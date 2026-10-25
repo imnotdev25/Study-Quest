@@ -46,13 +46,14 @@ Pick a path in the sidebar and only that path is shown, with a progress ring, ch
 
 ## 📦 Install
 
-Download the latest build from **[Releases](https://github.com/imnotdev25/Study-Quest/releases)**:
+Download from **[Releases](https://github.com/imnotdev25/Study-Quest/releases)**: a versioned release, or **nightly** for the latest commit:
 
 | OS | File | First launch (builds aren't signed yet) |
 |---|---|---|
 | macOS (Apple Silicon / Intel) | `.dmg` | Right-click the app → **Open** |
 | Windows 10 / 11 | `.exe` installer or `.msi` | SmartScreen: **More info → Run anyway** |
-| Linux (x86_64) | `.AppImage` or `.deb` | `chmod +x Study*.AppImage && ./Study*.AppImage`, or `sudo apt install ./study-quest*.deb` |
+| Linux x86_64 / ARM64 | `.AppImage` or `.deb` | `chmod +x Study*.AppImage && ./Study*.AppImage`, or `sudo apt install ./study-quest*.deb` |
+| Linux ARMv7 (e.g. Raspberry Pi 32-bit) | `.deb` | `sudo apt install ./study-quest*armhf.deb` |
 
 **Python for exercises and notebooks.** In **Settings → Python**, pick one:
 
@@ -106,7 +107,7 @@ The book content (`public/content/`, `public/figs/`) and `notebooks/` are genera
 | `src/nudges.json` | Every notification and roast |
 | `AGENTS.md` | Conventions for AI coding agents (and humans) |
 
-Pushing a tag like `study-quest-v0.2.0` makes CI build every installer and publish a release.
+Every push to `master` refreshes the **nightly** pre-release. Pushing a tag like `v0.2.0` publishes a versioned release with every installer.
 
 ---
 

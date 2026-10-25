@@ -1,13 +1,15 @@
-# Builds Study Quest for macOS, Linux and Windows on every push and pull request that touches it.
-# Push a tag like `study-quest-v0.1.0` to also publish every installer as a GitHub Release.
+# Builds Study Quest for macOS, Windows and Linux, then publishes ONE release with every installer.
 #
-# Outputs per platform:
-#   macOS   .dmg (Apple Silicon and Intel)
-#   Linux   .AppImage and .deb (x86_64)
-#   Windows .exe (NSIS installer) and .msi (x86_64)
+#   push to main/master  → rolling pre-release "nightly" (replaced on every push)
+#   push tag v* or study-quest-v*  → versioned release, e.g. v0.2.0
+#   pull request         → build only (artifacts on the run page)
 #
-# The book content (public/content, public/figs) and notebooks are generated locally by `pnpm content`
-# (it needs pandoc, tectonic and the repo's Python venvs) and committed, so CI only builds the app.
+# Outputs:
+#   macOS    .dmg            Apple Silicon, Intel
+#   Linux    .AppImage .deb  x86_64, ARM64 (native runner); .deb ARMv7 (cross-compiled)
+#   Windows  .exe .msi       x86_64
+#
+# Book content (public/content, public/figs) and notebooks/ are generated locally and committed.
 # Builds are unsigned: macOS needs right-click → Open the first time; Windows SmartScreen needs "More info → Run anyway".
 
 name: Study Quest
@@ -15,12 +17,12 @@ name: Study Quest
 on:
   push:
     branches: [main, master]
-    tags: ["study-quest-v*"]
+    tags: ["v*", "study-quest-v*"]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: write          # needed only to create the release on tags
+  contents: write
 
 concurrency:
   group: study-quest-${{ github.ref }}
@@ -37,37 +39,57 @@ jobs:
           - name: macOS (Apple Silicon)
             os: macos-latest
             target: aarch64-apple-darwin
-            files: |
-              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           - name: macOS (Intel)
             os: macos-latest
             target: x86_64-apple-darwin
-            files: |
-              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-          - name: Linux (x86_64)
-            os: ubuntu-22.04          # oldest supported glibc, so the AppImage runs on more distros
-            target: x86_64-unknown-linux-gnu
-            files: |
-              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
-              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
           - name: Windows (x86_64)
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            files: |
-              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          - name: Linux (x86_64)
+            os: ubuntu-22.04            # oldest supported glibc, so the AppImage runs on more distros
+            target: x86_64-unknown-linux-gnu
+          - name: Linux (ARM64)
+            os: ubuntu-22.04-arm        # native ARM runner (free for public repos)
+            target: aarch64-unknown-linux-gnu
+          - name: Linux (ARMv7)
+            os: ubuntu-22.04            # no ARMv7 runner: cross-compile from x86_64
+            target: armv7-unknown-linux-gnueabihf
+            cross: true
+            bundles: deb                # AppImage tooling doesn't support ARMv7
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - name: Linux system libraries (WebKitGTK, tray, AppImage)
-        if: runner.os == 'Linux'
+      - name: Linux system libraries
+        if: runner.os == 'Linux' && !matrix.cross
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             libssl-dev libgtk-3-dev patchelf file
+
+      - name: ARMv7 cross toolchain and armhf libraries
+        if: matrix.cross
+        run: |
+          sudo dpkg --add-architecture armhf
+          # Existing sources serve amd64 only; armhf packages come from ports.ubuntu.com.
+          sudo sed -i 's/^deb http/deb [arch=amd64] http/' /etc/apt/sources.list
+          for f in /etc/apt/sources.list.d/*.list; do [ -f "$f" ] && sudo sed -i 's/^deb http/deb [arch=amd64] http/' "$f"; done
+          for s in jammy jammy-updates jammy-security; do
+            echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports $s main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf.list
+          done
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf pkg-config file \
+            libwebkit2gtk-4.1-dev:armhf libayatana-appindicator3-dev:armhf librsvg2-dev:armhf \
+            libssl-dev:armhf libgtk-3-dev:armhf
+          {
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc"
+            echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc"
+            echo "CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++"
+            echo "PKG_CONFIG_ALLOW_CROSS=1"
+            echo "PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig"
+          } >> "$GITHUB_ENV"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -103,18 +125,53 @@ jobs:
         run: pnpm tauri icon src-tauri/icons/source.png
 
       - name: Build app
-        run: pnpm tauri build --target ${{ matrix.target }}
+        run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundles && format('--bundles {0}', matrix.bundles) || '' }}
 
-      - name: Upload installers
-        uses: actions/upload-artifact@v4
+      - name: Collect installers
+        run: |
+          mkdir -p out
+          b="src-tauri/target/${{ matrix.target }}/release/bundle"
+          find "$b" -maxdepth 2 -type f \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' -o -name '*.msi' \) \
+            -exec cp {} out/ \;
+          ls -la out
+          test -n "$(ls -A out)" || { echo "::error::no installers were produced"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
         with:
           name: study-quest-${{ matrix.target }}
-          path: ${{ matrix.files }}
+          path: out/*
           if-no-files-found: error
 
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/study-quest-v')
-        uses: softprops/action-gh-release@v2
+  release:
+    name: Publish release
+    needs: build
+    # Publish whatever built, even if one platform failed; skip pull requests.
+    if: ${{ !cancelled() && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: ${{ matrix.files }}
-          generate_release_notes: true
+          path: dist
+          merge-multiple: true
+
+      - name: List installers
+        run: ls -la dist
+
+      - name: Versioned release (tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* -R "${GITHUB_REPOSITORY}" \
+            --title "Study Quest ${GITHUB_REF_NAME}" --generate-notes
+
+      - name: Nightly pre-release (branch push)
+        if: startsWith(github.ref, 'refs/heads/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Replace the previous nightly so the tag always points at the latest commit.
+          gh release delete nightly -R "${GITHUB_REPOSITORY}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create nightly dist/* -R "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --prerelease \
+            --title "Study Quest nightly ($(echo "${GITHUB_SHA}" | cut -c1-7))" \
+            --notes "Automatic build of the latest commit on ${GITHUB_REF_NAME}. For a stable version, use the newest v* release."
