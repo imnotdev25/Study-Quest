@@ -1,111 +1,148 @@
 # 🦦 Study Quest
 
-A macOS app for learning **Reinforcement Learning, LLMs and System Design** interactively. It turns five long-form books into lessons you can read, run and quiz yourself on, with a coding playground, live [marimo](https://marimo.io) notebooks, and Byte the otter, who nudges (and roasts) you until you study.
+[![Build](https://github.com/imnotdev25/Study-Quest/actions/workflows/build.yml/badge.svg)](https://github.com/imnotdev25/Study-Quest/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/imnotdev25/Study-Quest?include_prereleases)](https://github.com/imnotdev25/Study-Quest/releases)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-7c5cf6)
 
-> Built with Tauri 2, React and Rust. Runs on macOS, Windows and Linux.
+**Learn Reinforcement Learning, LLMs and System Design by doing, not just reading.**
 
-## Features
+Study Quest is a desktop app that turns five long-form books into lessons you can read, run, sketch and quiz yourself on. It has live [marimo](https://marimo.io) notebooks, a coding playground with tested exercises, [Excalidraw](https://excalidraw.com) boards for system design, and Byte the otter 🦦, who nudges (and roasts) you until you open a lesson.
 
-- **Three learning paths, one at a time:** 🎯 RL, 🧠 LLMs (LLM fundamentals + pre/post-training), 🏗️ System Design (system design + DSA/ML interviews). Each lesson keeps its math (KaTeX), diagrams (compiled from TikZ) and code.
-- **Runnable lessons:** every Python block has **▶ Run / Edit**, notebook-style, with output and plots inline.
-- **Notebooks inside lessons:** reactive marimo notebooks open right in the page. Create your own; they live in `~/.study-quest/notebooks`.
-- **Coding playground:** 50 tested exercises (DSA, ML math, transformers, RL, inference, system design, agents) plus a scratchpad.
-- **Active learning:** warm-up predictions, *Quiz me* step-by-step reveal, *Explain it back* with key-term check, *Connect it*, muddiest point, confidence before/after. Voice typing on every box.
-- **Habit loop:** streaks, XP, badges, activity heatmap, native notifications with an adjustable troll level, menu-bar streak, and macOS Calendar sync for study blocks.
+Built with Tauri 2, React and Rust. Runs on macOS, Windows and Linux. Everything stays on your computer.
 
-## Install
+---
 
-Download from [Releases](../../releases):
+## ✨ What's inside
+
+### Three learning paths, one at a time
+| Path | Books | Topics |
+|---|---|---|
+| 🎯 **RL** | Reinforcement Learning | 183 |
+| 🧠 **LLMs** | LLM Fundamentals · Pre-Training to Post-Training | 145 |
+| 🏗️ **System Design** | System Design: Zero to Expert · DSA and ML Interviews | 54 |
+
+Pick a path in the sidebar and only that path is shown, with a progress ring, chapter list and a **Continue** button. Lessons keep their math (KaTeX), diagrams (compiled from TikZ) and code.
+
+### Learn by doing
+- **▶ Runnable lessons:** every Python block has **Run / Edit**, notebook-style: earlier cells run first, output and plots appear inline.
+- **📓 Notebooks in the page:** reactive marimo notebooks open inside lessons. 14 interactive ones (bandits, PPO clipping, attention heatmaps, KV-cache calculator, gridworld, CLT…) plus every book script. Create your own; they live in `~/.study-quest/notebooks`.
+- **🧪 Coding playground:** 50 tested exercises across DSA, ML math, transformers, RL, inference, system design and agents, plus a free scratchpad.
+- **✏️ Design it yourself:** every System Design and DSA lesson has an Excalidraw board, saved per lesson. All your boards are on the **Diagrams** page; export as `.excalidraw`.
+
+### Make it stick
+- **🔮 Warm-up:** rate what you know and guess before reading.
+- **🧠 Quiz me:** derivations reveal one step at a time; key ideas hide until you've recalled them.
+- **✍️ Explain it back:** write it in your own words; the app checks which key terms you used and compares with your guess.
+- **🔗 Connect it**, **🌫️ What's unclear?** (shown on your dashboard until resolved) and **📈 confidence** before vs after.
+- **🎙 Voice typing** on every box (falls back to 🌐 twice on macOS, Win + H on Windows).
+
+### Keep coming back
+- Streaks, XP, levels, badges and an activity card (this week vs last, daily-goal chart, heatmap).
+- **Desktop nudges** with a troll level from 😇 Nice to 🔥 Unhinged. At the top end Byte brings up your crush's LinkedIn and your screen-time report.
+- **Plan my week:** books study blocks on weekday evenings. macOS adds them to Calendar (✕ removes them again); Windows and Linux open an `.ics` in your calendar app.
+- **🎨 Themes:** System / Light / Dark and eight accent colours (or pick your own).
+
+---
+
+## 📦 Install
+
+Download the latest build from **[Releases](https://github.com/imnotdev25/Study-Quest/releases)**:
 
 | OS | File | First launch (builds aren't signed yet) |
 |---|---|---|
 | macOS (Apple Silicon / Intel) | `.dmg` | Right-click the app → **Open** |
-| Windows 10/11 | `.exe` installer or `.msi` | SmartScreen: **More info → Run anyway** |
+| Windows 10 / 11 | `.exe` installer or `.msi` | SmartScreen: **More info → Run anyway** |
 | Linux (x86_64) | `.AppImage` or `.deb` | `chmod +x Study*.AppImage && ./Study*.AppImage`, or `sudo apt install ./study-quest*.deb` |
 
-Linux needs WebKitGTK 4.1 (preinstalled on Ubuntu 22.04+, Fedora 37+). The tray icon needs an AppIndicator-capable desktop; without one, closing the window quits the app.
-
-What differs by platform: Calendar sync is macOS-only (Windows and Linux export an `.ics` to your calendar app instead). The translucent sidebar is macOS-only. Voice typing falls back to the OS dictation (🌐 twice on macOS, Win + H on Windows).
-
-Exercises and notebooks use your local Python. Install marimo into it:
+**Python for exercises and notebooks.** The app uses your own Python. Install marimo into it:
 
 ```bash
 python3 -m pip install marimo numpy matplotlib
 ```
 
-Then point **Settings → Python** at that interpreter (it auto-detects common locations).
+Then check **Settings → Python** (it auto-detects common locations and shows whether marimo was found).
 
-## Develop
+<details>
+<summary>Platform differences</summary>
 
-Requirements: macOS 13+, Node 22+, pnpm 10, Rust (stable), Python 3.11.
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Calendar | Synced to a "Study Quest" calendar | `.ics` export | `.ics` export |
+| Sidebar | Translucent (vibrancy) | Solid | Solid |
+| Tray / menu bar | Menu-bar streak 🔥 | System tray | Needs an AppIndicator desktop; otherwise closing the window quits |
+| Dictation fallback | 🌐 twice | Win + H | Desktop dictation tool |
+
+Linux needs WebKitGTK 4.1 (preinstalled on Ubuntu 22.04+, Fedora 37+).
+</details>
+
+---
+
+## 🛠 Develop
+
+Requirements: Node 22+, pnpm 10, Rust (stable), Python 3.11. On Linux also the Tauri system libraries:
+`sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`.
 
 ```bash
-cd study_app
 pnpm install
-pnpm tauri icon src-tauri/icons/source.png   # once, generates the app icons
+pnpm tauri icon src-tauri/icons/source.png   # once: generates the app icons
 pnpm tauri dev                                # run with hot reload
-pnpm tauri build                              # produce .app and .dmg
+pnpm build                                    # type-check + build the frontend
+pnpm tauri build                              # installers for your OS
 ```
 
-Regenerating the book content needs more tools (pandoc, tectonic, and the repo's `.venv` / `.venv-post` Python environments):
-
-```bash
-pnpm content   # books → public/content, notebooks → notebooks/, exercises → public/content/exercises.json
-```
-
-The generated files are committed so CI can build without those tools.
-
-### Layout
+The book content (`public/content/`, `public/figs/`) and `notebooks/` are generated from LaTeX sources kept outside this repo, and committed here so anyone can build the app.
 
 | Path | What |
 |---|---|
-| `src/` | React frontend (views, components, store) |
+| `src/views/`, `src/components/` | React pages and UI |
+| `src/lib/store.ts` | All saved progress and settings |
+| `src/lib/platform.ts`, `src-tauri/src/platform.rs` | Everything that differs between macOS, Windows and Linux |
 | `src-tauri/src/` | Rust: notebooks folder, marimo server, Python runner, Calendar, nudges, tray |
-| `scripts/build_content.py` | LaTeX books → per-topic HTML + SVG figures |
 | `scripts/exercises_src.py` | All playground exercises (source of truth) |
 | `scripts/build_notebooks.py` | Example marimo notebooks |
-| `src/nudges.json` | Every notification message |
+| `src/nudges.json` | Every notification and roast |
+| `AGENTS.md` | Conventions for AI coding agents (and humans) |
 
-## Contributing 💜
+Pushing a tag like `study-quest-v0.2.0` makes CI build every installer and publish a release.
 
-**The most useful thing you can add is a topic.** If you know something well that a learner on the RL, LLM or System Design path should know, please contribute it. Pull requests of any size are welcome, and so are issues that just say "this topic is missing".
+---
 
-### Add or improve a topic
+## 💜 Contributing
 
-Topics come from the LaTeX books (`../rl_enhanced.tex`, `../llm_book/`, `../posttrain_book/`, and the System Design books). A topic is one `\section` (one `\chapter` in the System Design books).
+**The most useful thing you can add is a topic.** If you know something a learner on the RL, LLM or System Design path should know, please share it. PRs of any size are welcome, and so are issues that just say *"this topic is missing"*.
 
-1. Write it in LaTeX in the matching book. Use the existing boxes so the app can style them and quiz on them:
-   `startbox` (where to begin), `derive{title}` with `\step{n}` (derivations, revealed one step at a time in *Quiz me*), `algobox{title}`, `keyideas`, `analogy{title}`.
-2. Put **key terms in bold** (`\textbf{...}`): *Explain it back* checks whether learners use them.
-3. Prefer one idea per topic, a real-life analogy, a derivation from first principles, and a small runnable Python example.
-4. Run `pnpm content` and check the lesson in `pnpm tauri dev`.
+### Suggest or write a topic
+Open an issue with the **topic** label, or a PR that adds a Markdown or LaTeX file under `contrib/topics/`. A good topic:
 
-Topic ideas we'd love: newer RL-for-LLM methods, inference systems, evaluation, safety and alignment, distributed training, interview-style system design case studies, and clearer explanations of anything that confused you.
+1. covers **one idea**, with a real-life analogy;
+2. builds any math up **step by step** (each step becomes a reveal in *Quiz me*);
+3. puts **key terms in bold** (*Explain it back* checks for them);
+4. ends with a small runnable Python example and 2–3 key ideas.
+
+Topics we'd love: newer RL-for-LLM methods, inference systems, evaluation, safety and alignment, distributed training, system design case studies, and clearer explanations of anything that confused you.
 
 ### Add a coding exercise
-
-Add an `E(...)` entry to `scripts/exercises_src.py` with a prompt, starter, reference solution, tests (`test_*` functions) and hints. Then run:
+Add an `E(...)` entry to `scripts/exercises_src.py` (prompt, starter, solution, `test_*` tests, hints, `topic=` keyword), then run:
 
 ```bash
-../.venv-post/bin/python scripts/build_exercises.py
+python scripts/build_exercises.py
 ```
 
-It refuses to write unless the solution passes every test and the starter fails at least one. Set `topic=` to a keyword so the exercise shows up inside matching lessons.
+It refuses to write unless the solution passes every test and the starter fails at least one.
 
 ### Add a notebook
-
-Add an entry to `INTERACTIVE` in `scripts/build_notebooks.py` (sliders and plots welcome), give it a group in `GROUPS` and a `topic` keyword, then run `pnpm content` and `marimo export html` on it to check it runs.
+Add an entry to `INTERACTIVE` in `scripts/build_notebooks.py` (sliders and plots welcome), give it a group in `GROUPS` and a `topic` keyword, and check it runs with `marimo export html`.
 
 ### Add nudges and roasts
-
-Add lines to `src/nudges.json`. Keep them funny and about **studying**: tease habits (scrolling, procrastinating, "I'll start Monday"), never appearance, identity, health or anything that would actually hurt. ML puns score double.
+Add lines to `src/nudges.json`. Keep them funny and about **studying**: tease habits (scrolling, "I'll start Monday", 47 open tabs), never appearance, identity, health or anything that would actually hurt. ML puns score double.
 
 ### Pull requests
+- One topic, exercise or fix per PR.
+- `pnpm build` must pass; CI builds macOS, Windows and Linux on every PR.
+- Say what a learner gains from the change.
 
-- One topic, exercise or fix per PR is easiest to review.
-- Make sure `pnpm build` passes. CI builds the macOS app on every PR.
-- Describe what a learner gains from the change.
+---
 
-## Privacy
+## 🔒 Privacy
 
-Everything stays on your Mac. Progress is stored locally (export it from Settings). Code runs with your own Python in a temp folder. marimo listens only on `127.0.0.1` with a random token. Calendar events are created through macOS Automation, which asks your permission first.
+Everything stays on your computer. Progress is saved locally (export or reset it in Settings). Code runs with your own Python in a temp folder with a time limit. marimo listens only on `127.0.0.1` with a random token and stops when you close the window. On macOS, Calendar events are created through Automation, which asks your permission first.
