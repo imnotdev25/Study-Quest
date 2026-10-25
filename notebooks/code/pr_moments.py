@@ -1,3 +1,4 @@
+# sq-meta: {"title": "pr_moments", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Probability: expectation, variance, Jensen, tail bounds, moment generating functions", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

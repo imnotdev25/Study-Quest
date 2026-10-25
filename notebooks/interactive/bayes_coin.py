@@ -1,3 +1,4 @@
+# sq-meta: {"title": "Bayesian Coin", "emoji": "🪙", "group": "Probability & Statistics", "kind": "interactive", "desc": "Prior + flips = posterior. Watch the Beta distribution sharpen.", "topic": "Bayes"}
 import marimo
 
 __generated_with = "0.25.1"

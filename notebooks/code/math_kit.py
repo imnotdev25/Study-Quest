@@ -1,3 +1,4 @@
+# sq-meta: {"title": "math_kit", "emoji": "📓", "group": "Math & Optimisation", "kind": "code", "desc": "Toolkit ch. 1-2: the math fundamentals, each checked numerically", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

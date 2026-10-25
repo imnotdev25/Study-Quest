@@ -1,3 +1,4 @@
+# sq-meta: {"title": "st_likelihood", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Inference: maximum likelihood, Fisher information, MAP, and logistic regression by Newton's method", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

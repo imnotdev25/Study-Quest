@@ -1,0 +1,6 @@
+# Python packages for Study Quest's exercises and notebooks.
+# The app installs these with uv into ~/.study-quest/.venv (Settings → Python → Set up with uv).
+# Developers: `uv sync` (see pyproject.toml) creates ./.venv with the same pins.
+marimo==0.25.1
+numpy==2.5.4
+matplotlib==3.11.2

@@ -1,3 +1,4 @@
+# sq-meta: {"title": "Gradient Descent Valley", "emoji": "⛰️", "group": "Math & Optimisation", "kind": "interactive", "desc": "Condition number vs learning rate on a quadratic bowl.", "topic": "optimisation"}
 import marimo
 
 __generated_with = "0.25.1"

@@ -1,3 +1,4 @@
+# sq-meta: {"title": "Softmax and Temperature", "emoji": "🌡️", "group": "Transformers & LLMs", "kind": "interactive", "desc": "See how temperature reshapes next-token probabilities and entropy.", "topic": "softmax"}
 import marimo
 
 __generated_with = "0.25.1"

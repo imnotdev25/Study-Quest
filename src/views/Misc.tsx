@@ -7,6 +7,7 @@ import { confirmDialog } from "../components/Dialog";
 import { addCalendarEvent, call, deleteCalendarEvent, inTauri } from "../lib/tauri";
 import { isMac, TRAY } from "../lib/platform";
 import { ACCENTS } from "../lib/theme";
+import { PythonSettings } from "../components/PythonSettings";
 import { go, type Route } from "../App";
 
 const toLocalInput = (ms: number) => {
@@ -157,8 +158,6 @@ export function PlanView({ data }: { data: Data }) {
 
 export function SettingsView() {
   const s = useStore();
-  const [info, setInfo] = useState<Record<string, unknown> | null>(null);
-  useEffect(() => { if (inTauri()) call<Record<string, unknown>>("app_info").then(setInfo, () => {}); }, [s.settings.python]);
   const set = <K extends keyof typeof s.settings>(k: K, v: (typeof s.settings)[K]) =>
     setState((x) => ({ ...x, settings: { ...x.settings, [k]: v } }));
   const exportJson = async () => {
@@ -252,10 +251,7 @@ export function SettingsView() {
       )}
       <section className="card">
         <h2>🐍 Python</h2>
-        <label>Python for exercises and notebooks (blank = auto)
-          <input placeholder="/path/to/.venv/bin/python" value={s.settings.python} onChange={(e) => set("python", e.target.value)} /></label>
-        {info && <p className="muted">Using <code>{String(info.python)}</code> · python {info.pythonFound ? "✅" : "❌ not found"} ·
-          marimo {info.marimoFound ? "✅" : "❌ not installed"} · notebooks in <code>{String(info.notebooks)}</code></p>}
+        <PythonSettings python={s.settings.python} setPython={(v) => set("python", v)} />
       </section>
       <section className="card">
         <h2>Progress</h2>

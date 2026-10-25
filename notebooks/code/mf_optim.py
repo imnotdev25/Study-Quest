@@ -1,3 +1,4 @@
+# sq-meta: {"title": "mf_optim", "emoji": "📓", "group": "Math & Optimisation", "kind": "code", "desc": "Math I: unconstrained and constrained optimisation, with the two constrained problems behind", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

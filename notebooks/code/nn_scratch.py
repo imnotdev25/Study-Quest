@@ -1,3 +1,4 @@
+# sq-meta: {"title": "nn_scratch", "emoji": "📓", "group": "Transformers & LLMs", "kind": "code", "desc": "Toolkit ch. 4: a neural network from scratch in NumPy, with RMSNorm, Adam and an LR schedule", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

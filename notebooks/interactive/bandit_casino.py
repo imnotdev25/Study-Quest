@@ -1,3 +1,4 @@
+# sq-meta: {"title": "Bandit Casino", "emoji": "🎰", "group": "Reinforcement Learning", "kind": "interactive", "desc": "Play three slot machines yourself, then race epsilon-greedy, greedy and UCB.", "topic": "bandit"}
 import marimo
 
 __generated_with = "0.25.1"

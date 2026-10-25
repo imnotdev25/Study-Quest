@@ -1,3 +1,4 @@
+# sq-meta: {"title": "mf_integrals", "emoji": "📓", "group": "Math & Optimisation", "kind": "code", "desc": "Math I: Riemann sums, double integrals, Fubini, polar change of variables, Monte Carlo", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

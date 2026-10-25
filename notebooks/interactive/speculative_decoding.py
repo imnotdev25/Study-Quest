@@ -1,3 +1,4 @@
+# sq-meta: {"title": "Speculative Decoding", "emoji": "🏎️", "group": "Inference", "kind": "interactive", "desc": "Acceptance rate, draft length and the real speedup.", "topic": "speculative decoding"}
 import marimo
 
 __generated_with = "0.25.1"

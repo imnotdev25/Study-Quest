@@ -1,3 +1,4 @@
+# sq-meta: {"title": "inf_memory", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference ch. 'Prefill, Decode, KV Cache and Memory': memory math, the roofline, and timing a cache", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

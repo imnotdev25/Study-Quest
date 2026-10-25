@@ -1,3 +1,4 @@
+# sq-meta: {"title": "distributed", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference chs. 'Multi-GPU', 'MoE Inference', 'Long Context', 'Disaggregation': simulated parallelism", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

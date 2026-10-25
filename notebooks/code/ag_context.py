@@ -1,3 +1,4 @@
+# sq-meta: {"title": "ag_context", "emoji": "📓", "group": "Agents & Evals", "kind": "code", "desc": "Agents ch. 'Context Engineering': BM25 retrieval, budget packing, compaction, and prompt-cache cost", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

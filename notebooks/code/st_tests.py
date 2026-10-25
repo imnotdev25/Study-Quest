@@ -1,3 +1,4 @@
+# sq-meta: {"title": "st_tests", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Inference: comparing two models on one eval set, multiple comparisons, Hoeffding, importance sampling", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

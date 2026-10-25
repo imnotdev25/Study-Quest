@@ -1,3 +1,4 @@
+# sq-meta: {"title": "intuitions", "emoji": "📓", "group": "Math & Optimisation", "kind": "code", "desc": "Toolkit ch. 2: dot products, softmax temperature, broadcasting", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

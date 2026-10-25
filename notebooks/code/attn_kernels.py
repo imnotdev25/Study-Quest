@@ -1,3 +1,4 @@
+# sq-meta: {"title": "attn_kernels", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference ch. 'Attention Optimization': tiled online-softmax attention (FlashAttention), split-KV decode", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

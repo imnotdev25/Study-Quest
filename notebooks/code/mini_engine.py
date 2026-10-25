@@ -1,3 +1,4 @@
+# sq-meta: {"title": "mini_engine", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference ch. 'Build a Mini Inference Engine': paged KV, continuous batching with a token budget,", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

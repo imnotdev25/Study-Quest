@@ -1,3 +1,4 @@
+# sq-meta: {"title": "ag_eval", "emoji": "📓", "group": "Agents & Evals", "kind": "code", "desc": "Agents ch. 'Benchmarks': pass@k and pass^k estimators, compounding errors, benchmark noise,", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

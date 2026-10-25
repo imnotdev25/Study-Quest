@@ -1,3 +1,4 @@
+# sq-meta: {"title": "serving_sim", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference chs. 'Benchmark', 'Break One GPU', 'Continuous Batching': a discrete-time server simulator", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

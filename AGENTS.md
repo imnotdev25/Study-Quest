@@ -4,12 +4,12 @@ Study Quest: a Tauri 2 desktop app (React + TypeScript frontend, Rust backend) f
 Runs on macOS, Windows and Linux.
 
 ## Commands
-- Install: `pnpm install`
+- Install: `pnpm install` and `uv sync` (./.venv with pinned Python packages; `--extra torch` for PyTorch)
 - Dev app: `pnpm tauri dev` (first time: `pnpm tauri icon src-tauri/icons/source.png`)
 - Frontend type-check + build: `pnpm build`. Run it before saying a task is done.
 - Rust check: `cd src-tauri && cargo check`
 - Regenerate content (needs pandoc, tectonic, `../.venv`, `../.venv-post`): `pnpm content`
-- Exercises only: `../.venv-post/bin/python scripts/build_exercises.py` (fails unless every solution passes and every starter fails)
+- Exercises only: `uv run python scripts/build_exercises.py` (fails unless every solution passes and every starter fails)
 - Check a notebook runs: `marimo export html notebooks/interactive/<name>.py -o /tmp/x.html`
 
 ## Layout
@@ -17,7 +17,7 @@ Runs on macOS, Windows and Linux.
 - `src/lib/platform.ts` OS detection and per-OS wording/keys; `src/lib/theme.ts` light/dark + accent
 - `src/nudges.json` every notification message (compiled into the Rust binary with `include_str!`)
 - `src-tauri/src/platform.rs` every OS-specific call (open, reveal, trash, speech, home dir)
-- `src-tauri/src/marimo.rs` the local notebook server; `notebooks.rs` `~/.study-quest/notebooks`; `runner.rs` runs user Python
+- `src-tauri/src/marimo.rs` the local notebook server; `notebooks.rs` `~/.study-quest/notebooks`; `runner.rs` runs user Python; `pyenv.rs` picks/creates the interpreter (custom path → ~/.study-quest/.venv → ./.venv → system)
 - `scripts/` content builders. `public/content/`, `public/figs/`, `notebooks/` are GENERATED but committed (CI can't regenerate them).
 
 ## Conventions
@@ -26,7 +26,7 @@ Runs on macOS, Windows and Linux.
 - OS-specific behaviour goes through `platform.rs` / `platform.ts`, not inline `cfg!` or `/usr/bin/...` paths.
   macOS-only features (Calendar via osascript, vibrancy) must degrade cleanly elsewhere.
 - Pass user data to external programs as arguments or env vars, never interpolated into a shell or script string.
-- Icons: use `src/components/Icon.tsx` (inline SVG), not new icon packages. Pin exact dependency versions.
+- Icons: use `src/components/Icon.tsx` (inline SVG), not new icon packages. Pin exact dependency versions (Python pins live in both `requirements.txt` and `pyproject.toml`; keep them equal).
 - XP for repeatable actions goes through `awardOnce(key, …)` so editing text can't farm points.
 - Topic ids are `book:index` (e.g. `rl:12`); paths sent to the frontend use forward slashes.
 

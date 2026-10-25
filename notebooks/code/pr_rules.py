@@ -1,3 +1,4 @@
+# sq-meta: {"title": "pr_rules", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Probability: the rules, Bayes' theorem, and Bayesian updating", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

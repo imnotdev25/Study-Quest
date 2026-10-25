@@ -1,3 +1,4 @@
+# sq-meta: {"title": "paged_kv", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference chs. 'PagedAttention' and 'Prefix Optimization': fragmentation, sharing, prefix-cache hit rates", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

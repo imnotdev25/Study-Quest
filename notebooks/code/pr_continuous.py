@@ -1,3 +1,4 @@
+# sq-meta: {"title": "pr_continuous", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Probability: continuous random variables and transformations (inverse CDF, Box-Muller,", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

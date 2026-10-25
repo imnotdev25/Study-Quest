@@ -1,3 +1,4 @@
+# sq-meta: {"title": "rl_bridge", "emoji": "📓", "group": "Reinforcement Learning", "kind": "code", "desc": "Toolkit ch. 5: agents and environments, REINFORCE, DQN, and the PPO/GRPO/GSPO ratios", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

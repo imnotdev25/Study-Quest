@@ -1,3 +1,4 @@
+# sq-meta: {"title": "lora_qlora", "emoji": "📓", "group": "Transformers & LLMs", "kind": "code", "desc": "Toolkit ch. 7: LoRA from scratch, and the NF4 quantisation inside QLoRA", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

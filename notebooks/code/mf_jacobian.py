@@ -1,3 +1,4 @@
+# sq-meta: {"title": "mf_jacobian", "emoji": "📓", "group": "Math & Optimisation", "kind": "code", "desc": "Math I: vector-valued maps, Jacobians and local (Taylor) approximation", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

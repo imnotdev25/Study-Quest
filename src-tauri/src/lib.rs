@@ -3,10 +3,10 @@ mod marimo;
 mod notebooks;
 mod nudges;
 pub mod platform;
+mod pyenv;
 mod runner;
 
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
@@ -27,17 +27,24 @@ pub struct AppState {
     pub nudge: Arc<Mutex<nudges::NudgeState>>,
 }
 
-/// Python used for the playground and marimo: settings override, then the repo's venv, then the system Python.
+/// Python used for the playground and marimo (see pyenv.rs): a custom path from Settings, then the app's uv
+/// environment, then (in development) the repo's ./.venv, then the system Python.
 pub fn python_path(app: &AppHandle) -> PathBuf {
     if let Some(p) = app.state::<AppState>().config.lock().unwrap().python.clone() {
         if !p.trim().is_empty() {
             return PathBuf::from(p.trim());
         }
     }
-    let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.venv-post");
-    let dev = if cfg!(windows) { venv.join("Scripts").join("python.exe") } else { venv.join("bin").join("python") };
-    if dev.exists() {
-        return dev;
+    let managed = pyenv::venv_python(&pyenv::venv_dir());
+    if managed.exists() {
+        return managed;
+    }
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    for dev in [repo.join(".venv"), repo.join("../.venv-post")] {
+        let py = pyenv::venv_python(&dev);
+        if py.exists() {
+            return py;
+        }
     }
     if cfg!(windows) {
         return PathBuf::from("python");
@@ -59,9 +66,6 @@ pub fn resource(app: &AppHandle, dev_rel: &str, bundled: &str) -> PathBuf {
     app.path().resource_dir().map(|d| d.join(bundled)).unwrap_or(dev)
 }
 
-fn runs(py: &PathBuf, args: &[&str]) -> bool {
-    platform::quiet(Command::new(py).args(args)).output().map_or(false, |o| o.status.success())
-}
 
 #[tauri::command]
 fn set_config(state: tauri::State<AppState>, config: Config) {
@@ -71,10 +75,12 @@ fn set_config(state: tauri::State<AppState>, config: Config) {
 #[tauri::command]
 async fn app_info(app: AppHandle) -> serde_json::Value {
     let py = python_path(&app);
+    let managed = pyenv::venv_python(&pyenv::venv_dir());
     serde_json::json!({
         "python": py.to_string_lossy(),
-        "pythonFound": runs(&py, &["--version"]),
-        "marimoFound": runs(&py, &["-c", "import marimo"]),
+        "probe": pyenv::probe(&py),
+        "managedVenv": pyenv::venv_dir().to_string_lossy(),
+        "usingManaged": py == managed,
         "notebooks": notebooks::home_dir().to_string_lossy(),
         "os": std::env::consts::OS,
     })
@@ -155,6 +161,8 @@ pub fn run() {
             notebooks::delete_notebook,
             notebooks::restore_examples,
             notebooks::reveal_notebooks,
+            pyenv::check_python,
+            pyenv::setup_python,
         ])
         .setup(move |app| {
             let open = MenuItem::with_id(app, "open", "Open Study Quest", true, None::<&str>)?;

@@ -1,3 +1,4 @@
+# sq-meta: {"title": "PPO Clipping", "emoji": "✂️", "group": "Reinforcement Learning", "kind": "interactive", "desc": "Drag epsilon and see where PPO's gradient switches off.", "topic": "PPO"}
 import marimo
 
 __generated_with = "0.25.1"

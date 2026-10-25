@@ -1,3 +1,4 @@
+# sq-meta: {"title": "prod", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference chs. 'Routing and Autoscaling', 'Economics': prefix-aware routing simulation and cost math", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

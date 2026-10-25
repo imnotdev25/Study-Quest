@@ -1,3 +1,4 @@
+# sq-meta: {"title": "jt_joint", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Joint RVs: two discrete, two continuous, moments of joint distributions, covariance and correlation", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

@@ -1,3 +1,4 @@
+# sq-meta: {"title": "pr_dists", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Probability: the standard discrete and continuous distributions, theory vs simulation", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

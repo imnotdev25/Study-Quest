@@ -1,3 +1,4 @@
+# sq-meta: {"title": "spec_decode", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference ch. 'Speculative Decoding': exactness of speculative sampling, expected speedup,", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

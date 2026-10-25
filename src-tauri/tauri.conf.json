@@ -39,7 +39,8 @@
     ],
     "resources": {
       "resources/harness.py": "harness.py",
-      "../notebooks/": "notebooks/"
+      "../notebooks/": "notebooks/",
+      "../requirements.txt": "requirements.txt"
     },
     "macOS": {
       "minimumSystemVersion": "13.0"

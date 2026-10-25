@@ -1,3 +1,4 @@
+# sq-meta: {"title": "ag_prompting", "emoji": "📓", "group": "Agents & Evals", "kind": "code", "desc": "Agents ch. 'Prompting Patterns': prompt builders, answer parsing, and why voting helps or hurts", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

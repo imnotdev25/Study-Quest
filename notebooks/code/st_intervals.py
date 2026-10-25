@@ -1,3 +1,4 @@
+# sq-meta: {"title": "st_intervals", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Inference: confidence intervals and whether they really cover 95%", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

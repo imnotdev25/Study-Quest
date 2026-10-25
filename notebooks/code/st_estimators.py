@@ -1,3 +1,4 @@
+# sq-meta: {"title": "st_estimators", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Inference: sampling behaviour (LLN, CLT), bias, variance and MSE of estimators", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

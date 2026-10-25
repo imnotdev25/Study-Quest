@@ -1,3 +1,4 @@
+# sq-meta: {"title": "quant", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference ch. 'Quantization and KV Compression': int8/int4, outliers, AWQ scaling, FP8, KV quantisation", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

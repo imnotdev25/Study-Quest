@@ -1,3 +1,4 @@
+# sq-meta: {"title": "ag_harness", "emoji": "📓", "group": "Agents & Evals", "kind": "code", "desc": "Agents ch. 'Harnesses': a minimal coding-agent harness. Tool registry with schemas, a ReAct loop,", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

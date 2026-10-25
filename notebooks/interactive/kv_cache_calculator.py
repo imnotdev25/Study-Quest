@@ -1,3 +1,4 @@
+# sq-meta: {"title": "KV Cache Calculator", "emoji": "🧮", "group": "Inference", "kind": "interactive", "desc": "How many users fit on one GPU? Weights, KV cache and precision.", "topic": "KV cache"}
 import marimo
 
 __generated_with = "0.25.1"

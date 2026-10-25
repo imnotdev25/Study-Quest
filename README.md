@@ -54,13 +54,15 @@ Download the latest build from **[Releases](https://github.com/imnotdev25/Study-
 | Windows 10 / 11 | `.exe` installer or `.msi` | SmartScreen: **More info → Run anyway** |
 | Linux (x86_64) | `.AppImage` or `.deb` | `chmod +x Study*.AppImage && ./Study*.AppImage`, or `sudo apt install ./study-quest*.deb` |
 
-**Python for exercises and notebooks.** The app uses your own Python. Install marimo into it:
+**Python for exercises and notebooks.** In **Settings → Python**, pick one:
 
-```bash
-python3 -m pip install marimo numpy matplotlib
-```
+- **Set up with uv (recommended):** one click creates the app's own environment in `~/.study-quest/.venv` with the pinned
+  packages from `requirements.txt` (marimo, numpy, matplotlib; optionally PyTorch). Needs [uv](https://docs.astral.sh/uv/):
+  `brew install uv`, `winget install astral-sh.uv`, or `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+- **Use my own Python:** paste any interpreter path (a conda env, a project `.venv`, pyenv…) and press **Test**. It shows the
+  version and which packages it has. Install what's missing with `python -m pip install -r requirements.txt`.
 
-Then check **Settings → Python** (it auto-detects common locations and shows whether marimo was found).
+The app uses, in order: your custom path, then the uv environment, then the system Python.
 
 <details>
 <summary>Platform differences</summary>
@@ -79,11 +81,12 @@ Linux needs WebKitGTK 4.1 (preinstalled on Ubuntu 22.04+, Fedora 37+).
 
 ## 🛠 Develop
 
-Requirements: Node 22+, pnpm 10, Rust (stable), Python 3.11. On Linux also the Tauri system libraries:
+Requirements: Node 22+, pnpm 10, Rust (stable), [uv](https://docs.astral.sh/uv/) (it fetches Python for you). On Linux also the Tauri system libraries:
 `sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`.
 
 ```bash
 pnpm install
+uv sync                                       # ./.venv with the pinned Python packages (add --extra torch for PyTorch)
 pnpm tauri icon src-tauri/icons/source.png   # once: generates the app icons
 pnpm tauri dev                                # run with hot reload
 pnpm build                                    # type-check + build the frontend
@@ -125,7 +128,7 @@ Topics we'd love: newer RL-for-LLM methods, inference systems, evaluation, safet
 Add an `E(...)` entry to `scripts/exercises_src.py` (prompt, starter, solution, `test_*` tests, hints, `topic=` keyword), then run:
 
 ```bash
-python scripts/build_exercises.py
+uv run python scripts/build_exercises.py
 ```
 
 It refuses to write unless the solution passes every test and the starter fails at least one.

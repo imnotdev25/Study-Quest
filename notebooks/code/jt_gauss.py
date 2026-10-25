@@ -1,3 +1,4 @@
+# sq-meta: {"title": "jt_gauss", "emoji": "📓", "group": "Probability & Statistics", "kind": "code", "desc": "Joint RVs: covariance matrices and Gaussian combinations (sums, linear maps, conditioning)", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

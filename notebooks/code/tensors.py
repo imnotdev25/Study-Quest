@@ -1,3 +1,4 @@
+# sq-meta: {"title": "tensors", "emoji": "📓", "group": "Transformers & LLMs", "kind": "code", "desc": "Toolkit ch. 3: PyTorch tensor operations, plus seven transformer-flavoured tasks", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

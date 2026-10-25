@@ -1,3 +1,4 @@
+# sq-meta: {"title": "mf_matcalc", "emoji": "📓", "group": "Math & Optimisation", "kind": "code", "desc": "Math I: matrix calculus identities, each checked against autograd", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

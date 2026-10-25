@@ -1,3 +1,4 @@
+# sq-meta: {"title": "llm_blocks", "emoji": "📓", "group": "Transformers & LLMs", "kind": "code", "desc": "Toolkit ch. 6: the distinctive blocks of Llama 4, DeepSeek-V3 and Qwen3, at toy size", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"

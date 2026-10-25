@@ -1,3 +1,4 @@
+# sq-meta: {"title": "specialized", "emoji": "📓", "group": "Inference", "kind": "code", "desc": "Inference ch. 'Specialized Workloads': constrained decoding, multi-LoRA batching, batch-invariant numerics", "topic": ""}
 import marimo
 
 __generated_with = "0.25.1"
