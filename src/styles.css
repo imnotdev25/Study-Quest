@@ -150,8 +150,7 @@ h2 { font-size: 17px; margin: 0 0 10px; }
 .icon { flex-shrink: 0; display: block; }
 .sidebar { --path: var(--accent); width: 292px; gap: 2px; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 0 6px 12px; font-size: 15px; letter-spacing: -.01em; }
-.logo { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; color: white;
-  background: linear-gradient(135deg, #a78bfa, var(--accent) 55%, #2f7bf6); box-shadow: 0 2px 8px rgba(124, 92, 246, .35); }
+.logo-svg { flex-shrink: 0; display: block; filter: drop-shadow(0 2px 6px rgba(84, 64, 216, .35)); }
 .streak-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 700; padding: 2px 8px;
   border-radius: 99px; color: var(--muted); background: var(--accent-soft); }
 .streak-chip.hot { color: #ea580c; background: rgba(234, 88, 12, .12); }

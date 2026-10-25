@@ -57,3 +57,23 @@ export function StatusDot({ state }: { state: "done" | "started" | "todo" }) {
     </span>
   );
 }
+
+/** The app mark: the same bear face as the app icon (src-tauri/icons/source.png), drawn as SVG. */
+export function Logo({ size = 26 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 1024 1024" aria-hidden="true" className="logo-svg">
+      <defs>
+        <linearGradient id="sq-logo-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#7c5cf6" /><stop offset="1" stopColor="#5440d8" />
+        </linearGradient>
+      </defs>
+      <rect x="40" y="40" width="944" height="944" rx="220" fill="url(#sq-logo-bg)" />
+      <circle cx="300" cy="330" r="80" fill="#faf0e6" />
+      <circle cx="724" cy="330" r="80" fill="#faf0e6" />
+      <circle cx="512" cy="560" r="270" fill="#faf0e6" />
+      <circle cx="420" cy="520" r="38" fill="#281e3c" />
+      <circle cx="604" cy="520" r="38" fill="#281e3c" />
+      <circle cx="512" cy="620" r="34" fill="#281e3c" />
+    </svg>
+  );
+}

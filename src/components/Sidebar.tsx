@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { PATHS, pathOf, pathTopicIds, type Data } from "../lib/data";
 import { liveStreak, setPath, useStore } from "../lib/store";
-import { Icon, Ring, StatusDot, type IconName } from "./Icon";
+import { Icon, Logo, Ring, StatusDot, type IconName } from "./Icon";
 import { MOD } from "../lib/platform";
 import { go, type Route } from "../App";
 
@@ -45,7 +45,7 @@ export function Sidebar({ data, route, onSearch }: { data: Data; route: Route; o
     <aside className="sidebar" style={accent}>
       <div className="drag" data-tauri-drag-region />
       <div className="brand" data-tauri-drag-region>
-        <span className="logo" aria-hidden><Icon name="sparkle" size={14} stroke={2.4} /></span>
+        <Logo size={26} />
         <span className="grow">Study Quest</span>
         <span className={`streak-chip ${streak ? "hot" : ""}`} title={`${streak}-day streak`}>
           <Icon name="flame" size={13} stroke={2.2} />{streak}
