@@ -1,0 +1,555 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can unweighted old-policy evaluation underestimate a new policy’s reward-model risk?</p></li>
+<li><p>What does importance-weight clipping trade away when it increases effective sample size?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="combine-prediction-with-observed-residuals">2. Combine prediction with observed residuals</h3>
+<p>Suppose context <span class="math inline">\(x\)</span> might be a prompt, action <span class="math inline">\(a\)</span> a completion, and <span class="math inline">\(R\)</span> the trusted outcome.</p>
+<p>Define the conditional action value:</p>
+<p><span class="math display">\[q(x,a)
+=
+\underbrace{
+E[R\mid x,a]
+}_{\text{expected trusted outcome for this prompt and action}}\]</span></p>
+<p>The direct method uses a learned approximation <span class="math inline">\(\hat q\)</span>:</p>
+<p><span class="math display">\[\hat V_{\mathrm{DM}}
+=
+\underbrace{
+\frac1n
+\sum_{i=1}^{n}
+\sum_a
+\pi(a\mid x_i)\hat q(x_i,a)
+}_{\text{predict every target-policy action&#39;s outcome}}\]</span></p>
+<p>It can have low variance but is biased when <span class="math inline">\(\hat q\)</span> is wrong.</p>
+<p>Importance sampling instead uses observed rewards:</p>
+<p><span class="math display">\[\hat V_{\mathrm{IPS}}
+=
+\frac1n\sum_i
+\underbrace{
+\frac{\pi(a_i\mid x_i)}
+{\mu(a_i\mid x_i)}
+}_{\text{target-to-behavior probability ratio}}
+R_i\]</span></p>
+<p>It is unbiased with correct propensities and support, but can have high variance.</p>
+<p>The doubly robust estimator combines both:</p>
+<p><span class="math display">\[\hat V_{\mathrm{DR}}
+=
+\frac1n\sum_i
+\left[
+\underbrace{
+\sum_a\pi(a\mid x_i)\hat q(x_i,a)
+}_{\text{reward-model baseline}}
++
+\underbrace{
+\frac{\pi(a_i\mid x_i)}
+{\mu(a_i\mid x_i)}
+\left(
+R_i-\hat q(x_i,a_i)
+\right)
+}_{\text{importance-weighted correction of observed residual}}
+\right]\]</span></p>
+<p>It is consistent if either:</p>
+<ul>
+<li><p>the behavior propensity <span class="math inline">\(\mu(a\mid x)\)</span> is correct; or</p></li>
+<li><p>the outcome model <span class="math inline">\(\hat q(x,a)\)</span> is correct.</p></li>
+</ul>
+<p>If both are wrong, the guarantee disappears. Weight clipping also generally breaks exact double robustness.</p>
+<p>Think of <span class="math inline">\(\hat q\)</span> as a map and the residual correction as checking the map against landmarks actually encountered. Either an accurate map or accurate knowledge of how the landmarks were sampled can rescue the estimate.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>contexts, actions and rewards: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>policy and value tables: <span style="background-color: codeinlinebg"><code> [S, A]</code></span></p></li>
+<li><p>gathered propensities and weights: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>repeated value estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>For LLMs, exact sequence propensities may be unstable. DR can reduce variance when the outcome model explains much of the reward, but it cannot repair missing support.</p>
+<p>DPO trains from offline preferences; it does not directly estimate deployment outcomes. A DPO policy can be the target policy <span class="math inline">\(\pi\)</span> in DR evaluation, but the outcome model and logged behavior propensities remain separate requirements.</p>
+<h3 class="unnumbered" id="pytorch-exercise-either-model-can-be-correct-but-not-neither">3. PyTorch exercise — either model can be correct, but not neither</h3>
+<p>Two equally likely prompt types and two actions are used. The behavior policy often chooses the worse action, while the target policy usually chooses the better one.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 3_000
+episodes_per_repetition = 500
+
+context_probabilities = torch.tensor([
+    0.50,
+    0.50,
+])
+
+# Rows are contexts; columns are actions.
+true_action_values = torch.tensor([
+    [0.20, 0.80],
+    [0.60, 0.40],
+])
+
+target_policy = torch.tensor([
+    [0.10, 0.90],
+    [0.90, 0.10],
+])
+
+behavior_policy = torch.tensor([
+    [0.80, 0.20],
+    [0.20, 0.80],
+])
+
+misspecified_behavior_policy = torch.tensor([
+    [0.60, 0.40],
+    [0.40, 0.60],
+])
+
+bad_reward_model = torch.tensor([
+    [0.40, 0.60],
+    [0.40, 0.60],
+])
+
+
+# TODO 1: Calculate the exact target value.
+exact_target_value = ...
+
+
+# TODO 2: Generate logged behavior-policy data.
+contexts = ...
+
+behavior_action_one_probabilities = ...
+
+actions = ...
+
+reward_probabilities = ...
+
+rewards = ...
+
+
+# TODO 3: Gather probabilities for logged actions.
+target_propensities = ...
+
+behavior_propensities = ...
+
+wrong_behavior_propensities = ...
+
+correct_importance_weights = ...
+
+wrong_importance_weights = ...
+
+
+# TODO 4: Implement three estimators.
+def direct_method(action_value_model):
+    target_action_values = ...
+
+    return ...
+
+
+def importance_sampling(weights):
+    return ...
+
+
+def doubly_robust(
+    action_value_model,
+    weights,
+):
+    model_baseline = ...
+
+    logged_action_predictions = ...
+
+    residual_correction = ...
+
+    return ...
+
+
+# TODO 5: Compare correct and incorrect components.
+dm_exact = ...
+dm_bad = ...
+
+ips_correct = ...
+ips_wrong = ...
+
+dr_correct_propensity_bad_model = ...
+
+dr_wrong_propensity_exact_model = ...
+
+dr_wrong_propensity_bad_model = ...
+
+
+all_estimates = torch.stack([
+    dm_exact,
+    dm_bad,
+    ips_correct,
+    ips_wrong,
+    dr_correct_propensity_bad_model,
+    dr_wrong_propensity_exact_model,
+    dr_wrong_propensity_bad_model,
+], dim=1)
+
+mean_estimates = ...
+
+biases = ...
+
+standard_deviations = ...
+
+rmses = ...
+
+results = torch.stack([
+    mean_estimates,
+    biases,
+    standard_deviations,
+    rmses,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Exact target value:&quot;)
+print(exact_target_value.item())
+
+print(
+    &quot;\nRows: DM exact, DM bad, IPS correct, IPS wrong, &quot;
+    &quot;DR correct-prop/bad-model, &quot;
+    &quot;DR wrong-prop/exact-model, DR both-wrong&quot;
+)
+print(
+    &quot;Columns: mean, bias, standard deviation, RMSE&quot;
+)
+print(results)
+
+print(&quot;\nCorrect/wrong maximum importance weight:&quot;)
+print(
+    correct_importance_weights.max().item(),
+    wrong_importance_weights.max().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the exact target-policy value?</p></li>
+<li><p>Will the bad direct-method estimate be above or below truth?</p></li>
+<li><p>Should correct IPS be unbiased but noisy?</p></li>
+<li><p>Can DR remain unbiased with a bad reward model?</p></li>
+<li><p>What happens when both the propensities and reward model are wrong?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>The exact value is:</p>
+<p><span class="math display">\[V^\pi
+=
+\underbrace{
+\sum_x p(x)
+\sum_a\pi(a\mid x)q(x,a)
+}_{\text{average target-policy outcome over contexts and actions}}\]</span></p>
+<ul>
+<li><p>Sample contexts with <span style="background-color: codeinlinebg"><code> torch.multinomial</code></span>.</p></li>
+<li><p>Sample action <span style="background-color: codeinlinebg"><code> 1</code></span> using its behavior-policy probability.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> table[contexts, actions]</code></span> to gather logged entries.</p></li>
+<li><p>The direct method averages over both target-policy actions, not just the logged action.</p></li>
+<li><p>The DR residual is <span style="background-color: codeinlinebg"><code> reward - predicted_logged_reward</code></span>.</p></li>
+<li><p>The residual correction is added, not subtracted.</p></li>
+<li><p>Each returned estimator should have shape <span style="background-color: codeinlinebg"><code> [R]</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Put target propensities in both the numerator and denominator.</p></li>
+<li><p>Calculate the direct method using only the greedy target action.</p></li>
+<li><p>Reverse the sign of the DR residual.</p></li>
+<li><p>Clip IPS weights and still claim exact double robustness.</p></li>
+<li><p>Train <span class="math inline">\(\hat q\)</span> on final evaluation outcomes and ignore leakage.</p></li>
+<li><p>Treat reward-model preference scores as calibrated outcome values.</p></li>
+<li><p>Ignore actions with zero behavior-policy support.</p></li>
+<li><p>Backpropagate through evaluation estimates instead of detaching predictions and weights.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can the direct method have low variance but high bias?</p></li>
+<li><p>Why can IPS have high variance despite being unbiased?</p></li>
+<li><p>What are the two routes to double robustness?</p></li>
+<li><p>Why does weight clipping weaken the guarantee?</p></li>
+<li><p>Does DR eliminate the need for on-policy evaluation?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Exact target value:</p>
+<pre class="code python"><code class="language-python">exact_target_value = (
+    context_probabilities[:, None]
+    * target_policy
+    * true_action_values
+).sum()</code></pre>
+<p>This gives:</p>
+<p><span class="math display">\[V^\pi
+=
+\underbrace{
+0.5(0.1\cdot0.2+0.9\cdot0.8)
+}_{\text{context 0 contribution}}
++
+\underbrace{
+0.5(0.9\cdot0.6+0.1\cdot0.4)
+}_{\text{context 1 contribution}}
+=
+0.66\]</span></p>
+<p>Logged data:</p>
+<pre class="code python"><code class="language-python">contexts = torch.multinomial(
+    context_probabilities,
+    num_samples=(
+        num_repetitions
+        * episodes_per_repetition
+    ),
+    replacement=True,
+).reshape(
+    num_repetitions,
+    episodes_per_repetition,
+)
+
+behavior_action_one_probabilities = (
+    behavior_policy[
+        contexts,
+        1,
+    ]
+)
+
+actions = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_repetition,
+    )
+    &lt; behavior_action_one_probabilities
+).to(torch.long)
+
+reward_probabilities = (
+    true_action_values[
+        contexts,
+        actions,
+    ]
+)
+
+rewards = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_repetition,
+    )
+    &lt; reward_probabilities
+).to(torch.float64)</code></pre>
+<p>Probabilities and weights:</p>
+<pre class="code python"><code class="language-python">target_propensities = target_policy[
+    contexts,
+    actions,
+]
+
+behavior_propensities = behavior_policy[
+    contexts,
+    actions,
+]
+
+wrong_behavior_propensities = (
+    misspecified_behavior_policy[
+        contexts,
+        actions,
+    ]
+)
+
+correct_importance_weights = (
+    target_propensities
+    / behavior_propensities
+)
+
+wrong_importance_weights = (
+    target_propensities
+    / wrong_behavior_propensities
+)</code></pre>
+<p>Estimators:</p>
+<pre class="code python"><code class="language-python">def direct_method(action_value_model):
+    target_action_values = (
+        target_policy[contexts]
+        * action_value_model[contexts]
+    ).sum(dim=-1)
+
+    return target_action_values.mean(
+        dim=1
+    )
+
+
+def importance_sampling(weights):
+    return (
+        weights * rewards
+    ).mean(dim=1)
+
+
+def doubly_robust(
+    action_value_model,
+    weights,
+):
+    model_baseline = (
+        target_policy[contexts]
+        * action_value_model[contexts]
+    ).sum(dim=-1)
+
+    logged_action_predictions = (
+        action_value_model[
+            contexts,
+            actions,
+        ]
+    )
+
+    residual_correction = (
+        weights
+        * (
+            rewards
+            - logged_action_predictions
+        )
+    )
+
+    return (
+        model_baseline
+        + residual_correction
+    ).mean(dim=1)</code></pre>
+<p>Estimator comparison:</p>
+<pre class="code python"><code class="language-python">dm_exact = direct_method(
+    true_action_values
+)
+
+dm_bad = direct_method(
+    bad_reward_model
+)
+
+ips_correct = importance_sampling(
+    correct_importance_weights
+)
+
+ips_wrong = importance_sampling(
+    wrong_importance_weights
+)
+
+dr_correct_propensity_bad_model = (
+    doubly_robust(
+        bad_reward_model,
+        correct_importance_weights,
+    )
+)
+
+dr_wrong_propensity_exact_model = (
+    doubly_robust(
+        true_action_values,
+        wrong_importance_weights,
+    )
+)
+
+dr_wrong_propensity_bad_model = (
+    doubly_robust(
+        bad_reward_model,
+        wrong_importance_weights,
+    )
+)
+
+mean_estimates = all_estimates.mean(
+    dim=0
+)
+
+biases = (
+    mean_estimates
+    - exact_target_value
+)
+
+standard_deviations = all_estimates.std(
+    dim=0,
+    correction=1,
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)</code></pre>
+<p>Typical results are:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Estimator</strong></th>
+<th style="text-align: left;"><strong>Mean</strong></th>
+<th style="text-align: left;"><strong>Bias</strong></th>
+<th style="text-align: left;"><strong>SD</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Estimator</strong></td>
+<td style="text-align: left;"><strong>Mean</strong></td>
+<td style="text-align: left;"><strong>Bias</strong></td>
+<td style="text-align: left;"><strong>SD</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">DM, exact model</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.660</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.004</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">DM, bad model</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.500</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.160</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.004</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">IPS, correct propensities</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.660</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.070</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">IPS, wrong propensities</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.355</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.305</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.035</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">DR, correct propensity/bad model</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.660</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.044</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">DR, wrong propensity/exact model</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.660</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.021</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">DR, both wrong</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.563</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> -0.097</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.023</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>Why the two routes work:</p>
+<ul>
+<li><p>If <span class="math inline">\(\hat q=q\)</span>, then:</p></li>
+</ul>
+<p><span class="math display">\[E[
+R-\hat q(x,a)
+\mid x,a
+]
+=
+\underbrace{0}_{\text{residual correction has zero mean}}\]</span></p>
+<p>even when the propensity model is wrong.</p>
+<ul>
+<li><p>If <span class="math inline">\(\mu\)</span> is correct, importance weighting makes the residual correction exactly compensate for errors in <span class="math inline">\(\hat q\)</span>.</p></li>
+</ul>
+<p>When both components are wrong, neither mechanism repairs the other.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It replaces noisy outcomes with predictions; stable but systematically incorrect predictions create persistent bias.</p></li>
+<li><p>Rare behavior-policy actions can receive very large target-to-behavior ratios.</p></li>
+<li><p>Either the outcome model is correct or the behavior propensities are correct, with adequate support.</p></li>
+<li><p>Clipping changes the importance ratios, so the correction no longer exactly represents the target policy.</p></li>
+<li><p>No. Weak support, long-horizon ratios, model misspecification and high-stakes decisions still favor fresh on-policy confirmation.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The new policy changes the frequency of regions where reward-model error may differ; old traffic weights the wrong mixture.</p></li>
+<li><p>Clipping reduces variance and raises ESS by biasing the estimate back toward the behavior distribution.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> doubly robust does not mean “robust to everything.” It means one of two components may be wrong—not both—and neither route can recover outcomes absent from the logs.</p>

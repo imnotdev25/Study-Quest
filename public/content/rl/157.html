@@ -1,0 +1,347 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What different roles do <span class="math inline">\(\pi_{\text{old}}\)</span> and <span class="math inline">\(\pi_{\text{ref}}\)</span> play in LLM PPO?</p></li>
+<li><p>Why may one sampled reference log-ratio be negative?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="sequence-kl-is-a-sum-over-generated-tokens">2. Sequence KL is a sum over generated tokens</h3>
+<p>For a response <span class="math inline">\(y=(a_1,\ldots,a_L)\)</span>, autoregressive factorization gives:</p>
+<p><span class="math display">\[\underbrace{
+\log\frac{\pi(y\mid x)}
+{\pi_{\text{ref}}(y\mid x)}
+}_{\text{sampled sequence log-ratio}}
+=
+\underbrace{
+\sum_{t=1}^{L}
+\left[
+\log\pi(a_t\mid s_t)
+-
+\log\pi_{\text{ref}}(a_t\mid s_t)
+\right]
+}_{\text{sum of sampled token log-ratios}}\]</span></p>
+<p>Here <span class="math inline">\(s_t=(x,a_{&lt;t})\)</span>. Include generated EOS according to your token convention; exclude prompt and padding tokens.</p>
+<p>Define:</p>
+<p><span class="math display">\[k_{it}
+=
+\underbrace{
+\log\pi(a_{it}\mid s_{it})
+-
+\log\pi_{\text{ref}}(a_{it}\mid s_{it})
+}_{\text{sampled token contribution}}\]</span></p>
+<p>The sequence-KL-shaped reward is:</p>
+<p><span class="math display">\[R_i^{\text{sum}}
+=
+\underbrace{R_i^{\text{task}}}_{\text{sequence reward}}
+-
+\underbrace{
+\beta\sum_t m_{it}k_{it}
+}_{\text{total reference-drift penalty}}\]</span></p>
+<p>If average token drift is <span class="math inline">\(c\)</span>, a length-<span class="math inline">\(L\)</span> response pays approximately <span class="math inline">\(\beta cL\)</span>. This can favour shorter answers when task reward does not compensate for length.</p>
+<p>A length-normalized alternative is:</p>
+<p><span class="math display">\[R_i^{\text{mean}}
+=
+R_i^{\text{task}}
+-
+\beta
+\underbrace{
+\frac{\sum_t m_{it}k_{it}}
+{\sum_t m_{it}}
+}_{\text{average drift per generated token}}\]</span></p>
+<p>This is a different objective. It treats a six-token response with constant per-token drift like a two-token response, even though the six-token sequence accumulates three times the total log-ratio.</p>
+<p>For token-level credit assignment, place the task reward once:</p>
+<p><span class="math display">\[r_{it}^{\text{shaped}}
+=
+\underbrace{-\beta k_{it}}_{\text{local KL cost}}
++
+\underbrace{
+\mathbf 1[t=L_i-1]R_i^{\text{task}}
+}_{\text{terminal task reward}}\]</span></p>
+<p>Then returns or GAE propagate the terminal reward backward. Repeating the sequence reward at every token creates a length-dependent reward bug.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>token log-ratios and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>lengths and sequence rewards: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>coefficient <span class="math inline">\(\beta\)</span>: scalar <span style="background-color: codeinlinebg"><code> []</code></span></p></li>
+</ul>
+<p>DPO also uses sums of completion-token log-probabilities:</p>
+<p><span class="math display">\[z
+=
+\beta_{\text{DPO}}
+\underbrace{
+\left[
+\log\frac{\pi_\theta(y_w\mid x)}
+{\pi_{\text{ref}}(y_w\mid x)}
+-
+\log\frac{\pi_\theta(y_l\mid x)}
+{\pi_{\text{ref}}(y_l\mid x)}
+\right]
+}_{\text{preferred-minus-rejected sequence margin}}\]</span></p>
+<p>Length-normalizing those log-probabilities changes the DPO objective; it is not merely a reporting choice. DPO remains offline preference optimization, without online rollouts or a PPO KL controller.</p>
+<h3 class="unnumbered" id="pytorch-exercise-one-normalization-choice-flips-the-ranking">3. PyTorch exercise — one normalization choice flips the ranking</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+batch_size = 4
+max_tokens = 6
+
+beta = torch.tensor(1.0)
+
+lengths = torch.tensor([2, 4, 6, 3])
+
+valid_mask = (
+    torch.arange(max_tokens)[None, :]
+    &lt; lengths[:, None]
+).to(torch.float64)
+
+task_sequence_rewards = torch.tensor([
+    0.85,
+    1.00,
+    1.20,
+    0.90,
+])
+
+# Sampled log pi - log pi_ref for generated tokens.
+sampled_log_ratios = torch.tensor([
+    [0.10,  0.10, 0.00, 0.00, 0.00, 0.00],
+    [0.08,  0.08, 0.08, 0.08, 0.00, 0.00],
+    [0.10,  0.10, 0.10, 0.10, 0.10, 0.10],
+    [0.02, -0.01, 0.06, 0.00, 0.00, 0.00],
+])
+
+# TODO 1: Compute summed and per-response mean KL costs.
+sequence_log_ratio_sums = ...
+
+sequence_log_ratio_means = ...
+
+# TODO 2: Compare the two shaped objectives.
+sum_shaped_rewards = ...
+
+mean_shaped_rewards = ...
+
+sum_ranking = ...
+mean_ranking = ...
+
+# TODO 3: Place sequence reward only on the final token.
+token_rewards = ...
+
+token_rewards[
+    torch.arange(batch_size),
+    lengths - 1,
+] += ...
+
+# Zero on the terminal token and padding.
+continuation_mask = (
+    torch.arange(max_tokens)[None, :]
+    &lt; (lengths - 1)[:, None]
+).to(torch.float64)
+
+# TODO 4: Compute undiscounted returns.
+returns = torch.zeros_like(token_rewards)
+running_return = torch.zeros(batch_size)
+
+for t in reversed(range(max_tokens)):
+    running_return = ...
+
+    running_return = ...
+
+    returns[:, t] = running_return
+
+return_identity_error = ...
+
+# TODO 5: Compare correctly and incorrectly scaled
+# adaptive-beta measurements.
+def update_beta(beta, observed, target):
+    relative_error = observed / target - 1.0
+
+    return beta * torch.exp(
+        0.10 * relative_error.clamp(-0.20, 0.20)
+    )
+
+observed_sequence_sum = ...
+observed_token_mean = ...
+
+sum_target = torch.tensor(0.30)
+token_mean_target = torch.tensor(0.075)
+
+beta_from_sum_units = ...
+beta_from_mean_units = ...
+
+# Unit bug: sequence sum compared with per-token target.
+beta_from_mixed_units = ...
+
+print(&quot;Lengths:&quot;, lengths)
+print(&quot;Sequence log-ratio sums:&quot;, sequence_log_ratio_sums)
+print(&quot;Per-response means:&quot;, sequence_log_ratio_means)
+
+print(&quot;Sum-shaped rewards:&quot;, sum_shaped_rewards)
+print(&quot;Mean-shaped rewards:&quot;, mean_shaped_rewards)
+print(&quot;Ranking with sums:&quot;, sum_ranking)
+print(&quot;Ranking with means:&quot;, mean_ranking)
+
+print(&quot;Token rewards:\n&quot;, token_rewards)
+print(&quot;Returns:\n&quot;, returns)
+print(&quot;Return identity error:&quot;, return_identity_error.item())
+
+print(
+    &quot;Observed sequence-sum KL:&quot;,
+    observed_sequence_sum.item(),
+)
+print(
+    &quot;Observed token-mean KL:&quot;,
+    observed_token_mean.item(),
+)
+print(
+    &quot;Beta: sum units, mean units, mixed-unit bug:&quot;,
+    beta_from_sum_units.item(),
+    beta_from_mean_units.item(),
+    beta_from_mixed_units.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which response pays the largest summed KL penalty?</p></li>
+<li><p>Will responses <span style="background-color: codeinlinebg"><code> 2</code></span> and <span style="background-color: codeinlinebg"><code> 0</code></span> retain the same relative ranking under both objectives?</p></li>
+<li><p>Can the <span style="background-color: codeinlinebg"><code> -0.01</code></span> token contribution be valid?</p></li>
+<li><p>What will happen when a sequence-sum observation is compared with a per-token target?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sum over <span style="background-color: codeinlinebg"><code> dim=1</code></span> after masking.</p></li>
+<li><p>Divide each sequence sum by its own length for the per-response mean.</p></li>
+<li><p>Rank with <span style="background-color: codeinlinebg"><code> torch.argsort(..., descending=True)</code></span>.</p></li>
+<li><p>Initialize token rewards with <span style="background-color: codeinlinebg"><code> -beta * log_ratio</code></span>.</p></li>
+<li><p>Reverse return recursion: reward plus continuation times the running return.</p></li>
+<li><p>A global token mean uses <span style="background-color: codeinlinebg"><code> valid_mask.sum()</code></span>, not the average sequence length.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Accidentally penalize prompt or padding tokens.</p></li>
+<li><p>Exclude EOS from one metric but include it in another.</p></li>
+<li><p>Add the sequence reward at every generated token.</p></li>
+<li><p>Tune <span class="math inline">\(\beta\)</span> using a summed observation and a per-token target.</p></li>
+<li><p>Assume every sampled log-ratio must be nonnegative.</p></li>
+<li><p>Compare runs without logging response-length distributions.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is the sum the natural sequence-distribution quantity?</p></li>
+<li><p>Is length normalization merely a variance-reduction technique?</p></li>
+<li><p>When can summed KL create an unwanted short-answer incentive?</p></li>
+<li><p>Why must KL-controller observations and targets use matching units?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>KL aggregation and shaped rewards:</p>
+<pre class="code python"><code class="language-python">sequence_log_ratio_sums = (
+    sampled_log_ratios * valid_mask
+).sum(dim=1)
+
+sequence_log_ratio_means = (
+    sequence_log_ratio_sums
+    / valid_mask.sum(dim=1)
+)
+
+sum_shaped_rewards = (
+    task_sequence_rewards
+    - beta * sequence_log_ratio_sums
+)
+
+mean_shaped_rewards = (
+    task_sequence_rewards
+    - beta * sequence_log_ratio_means
+)
+
+sum_ranking = torch.argsort(
+    sum_shaped_rewards,
+    descending=True,
+)
+
+mean_ranking = torch.argsort(
+    mean_shaped_rewards,
+    descending=True,
+)</code></pre>
+<p>Token reward placement:</p>
+<pre class="code python"><code class="language-python">token_rewards = (
+    -beta
+    * sampled_log_ratios
+    * valid_mask
+)
+
+token_rewards[
+    torch.arange(batch_size),
+    lengths - 1,
+] += task_sequence_rewards</code></pre>
+<p>Returns:</p>
+<pre class="code python"><code class="language-python">running_return = (
+    token_rewards[:, t]
+    + continuation_mask[:, t]
+    * running_return
+)
+
+running_return = (
+    running_return
+    * valid_mask[:, t]
+)
+
+returns[:, t] = running_return</code></pre>
+<p>Identity check:</p>
+<pre class="code python"><code class="language-python">return_identity_error = (
+    returns[:, 0]
+    - sum_shaped_rewards
+).abs().max()</code></pre>
+<p>Controller measurements:</p>
+<pre class="code python"><code class="language-python">observed_sequence_sum = (
+    sequence_log_ratio_sums.mean()
+)
+
+observed_token_mean = (
+    (
+        sampled_log_ratios
+        * valid_mask
+    ).sum()
+    / valid_mask.sum()
+)
+
+beta_from_sum_units = update_beta(
+    beta,
+    observed_sequence_sum,
+    sum_target,
+)
+
+beta_from_mean_units = update_beta(
+    beta,
+    observed_token_mean,
+    token_mean_target,
+)
+
+beta_from_mixed_units = update_beta(
+    beta,
+    observed_sequence_sum,
+    token_mean_target,
+)</code></pre>
+<p>The two reward vectors are:</p>
+<p><span class="math display">\[R^{\text{sum}}
+=
+\underbrace{[0.65,\ 0.68,\ 0.60,\ 0.83]}_{\text{total sequence penalty}}\]</span></p>
+<p><span class="math display">\[R^{\text{mean}}
+\approx
+\underbrace{[0.75,\ 0.92,\ 1.10,\ 0.877]}_{\text{length-normalized penalty}}\]</span></p>
+<p>Thus their rankings differ:</p>
+<pre class="code python"><code class="language-python">sum:  [3, 1, 0, 2]
+mean: [2, 1, 3, 0]</code></pre>
+<p>The return identity error should be zero: the initial return equals the task reward minus all token KL costs.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Autoregressive sequence probabilities multiply, so their log-probability ratios add across generated tokens.</p></li>
+<li><p>No. It changes which policies and response lengths the objective prefers.</p></li>
+<li><p>When task reward is roughly length-independent but positive per-token KL accumulates with length.</p></li>
+<li><p>Otherwise the controller interprets a unit mismatch as a large constraint violation and changes <span class="math inline">\(\beta\)</span> unnecessarily.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(\pi_{\text{old}}\)</span> measures movement within the current PPO phase; <span class="math inline">\(\pi_{\text{ref}}\)</span> anchors cumulative behaviour to the SFT policy.</p></li>
+<li><p>A sampled token may be more probable under the reference model. Nonnegativity applies to the expected KL, not every sampled contribution.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> sequence KL naturally sums token log-ratios. Averaging removes the direct length dependence, but defines a different objective. Choose deliberately, mask consistently, place sequence reward once, and never mix summed and per-token KL units in diagnostics or controllers.</p>

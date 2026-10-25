@@ -1,0 +1,95 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> For a scalar <span class="math inline">\(L\)</span> and a matrix <span class="math inline">\(X\)</span>, <span class="math inline">\(\partial L/\partial X\)</span> is the matrix of the same shape with entries <span class="math inline">\(\partial L/\partial X_{ij}\)</span>. The fastest way to derive any identity is the <em>differential</em>: write <span class="math inline">\(dL\)</span> to first order, massage it into <span class="math inline">\(dL=\operatorname{tr}(G^\top dX)=\sum_{ij}G_{ij}\,dX_{ij}\)</span>, and read off <span class="math inline">\(\partial L/\partial X=G\)</span>.</p>
+</div>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><span class="math inline">\(L\)</span></th>
+<th style="text-align: left;"><span class="math inline">\(\partial L/\partial(\cdot)\)</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(a^\top Xb\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(ab^\top\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(x^\top Ax\)</span></td>
+<td style="text-align: left;"><span class="math inline">\((A+A^\top)x\)</span> (<span class="math inline">\(=2Ax\)</span> if symmetric)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\operatorname{tr}(AXB)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(A^\top B^\top\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\log\det S\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(S^{-\top}\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\operatorname{tr}(S^{-1}A)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(-S^{-\top}A^\top S^{-\top}\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\lVert XW-Y\rVert_F^2\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(2X^\top(XW-Y)\)</span> (w.r.t. <span class="math inline">\(W\)</span>)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Three identities by differentials</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\operatorname{tr}(AXB)\)</span>: <span class="math inline">\(d\operatorname{tr}(AXB)=\operatorname{tr}(A\,dX\,B)=\operatorname{tr}(BA\,dX)\)</span> (cyclic trace) <span class="math inline">\(=\operatorname{tr}((A^\top B^\top)^\top dX)\)</span>. So the gradient is <span class="math inline">\(A^\top B^\top\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\lVert XW-Y\rVert_F^2=\operatorname{tr}(R^\top R)\)</span> with <span class="math inline">\(R=XW-Y\)</span>: <span class="math inline">\(d=2\operatorname{tr}(R^\top dR)=2\operatorname{tr}(R^\top X\,dW)\)</span>, gradient <span class="math inline">\(2X^\top R\)</span>. Setting it to zero gives the <em>normal equations</em> <span class="math inline">\(X^\top XW=X^\top Y\)</span>.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(\log\det S\)</span>: <span class="math inline">\(d\log\det S=\operatorname{tr}(S^{-1}dS)\)</span> (Jacobi’s formula), gradient <span class="math inline">\(S^{-\top}\)</span>. And from <span class="math inline">\(S^{-1}S=I\)</span>: <span class="math inline">\(d(S^{-1})=-S^{-1}\,dS\,S^{-1}\)</span>, which gives the last identity. These two are the gradient of the Gaussian log-likelihood with respect to its covariance.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Math I: matrix calculus identities, each checked against autograd.&quot;&quot;&quot;
+import torch
+
+torch.manual_seed(0)
+D = torch.float64
+
+
+def grad_of(fn, X):
+    X = X.clone().requires_grad_(True)
+    fn(X).backward()
+    return X.grad
+
+
+n, m = 4, 3
+a, b, x = torch.randn(n, dtype=D), torch.randn(m, dtype=D), torch.randn(n, dtype=D)
+X = torch.randn(n, m, dtype=D)
+A = torch.randn(n, n, dtype=D)
+B = torch.randn(m, n, dtype=D)
+S = torch.randn(n, n, dtype=D); S = S @ S.T + n * torch.eye(n, dtype=D)       # symmetric positive definite
+Xd, Y, W = torch.randn(20, n, dtype=D), torch.randn(20, 2, dtype=D), torch.randn(n, 2, dtype=D)
+
+checks = {
+    &quot;d(a^T X b)/dX       = a b^T&quot;: (grad_of(lambda X: a @ X @ b, X), torch.outer(a, b)),
+    &quot;d(x^T A x)/dx       = (A + A^T) x&quot;: (grad_of(lambda x: x @ A @ x, x), (A + A.T) @ x),
+    &quot;d tr(A X B)/dX      = A^T B^T&quot;: (grad_of(lambda X: torch.trace(A @ X @ B), X), A.T @ B.T),
+    &quot;d log det S/dS      = S^-T&quot;: (grad_of(torch.logdet, S), torch.linalg.inv(S).T),
+    &quot;d tr(S^-1 A)/dS     = -S^-T A^T S^-T&quot;: (grad_of(lambda S: torch.trace(torch.linalg.inv(S) @ A), S),
+                                             -torch.linalg.inv(S).T @ A.T @ torch.linalg.inv(S).T),
+    &quot;d |XW - Y|_F^2/dW   = 2 X^T (XW - Y)&quot;: (grad_of(lambda W: ((Xd @ W - Y) ** 2).sum(), W), 2 * Xd.T @ (Xd @ W - Y)),
+}
+for name, (auto, formula) in checks.items():
+    print(f&quot;[matcalc] {name:38s} {torch.allclose(auto, formula)}&quot;)
+
+z = torch.randn(5, dtype=D)
+p = z.softmax(0)
+Jsm = torch.autograd.functional.jacobian(lambda z: z.softmax(0), z)
+print(f&quot;[matcalc] softmax Jacobian = diag(p) - p p^T       {torch.allclose(Jsm, torch.diag(p) - torch.outer(p, p))}&quot;)
+
+# Setting the least-squares gradient to zero gives the normal equations X^T X W = X^T Y.
+W_star = torch.linalg.solve(Xd.T @ Xd, Xd.T @ Y)
+print(f&quot;[lstsq] normal equations == torch.linalg.lstsq: {torch.allclose(W_star, torch.linalg.lstsq(Xd, Y).solution)}, &quot;
+      f&quot;gradient there {grad_of(lambda W: ((Xd @ W - Y) ** 2).sum(), W_star).abs().max():.1e}&quot;)</code></pre>
+<pre class="code output"><code class="output">[matcalc] d(a^T X b)/dX       = a b^T            True
+[matcalc] d(x^T A x)/dx       = (A + A^T) x      True
+[matcalc] d tr(A X B)/dX      = A^T B^T          True
+[matcalc] d log det S/dS      = S^-T             True
+[matcalc] d tr(S^-1 A)/dS     = -S^-T A^T S^-T   True
+[matcalc] d |XW - Y|_F^2/dW   = 2 X^T (XW - Y)   True
+[matcalc] softmax Jacobian = diag(p) - p p^T       True
+[lstsq] normal equations == torch.linalg.lstsq: True, gradient there 4.9e-15</code></pre>

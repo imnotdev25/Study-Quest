@@ -1,0 +1,73 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>LLaMA (Touvron et al., 2023) fixed the template most open models still follow: pre-norm with <strong>RMSNorm</strong>, <strong>SwiGLU</strong> MLPs, <strong>RoPE</strong> positions (Session 24), no biases, and (from Llama 2 70B) <strong>grouped-query attention</strong>. Llama 3 (2024) kept it and scaled data to about 15T tokens with a 128K vocabulary.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/94073992bc81.svg" alt="diagram" loading="lazy"></figure>
+<p><em>One LLaMA block. Normalization sits inside each branch (pre-norm); the residual stream itself is never normalized.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: RMSNorm: LayerNorm without the mean</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\operatorname{RMSNorm}(x)=\gamma\odot\frac{x}{\operatorname{rms}(x)}\)</span>, with <span class="math inline">\(\operatorname{rms}(x)=\sqrt{\frac1D\sum_jx_j^2+\epsilon}\)</span>. No centering, no <span class="math inline">\(\beta\)</span>.</p>
+<p><strong>Step 2.</strong> Backward, with <span class="math inline">\(g=\partial L/\partial\hat x\)</span> and <span class="math inline">\(\hat x=x/r\)</span>: <span class="math inline">\(\frac{\partial r}{\partial x_k}=\frac{x_k}{Dr}\)</span>, so <span class="math inline">\(\frac{\partial\hat x_j}{\partial x_k}=\frac{\delta_{jk}}{r}-\frac{x_jx_k}{Dr^3}\)</span>.</p>
+<p><strong>Step 3.</strong> VJP: <span class="math inline">\(\frac{\partial L}{\partial x}=\frac1r\big(g-\hat x\,\overline{g\odot\hat x}\big)\)</span>. Compare LayerNorm (Session 6): the <span class="math inline">\(-\overline g\)</span> term is gone because there is no mean to remove.</p>
+<p><strong>Step 4.</strong> One reduction instead of two, and empirically just as stable.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: SwiGLU and the <span class="math inline">\(\tfrac23\)</span> factor</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\operatorname{SwiGLU}(x)=W_2\big(\operatorname{SiLU}(xW_1)\odot xW_3\big)\)</span>, with <span class="math inline">\(\operatorname{SiLU}(z)=z\sigma(z)\)</span>. The second branch is a learned, input-dependent gate.</p>
+<p><strong>Step 2.</strong> Parameters: three <span class="math inline">\(D\times D_{\text{ff}}\)</span> matrices <span class="math inline">\(=3DD_{\text{ff}}\)</span>, versus <span class="math inline">\(2D\cdot4D=8D^2\)</span> for a GELU MLP.</p>
+<p><strong>Step 3.</strong> Match the budget: <span class="math inline">\(3DD_{\text{ff}}=8D^2\Rightarrow D_{\text{ff}}=\frac23\cdot4D\)</span>. For <span class="math inline">\(D=4096\)</span>: <span class="math inline">\(10{,}923\)</span>, rounded up to a multiple of 256: Llama 2 7B uses 11<span>,</span>008.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/ad60b1dc27ef.svg" alt="diagram" loading="lazy"></figure>
+<p><em>8 query heads sharing 8, 2 or 1 key/value heads. Only the orange squares are stored in the KV cache.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: grouped-query attention cuts the KV cache</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(H\)</span> query heads share <span class="math inline">\(n_{kv}&lt;H\)</span> key/value heads; each group of <span class="math inline">\(H/n_{kv}\)</span> query heads reads the same <span class="math inline">\(K,V\)</span>. <span class="math inline">\(n_{kv}=H\)</span> is MHA, <span class="math inline">\(n_{kv}=1\)</span> is multi-query attention (MQA).</p>
+<p><strong>Step 2.</strong> KV cache per token per layer: <span class="math inline">\(2n_{kv}d_h\)</span> numbers instead of <span class="math inline">\(2Hd_h\)</span>. A reduction of <span class="math inline">\(H/n_{kv}\)</span>.</p>
+<p><strong>Step 3.</strong> <strong>Llama 3 70B:</strong> 80 layers, 64 query heads, 8 KV heads, <span class="math inline">\(d_h=128\)</span>, BF16. Per token: <span class="math inline">\(2\cdot8\cdot128\cdot80\cdot2=327{,}680\)</span> bytes <span class="math inline">\(=320\)</span> KB, versus 2.5 MB with full MHA. An 8<span class="math inline">\(\times\)</span> saving, so 8<span class="math inline">\(\times\)</span> more concurrent context in the same memory.</p>
+<p><strong>Step 4.</strong> Attention FLOPs are unchanged (every query head still attends). GQA saves <em>memory bandwidth</em>, which is what limits decoding speed.</p>
+</div>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Model</th>
+<th style="text-align: right;">Layers</th>
+<th style="text-align: right;"><span class="math inline">\(D\)</span></th>
+<th style="text-align: right;">Heads (Q/KV)</th>
+<th style="text-align: right;">Context</th>
+<th style="text-align: right;">Tokens</th>
+<th style="text-align: left;">Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">LLaMA 1 65B</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">8192</td>
+<td style="text-align: right;">64/64</td>
+<td style="text-align: right;">2K</td>
+<td style="text-align: right;">1.4T</td>
+<td style="text-align: left;">RMSNorm, SwiGLU, RoPE</td>
+</tr>
+<tr>
+<td style="text-align: left;">Llama 2 70B</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">8192</td>
+<td style="text-align: right;">64/8</td>
+<td style="text-align: right;">4K</td>
+<td style="text-align: right;">2T</td>
+<td style="text-align: left;">+ GQA</td>
+</tr>
+<tr>
+<td style="text-align: left;">Llama 3 70B</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">8192</td>
+<td style="text-align: right;">64/8</td>
+<td style="text-align: right;">8K<span class="math inline">\(\to\)</span>128K</td>
+<td style="text-align: right;">15T</td>
+<td style="text-align: left;">128K vocab, RoPE <span class="math inline">\(\theta=5\times10^5\)</span></td>
+</tr>
+</tbody>
+</table>
+</div>

@@ -1,0 +1,311 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Monitoring drift:</strong> PPO needs to know how far <span class="math inline">\(\pi_\theta\)</span> has moved from <span class="math inline">\(\pi_{\text{old}}\)</span>, measured as <span class="math inline">\(D_{\mathrm{KL}}(\pi_{\text{old}}\|\pi_\theta)\)</span>. The exact value needs the full <span class="math inline">\(V\)</span>-way distribution at every token, which is expensive. <strong>Sampled estimators</strong> use only the log-probabilities of the tokens actually generated.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why should advantages be normalized over the complete rollout rather than separately per minibatch?</p></li>
+<li><p>What happens when a one-element minibatch is independently centered?</p></li>
+</ol>
+<p>Let the rollout policy be <span class="math inline">\(p=\pi_{\text{old}}\)</span>, the current policy be <span class="math inline">\(q=\pi_\theta\)</span>, and:</p>
+<p><span class="math display">\[a\sim p\]</span></p>
+<p>For selected-action log-probabilities:</p>
+<p><span class="math display">\[\ell_{\text{old}},\ell_{\text{new}}
+\in\mathbb{R}^{B\times T}\]</span></p>
+<p>define:</p>
+<p><span class="math display">\[x=\ell_{\text{new}}-\ell_{\text{old}},
+\qquad
+r=e^x=\frac{q(a)}{p(a)}\]</span></p>
+<p>A direct Monte Carlo estimator of the reverse KL is:</p>
+<p><span class="math display">\[k_1=-x=\log p(a)-\log q(a)\]</span></p>
+<p>because:</p>
+<p><span class="math display">\[\mathbb E_{a\sim p}[k_1]
+=
+D_{\mathrm{KL}}(p\|q)\]</span></p>
+<p>Individual values—and even a small-batch mean—can be negative.</p>
+<p>A pointwise nonnegative alternative is:</p>
+<p><span class="math display">\[k_3=(r-1)-\log r\]</span></p>
+<p>Since <span class="math inline">\(e^x\ge1+x\)</span>:</p>
+<p><span class="math display">\[k_3=e^x-1-x\ge0\]</span></p>
+<p>Under exact old-policy sampling:</p>
+<p><span class="math display">\[\mathbb E_p[r-1]=0\]</span></p>
+<p>so <span class="math inline">\(k_1\)</span> and <span class="math inline">\(k_3\)</span> have the same expectation. For nearby policies:</p>
+<p><span class="math display">\[k_3\approx\frac{x^2}{2}\]</span></p>
+<p>The exact full-distribution KL is:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(p\|q)
+=
+\sum_a p(a)
+\left[\log p(a)-\log q(a)\right]\]</span></p>
+<p>Computing it requires full <span><code>[</code></span><code>B,T,A</code><span><code>]</code></span> distributions. Sampled diagnostics need only selected-action log-probabilities, which matters for large-vocabulary LMs.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: <span class="math inline">\(k_1\)</span> and <span class="math inline">\(k_3\)</span>: same mean, different behaviour</div>
+<p>Samples <span class="math inline">\(a\sim p=\pi_{\text{old}}\)</span>; <span class="math inline">\(q=\pi_\theta\)</span>; <span class="math inline">\(x=\log q(a)-\log p(a)\)</span>; <span class="math inline">\(r=e^x=q(a)/p(a)\)</span>.</p>
+<p><strong>Step 1.</strong> <span class="math inline">\(k_1=-x\)</span>: <span class="math inline">\(\mathbb E_p[k_1]=\sum_ap(a)\log\frac{p(a)}{q(a)}=D_{\mathrm{KL}}(p\|q)\)</span>. Unbiased, but negative whenever <span class="math inline">\(q(a)&gt;p(a)\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\mathbb E_p[r]=\sum_ap(a)\frac{q(a)}{p(a)}=\sum_aq(a)=1\)</span>, so <span class="math inline">\(\mathbb E_p[r-1]=0\)</span>.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(k_3=(r-1)-x\)</span>: <span class="math inline">\(\mathbb E[k_3]=0+\mathbb E[k_1]=D_{\mathrm{KL}}(p\|q)\)</span>. Also unbiased.</p>
+<p><strong>Step 4.</strong> <span class="math inline">\(e^x\ge1+x\)</span> for all <span class="math inline">\(x\)</span> (the tangent line at 0 lies below a convex curve), so <span class="math inline">\(k_3=e^x-1-x\ge0\)</span> pointwise.</p>
+<p><strong>Step 5.</strong> Small moves: <span class="math inline">\(e^x=1+x+\frac{x^2}{2}+\dots\)</span>, so <span class="math inline">\(k_3\approx\frac{x^2}{2}\)</span>. It’s quadratic, like the true KL, so its variance is small near <span class="math inline">\(p=q\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Example:</strong> <span class="math inline">\(x=0.1\)</span>: <span class="math inline">\(k_1=-0.100\)</span>, <span class="math inline">\(k_3=e^{0.1}-1.1=0.0052\)</span>.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: sampled PPO KL diagnostics</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> selected-token <span class="math inline">\(\ell_{\text{new}},\ell_{\text{old}}\)</span>, mask <span class="math inline">\(M\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(x\gets\ell_{\text{new}}-\ell_{\text{old}}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\widehat{\mathrm{KL}}_1\gets\sum M(-x)/\sum M\)</span>; <span class="math inline">\(\widehat{\mathrm{KL}}_3\gets\sum M(e^x-1-x)/\sum M\)</span></div>
+<div class="algo-line" style="--d:0">log both; early-stop the epoch if <span class="math inline">\(\widehat{\mathrm{KL}}_3\)</span> exceeds the target</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Compare exact KL with two sampled estimators.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(271)
+
+B, T, A = 2, 3, 5
+num_samples = 100_000
+clip_epsilon = 0.2
+
+old_logits = torch.randn(B, T, A)
+
+new_logits = (
+    old_logits
+    + 0.35 * torch.randn(B, T, A)
+)
+
+valid_mask = torch.tensor([
+    [1, 1, 0],
+    [1, 1, 1],
+], dtype=torch.bool)
+
+
+old_logp = ...                                      # TODO 1: [B,T,A]
+new_logp = ...                                      # TODO 2: [B,T,A]
+old_probs = ...                                     # TODO 3
+
+token_exact_kl = ...                                # TODO 4: [B,T]
+exact_kl = ...                                      # TODO 5: masked mean
+
+print(&quot;exact token KL:\n&quot;, token_exact_kl)
+print(&quot;exact mean KL:&quot;, exact_kl.item())
+
+assert token_exact_kl.shape == (B, T)
+assert torch.all(token_exact_kl &gt;= -1e-6)</code></pre>
+<p>Sample actions from the rollout policy:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    old_distribution = torch.distributions.Categorical(
+        logits=old_logits
+    )
+
+    actions = ...                                   # TODO 6: [N,B,T]
+
+    expanded_old_logp = old_logp.unsqueeze(0).expand(
+        num_samples, -1, -1, -1
+    )
+
+    expanded_new_logp = new_logp.unsqueeze(0).expand(
+        num_samples, -1, -1, -1
+    )
+
+    old_selected = ...                              # TODO 7: [N,B,T]
+    new_selected = ...                              # TODO 8: [N,B,T]
+
+    log_ratio = ...                                 # TODO 9
+    ratio = ...                                     # TODO 10
+
+    k1 = ...                                        # TODO 11
+    k3 = ...                                        # TODO 12
+
+    sampled_k1 = ...                                # TODO 13: masked mean
+    sampled_k3 = ...                                # TODO 14: masked mean
+
+    clip_fraction = ...                             # TODO 15
+
+print(&quot;\nsampled k1:&quot;, sampled_k1.item())
+print(&quot;sampled k3:&quot;, sampled_k3.item())
+print(&quot;clip fraction:&quot;, clip_fraction.item())
+
+print(
+    &quot;fraction of negative k1 terms:&quot;,
+    (k1[:, valid_mask] &lt; 0).float().mean().item(),
+)
+
+print(
+    &quot;absolute k1 error:&quot;,
+    abs(sampled_k1.item() - exact_kl.item()),
+)
+
+print(
+    &quot;absolute k3 error:&quot;,
+    abs(sampled_k3.item() - exact_kl.item()),
+)
+
+assert torch.all(k3 &gt;= -1e-7)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Must every <code>k1</code> term be nonnegative?</p></li>
+<li><p>Must every <code>k3</code> term be nonnegative?</p></li>
+<li><p>Should both large-sample means approach the exact KL?</p></li>
+</ul>
+<p>Now reproduce a sampling-direction bug:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    new_distribution = torch.distributions.Categorical(
+        logits=new_logits
+    )
+
+    wrong_actions = ...                             # TODO 16
+
+    wrong_old_selected = expanded_old_logp.gather(
+        dim=-1,
+        index=wrong_actions.unsqueeze(-1),
+    ).squeeze(-1)
+
+    wrong_new_selected = expanded_new_logp.gather(
+        dim=-1,
+        index=wrong_actions.unsqueeze(-1),
+    ).squeeze(-1)
+
+    wrong_k1 = (
+        wrong_old_selected
+        - wrong_new_selected
+    )[:, valid_mask].mean()
+
+print(
+    &quot;\nold-vs-new estimator using new-policy samples:&quot;,
+    wrong_k1.item(),
+)</code></pre>
+<p>Explain why this estimate tends to be negative despite both KL directions being nonnegative.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>F.log_softmax(..., dim=-1)</code>.</p></li>
+<li><p>Exact KL sums over the action dimension.</p></li>
+<li><p>Sampling with <code>distribution.sample((num_samples,))</code> adds a leading dimension.</p></li>
+<li><p>Gather using <code>actions.unsqueeze(-1)</code>.</p></li>
+<li><p><code>k1 = -log_ratio</code>.</p></li>
+<li><p><code>k3 = ratio - 1 - log_ratio</code>.</p></li>
+<li><p>Clip fraction measures <code>abs(ratio - 1) &gt; clip_epsilon</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>From which policy must actions be sampled for <span class="math inline">\(k_1\)</span> to estimate <span class="math inline">\(D_{\mathrm{KL}}(\pi_{\text{old}}\|\pi_\theta)\)</span>?</p></li>
+<li><p>Prediction: if old and new policies are identical, what are <span class="math inline">\(r\)</span>, <span class="math inline">\(k_1\)</span>, and <span class="math inline">\(k_3\)</span>?</p></li>
+<li><p>Why can a small-batch mean of <span class="math inline">\(k_1\)</span> be negative without indicating an implementation bug?</p></li>
+<li><p>Debugging: the KL estimate remains substantially negative over millions of tokens. Which two mistakes should you check first?</p></li>
+<li><p>Why can clip fraction remain modest while exact full-vocabulary KL is large?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">old_logp = F.log_softmax(
+    old_logits,
+    dim=-1,
+)
+
+new_logp = F.log_softmax(
+    new_logits,
+    dim=-1,
+)
+
+old_probs = old_logp.exp()
+
+token_exact_kl = (
+    old_probs
+    * (old_logp - new_logp)
+).sum(dim=-1)
+
+exact_kl = token_exact_kl[valid_mask].mean()</code></pre>
+<p>Sampled estimates:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    old_distribution = torch.distributions.Categorical(
+        logits=old_logits
+    )
+
+    actions = old_distribution.sample(
+        (num_samples,)
+    )
+
+    expanded_old_logp = old_logp.unsqueeze(0).expand(
+        num_samples, -1, -1, -1
+    )
+
+    expanded_new_logp = new_logp.unsqueeze(0).expand(
+        num_samples, -1, -1, -1
+    )
+
+    old_selected = expanded_old_logp.gather(
+        dim=-1,
+        index=actions.unsqueeze(-1),
+    ).squeeze(-1)
+
+    new_selected = expanded_new_logp.gather(
+        dim=-1,
+        index=actions.unsqueeze(-1),
+    ).squeeze(-1)
+
+    log_ratio = new_selected - old_selected
+    ratio = torch.exp(log_ratio)
+
+    k1 = -log_ratio
+    k3 = ratio - 1.0 - log_ratio
+
+    sampled_k1 = k1[:, valid_mask].mean()
+    sampled_k3 = k3[:, valid_mask].mean()
+
+    clip_fraction = (
+        (ratio - 1.0).abs() &gt; clip_epsilon
+    )[:, valid_mask].float().mean()</code></pre>
+<p>Wrong sampling direction:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    new_distribution = torch.distributions.Categorical(
+        logits=new_logits
+    )
+
+    wrong_actions = new_distribution.sample(
+        (num_samples,)
+    )</code></pre>
+<p>If actions come from <span class="math inline">\(q\)</span> while the measured term remains:</p>
+<p><span class="math display">\[\log p(a)-\log q(a)\]</span></p>
+<p>then:</p>
+<p><span class="math display">\[\mathbb E_{a\sim q}
+[\log p(a)-\log q(a)]
+=
+-D_{\mathrm{KL}}(q\|p)
+\le0\]</span></p>
+<p>The KL itself is not negative—the code is estimating the negative of the opposite KL direction.</p>
+<p>For old-policy samples:</p>
+<p><span class="math display">\[\mathbb E_p[k_3]
+=
+\mathbb E_p[r-1-\log r]\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\mathbb E_p[r]
+=
+\sum_a p(a)\frac{q(a)}{p(a)}
+=
+\sum_aq(a)=1\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\mathbb E_p[k_3]
+=
+-\mathbb E_p[\log r]
+=
+D_{\mathrm{KL}}(p\|q)\]</span></p>
+<p>Check answers:</p>
+<ol>
+<li><p>The old rollout policy.</p></li>
+<li><p><span class="math inline">\(r=1\)</span>, <span class="math inline">\(k_1=0\)</span>, and <span class="math inline">\(k_3=0\)</span>.</p></li>
+<li><p>Individual log-ratio terms can be negative; only their old-policy expectation equals the nonnegative KL.</p></li>
+<li><p>Check whether actions were sampled from the new policy and whether the old/new log-ratio sign was reversed.</p></li>
+<li><p>Clip fraction observes ratios only for sampled actions. The policy can change substantially over unsampled or low-probability vocabulary entries, and PPO clipping is not a full-distribution trust-region constraint.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Normalize advantages once over the complete valid rollout population; local normalization makes gradients depend on minibatch partitioning.</p></li>
+<li><p>A one-element centered minibatch produces normalized advantage zero and therefore no policy-gradient contribution.</p></li>
+</ul>

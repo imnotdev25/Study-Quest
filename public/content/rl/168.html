@@ -1,0 +1,131 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a practice notebook of only your correct answers</div>
+<p>Do 8 practice problems, mark them, and copy only the ones you got right into a clean notebook. Study that notebook, then try 8 new problems. You get better at the problems you can sometimes solve. But a problem you <em>never</em> get right never makes it into the notebook, so you never learn it. That’s rejection-sampling fine-tuning, and it’s also its main limitation.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/0648d912308b.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What is the REINFORCE gradient for a reward <span class="math inline">\(R\in\{0,1\}\)</span> and no baseline?</p></li>
+<li><p>Why does a prompt that’s never solved give GRPO zero gradient? (Topic 32)</p></li>
+</ol>
+<h3 class="unnumbered" id="the-idea">2. The idea</h3>
+<p><strong>Names you’ll see:</strong> STaR (Zelikman et al., 2022), ReST (Gulcehre et al., 2023), RFT, “rejection sampling,” and “expert iteration.” All follow one loop: sample several answers, keep the ones a checker accepts, fine-tune on them, repeat.</p>
+<p><strong>It’s secretly policy gradient.</strong> Supervised fine-tuning on kept samples maximizes <span class="math inline">\(\sum_{\text{kept}}\log\pi_\theta(y|x)\)</span>. Since the samples came from <span class="math inline">\(\pi_\theta\)</span> and were kept when <span class="math inline">\(R=1\)</span>, this is <span class="math display">\[\mathbb E_{y\sim\pi_\theta}\big[R(x,y)\,\nabla\log\pi_\theta(y|x)\big],\]</span> which is REINFORCE with a 0/1 reward and <em>no baseline</em>. Wrong answers are simply thrown away instead of being pushed down.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: strengths and limits</div>
+<ul>
+<li><p><strong>Stable and simple:</strong> it’s just SFT, with no ratios, clipping or critic. It’s a strong baseline that’s always worth running first.</p></li>
+<li><p><strong>Learns only from successes:</strong> with no negative signal, it can’t explicitly suppress a common wrong pattern. GRPO-style methods use failures too.</p></li>
+<li><p><strong>Stuck prompts:</strong> if <span class="math inline">\(p(\text{solve})\approx0\)</span>, no sample is kept, so there’s no learning. Solutions: more samples per prompt, hints or rationalization (STaR gives the answer and asks for a reason), or a curriculum.</p></li>
+<li><p><strong>Off-policy drift:</strong> ReST reuses a fixed batch of samples for several fine-tuning epochs. That’s convenient, but the data grows stale.</p></li>
+</ul>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Filter to correct samples, then SFT. It’s REINFORCE with a binary reward and no baseline.</p></li>
+<li><p>Simple and stable, but blind to failures and stuck on never-solved prompts.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: how many samples do you need?</div>
+<p>A prompt with solve rate <span class="math inline">\(p=0.05\)</span> and <span class="math inline">\(k\)</span> samples: <span class="math inline">\(P(\text{at least one kept})=1-0.95^k\)</span>. That’s <span class="math inline">\(0.40\)</span> for <span class="math inline">\(k=10\)</span> and <span class="math inline">\(0.92\)</span> for <span class="math inline">\(k=50\)</span>. Hard prompts need many samples before they contribute anything.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Keeping answers a lenient checker accepts but that are wrong (the model learns the loophole).</p></li>
+<li><p>Many fine-tuning epochs on one batch (overfitting stale data).</p></li>
+<li><p>Reporting gains averaged only over prompts that had kept samples.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Rejection-sampling fine-tuning (expert iteration)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy <span class="math inline">\(\pi_\theta\)</span>, prompts with a checker, samples per prompt <span class="math inline">\(k\)</span>, iterations <span class="math inline">\(N\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(n=1,\dots,N\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">for each prompt, sample <span class="math inline">\(y_1,\dots,y_k\sim\pi_\theta(\cdot|x)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\mathcal D_n\gets\{(x,y_j):\text{checker}(x,y_j)=1\}\)</span> <em>▷ optionally dedupe, cap per prompt</em></div>
+<div class="algo-line" style="--d:1">fine-tune <span class="math inline">\(\pi_\theta\)</span> on <span class="math inline">\(\mathcal D_n\)</span> with cross-entropy for a few epochs</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-expert-iteration-on-four-prompts">3. PyTorch exercise — expert iteration on four prompts</h3>
+<p>Each prompt has 5 candidate answers. Prompt 3 starts with almost no chance of being right.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+correct = torch.tensor([2, 0, 4, 1])
+logits = torch.zeros(4, 5, requires_grad=True)
+logits.data[3] = torch.tensor([3.0, -3.0, 0.0, 0.0, 0.0])
+opt = torch.optim.Adam([logits], lr=0.1)
+
+for it in range(4):
+    with torch.no_grad():
+        samples = torch.multinomial(logits.softmax(-1), 8, replacement=True)
+    # TODO 1: boolean mask of samples equal to the correct answer
+    keep = ...
+    # TODO 2: prompt index and answer for every kept sample
+    prompt_ids = ...
+    answers = ...
+    # TODO 3: 20 SFT steps of cross-entropy on (prompt_ids, answers), if any were kept
+    ...</code></pre>
+<p><strong>Predict first:</strong> which prompts improve, and what happens to prompt 3?</p>
+<p><strong>Hints</strong></p>
+<ul>
+<li><p>Compare <span style="background-color: codeinlinebg"><code> samples</code></span> with <span style="background-color: codeinlinebg"><code> correct[:, None]</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> torch.arange(4)[:, None].expand_as(samples)[keep]</code></span> gives the prompt id for each kept sample.</p></li>
+<li><p>Guard with <span style="background-color: codeinlinebg"><code> if keep.any()</code></span>: cross-entropy on an empty batch is NaN.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is SFT on kept samples equivalent to REINFORCE with a 0/1 reward?</p></li>
+<li><p>Why does prompt 3 never improve?</p></li>
+<li><p>Name one way to give prompt 3 a chance.</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+
+# 4 prompts, 5 candidate answers each. correct[p] is the right answer for prompt p.
+correct = torch.tensor([2, 0, 4, 1])
+logits = torch.zeros(4, 5, requires_grad=True)
+logits.data[3] = torch.tensor([3.0, -3.0, 0.0, 0.0, 0.0])  # prompt 3 almost never right
+opt = torch.optim.Adam([logits], lr=0.1)
+
+
+def solve_rate():
+    with torch.no_grad():
+        return logits.softmax(-1).gather(1, correct[:, None]).squeeze(1)
+
+
+print(&quot;start solve rate&quot;, [round(x, 3) for x in solve_rate().tolist()])
+for it in range(4):
+    with torch.no_grad():
+        samples = torch.multinomial(logits.softmax(-1), 8, replacement=True)  # [prompts, 8]
+    keep = samples == correct[:, None]                                      # filter: correct only
+    prompt_ids = torch.arange(4)[:, None].expand_as(samples)[keep]
+    answers = samples[keep]
+    if keep.any():
+        for _ in range(20):                                                 # SFT on kept samples
+            loss = F.cross_entropy(logits[prompt_ids], answers)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+    print(f&quot;iter {it}: kept per prompt {keep.sum(1).tolist()}  solve rate {[round(x, 3) for x in solve_rate().tolist()]}&quot;)</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">start solve rate [0.2, 0.2, 0.2, 0.002]
+iter 0: kept per prompt [1, 1, 0, 0]  solve rate [0.891, 0.891, 0.2, 0.002]
+iter 1: kept per prompt [8, 8, 3, 0]  solve rate [0.972, 0.972, 0.912, 0.002]
+iter 2: kept per prompt [8, 8, 8, 0]  solve rate [0.982, 0.982, 0.987, 0.002]
+iter 3: kept per prompt [8, 8, 8, 0]  solve rate [0.986, 0.986, 0.993, 0.002]</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>SFT maximizes <span class="math inline">\(\sum\log\pi\)</span> over samples drawn from <span class="math inline">\(\pi\)</span> with <span class="math inline">\(R=1\)</span>, which is a sample estimate of <span class="math inline">\(\mathbb E_\pi[R\nabla\log\pi]\)</span>.</p></li>
+<li><p>Its solve rate is 0.002: in 8 samples, nothing is ever kept, so it never gets a gradient.</p></li>
+<li><p>More samples per prompt, a hint or rationalization (STaR), or switching to a method that also learns from failures.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) <span class="math inline">\(R\,\nabla\log\pi(y|x)\)</span>. (2) All rewards are equal, so every group-relative advantage is 0.</p>
+<p><strong>Takeaway:</strong> rejection sampling is the simplest working RL-for-reasoning recipe: sample, filter, imitate. Run it as a baseline before anything fancier, and track which prompts it never touches.</p>
+<p><em>Next: DAPO, the four changes that made GRPO work at scale.</em></p>

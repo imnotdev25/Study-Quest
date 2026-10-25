@@ -1,0 +1,458 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does a harm deployment gate use an upper confidence bound?</p></li>
+<li><p>Why did one fixed candidate’s joint reward-and-safety gate not require Bonferroni correction?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="replace-an-arbitrary-penalty-with-an-adaptive-multiplier">2. Replace an arbitrary penalty with an adaptive multiplier</h3>
+<p>Constrained RL asks:</p>
+<p><span class="math display">\[\max_\theta
+\underbrace{J_R(\theta)}_{\text{expected reward}}
+\qquad
+\text{subject to}
+\qquad
+\underbrace{J_C(\theta)\le d}_{\text{expected cost below limit}}\]</span></p>
+<p>Here, cost could mean unsafe responses, excessive tool calls, latency or policy violations.</p>
+<p>Introduce a nonnegative Lagrange multiplier:</p>
+<p><span class="math display">\[\mathcal L(\theta,\lambda)
+=
+\underbrace{J_R(\theta)}_{\text{reward}}
+-
+\underbrace{
+\lambda\left(J_C(\theta)-d\right)
+}_{\text{adaptive constraint penalty}}
++
+\underbrace{\beta\mathcal H(\pi_\theta)}_{\text{optional entropy}}\]</span></p>
+<p>with:</p>
+<p><span class="math display">\[\lambda\ge0\]</span></p>
+<p>The actor maximizes the Lagrangian:</p>
+<p><span class="math display">\[\theta
+\leftarrow
+\underbrace{
+\theta+\eta_\theta
+\nabla_\theta\mathcal L(\theta,\lambda)
+}_{\text{reward ascent penalized by cost}}\]</span></p>
+<p>The multiplier follows:</p>
+<p><span class="math display">\[\lambda
+\leftarrow
+\underbrace{
+\left[
+\lambda+
+\eta_\lambda
+\left(J_C(\theta)-d\right)
+\right]_+
+}_{\text{increase penalty when cost exceeds limit}}\]</span></p>
+<p>The sign is important:</p>
+<ul>
+<li><p>if <span class="math inline">\(J_C&gt;d\)</span>, increase <span class="math inline">\(\lambda\)</span>;</p></li>
+<li><p>if <span class="math inline">\(J_C&lt;d\)</span>, decrease <span class="math inline">\(\lambda\)</span>;</p></li>
+<li><p>projection <span class="math inline">\([\cdot]_+\)</span> prevents negative safety penalties.</p></li>
+</ul>
+<p>At a constrained optimum:</p>
+<p><span class="math display">\[\underbrace{\lambda\ge0}_{\text{valid multiplier}},
+\qquad
+\underbrace{J_C-d\le0}_{\text{feasible policy}},
+\qquad
+\underbrace{\lambda(J_C-d)=0}_{\text{complementary slackness}}\]</span></p>
+<p>Thus an active constraint usually ends near <span class="math inline">\(J_C=d\)</span>.</p>
+<p>A fixed penalty such as <span class="math inline">\(J_R-0.5J_C\)</span> is not automatically equivalent to a constraint. Its correct coefficient depends on reward scale, cost scale and the environment.</p>
+<p>DPO’s <span class="math inline">\(\beta\)</span> regulates movement from a reference policy; it is not an automatically adjusted safety multiplier. DPO remains offline preference optimization unless coupled to an environment interaction loop.</p>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Lagrangian constrained RL</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> cost limit <span class="math inline">\(d\)</span>, multiplier <span class="math inline">\(\lambda\gets0\)</span>, multiplier step size <span class="math inline">\(\eta_\lambda\)</span></div>
+<div class="algo-line" style="--d:0"><strong>repeat</strong></div>
+<div class="algo-line" style="--d:1">collect rollouts; estimate reward return <span class="math inline">\(\hat J_R\)</span> and cost return <span class="math inline">\(\hat J_C\)</span></div>
+<div class="algo-line" style="--d:1">compute reward advantages <span class="math inline">\(A^R\)</span> and cost advantages <span class="math inline">\(A^C\)</span> (separate critics)</div>
+<div class="algo-line" style="--d:1">policy update (e.g. PPO) on the combined advantage <span class="math inline">\(A^R-\lambda A^C\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\lambda\gets\max\big(0,\ \lambda+\eta_\lambda(\hat J_C-d)\big)\)</span> <em>▷ violations raise the penalty</em></div>
+<div class="algo-line" style="--d:0"><strong>until</strong> converged</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-constrain-a-risky-bandit">3. PyTorch exercise — constrain a risky bandit</h3>
+<p>Action <span style="background-color: codeinlinebg"><code> 1</code></span> has more reward but more safety cost:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Action</strong></th>
+<th style="text-align: left;"><strong>Reward</strong></th>
+<th style="text-align: left;"><strong>Cost</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Action</strong></td>
+<td style="text-align: left;"><strong>Reward</strong></td>
+<td style="text-align: left;"><strong>Cost</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Safe <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.3</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.1</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Risky <span style="background-color: codeinlinebg"><code> 1</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 1.0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.8</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The policy chooses risky action with:</p>
+<p><span class="math display">\[p_\theta=\underbrace{\sigma(\theta)}_{\text{risky-action probability}}\]</span></p>
+<p>The cost limit is <span style="background-color: codeinlinebg"><code> 0.30</code></span>.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+reward_by_action = torch.tensor([
+    0.30,
+    1.00,
+])
+
+cost_by_action = torch.tensor([
+    0.10,
+    0.80,
+])
+
+cost_limit = 0.30
+entropy_coefficient = 0.20
+
+num_steps = 5_000
+actor_learning_rate = 0.05
+dual_learning_rate = 0.005
+
+
+def train_policy(
+    initial_multiplier,
+    multiplier_learning_rate,
+):
+    policy_logit = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    multiplier = torch.tensor(
+        initial_multiplier,
+    )
+
+    optimizer = torch.optim.SGD(
+        [policy_logit],
+        lr=actor_learning_rate,
+    )
+
+    history = []
+
+    for step in range(num_steps):
+        # TODO 1: Policy and exact expectations.
+        risky_probability = ...
+
+        expected_reward = ...
+
+        expected_cost = ...
+
+
+        # TODO 2: Entropy and Lagrangian.
+        safe_probability = ...
+
+        entropy = ...
+
+        actor_objective = ...
+
+        actor_loss = ...
+
+
+        # TODO 3: Actor update.
+        optimizer.zero_grad()
+
+        ...
+
+        ...
+
+
+        # TODO 4: Projected dual update.
+        with torch.no_grad():
+            constraint_violation = ...
+
+            multiplier = ...
+
+        if step % 250 == 0:
+            history.append(
+                torch.stack([
+                    risky_probability.detach(),
+                    expected_reward.detach(),
+                    expected_cost.detach(),
+                    multiplier.detach(),
+                ])
+            )
+
+
+    # TODO 5: Recompute final policy metrics.
+    with torch.no_grad():
+        final_risky_probability = ...
+
+        final_expected_reward = ...
+
+        final_expected_cost = ...
+
+    return (
+        torch.stack([
+            final_risky_probability,
+            final_expected_reward,
+            final_expected_cost,
+            multiplier,
+        ]),
+        torch.stack(history),
+    )
+
+
+# No cost penalty.
+unconstrained_metrics, _ = train_policy(
+    initial_multiplier=0.0,
+    multiplier_learning_rate=0.0,
+)
+
+# Arbitrary fixed penalty.
+fixed_penalty_metrics, _ = train_policy(
+    initial_multiplier=0.5,
+    multiplier_learning_rate=0.0,
+)
+
+# Adaptive constrained optimization.
+adaptive_metrics, adaptive_history = train_policy(
+    initial_multiplier=0.0,
+    multiplier_learning_rate=dual_learning_rate,
+)
+
+all_metrics = torch.stack([
+    unconstrained_metrics,
+    fixed_penalty_metrics,
+    adaptive_metrics,
+])
+
+exact_maximum_risky_probability = ...
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Rows: unconstrained, fixed penalty, adaptive\n&quot;
+    &quot;Columns: risky probability, reward, cost, multiplier&quot;
+)
+print(all_metrics)
+
+print(
+    &quot;Maximum feasible risky probability:&quot;,
+    exact_maximum_risky_probability,
+)
+
+print(
+    &quot;Adaptive history columns: &quot;
+    &quot;risky probability, reward, cost, multiplier&quot;
+)
+print(adaptive_history)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the largest feasible risky-action probability?</p></li>
+<li><p>Where should the unconstrained policy move?</p></li>
+<li><p>Is a fixed multiplier of <span style="background-color: codeinlinebg"><code> 0.5</code></span> strong enough?</p></li>
+<li><p>Which direction should <span class="math inline">\(\lambda\)</span> move when expected cost is <span style="background-color: codeinlinebg"><code> 0.50</code></span>?</p></li>
+<li><p>Why might very different actor and dual learning rates cause oscillation?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>Expected quantities are:</p>
+<p><span class="math display">\[J_R
+=
+\underbrace{
+(1-p)(0.3)+p(1.0)
+}_{0.3+0.7p}\]</span></p>
+<p><span class="math display">\[J_C
+=
+\underbrace{
+(1-p)(0.1)+p(0.8)
+}_{0.1+0.7p}\]</span></p>
+<p>Use <span style="background-color: codeinlinebg"><code> .detach()</code></span> on the multiplier inside the actor objective. Manually update the multiplier from a detached cost violation.</p>
+<p>Clamp probabilities before <span style="background-color: codeinlinebg"><code> log</code></span> for numerical stability.</p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Reverse the dual-update sign.</p></li>
+<li><p>Allow the multiplier to become negative.</p></li>
+<li><p>Omit <span style="background-color: codeinlinebg"><code> .detach()</code></span> and accidentally mix actor and dual graphs.</p></li>
+<li><p>Use reward and cost scales differing by <span class="math inline">\(10^3\)</span> without adjusting learning rates.</p></li>
+<li><p>Update the multiplier from one noisy episode rather than a stable batch estimate.</p></li>
+<li><p>Treat padded tokens as real cost-bearing actions.</p></li>
+<li><p>Report average reward without reporting constraint violation.</p></li>
+<li><p>Treat DPO’s reference-policy coefficient as an automatically enforced safety constraint.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Policy expectations:</p>
+<pre class="code python"><code class="language-python">        risky_probability = torch.sigmoid(
+            policy_logit
+        )
+
+        expected_reward = (
+            (
+                1.0 - risky_probability
+            )
+            * reward_by_action[0]
+            + risky_probability
+            * reward_by_action[1]
+        )
+
+        expected_cost = (
+            (
+                1.0 - risky_probability
+            )
+            * cost_by_action[0]
+            + risky_probability
+            * cost_by_action[1]
+        )</code></pre>
+<p>Entropy and Lagrangian:</p>
+<pre class="code python"><code class="language-python">        safe_probability = (
+            1.0 - risky_probability
+        )
+
+        epsilon = 1e-8
+
+        entropy = -(
+            risky_probability
+            * torch.log(
+                risky_probability + epsilon
+            )
+            + safe_probability
+            * torch.log(
+                safe_probability + epsilon
+            )
+        )
+
+        actor_objective = (
+            expected_reward
+            - multiplier.detach()
+            * (
+                expected_cost
+                - cost_limit
+            )
+            + entropy_coefficient
+            * entropy
+        )
+
+        actor_loss = -actor_objective</code></pre>
+<p>Actor and dual updates:</p>
+<pre class="code python"><code class="language-python">        optimizer.zero_grad()
+
+        actor_loss.backward()
+
+        optimizer.step()
+
+        with torch.no_grad():
+            constraint_violation = (
+                expected_cost.detach()
+                - cost_limit
+            )
+
+            multiplier = (
+                multiplier
+                + multiplier_learning_rate
+                * constraint_violation
+            ).clamp_min(0.0)</code></pre>
+<p>Final metrics:</p>
+<pre class="code python"><code class="language-python">    with torch.no_grad():
+        final_risky_probability = (
+            torch.sigmoid(policy_logit)
+        )
+
+        final_expected_reward = (
+            (
+                1.0
+                - final_risky_probability
+            )
+            * reward_by_action[0]
+            + final_risky_probability
+            * reward_by_action[1]
+        )
+
+        final_expected_cost = (
+            (
+                1.0
+                - final_risky_probability
+            )
+            * cost_by_action[0]
+            + final_risky_probability
+            * cost_by_action[1]
+        )</code></pre>
+<p>Feasible risky probability:</p>
+<pre class="code python"><code class="language-python">exact_maximum_risky_probability = (
+    cost_limit - cost_by_action[0]
+) / (
+    cost_by_action[1]
+    - cost_by_action[0]
+)</code></pre>
+<p>The constraint gives:</p>
+<p><span class="math display">\[0.1+0.7p\le0.3\]</span></p>
+<p><span class="math display">\[p
+\le
+\underbrace{
+\frac{0.3-0.1}{0.8-0.1}
+}_{2/7}
+\approx0.2857\]</span></p>
+<p>Typical final values:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Training rule</strong></th>
+<th style="text-align: left;"><strong>Risky <span class="math inline">\(p\)</span></strong></th>
+<th style="text-align: left;"><strong>Reward</strong></th>
+<th style="text-align: left;"><strong>Cost</strong></th>
+<th style="text-align: left;"><strong><span class="math inline">\(\lambda\)</span></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Training rule</strong></td>
+<td style="text-align: left;"><strong>Risky <span class="math inline">\(p\)</span></strong></td>
+<td style="text-align: left;"><strong>Reward</strong></td>
+<td style="text-align: left;"><strong>Cost</strong></td>
+<td style="text-align: left;"><strong><span class="math inline">\(\lambda\)</span></strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Unconstrained</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.97</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.98</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.78</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.00</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Fixed <span class="math inline">\(\lambda=0.5\)</span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.85</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.90</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.70</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.50</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Adaptive</td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.28–0.29</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.50</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.30</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 1.26</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The adaptive multiplier settles near the value that balances reward, cost and entropy gradients. Small residual oscillation is normal for simultaneous primal-dual updates.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p><span class="math inline">\(p_{\max}=2/7\approx0.2857\)</span>.</p></li>
+<li><p>Toward the risky action because it has greater reward.</p></li>
+<li><p>No. It leaves the risky action sufficiently attractive that expected cost remains far above <span style="background-color: codeinlinebg"><code> 0.30</code></span>.</p></li>
+<li><p>Upward, because <span class="math inline">\(J_C-d=0.50-0.30&gt;0\)</span>.</p></li>
+<li><p>The fast variable can repeatedly overshoot before the slow variable reacts, producing cycles around the constraint boundary.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Safety must rule out excessive harm, so the worst plausible value—the upper bound—must remain below the margin.</p></li>
+<li><p>Promotion requires every component to pass. If any requirement is truly false, falsely promoting requires its level-<span class="math inline">\(\alpha\)</span> test to make an error. Searching across candidates is different and introduces multiplicity.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> fixed reward penalties encode one guess about the tradeoff. A Lagrange multiplier turns observed constraint violation into an adaptive penalty—but training stability and independent deployment gates still matter.</p>

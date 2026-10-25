@@ -1,0 +1,68 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A continuous random variable has a <em>density</em> <span class="math inline">\(f\ge0\)</span> with <span class="math inline">\(\int f=1\)</span>, and <span class="math inline">\(P(a&lt;X\le b)=\int_a^bf(x)\,dx\)</span>. The <em>CDF</em> is <span class="math inline">\(F(x)=P(X\le x)\)</span>, so <span class="math inline">\(f=F&#39;\)</span>. A density is not a probability: <span class="math inline">\(f(x)\)</span> can exceed 1, and <span class="math inline">\(P(X=x)=0\)</span> for every single point.</p>
+</div>
+<p><strong>Example: the exponential.</strong> <span class="math inline">\(f(x)=\lambda e^{-\lambda x}\)</span> for <span class="math inline">\(x\ge0\)</span>, <span class="math inline">\(F(x)=1-e^{-\lambda x}\)</span>, mean <span class="math inline">\(1/\lambda\)</span>. It is <em>memoryless</em>: <span class="math inline">\(P(X&gt;s+t\mid X&gt;s)=\frac{e^{-\lambda(s+t)}}{e^{-\lambda s}}=e^{-\lambda t}=P(X&gt;t)\)</span>. Having waited does not shorten the remaining wait.</p>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Transforming a random variable</div>
+<p><strong>Step 1.</strong> Let <span class="math inline">\(Y=g(X)\)</span> with <span class="math inline">\(g\)</span> increasing. Then <span class="math inline">\(F_Y(y)=P(g(X)\le y)=P(X\le g^{-1}(y))=F_X(g^{-1}(y))\)</span>.</p>
+<p><strong>Step 2.</strong> Differentiate: <span class="math inline">\(\boxed{f_Y(y)=f_X(g^{-1}(y))\,\Big|\tfrac{d}{dy}g^{-1}(y)\Big|}\)</span> (the absolute value covers decreasing <span class="math inline">\(g\)</span>). In several variables the derivative becomes <span class="math inline">\(|\det J_{g^{-1}}|\)</span>, the area-scaling factor from the integration chapter.</p>
+<p><strong>Step 3.</strong> Example: <span class="math inline">\(X\sim U(0,1)\)</span>, <span class="math inline">\(Y=X^2\)</span>, <span class="math inline">\(g^{-1}(y)=\sqrt y\)</span>: <span class="math inline">\(f_Y(y)=\frac1{2\sqrt y}\)</span> on <span class="math inline">\((0,1)\)</span>. Mass piles up near 0.</p>
+<p><strong>Step 4.</strong> <strong>Inverse-CDF sampling</strong> runs this backwards: if <span class="math inline">\(U\sim U(0,1)\)</span>, <span class="math inline">\(X=F^{-1}(U)\)</span> has CDF <span class="math inline">\(F\)</span>, because <span class="math inline">\(P(F^{-1}(U)\le x)=P(U\le F(x))=F(x)\)</span>. For the exponential, <span class="math inline">\(X=-\ln(1-U)/\lambda\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Box–Muller</strong>: two uniforms, <span class="math inline">\(R=\sqrt{-2\ln U_1}\)</span>, <span class="math inline">\(\Theta=2\pi U_2\)</span>, give two independent <span class="math inline">\(N(0,1)\)</span> as <span class="math inline">\((R\cos\Theta,R\sin\Theta)\)</span>. It is the polar Gaussian integral read as a sampler.</p>
+</div>
+<h2 class="unnumbered" id="two-transforms-used-in-deep-learning">Two transforms used in deep learning</h2>
+<p><strong>Gumbel-max.</strong> If <span class="math inline">\(G_i\)</span> are independent Gumbel(0,1) (<span class="math inline">\(G=-\log(-\log U)\)</span>), then <span class="math inline">\(\arg\max_i(z_i+G_i)\)</span> is distributed exactly as <span class="math inline">\(\operatorname{softmax}(z)\)</span>. Replacing argmax by a softmax with a temperature gives the Gumbel-softmax relaxation.</p>
+<p><strong>Reparameterisation vs score function.</strong> To get <span class="math inline">\(\nabla_\mu\mathbb E_{x\sim N(\mu,1)}[f(x)]\)</span> you can write <span class="math inline">\(x=\mu+\epsilon\)</span> and differentiate through <span class="math inline">\(f\)</span> (pathwise, used by VAEs and SAC), or use <span class="math inline">\(\mathbb E[f(x)\nabla_\mu\log p(x)]\)</span> (score function, REINFORCE, which needs no derivative of <span class="math inline">\(f\)</span>, so it works for rewards from a judge or a unit test). Both are unbiased; the score-function estimator has much higher variance (3.6<span class="math inline">\(\times\)</span> the standard deviation in the output), which is why policy gradients need baselines.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Probability: continuous random variables and transformations (inverse CDF, Box-Muller,
+change of variables, Gumbel-max, and the reparameterisation vs score-function gradient).&quot;&quot;&quot;
+import numpy as np
+
+rng = np.random.default_rng(0)
+N = 1_000_000
+
+# 1. Exponential(rate 2): CDF 1 - e^{-2x}; memoryless P(X &gt; s + t | X &gt; s) = P(X &gt; t).
+x = rng.exponential(1 / 2, N)
+print(f&quot;[exp] P(X &lt;= 0.5) sim {np.mean(x &lt;= 0.5):.4f}  CDF {1 - np.exp(-1):.4f}&quot;)
+print(f&quot;[exp] memoryless: P(X &gt; 1.3 | X &gt; 1) = {np.mean(x[x &gt; 1] &gt; 1.3):.4f}  P(X &gt; 0.3) = {np.mean(x &gt; 0.3):.4f}&quot;)
+
+# 2. Inverse-CDF sampling: if U ~ U(0,1) then F^{-1}(U) ~ F.  Exponential: -ln(1-U)/rate.
+u = rng.random(N)
+xi = -np.log(1 - u) / 2
+print(f&quot;[inverse-cdf] mean {xi.mean():.4f} (0.5)  var {xi.var():.4f} (0.25)&quot;)
+
+# 3. Change of variables: Y = X^2 with X ~ U(0,1) has density f_Y(y) = 1 / (2 sqrt y).
+y = rng.random(N) ** 2
+edges = np.array([0.01, 0.1, 0.4, 0.9])
+for lo, hi in zip(edges[:-1], edges[1:]):
+    print(f&quot;[transform] P({lo} &lt; Y &lt; {hi}): sim {np.mean((y &gt; lo) &amp; (y &lt; hi)):.4f}  &quot;
+          f&quot;integral of 1/(2 sqrt y) = sqrt(hi) - sqrt(lo) = {np.sqrt(hi) - np.sqrt(lo):.4f}&quot;)
+
+# 4. Box-Muller: two uniforms -&gt; two independent N(0,1), via the polar Jacobian.
+u1, u2 = rng.random(N), rng.random(N)
+r = np.sqrt(-2 * np.log(u1))
+z1, z2 = r * np.cos(2 * np.pi * u2), r * np.sin(2 * np.pi * u2)
+print(f&quot;[box-muller] mean {z1.mean():+.4f}  var {z1.var():.4f}  corr(z1, z2) {np.corrcoef(z1, z2)[0, 1]:+.4f}&quot;
+      f&quot;  P(|z|&lt;1.96) {np.mean(np.abs(z1) &lt; 1.96):.4f}&quot;)
+
+# 5. Gumbel-max: argmax(logits + Gumbel noise) is an exact sample from softmax(logits).
+logits = np.array([2.0, 1.0, 0.0, -1.0])
+g = -np.log(-np.log(rng.random((N, 4))))
+counts = np.bincount((logits + g).argmax(1), minlength=4) / N
+print(f&quot;[gumbel] frequencies {np.round(counts, 4)}  softmax {np.round(np.exp(logits) / np.exp(logits).sum(), 4)}&quot;)
+
+# 6. Gradient of E_{x ~ N(mu, 1)}[x^2] = 2 mu, two ways (mu = 1.5 -&gt; 3).
+mu, n = 1.5, 1000
+eps = rng.normal(size=(2000, n))
+pathwise = (2 * (mu + eps)).mean(1)                    # reparameterise x = mu + eps, differentiate x^2
+score = ((mu + eps) ** 2 * eps).mean(1)                # REINFORCE: f(x) d/dmu log p(x) = x^2 (x - mu)
+print(f&quot;[grad] pathwise estimate {pathwise.mean():.3f} +- {pathwise.std():.3f}   &quot;
+      f&quot;score-function {score.mean():.3f} +- {score.std():.3f}   (true 3.000)&quot;)</code></pre>
+<pre class="code output"><code class="output">[exp] P(X &lt;= 0.5) sim 0.6323  CDF 0.6321
+[exp] memoryless: P(X &gt; 1.3 | X &gt; 1) = 0.5499  P(X &gt; 0.3) = 0.5481
+[inverse-cdf] mean 0.4998 (0.5)  var 0.2498 (0.25)
+[transform] P(0.01 &lt; Y &lt; 0.1): sim 0.2166  integral of 1/(2 sqrt y) = sqrt(hi) - sqrt(lo) = 0.2162
+[transform] P(0.1 &lt; Y &lt; 0.4): sim 0.3163  integral of 1/(2 sqrt y) = sqrt(hi) - sqrt(lo) = 0.3162
+[transform] P(0.4 &lt; Y &lt; 0.9): sim 0.3162  integral of 1/(2 sqrt y) = sqrt(hi) - sqrt(lo) = 0.3162
+[box-muller] mean -0.0007  var 1.0004  corr(z1, z2) +0.0027  P(|z|&lt;1.96) 0.9503
+[gumbel] frequencies [0.6435 0.2371 0.0868 0.0326]  softmax [0.6439 0.2369 0.0871 0.0321]
+[grad] pathwise estimate 3.000 +- 0.063   score-function 3.002 +- 0.229   (true 3.000)</code></pre>

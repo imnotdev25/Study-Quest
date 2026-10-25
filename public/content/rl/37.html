@@ -1,0 +1,283 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: rating the starter, not the dessert</div>
+<p>If you rate a chef’s starter, your rating shouldn’t change based on which dessert was served afterwards. The dessert came later. Per-decision IS applies that to rewards: a reward earned at step <span class="math inline">\(t\)</span> is reweighted only by the actions taken <em>up to</em> step <span class="math inline">\(t\)</span>.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/a5f4d521bd99.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What support condition is required for off-policy evaluation?</p></li>
+<li><p>Why can trajectory importance sampling have low effective sample size?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="use-only-the-ratios-relevant-to-each-reward">2. Use only the ratios relevant to each reward</h3>
+<p>Logged trajectories come from behavior policy <span class="math inline">\(\mu\)</span>, while we want to evaluate target policy <span class="math inline">\(\pi\)</span>.</p>
+<p>Full-trajectory importance sampling uses:</p>
+<p><span class="math display">\[W_{0:T-1}
+=
+\prod_{k=0}^{T-1}
+\frac{\pi(A_k\mid S_k)}
+{\mu(A_k\mid S_k)}\]</span></p>
+<p>and estimates:</p>
+<p><span class="math display">\[\hat V_{\text{trajectory}}
+=
+\frac1N\sum_i
+W_{0:T-1}^{(i)}G_i\]</span></p>
+<p>The problem is that a reward received at time <span class="math inline">\(t=0\)</span> cannot be affected by actions taken at <span class="math inline">\(t=1\)</span> or <span class="math inline">\(t=2\)</span>. Yet trajectory IS multiplies that early reward by their ratios.</p>
+<p>Per-decision importance sampling instead uses only ratios up to each reward:</p>
+<p><span class="math display">\[W_{0:t}
+=
+\prod_{k=0}^{t}
+\frac{\pi(A_k\mid S_k)}
+{\mu(A_k\mid S_k)}\]</span></p>
+<p><span class="math display">\[\hat V_{\text{PDIS}}
+=
+\frac1N
+\sum_i
+\sum_{t=0}^{T-1}
+\gamma^t
+W_{0:t}^{(i)}
+R_{i,t}\]</span></p>
+<p>This is like correcting receipts individually: the first purchase is corrected using the first decision, not decisions made later in the shopping trip.</p>
+<p>Compute cumulative weights in log space:</p>
+<p><span class="math display">\[\log W_{0:t}
+=
+\sum_{k=0}^{t}
+\left[
+\log\pi(A_k\mid S_k)
+-
+\log\mu(A_k\mid S_k)
+\right]\]</span></p>
+<pre class="code python"><code class="language-python">cumulative_log_weights = step_log_ratios.cumsum(dim=-1)
+cumulative_weights = cumulative_log_weights.exp()</code></pre>
+<p>PDIS remains vulnerable to large weights late in long trajectories, but early rewards avoid unnecessary future ratios.</p>
+<p>Important limit: if all reward arrives at the final step, PDIS and trajectory IS become identical.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions, rewards, step log-ratios: <span style="background-color: codeinlinebg"><code> [trials, B, T]</code></span></p></li>
+<li><p>cumulative weights: <span style="background-color: codeinlinebg"><code> [trials, B, T]</code></span></p></li>
+<li><p>estimates across repeated trials: <span style="background-color: codeinlinebg"><code> [trials]</code></span></p></li>
+</ul>
+<p>DPO does not use these estimators: it optimizes fixed preference comparisons rather than estimating environment return from behavior-policy logs.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: why future ratios can be dropped</div>
+<p>Trajectory IS: <span class="math inline">\(\rho_{0:T-1}\sum_t\gamma^tr_{t+1}\)</span>. Per-decision IS: <span class="math display">\[\hat V_{\text{PDIS}}=\frac1N\sum_i\sum_t\gamma^t\,\rho^{(i)}_{0:t}\,r^{(i)}_{t+1},\qquad\rho_{0:t}=\prod_{k=0}^t\frac{\pi(a_k|s_k)}{b(a_k|s_k)}.\]</span> <strong>Why it’s still unbiased:</strong> given everything up to the reward <span class="math inline">\(r_{t+1}\)</span>, each later ratio has conditional expectation <span class="math inline">\(\mathbb E_b[\pi(a|s)/b(a|s)\mid s]=\sum_ab(a|s)\frac{\pi(a|s)}{b(a|s)}=1\)</span>. Multiplying <span class="math inline">\(r_{t+1}\)</span> by those future ratios adds noise with mean 1: no bias removed, only variance added. So PDIS drops them.</p>
+<p>Early rewards now get short products, which means less variance, especially for long trajectories.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Weight each reward by the ratios that could have caused it, and no more.</p></li>
+<li><p>Same expectation as trajectory IS, usually far lower variance.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: trajectory IS vs PDIS</div>
+<p>Two steps, <span class="math inline">\(\gamma=1\)</span>, ratios <span class="math inline">\(\rho_0=2,\rho_1=0.5\)</span>, rewards <span class="math inline">\(r_1=1,r_2=1\)</span>. Trajectory IS: <span class="math inline">\(2\cdot0.5\cdot(1+1)=2.0\)</span>. PDIS: <span class="math inline">\(2\cdot1+(2\cdot0.5)\cdot1=3.0\)</span>. Different numbers on one sample, but both have the same expectation. PDIS has lower variance on average.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Applying <span class="math inline">\(\rho_{t+1}\)</span> to <span class="math inline">\(r_{t+1}\)</span> (off by one).</p></li>
+<li><p>Not resetting the product at a new episode.</p></li>
+<li><p>Reporting PDIS without ESS diagnostics.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Per-decision importance sampling (PDIS)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logged trajectories, target <span class="math inline">\(\pi\)</span>, logging policy <span class="math inline">\(b\)</span>, discount <span class="math inline">\(\gamma\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each trajectory <span class="math inline">\(i\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\rho\gets1,\ \hat V_i\gets0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(t=0,\dots,T-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\rho\gets\rho\cdot\pi(a_t|s_t)/b(a_t|s_t)\)</span> <em>▷ only ratios up to this step</em></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\hat V_i\gets\hat V_i+\gamma^t\rho\,r_{t+1}\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\frac1N\sum_i\hat V_i\)</span></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-compare-estimator-variance">3. PyTorch exercise — compare estimator variance</h3>
+<p>Each action <span style="background-color: codeinlinebg"><code> 1</code></span> earns reward one immediately. The behavior policy rarely selects it, while the target policy selects it often.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+num_trials = 200
+batch_size = 512
+horizon = 3
+
+behavior_probs = torch.tensor([0.8, 0.2])
+target_probs = torch.tensor([0.3, 0.7])
+
+behavior_policy = Categorical(
+    probs=behavior_probs
+)
+
+# Independent logged datasets:
+# [trials, trajectories, time].
+actions = behavior_policy.sample((
+    num_trials,
+    batch_size,
+    horizon,
+))
+
+# Reward arrives immediately after each action.
+rewards = (
+    actions == 1
+).float()
+
+returns = rewards.sum(dim=-1)
+
+behavior_log_probs = behavior_probs.log()
+target_log_probs = target_probs.log()
+
+# TODO 1: Selected target-to-behavior log-ratio per action.
+step_log_ratios = ...
+
+# TODO 2: Cumulative log-weights and weights.
+cumulative_log_weights = ...
+cumulative_weights = ...
+
+# TODO 3: Full trajectory weights.
+trajectory_weights = ...
+
+# One trajectory-IS estimate per simulated dataset.
+trajectory_estimates = (
+    trajectory_weights * returns
+).mean(dim=1)
+
+# TODO 4: Per-decision IS estimates.
+pdis_estimates = ...
+
+# Exact target value: three actions, each with P(action 1)=0.7.
+true_target_value = horizon * target_probs[1]
+
+print(&quot;True target value:&quot;, true_target_value.item())
+print(
+    &quot;Unweighted logged return:&quot;,
+    returns.mean().item(),
+)
+
+print(
+    &quot;Trajectory IS:&quot;,
+    f&quot;mean={trajectory_estimates.mean().item():.3f}&quot;,
+    f&quot;std={trajectory_estimates.std(unbiased=False).item():.3f}&quot;,
+)
+
+print(
+    &quot;Per-decision IS:&quot;,
+    f&quot;mean={pdis_estimates.mean().item():.3f}&quot;,
+    f&quot;std={pdis_estimates.std(unbiased=False).item():.3f}&quot;,
+)
+
+print(
+    &quot;Maximum final weight:&quot;,
+    trajectory_weights.max().item(),
+)
+
+# TODO 5: Fraction of trials closer to truth with PDIS.
+pdis_wins = ...
+
+print(
+    &quot;Fraction of trials where PDIS is closer:&quot;,
+    pdis_wins.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the unweighted logged return closer to <span style="background-color: codeinlinebg"><code> 0.6</code></span> or <span style="background-color: codeinlinebg"><code> 2.1</code></span>?</p></li>
+<li><p>Around what value should both IS estimators average?</p></li>
+<li><p>Which estimator should usually have lower variance?</p></li>
+<li><p>What is the largest possible three-step trajectory weight?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Index each log-probability vector with <span style="background-color: codeinlinebg"><code> actions</code></span>.</p></li>
+<li><p>Log-ratio direction is <span style="background-color: codeinlinebg"><code> target - behavior</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> cumsum(dim=-1)</code></span>.</p></li>
+<li><p>The full trajectory weight is the final cumulative weight.</p></li>
+<li><p>For PDIS, multiply each reward by its corresponding cumulative weight, sum over time, then average over trajectories.</p></li>
+<li><p>Compare absolute errors for <span style="background-color: codeinlinebg"><code> pdis_wins</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Reverse the log-ratio:</p>
+<pre class="code python"><code class="language-python">step_log_ratios = (
+    behavior_log_probs[actions]
+    - target_log_probs[actions]
+)</code></pre>
+<p>The estimator now reweights target behavior toward the logging policy—the opposite of the required correction.</p>
+<p>Next, move all reward to the last step:</p>
+<pre class="code python"><code class="language-python">rewards = torch.zeros_like(rewards)
+rewards[..., -1] = (
+    actions[..., -1] == 1
+).float()
+returns = rewards.sum(dim=-1)</code></pre>
+<p>PDIS and trajectory IS now use the same final cumulative weight and should match.</p>
+<p>For variable-length agent traces, introduce a mask:</p>
+<pre class="code python"><code class="language-python">step_log_ratios = step_log_ratios * trajectory_mask
+rewards = rewards * trajectory_mask</code></pre>
+<p>Post-termination placeholder actions must affect neither cumulative weights nor rewards.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why are future action ratios unnecessary for an earlier reward?</p></li>
+<li><p>Does PDIS completely solve importance-weight variance?</p></li>
+<li><p>When are PDIS and trajectory IS identical?</p></li>
+<li><p>What happens if cumulative log-weights are exponentiated after hundreds of large token-level ratios?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Step log-ratios:</p>
+<pre class="code python"><code class="language-python">step_log_ratios = (
+    target_log_probs[actions]
+    - behavior_log_probs[actions]
+)</code></pre>
+<p>Cumulative weights:</p>
+<pre class="code python"><code class="language-python">cumulative_log_weights = (
+    step_log_ratios.cumsum(dim=-1)
+)
+
+cumulative_weights = (
+    cumulative_log_weights.exp()
+)</code></pre>
+<p>Full trajectory weights:</p>
+<pre class="code python"><code class="language-python">trajectory_weights = (
+    cumulative_weights[..., -1]
+)</code></pre>
+<p>PDIS estimates:</p>
+<pre class="code python"><code class="language-python">pdis_estimates = (
+    cumulative_weights * rewards
+).sum(dim=-1).mean(dim=1)</code></pre>
+<p>Trial comparison:</p>
+<pre class="code python"><code class="language-python">trajectory_errors = (
+    trajectory_estimates
+    - true_target_value
+).abs()
+
+pdis_errors = (
+    pdis_estimates
+    - true_target_value
+).abs()
+
+pdis_wins = (
+    pdis_errors &lt; trajectory_errors
+).float().mean()</code></pre>
+<p>The behavior policy’s expected logged return is:</p>
+<p><span class="math display">\[3(0.2)=0.6\]</span></p>
+<p>The target policy’s expected return is:</p>
+<p><span class="math display">\[3(0.7)=2.1\]</span></p>
+<p>Both IS estimators should average near <span class="math inline">\(2.1\)</span> across repeated datasets. PDIS should normally have lower variance because the first reward uses one ratio, the second uses two, and only the final reward uses all three.</p>
+<p>A selected action <span style="background-color: codeinlinebg"><code> 1</code></span> has ratio:</p>
+<p><span class="math display">\[\frac{0.7}{0.2}=3.5\]</span></p>
+<p>Therefore, the largest final weight is:</p>
+<p><span class="math display">\[3.5^3=42.875\]</span></p>
+<p>A rare <span style="background-color: codeinlinebg"><code> [1,1,1]</code></span> behavior-policy trajectory consequently receives substantial influence.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Future actions cannot causally change a reward that has already been observed; their ratios add variance without correcting its distribution.</p></li>
+<li><p>No. Later cumulative products can still become extreme, especially for long trajectories or distant policies.</p></li>
+<li><p>When reward exists only at the final step, both multiply it by the full trajectory ratio.</p></li>
+<li><p>The exponential may overflow, while other trajectories underflow toward zero. Accumulate in log space, inspect ranges, and consider safer estimators or constrained policy distance.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Whenever <span class="math inline">\(\pi(a\mid s)&gt;0\)</span>, the logging policy must also satisfy <span class="math inline">\(\mu(a\mid s)&gt;0\)</span>.</p></li>
+<li><p>Most weight is concentrated on a small number of rare trajectories, making the estimate noisy and sample-sensitive.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> trajectory IS applies every action ratio to every reward. Per-decision IS respects reward timing, often reducing variance by preventing future actions from reweighting outcomes that occurred before them.</p>

@@ -1,0 +1,196 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>When greedy is correct and how to prove it (exchange arguments), interval scheduling and sweep lines, Huffman coding, bit manipulation, and the number theory, combinatorics, probability, and geometry that interviewers expect you to know.</p>
+</div>
+<h1 id="greedy-algorithms">Greedy Algorithms</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A greedy algorithm always takes the best-looking option right now and never reconsiders. It is fast and simple, but it only works when the local best choice is guaranteed to be part of a global best answer. The skill is knowing when that guarantee holds.</p>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>The exchange argument</strong> is the standard proof. Take any optimal solution <span class="math inline">\(O\)</span>. Show that if <span class="math inline">\(O\)</span> differs from the greedy solution <span class="math inline">\(G\)</span> at the first choice, you can swap <span class="math inline">\(O\)</span>’s choice for <span class="math inline">\(G\)</span>’s without making <span class="math inline">\(O\)</span> worse. Repeat until <span class="math inline">\(O = G\)</span>. Therefore <span class="math inline">\(G\)</span> is optimal. If you cannot write that swap, test small counterexamples; coin change with {1, 3, 4} breaks greedy.</p>
+</div>
+<h1 id="intervals">Intervals</h1>
+<p><em>Maximum number of non-overlapping intervals (activity selection)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0">sort intervals by <strong>end</strong> time; <span class="math inline">\(count \gets 0\)</span>; <span class="math inline">\(lastEnd \gets -\infty\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each <span class="math inline">\([s, e]\)</span> in sorted order <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(s \ge lastEnd\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(count \gets count + 1\)</span>; <span class="math inline">\(lastEnd \gets e\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(count\)</span> <em>▷ minimum removals <span class="math inline">\(= n - count\)</span></em></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Exchange: let <span class="math inline">\(O\)</span> be optimal and suppose its first interval is not the one ending earliest. Replace it with the earliest-ending interval: it ends no later, so it conflicts with nothing else in <span class="math inline">\(O\)</span>. The size stays the same. Induct on the rest. Sorting by <em>start</em> or by <em>length</em> fails; know a counterexample for each.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Problem</th>
+<th style="text-align: left;">Approach</th>
+<th style="text-align: left;">Sort by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Merge overlapping intervals</td>
+<td style="text-align: left;">extend the current interval while the next start <span class="math inline">\(\le\)</span> current end</td>
+<td style="text-align: left;">start</td>
+</tr>
+<tr>
+<td style="text-align: left;">Insert interval</td>
+<td style="text-align: left;">add those ending before, merge overlapping, add the rest</td>
+<td style="text-align: left;">(already sorted)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Max non-overlapping / min removals</td>
+<td style="text-align: left;">greedy by earliest end</td>
+<td style="text-align: left;">end</td>
+</tr>
+<tr>
+<td style="text-align: left;">Minimum arrows to burst balloons</td>
+<td style="text-align: left;">same as non-overlapping</td>
+<td style="text-align: left;">end</td>
+</tr>
+<tr>
+<td style="text-align: left;">Minimum meeting rooms</td>
+<td style="text-align: left;">heap of end times, or sweep line</td>
+<td style="text-align: left;">start</td>
+</tr>
+<tr>
+<td style="text-align: left;">Interval intersections (two lists)</td>
+<td style="text-align: left;">two pointers; advance the one ending first</td>
+<td style="text-align: left;">(sorted)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Employee free time</td>
+<td style="text-align: left;">merge all, then gaps</td>
+<td style="text-align: left;">start</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="sweep-line">Sweep Line</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Turn each interval into events <span class="math inline">\((s, +1)\)</span> and <span class="math inline">\((e, -1)\)</span>, sort events (at equal times, process ends before starts if intervals are half-open), and sweep while maintaining a counter. The maximum counter value is the maximum overlap (meeting rooms, car pooling, flights in the air). With a heap of active heights instead of a counter, the same sweep solves <strong>the skyline problem</strong>: on a start push the height, on an end remove it (lazy deletion), and output a key point whenever the maximum height changes. <span class="math inline">\(O(n\log n)\)</span>.</p>
+</div>
+<h1 id="more-greedy-classics">More Greedy Classics</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Jump game</strong>: track the farthest reachable index; jump game II counts BFS-like levels (the end of the current jump range).</p></li>
+<li><p><strong>Gas station</strong>: if total gas <span class="math inline">\(\ge\)</span> total cost a solution exists; start after the last point where the running tank went negative.</p></li>
+<li><p><strong>Candy / trapping rain water</strong>: two passes (left-to-right and right-to-left) and combine.</p></li>
+<li><p><strong>Partition labels</strong>: record each letter’s last index; cut when the current index equals the max last index seen.</p></li>
+<li><p><strong>Fractional knapsack</strong>: sort by value/weight; greedy is optimal (unlike 0/1 knapsack).</p></li>
+<li><p><strong>Scheduling to minimize lateness</strong>: earliest deadline first.</p></li>
+</ul>
+</div>
+<h1 id="huffman-coding">Huffman Coding</h1>
+<p><em>Huffman coding</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(H \gets\)</span> min-heap of leaf nodes keyed by symbol frequency</div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(|H| &gt; 1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(a \gets\)</span> pop; <span class="math inline">\(b \gets\)</span> pop <em>▷ the two least frequent</em></div>
+<div class="algo-line" style="--d:1">push a new node with children <span class="math inline">\(a\)</span>, <span class="math inline">\(b\)</span> and frequency <span class="math inline">\(a.f + b.f\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">codes: left edge <span class="math inline">\(=0\)</span>, right edge <span class="math inline">\(=1\)</span>, read root-to-leaf paths</div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>The two least frequent symbols can always be siblings at the deepest level of some optimal prefix-free code (exchange them with whatever is deepest; this cannot increase cost). Merging them reduces the problem to <span class="math inline">\(n-1\)</span> symbols. The result minimizes expected code length, which comes within 1 bit of the entropy <span class="math inline">\(H = -\sum p_i\log_2 p_i\)</span>.</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<p><strong>Byte-pair encoding</strong> (Chapter 14) also merges the most frequent pair repeatedly, a greedy compression heuristic, though it optimizes vocabulary rather than code length. <strong>Entropy and cross-entropy</strong> come from the same coding view: cross-entropy loss is the expected number of bits to encode true labels with the model’s distribution. Greedy decoding in LLMs picks the most probable token at every step and is <em>not</em> globally optimal, which is why beam search and sampling exist.</p>
+</div>
+<h1 id="bit-manipulation">Bit Manipulation</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Expression</th>
+<th style="text-align: left;">Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>x &amp; (x-1)</code></td>
+<td style="text-align: left;">clear the lowest set bit (count bits; test power of two: result 0)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>x &amp; -x</code></td>
+<td style="text-align: left;">isolate the lowest set bit (Fenwick trees)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>x &gt;&gt; k &amp; 1</code></td>
+<td style="text-align: left;">test bit <span class="math inline">\(k\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>x | (1 &lt;&lt; k)</code>, <code>x &amp; ~(1 &lt;&lt; k)</code></td>
+<td style="text-align: left;">set / clear bit <span class="math inline">\(k\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>a ^ b ^ b = a</code></td>
+<td style="text-align: left;">XOR cancels pairs</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>s = (s-1) &amp; m</code></td>
+<td style="text-align: left;">next submask of <span class="math inline">\(m\)</span></td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Single number</strong>: XOR all values; pairs cancel. <strong>Single number III</strong> (two unique): XOR all to get <span class="math inline">\(a \oplus b\)</span>, split by any set bit of it, XOR each group. <strong>Single number II</strong> (others appear three times): count each bit position mod 3. <strong>Counting bits</strong> for <span class="math inline">\(0..n\)</span>: <span class="math inline">\(bits[i] = bits[i \gg 1] + (i \,\&amp;\, 1)\)</span>. <strong>Missing number</strong>: XOR of indices and values, or sum formula. <strong>Sum without +</strong>: XOR is sum without carry, AND shifted left is the carry; repeat until no carry.</p>
+</div>
+<h1 id="number-theory">Number Theory</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>GCD</strong> (Euclid): <span class="math inline">\(\gcd(a, b) = \gcd(b, a \bmod b)\)</span>, <span class="math inline">\(O(\log\min(a,b))\)</span>; <span class="math inline">\(\text{lcm}(a,b) = a / \gcd(a,b) \cdot b\)</span> (divide first to avoid overflow).</p></li>
+<li><p><strong>Fast modular exponentiation</strong>: square and multiply, <span class="math inline">\(O(\log n)\)</span>.</p></li>
+<li><p><strong>Modular inverse</strong> for prime <span class="math inline">\(p\)</span>: <span class="math inline">\(a^{p-2} \bmod p\)</span> (Fermat). Needed for <span class="math inline">\(\binom{n}{k} \bmod p\)</span> via factorials.</p></li>
+<li><p><strong>Sieve of Eratosthenes</strong>: primes up to <span class="math inline">\(n\)</span> in <span class="math inline">\(O(n\log\log n)\)</span>; start crossing out at <span class="math inline">\(p^2\)</span>.</p></li>
+<li><p><strong>Overflow</strong>: in languages with fixed-width integers, compute <code>mid = lo + (hi - lo)/2</code> and take mod after every multiplication.</p></li>
+</ul>
+</div>
+<h1 id="combinatorics-and-probability">Combinatorics and Probability</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><span class="math inline">\(\binom{n}{k}\)</span> via Pascal’s rule <span class="math inline">\(\binom{n}{k} = \binom{n-1}{k-1} + \binom{n-1}{k}\)</span> (DP).</p></li>
+<li><p>Grid paths from <span class="math inline">\((0,0)\)</span> to <span class="math inline">\((m,n)\)</span>: <span class="math inline">\(\binom{m+n}{m}\)</span>.</p></li>
+<li><p>Catalan numbers <span class="math inline">\(C_n = \frac{1}{n+1}\binom{2n}{n}\)</span> count valid parentheses, BST shapes with <span class="math inline">\(n\)</span> nodes, and polygon triangulations.</p></li>
+<li><p>Linearity of expectation solves many “expected number of…” questions without independence: expected fixed points of a random permutation is 1.</p></li>
+<li><p>Birthday bound: with <span class="math inline">\(n\)</span> items hashed into <span class="math inline">\(m\)</span> buckets, collisions become likely around <span class="math inline">\(n \approx \sqrt{m}\)</span>, which sizes hash IDs (64-bit IDs are safe for billions of items; 32-bit are not).</p></li>
+</ul>
+</div>
+<p><em>rand7() from rand5() by rejection sampling</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>loop</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(x \gets 5\cdot(\text{rand5}() - 1) + \text{rand5}()\)</span> <em>▷ uniform on 1..25</em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(x \le 21\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> <span class="math inline">\(((x - 1) \bmod 7) + 1\)</span> <em>▷ 21 = 3 full copies of 1..7</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Two calls give 25 equally likely outcomes. Keeping only the first 21 keeps each of 7 values exactly 3 times, so the result is uniform. Rejecting 4/25 of the time means the expected number of loops is <span class="math inline">\(25/21\)</span>. The same idea, <strong>rejection sampling</strong>, draws from any distribution you can bound by an easier one, and appears in ML in sampling algorithms and in speculative decoding’s acceptance rule.</p>
+</div>
+<h1 id="geometry">Geometry</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Cross product</strong> <span class="math inline">\((b-a)\times(c-a)\)</span>: sign tells whether <span class="math inline">\(c\)</span> is left or right of the line <span class="math inline">\(ab\)</span> (orientation), the basis of convex hull (Andrew’s monotone chain, <span class="math inline">\(O(n\log n)\)</span>) and segment intersection tests.</p></li>
+<li><p><strong>Points on a line</strong>: normalize slopes as reduced fractions <span class="math inline">\((dy/g,
+    dx/g)\)</span> with a sign convention, not floating-point.</p></li>
+<li><p><strong>Rectangle overlap / area</strong>: overlap width <span class="math inline">\(= \max(0, \min(r_1,r_2) - \max(l_1,l_2))\)</span>.</p></li>
+<li><p><strong>IoU</strong> of boxes = intersection area / union area, used in detection metrics and non-max suppression (Chapter 18).</p></li>
+<li><p><strong>Rotate a matrix 90°</strong>: transpose, then reverse each row.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Merge intervals</div>
+<p>Sort by start (<span class="math inline">\(O(n\log n)\)</span>). Keep a result list; for each interval, if it starts after the last merged interval ends, append it; otherwise extend the last end to <span class="math inline">\(\max(\text{last end}, \text{current end})\)</span>. Clarify whether touching intervals (<code>[1,2],[2,3]</code>) merge. Why sort by start: after sorting, any interval that overlaps the current merged block must come immediately after it. Follow-ups: intervals arrive as a stream (an ordered map from start to end, merge neighbors on insert, <span class="math inline">\(O(\log n)\)</span>); count of overlapping at each point (sweep line).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Use greedy only with an exchange argument; otherwise look for a counterexample.</p></li>
+<li><p>Intervals: sort by end for selection, by start for merging; sweep lines for overlap counts.</p></li>
+<li><p>Know the core bit tricks and XOR cancellation.</p></li>
+<li><p>GCD, fast exponentiation, rejection sampling, and cross products cover most math rounds.</p></li>
+</ul>
+</div>

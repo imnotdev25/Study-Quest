@@ -1,0 +1,91 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Real-life version.</strong> Reserving KV memory for the maximum length is like booking a 40-seat hall for every dinner because one might bring 40 guests. PagedAttention hands out tables of 16 seats as guests arrive, from anywhere in the building, and keeps a seating chart.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/d6e1cdbe3e5a.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<ul>
+<li><p><strong>KV blocks.</strong> The cache is a pool of fixed-size blocks (16 tokens is the vLLM default). Each sequence has a <em>block table</em>, a list of physical block ids, like a page table.</p></li>
+<li><p><strong>PagedAttention</strong> is an attention kernel that reads K and V through the block table, so a sequence’s cache doesn’t have to be contiguous. Waste is under one block per sequence.</p></li>
+<li><p><strong>Sharing.</strong> Blocks carry reference counts. Parallel samples of one prompt share its blocks; the first write to a shared block copies it (copy-on-write).</p></li>
+<li><p><strong>Preemption.</strong> When the pool runs out, the scheduler evicts a sequence: either <em>recompute</em> (drop its blocks, re-prefill later; vLLM’s default) or <em>swap</em> to CPU memory.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference chs. &#x27;PagedAttention&#x27; and &#x27;Prefix Optimization&#x27;: fragmentation, sharing, prefix-cache hit rates.&quot;&quot;&quot;
+import math
+from collections import OrderedDict
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# 1. Contiguous vs paged allocation for the same requests.
+MAX_LEN, BS = 4096, 16
+lens = np.clip(rng.lognormal(np.log(700), 0.8, 256), 16, MAX_LEN).astype(int)
+used = lens.sum()
+contig = len(lens) * MAX_LEN                         # reserve max length per request
+paged = sum(math.ceil(n / BS) * BS for n in lens)    # waste only inside the last block
+print(f&quot;[frag] {len(lens)} requests, mean length {lens.mean():.0f}, max reservation {MAX_LEN}&quot;)
+print(f&quot;[frag] contiguous: {used / contig:5.1%} of reserved KV slots hold tokens&quot;)
+print(f&quot;[frag] paged ({BS}-token blocks): {used / paged:5.1%}  (waste {paged - used:,} slots, &lt; {BS} per request)&quot;)
+budget = 400_000
+print(f&quot;[frag] requests that fit in {budget:,} KV slots: contiguous {budget // MAX_LEN}, &quot;
+      f&quot;paged {np.searchsorted(np.cumsum(np.ceil(lens / BS) * BS), budget)}&quot;)
+
+# 2. Parallel sampling: n samples share the prompt&#x27;s blocks (ref counts), copy-on-write at the end.
+prompt, out, n = 2000, 300, 8
+no_share = n * math.ceil((prompt + out) / BS)
+share = math.ceil(prompt / BS) + n * (math.ceil((prompt + out) / BS) - prompt // BS)
+print(f&quot;[share] {n} samples of a {prompt}-token prompt: {no_share} blocks unshared, {share} shared &quot;
+      f&quot;({1 - share / no_share:.0%} saved)&quot;)
+
+
+# 3. Prefix caching on multi-turn chat: block-hash LRU (vLLM style) vs exact token trie (radix style).
+def chats(n_conv=40, turns=6, n_sys=3):
+    systems = [list(rng.integers(0, 50_000, 600)) for _ in range(n_sys)]
+    convs = [list(systems[rng.integers(n_sys)]) for _ in range(n_conv)]
+    reqs = []
+    for t in range(turns):
+        for c in rng.permutation(n_conv):
+            convs[c] += list(rng.integers(0, 50_000, rng.integers(30, 200)))      # user turn
+            reqs.append(list(convs[c]))
+            convs[c] += list(rng.integers(0, 50_000, rng.integers(50, 300)))      # assistant reply
+    return reqs
+
+
+reqs = chats()
+total = sum(len(r) for r in reqs)
+for cap_blocks in (2_000, 8_000, 40_000):
+    lru, hit, hit_trie = OrderedDict(), 0, 0
+    for r in reqs:
+        h, matched = None, 0
+        keys = []
+        for i in range(len(r) // BS):
+            h = hash((h, tuple(r[i * BS:(i + 1) * BS])))
+            keys.append(h)
+        for k in keys:
+            if k in lru:
+                matched += BS; lru.move_to_end(k)
+            else:
+                break
+        hit += matched
+        for k in keys:
+            lru[k] = None; lru.move_to_end(k)
+        while len(lru) &gt; cap_blocks:
+            lru.popitem(last=False)
+    print(f&quot;[prefix] cache {cap_blocks:6,} blocks ({cap_blocks * BS:,} tokens): hit rate {hit / total:5.1%}&quot;)
+print(f&quot;[prefix] workload: {len(reqs)} requests, {total:,} prompt tokens; ideal (infinite cache) &quot;
+      f&quot;is bounded by the share of each prompt seen before&quot;)</code></pre>
+<pre class="code output"><code class="output">[frag] 256 requests, mean length 946, max reservation 4096
+[frag] contiguous: 23.1% of reserved KV slots hold tokens
+[frag] paged (16-token blocks): 99.3%  (waste 1,804 slots, &lt; 16 per request)
+[frag] requests that fit in 400,000 KV slots: contiguous 97, paged 256
+[share] 8 samples of a 2000-token prompt: 1152 blocks unshared, 277 shared (76% saved)
+[prefix] cache  2,000 blocks (32,000 tokens): hit rate 59.8%
+[prefix] cache  8,000 blocks (128,000 tokens): hit rate 80.9%
+[prefix] cache 40,000 blocks (640,000 tokens): hit rate 80.9%
+[prefix] workload: 240 requests, 343,852 prompt tokens; ideal (infinite cache) is bounded by the share of each prompt seen before</code></pre>
+<h2 class="unnumbered" id="prefix-caching-automatic-and-radix-tree">Prefix caching: automatic and radix-tree</h2>
+<p>A block’s identity is a hash of <em>all tokens up to its end</em> (chained: <span class="math inline">\(h_i=\text{hash}(h_{i-1},\text{tokens}_i)\)</span>), so two requests share block <span class="math inline">\(i\)</span> only if they agree on everything before it. On admission, the scheduler walks the new prompt’s block hashes and reuses each cached block until the first miss. Freed blocks keep their contents and stay in an LRU list until the space is needed. SGLang’s <strong>RadixAttention</strong> keeps the same information in a radix tree over tokens, which matches at token granularity and makes cache-aware scheduling natural (serve requests that share a long prefix together). Shared system prompts, multi-turn chat and agent loops are where it pays: 60–81% of prompt tokens in the chat workload above never need a prefill.</p>
+<h2 class="unnumbered" id="chunked-prefill">Chunked prefill</h2>
+<p>A 32k-token prompt prefilled in one step stalls every decoding sequence for the length of that step. Chunked prefill splits it across steps under the token budget, mixed with decode tokens. The simulator showed the effect: same throughput and TTFT, half the ITL tail.</p>

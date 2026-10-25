@@ -1,0 +1,204 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>The whole of pre-training is one loop: <strong>sample a batch</strong> of token sequences, compute the <strong>next-token loss</strong> (<em>LLM Fundamentals</em>, Session 11), <strong>backpropagate</strong>, <strong>clip</strong> gradients, and <strong>step</strong> AdamW with a learning-rate <strong>schedule</strong>. The model below is the LLaMA recipe at small scale: RMSNorm, SwiGLU, RoPE, tied embeddings, and <code>scaled_dot_product_attention</code> (FlashAttention on GPU).</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Pre-train a small LLaMA-style GPT from scratch on FineWeb-Edu.
+
+Local smoke test:   python pretrain_gpt.py                  (tiny model, CPU, 40 steps)
+On Modal:           modal run pretrain_gpt.py::train_remote (124M-class model, 1x H100)
+&quot;&quot;&quot;
+import math
+import time
+from dataclasses import dataclass
+
+import modal
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+@dataclass
+class Config:
+    vocab_size: int = 49152          # SmolLM2 tokenizer
+    d_model: int = 768
+    n_layers: int = 12
+    n_heads: int = 12
+    seq_len: int = 1024
+    batch_size: int = 32             # sequences per step -&gt; 32 x 1024 = 32,768 tokens/step
+    max_steps: int = 10_000          # about 330M tokens
+    lr: float = 1e-3
+    warmup: int = 200
+    decay_frac: float = 0.2          # WSD: constant LR, then linear decay over the last 20%
+    weight_decay: float = 0.1
+
+
+def rope_tables(seq_len, head_dim, base=10000.0, device=None):
+    inv = base ** (-torch.arange(0, head_dim, 2, device=device).float() / head_dim)
+    ang = torch.outer(torch.arange(seq_len, device=device).float(), inv)
+    return ang.cos(), ang.sin()
+
+
+def apply_rope(x, cos, sin):                         # x: [B, H, T, D]; rotate feature pairs
+    x1, x2 = x[..., 0::2], x[..., 1::2]
+    return torch.stack([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1).flatten(-2)
+
+
+class Block(nn.Module):
+    def __init__(self, c: Config):
+        super().__init__()
+        d, self.h = c.d_model, c.n_heads
+        hidden = 64 * round(8 * d / 3 / 64)          # SwiGLU width: 2/3 of 4d, rounded
+        self.n1, self.n2 = nn.RMSNorm(d), nn.RMSNorm(d)
+        self.qkv = nn.Linear(d, 3 * d, bias=False)
+        self.o = nn.Linear(d, d, bias=False)
+        self.w13 = nn.Linear(d, 2 * hidden, bias=False)
+        self.w2 = nn.Linear(hidden, d, bias=False)
+
+    def forward(self, x, cos, sin):
+        B, T, D = x.shape
+        q, k, v = self.qkv(self.n1(x)).view(B, T, 3, self.h, D // self.h).permute(2, 0, 3, 1, 4)
+        q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)       # FlashAttention on GPU
+        x = x + self.o(y.transpose(1, 2).reshape(B, T, D))
+        a, b = self.w13(self.n2(x)).chunk(2, dim=-1)
+        return x + self.w2(F.silu(a) * b)
+
+
+class GPT(nn.Module):
+    def __init__(self, c: Config):
+        super().__init__()
+        self.c = c
+        self.emb = nn.Embedding(c.vocab_size, c.d_model)
+        self.blocks = nn.ModuleList(Block(c) for _ in range(c.n_layers))
+        self.norm = nn.RMSNorm(c.d_model)
+        self.head = nn.Linear(c.d_model, c.vocab_size, bias=False)
+        self.head.weight = self.emb.weight                                # weight tying
+        for name, p in self.named_parameters():
+            if p.dim() == 2:
+                std = 0.02 / math.sqrt(2 * c.n_layers) if name.endswith((&quot;o.weight&quot;, &quot;w2.weight&quot;)) else 0.02
+                nn.init.normal_(p, std=std)
+        cos, sin = rope_tables(c.seq_len, c.d_model // c.n_heads)
+        self.register_buffer(&quot;cos&quot;, cos, persistent=False)
+        self.register_buffer(&quot;sin&quot;, sin, persistent=False)
+
+    def forward(self, idx, targets=None):
+        T = idx.shape[1]
+        x = self.emb(idx)
+        for blk in self.blocks:
+            x = blk(x, self.cos[:T], self.sin[:T])
+        logits = self.head(self.norm(x))
+        if targets is None:
+            return logits
+        return F.cross_entropy(logits.float().reshape(-1, logits.size(-1)), targets.reshape(-1))
+
+
+def packed_batches(texts, tokenizer, B, T):
+    &quot;&quot;&quot;Concatenate documents (EOS between them) and cut into [B, T+1] blocks: no padding, no waste.&quot;&quot;&quot;
+    buf = []
+    for text in texts:
+        buf += tokenizer(text)[&quot;input_ids&quot;] + [tokenizer.eos_token_id]
+        while len(buf) &gt;= B * (T + 1):
+            x = torch.tensor(buf[:B * (T + 1)]).view(B, T + 1)
+            buf = buf[B * (T + 1):]
+            yield x[:, :-1], x[:, 1:]
+
+
+def lr_at(step, c: Config):
+    if step &lt; c.warmup:
+        return c.lr * (step + 1) / c.warmup
+    decay_start = int(c.max_steps * (1 - c.decay_frac))
+    if step &lt; decay_start:
+        return c.lr
+    return c.lr * max(0.0, 1 - (step - decay_start) / max(1, c.max_steps - decay_start))
+
+
+def make_optimizer(model, c: Config, fused: bool):
+    decay = [p for p in model.parameters() if p.dim() &gt;= 2]       # matrices and embeddings
+    no_decay = [p for p in model.parameters() if p.dim() &lt; 2]     # norms
+    return torch.optim.AdamW([{&quot;params&quot;: decay, &quot;weight_decay&quot;: c.weight_decay},
+                              {&quot;params&quot;: no_decay, &quot;weight_decay&quot;: 0.0}],
+                             lr=c.lr, betas=(0.9, 0.95), fused=fused)
+
+
+def train(c: Config, texts, tokenizer, device=&quot;cpu&quot;, log_every=10, on_step=None):
+    torch.manual_seed(0)
+    model = GPT(c).to(device)
+    n_params = sum(p.numel() for p in model.parameters())
+    opt = make_optimizer(model, c, fused=device == &quot;cuda&quot;)
+    losses, t0 = [], time.time()
+    for step, (x, y) in enumerate(packed_batches(texts, tokenizer, c.batch_size, c.seq_len)):
+        if step &gt;= c.max_steps:
+            break
+        for g in opt.param_groups:
+            g[&quot;lr&quot;] = lr_at(step, c)
+        x, y = x.to(device), y.to(device)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=device == &quot;cuda&quot;):
+            loss = model(x, y)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        opt.step()
+        opt.zero_grad(set_to_none=True)
+        losses.append(loss.item())
+        if step % log_every == 0:
+            dt = time.time() - t0
+            tok_s = (step + 1) * c.batch_size * c.seq_len / dt
+            mfu = 6 * n_params * tok_s / 989e12 if device == &quot;cuda&quot; else float(&quot;nan&quot;)   # H100 dense BF16 peak
+            print(f&quot;step {step:5d}  loss {loss.item():.3f}  lr {lr_at(step, c):.2e}  tok/s {tok_s:,.0f}  MFU {mfu:.2f}&quot;)
+        if on_step:
+            on_step(step, model)
+    return model, losses
+
+
+# ---------------------------- Modal ----------------------------
+app = modal.App(&quot;pt-book-pretrain&quot;)
+image = (modal.Image.debian_slim(python_version=&quot;3.12&quot;)
+         .uv_pip_install(&quot;torch==2.14.1&quot;, &quot;transformers==5.20.2&quot;, &quot;datasets==5.1.0&quot;)
+         .add_local_python_source(&quot;pretrain_gpt&quot;))
+ckpt = modal.Volume.from_name(&quot;pt-book-ckpt&quot;, create_if_missing=True)
+
+
+@app.function(gpu=&quot;H100&quot;, image=image, volumes={&quot;/ckpt&quot;: ckpt},
+              secrets=[modal.Secret.from_name(&quot;huggingface-secret&quot;)], timeout=6 * 60 * 60)
+def train_remote(max_steps: int = 10_000):
+    from datasets import load_dataset
+    from transformers import AutoTokenizer
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+    tok = AutoTokenizer.from_pretrained(&quot;HuggingFaceTB/SmolLM2-135M&quot;)
+    stream = load_dataset(&quot;HuggingFaceFW/fineweb-edu&quot;, name=&quot;sample-10BT&quot;, split=&quot;train&quot;, streaming=True)
+    c = Config(max_steps=max_steps)
+
+    def save(step, model):
+        if step &gt; 0 and step % 2000 == 0:
+            torch.save(model.state_dict(), f&quot;/ckpt/gpt_step{step}.pt&quot;)
+            ckpt.commit()
+
+    train(c, (d[&quot;text&quot;] for d in stream), tok, device=&quot;cuda&quot;, log_every=100, on_step=save)
+
+
+if __name__ == &quot;__main__&quot;:
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(&quot;HuggingFaceTB/SmolLM2-135M&quot;)
+    texts = [&quot;The water cycle moves water between the oceans, the air and the land. &quot;
+             &quot;Water evaporates, condenses into clouds and falls as rain or snow.&quot;] * 400
+    c = Config(d_model=64, n_layers=2, n_heads=4, seq_len=64, batch_size=8, max_steps=40, lr=3e-3, warmup=5)
+    model, losses = train(c, texts, tok, device=&quot;cpu&quot;, log_every=10)
+    print(f&quot;params {sum(p.numel() for p in model.parameters()):,}   loss {losses[0]:.2f} -&gt; {losses[-1]:.2f}&quot;)</code></pre>
+<p>Local smoke-test output (tiny model on CPU, repeated text, so loss should fall fast):</p>
+<pre class="code output"><code class="output">step     0  loss 10.807  lr 6.00e-04  tok/s 6,422  MFU nan
+step    10  loss 8.030  lr 3.00e-03  tok/s 9,641  MFU nan
+step    20  loss 4.615  lr 3.00e-03  tok/s 9,840  MFU nan
+params 3,252,544   loss 10.81 -&gt; 3.95</code></pre>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the pieces of the loop</div>
+<p><strong>Step 1.</strong> <strong>Packing:</strong> concatenate documents with an EOS between them and cut every <span class="math inline">\(T+1\)</span> tokens. Inputs <span class="math inline">\(x_{0:T}\)</span>, targets <span class="math inline">\(x_{1:T+1}\)</span>. No padding, so every token trains. (Attention can cross the EOS into the previous document; at this scale that’s harmless, and larger runs mask it with document-aware attention.)</p>
+<p><strong>Step 2.</strong> <strong>Init:</strong> weights <span class="math inline">\(\mathcal N(0,0.02^2)\)</span>, and the two projections that write into the residual stream (<code>o</code>, <code>w2</code>) scaled by <span class="math inline">\(1/\sqrt{2L}\)</span>, so the residual stream’s variance after <span class="math inline">\(L\)</span> blocks stays about the same as at the start (each block adds two terms).</p>
+<p><strong>Step 3.</strong> <strong>AdamW with <span class="math inline">\(\beta_2=0.95\)</span></strong> (not 0.999): a shorter memory for <span class="math inline">\(v\)</span>, which reacts faster to gradient spikes. Weight decay only on matrices and embeddings, never on norm gains.</p>
+<p><strong>Step 4.</strong> <strong>WSD schedule</strong> (warmup–stable–decay): linear warmup, a long constant phase, then a linear decay to 0 over the last 10–20%. Unlike cosine, you can stop the constant phase whenever you like and decay from any checkpoint, and the decay phase is where you put your best data (mid-training).</p>
+<p><strong>Step 5.</strong> <strong>MFU</strong> printed by the loop: <span class="math inline">\(6N\cdot\text{tokens/s}/989\text{T}\)</span>. On one H100 with BF16 and <code>torch.compile</code> off, a model this size typically lands around 30–45%.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/c43ef70e998c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The two common schedules. Most of WSD’s loss improvement arrives during the final decay.</em></p>
+</div>
+<p><strong>Running it on Modal:</strong> <code>modal run pretrain_gpt.py::train_remote</code>. It streams <code>fineweb-edu/sample-10BT</code> (no download step), trains 10<span>,</span>000 steps of 32<span>,</span>768 tokens (328M tokens), and checkpoints to the <code>pt-book-ckpt</code> volume every 2<span>,</span>000 steps. Take more steps (or use <code>sample-100BT</code>) to keep improving; I haven’t run the full job, so I don’t quote a final loss.</p>

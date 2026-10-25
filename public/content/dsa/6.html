@@ -1,0 +1,184 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Four advanced structures that turn slow problems into fast ones: tries for prefixes, union-find for dynamic connectivity, Fenwick and segment trees for range queries with updates, and sparse tables for static range minimum. Plus ordered sets and coordinate compression, the glue that makes them usable.</p>
+</div>
+<h1 id="tries-prefix-trees">Tries (Prefix Trees)</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A dictionary’s thumb tabs let you jump to all words starting with “C,” then “CA,” then “CAT.” A trie is a tree of those tabs: each edge is a letter, and following edges spells a prefix.</p>
+</div>
+<figure class="tikz"><img src="figs/dsa/1de68caed65b.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A trie storing “cat,” “car,” and “dog.”</em></p>
+<p><em>Trie insert and prefix search</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Insert(<span class="math inline">\(word\)</span>)</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(node \gets root\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each character <span class="math inline">\(c\)</span> in <span class="math inline">\(word\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(c \notin node.children\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(node.children[c] \gets\)</span> new node</div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(node \gets node.children[c]\)</span>; <span class="math inline">\(node.count \gets node.count + 1\)</span> <em>▷ words through here</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(node.isEnd \gets\)</span> true</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> StartsWith(<span class="math inline">\(prefix\)</span>)</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(node \gets root\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each <span class="math inline">\(c\)</span> in <span class="math inline">\(prefix\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(c \notin node.children\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><strong>return</strong> false</div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(node \gets node.children[c]\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> true</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Operations cost <span class="math inline">\(O(L)\)</span> for a word of length <span class="math inline">\(L\)</span>, independent of how many words are stored. <strong>Patterns:</strong> autocomplete (walk to the prefix node, then DFS, or store the top-<span class="math inline">\(k\)</span> completions at each node for <span class="math inline">\(O(L)\)</span> queries); word search on a grid (DFS on the board while walking the trie, pruning dead prefixes); longest common prefix; replace words with roots; <strong>XOR maximization</strong> (a binary trie over bits: to maximize <span class="math inline">\(x \oplus y\)</span>, at each bit prefer the opposite child). <strong>Memory</strong>: a node with 26 child pointers wastes space; use hash maps, or a <strong>radix (compressed) trie</strong> that merges single-child chains.</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<p>Tokenizers match the longest vocabulary entry at each position using a trie (WordPiece’s greedy longest-match, SentencePiece’s lookup). Constrained decoding for structured output or a fixed set of allowed strings walks a trie of valid token sequences and masks every token not on an allowed edge. Search engines’ query autocomplete stores popularity-ranked completions in tries.</p>
+</div>
+<h1 id="union-find-disjoint-set-union">Union-Find (Disjoint Set Union)</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Each group of friends picks a representative. To check whether two people are in the same group, ask each for their representative and compare. To merge two groups, one representative agrees to report to the other.</p>
+</div>
+<p><em>Union-find with path compression and union by rank</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Find(<span class="math inline">\(x\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(parent[x] \ne x\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(parent[x] \gets\)</span> <em>▷ path compression</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(parent[x]\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Union(<span class="math inline">\(a, b\)</span>)</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(ra \gets\)</span> ; <span class="math inline">\(rb \gets\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(ra = rb\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> false <em>▷ already connected: an edge here makes a cycle</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(rank[ra] &lt; rank[rb]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">swap <span class="math inline">\(ra, rb\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(parent[rb] \gets ra\)</span> <em>▷ attach shorter tree under taller</em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(rank[ra] = rank[rb]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(rank[ra] \gets rank[ra] + 1\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> true</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Union by rank alone keeps trees of height <span class="math inline">\(O(\log n)\)</span>: a tree’s rank only grows when merging two equal ranks, which at least doubles its size. Path compression flattens trees during finds. Together, <span class="math inline">\(m\)</span> operations cost <span class="math inline">\(O(m\,\alpha(n))\)</span> where <span class="math inline">\(\alpha\)</span> is the inverse Ackermann function, at most 4 for any realistic <span class="math inline">\(n\)</span>: effectively constant. (Tarjan’s analysis; you only need to state the result.)</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“Number of connected components” with edges arriving over time, “are these two connected,” “redundant connection” (first edge whose endpoints are already connected), Kruskal’s MST, “accounts merge” (union emails that share an account), “number of islands II” (cells added one at a time), equations like <code>a==b, b!=c</code> (union equalities, then check inequalities). Union-find cannot easily <em>delete</em> edges; process deletions in reverse as additions when possible.</p>
+</div>
+<h1 id="fenwick-tree-binary-indexed-tree">Fenwick Tree (Binary Indexed Tree)</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Prefix sums answer range queries in <span class="math inline">\(O(1)\)</span> but an update costs <span class="math inline">\(O(n)\)</span>. A Fenwick tree balances both at <span class="math inline">\(O(\log n)\)</span>. Index <span class="math inline">\(i\)</span> (1-based) stores the sum of the range ending at <span class="math inline">\(i\)</span> of length <span class="math inline">\(\text{lowbit}(i) = i \,\&amp;\, (-i)\)</span>, the lowest set bit.</p>
+</div>
+<p><em>Fenwick tree update and prefix query</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Add(<span class="math inline">\(i, \delta\)</span>) <em>▷ <span class="math inline">\(A[i] \mathrel{+}= \delta\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(i \le n\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(T[i] \gets T[i] + \delta\)</span>; <span class="math inline">\(i \gets i + (i \,\&amp;\, -i)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> PrefixSum(<span class="math inline">\(i\)</span>) <em>▷ <span class="math inline">\(A[1] + \dots + A[i]\)</span></em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(s \gets 0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(i &gt; 0\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(s \gets s + T[i]\)</span>; <span class="math inline">\(i \gets i - (i \,\&amp;\, -i)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(s\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Removing the lowest set bit repeatedly breaks <span class="math inline">\([1, i]\)</span> into at most <span class="math inline">\(\log_2 n\)</span> disjoint ranges, one per set bit of <span class="math inline">\(i\)</span>, so a query touches <span class="math inline">\(O(\log n)\)</span> cells. An update must touch every cell whose range covers <span class="math inline">\(i\)</span>; adding the lowest set bit walks exactly those, again <span class="math inline">\(O(\log n)\)</span>. Range sum <span class="math inline">\(= \text{PrefixSum}(r) -
+\text{PrefixSum}(l-1)\)</span>.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Classic use: counting inversions or “count of smaller numbers after self.”</strong> Process the array from the right; for each value, query how many smaller values have been inserted, then insert it. Values must be <strong>coordinate compressed</strong> (replace each value with its rank among sorted distinct values) so the tree has size <span class="math inline">\(n\)</span> instead of the value range.</p>
+</div>
+<h1 id="segment-tree">Segment Tree</h1>
+<figure class="tikz"><img src="figs/dsa/fb5c731b479f.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A segment tree over <code>[5,2,3,5]</code> storing range sums.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Each node stores an aggregate (sum, min, max, gcd, count) over a range; children split the range in half. A query or point update visits <span class="math inline">\(O(\log n)\)</span> nodes. Any <em>associative</em> combine function works, which makes segment trees more general than Fenwick trees (which need invertible operations like sum for range queries). <strong>Lazy propagation</strong> supports range updates (“add 5 to every element in <span class="math inline">\([l, r]\)</span>”): store a pending update at a node that fully covers the range, and push it to children only when a later operation needs to go deeper. Both range update and range query become <span class="math inline">\(O(\log n)\)</span>.</p>
+</div>
+<p><em>Segment tree range query (sum)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Query(<span class="math inline">\(node, nl, nr, l, r\)</span>) <em>▷ <span class="math inline">\(node\)</span> covers <span class="math inline">\([nl, nr]\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(r &lt; nl\)</span> <strong>or</strong> <span class="math inline">\(nr &lt; l\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> 0 <em>▷ no overlap</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(l \le nl\)</span> <strong>and</strong> <span class="math inline">\(nr \le r\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> <span class="math inline">\(T[node]\)</span> <em>▷ full overlap</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(m \gets \lfloor (nl + nr)/2 \rfloor\)</span></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(+\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<h1 id="sparse-table">Sparse Table</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>For a <em>static</em> array and an <em>idempotent</em> operation (min, max, gcd), precompute <span class="math inline">\(st[j][i] = \min(A[i..i+2^j-1])\)</span> in <span class="math inline">\(O(n\log n)\)</span>. Any range <span class="math inline">\([l, r]\)</span> is covered by two overlapping power-of-two blocks: with <span class="math inline">\(j = \lfloor\log_2(r-l+1)\rfloor\)</span>, answer <span class="math inline">\(\min(st[j][l], st[j][r-2^j+1])\)</span> in <span class="math inline">\(O(1)\)</span>. Overlap is fine because <span class="math inline">\(\min(x,x)=x\)</span>; it would double-count for sums.</p>
+</div>
+<h1 id="choosing-a-range-structure">Choosing a Range Structure</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Structure</th>
+<th style="text-align: left;">Use when</th>
+<th style="text-align: left;">Query</th>
+<th style="text-align: left;">Update</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Prefix sums</td>
+<td style="text-align: left;">static array, sums</td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(n)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Sparse table</td>
+<td style="text-align: left;">static array, min/max/gcd</td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;">rebuild</td>
+</tr>
+<tr>
+<td style="text-align: left;">Fenwick tree</td>
+<td style="text-align: left;">point updates, prefix sums, inversion counts</td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Segment tree</td>
+<td style="text-align: left;">any associative op, range updates with lazy propagation</td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Ordered set / balanced BST</td>
+<td style="text-align: left;">dynamic sorted data, rank and <span class="math inline">\(k\)</span>-th queries</td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Sqrt decomposition</td>
+<td style="text-align: left;">simpler alternative, offline tricks (Mo’s algorithm)</td>
+<td style="text-align: left;"><span class="math inline">\(O(\sqrt n)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span>–<span class="math inline">\(O(\sqrt n)\)</span></td>
+</tr>
+</tbody>
+</table>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Ordered sets</strong> (C++ <code>std::set</code>, Java <code>TreeSet</code>, Python’s <code>sortedcontainers</code>) solve many “sliding window with ordering” problems: “contains duplicate III” (is there a value within <span class="math inline">\(t\)</span> of the current one in the last <span class="math inline">\(k\)</span> elements: query the ceiling of <span class="math inline">\(x-t\)</span>), sliding window median, and calendar booking (find the neighboring intervals). Know which your interview language provides; Python has none built in, so a heap with lazy deletion or a bucket trick is the usual substitute. <strong>Persistent segment trees</strong> keep every historical version by copying only the <span class="math inline">\(O(\log n)\)</span> changed nodes per update, answering “<span class="math inline">\(k\)</span>-th smallest in a subarray” queries.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Count of smaller numbers after self</div>
+<p>Brute force: for each index, scan to the right, <span class="math inline">\(O(n^2)\)</span>. Two <span class="math inline">\(O(n\log n)\)</span> ideas: (1) process right to left with a Fenwick tree over compressed values: answer for <span class="math inline">\(i\)</span> = prefix count of values strictly less than <span class="math inline">\(A[i]\)</span>, then add <span class="math inline">\(A[i]\)</span>; (2) merge sort on indices, counting how many elements from the right half move before each left-half element. I would compress values (sort distinct values, map each to its rank), then use the Fenwick tree. Edge cases: duplicates (query rank <span class="math inline">\(-1\)</span> for strictly smaller), negatives (compression handles them). This is the same computation as counting inversions, which measures how “unsorted” a ranking is, related to Kendall’s tau for comparing rankings in search evaluation.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Tries: <span class="math inline">\(O(L)\)</span> prefix operations; core of autocomplete and tokenizers.</p></li>
+<li><p>Union-find: near-constant connectivity merges; Kruskal, components, cycles.</p></li>
+<li><p>Fenwick for prefix sums with updates; segment tree for any associative range query and range updates.</p></li>
+<li><p>Coordinate compression makes value-indexed structures practical.</p></li>
+</ul>
+</div>

@@ -1,0 +1,213 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Floating point</strong> stores <span class="math inline">\(\pm\,\text{mantissa}\times2^{\text{exponent}}\)</span>. FP16 has 5 exponent bits: its largest value is 65<span>,</span>504, the smallest normal is <span class="math inline">\(2^{-14}\approx6.1\times10^{-5}\)</span>, and the smallest subnormal is <span class="math inline">\(2^{-24}\approx6\times10^{-8}\)</span>. Anything smaller becomes 0 (<em>underflow</em>), and anything larger becomes <span class="math inline">\(\infty\)</span> (<em>overflow</em>). BF16 has FP32’s 8 exponent bits, so its range is huge but its precision is low.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why are Adam’s moment estimates bias-corrected?</p></li>
+<li><p>How does AdamW decay a parameter when its task gradient is zero?</p></li>
+</ol>
+<p>Mixed-precision training typically combines:</p>
+<ul>
+<li><p>FP16 or BF16 computation for faster matrix operations and lower activation memory.</p></li>
+<li><p>FP32 master parameters and optimizer state for reliable updates.</p></li>
+<li><p>FP32 accumulation for numerically sensitive reductions.</p></li>
+</ul>
+<p>FP16 has limited range. A sufficiently small gradient can underflow to zero, while a large value can overflow to infinity.</p>
+<p>Loss scaling multiplies the loss before backpropagation:</p>
+<p><span class="math display">\[L_{\text{scaled}}=sL\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\nabla_\theta L_{\text{scaled}}
+=
+s\nabla_\theta L\]</span></p>
+<p>Before the optimizer update, divide by the same scale:</p>
+<p><span class="math display">\[g=\frac{g_{\text{scaled}}}{s}\]</span></p>
+<p>Mathematically this changes nothing, but it moves small intermediate gradients into FP16’s representable range.</p>
+<p>The correct update sequence is:</p>
+<pre class="code text"><code class="language-plaintext">scaled backward
+→ unscale gradients
+→ check for inf/nan
+→ clip gradients
+→ optimizer step</code></pre>
+<p>If overflow is detected, skip the optimizer step and reduce the scale. BF16 has a much wider exponent range than FP16 and usually does not require loss scaling, though it has lower mantissa precision than FP32.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: loss scaling preserves the update</div>
+<p><strong>Step 1.</strong> Backprop is linear in the loss: <span class="math inline">\(\nabla_\theta(SL)=S\nabla_\theta L\)</span> for a constant <span class="math inline">\(S\)</span>.</p>
+<p><strong>Step 2.</strong> So compute <span class="math inline">\(g_s=\nabla(SL)\)</span> in FP16, where small gradients are now <span class="math inline">\(S\)</span> times larger and above the underflow limit.</p>
+<p><strong>Step 3.</strong> Unscale in FP32: <span class="math inline">\(g=g_s/S\)</span>. The update <span class="math inline">\(\theta-\eta g\)</span> is mathematically identical to an unscaled run.</p>
+<p><strong>Step 4.</strong> <strong>Example:</strong> a gradient of <span class="math inline">\(10^{-8}\)</span> underflows in FP16. With <span class="math inline">\(S=2^{16}=65{,}536\)</span>, it becomes <span class="math inline">\(6.6\times10^{-4}\)</span>, which is representable.</p>
+<p><strong>Step 5.</strong> <strong>Overflow:</strong> if <span class="math inline">\(S\)</span> is too large, some <span class="math inline">\(g_s=\infty\)</span>. Then the step must be <em>skipped</em> (no update), and <span class="math inline">\(S\)</span> reduced. A dynamic scaler halves <span class="math inline">\(S\)</span> on overflow and doubles it after <span class="math inline">\(N\)</span> clean steps, staying near the largest safe value.</p>
+<p><strong>Step 6.</strong> BF16 rarely needs scaling, because its range matches FP32.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: dynamic loss scaling</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> initial scale <span class="math inline">\(S\)</span>, growth interval <span class="math inline">\(N\)</span>, FP32 master weights</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each step <strong>do</strong></div>
+<div class="algo-line" style="--d:1">forward in FP16; backward on <span class="math inline">\(S\cdot L\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(g\gets g_s/S\)</span> in FP32</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> any <span class="math inline">\(g\)</span> is <span class="math inline">\(\infty\)</span> or NaN <strong>then</strong></div>
+<div class="algo-line" style="--d:2">skip the update; <span class="math inline">\(S\gets S/2\)</span>; reset clean-step counter</div>
+<div class="algo-line" style="--d:1"><strong>else</strong></div>
+<div class="algo-line" style="--d:2">optimizer step on <span class="math inline">\(g\)</span>; after <span class="math inline">\(N\)</span> clean steps, <span class="math inline">\(S\gets2S\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Emulate loss scaling and overflow handling without requiring a GPU.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(91)
+
+parameter = torch.tensor(
+    [1.0, -2.0, 0.5, 3.0],
+    dtype=torch.float32,
+)
+
+gradient = torch.tensor(
+    [1e-8, 1e-6, 1e-3, 1.0],
+    dtype=torch.float32,
+)
+
+lr = 0.1
+scale = 1024.0
+
+
+def simulated_amp_step(parameter, gradient, scale):
+    # Emulate a scaled gradient represented in FP16
+    scaled_gradient_fp16 = ...                  # TODO 1: [4], float16
+
+    gradients_finite = ...                      # TODO 2: scalar bool
+
+    if not gradients_finite:
+        # Overflow: skip the optimizer update
+        return parameter.clone(), False, None
+
+    recovered_gradient = ...                    # TODO 3: FP32 and unscaled
+
+    updated_parameter = ...                     # TODO 4: SGD update
+    return updated_parameter, True, recovered_gradient
+
+
+# Direct FP16 conversion: tiny values may disappear
+direct_fp16 = ...                               # TODO 5
+
+updated, stepped, recovered = simulated_amp_step(
+    parameter, gradient, scale
+)
+
+print(&quot;original gradient: &quot;, gradient)
+print(&quot;direct FP16:       &quot;, direct_fp16)
+print(&quot;scaled/recovered:  &quot;, recovered)
+print(&quot;optimizer stepped: &quot;, stepped)
+
+assert direct_fp16[0] == 0
+assert recovered[0] != 0
+assert torch.allclose(recovered, gradient, rtol=1e-3, atol=1e-10)</code></pre>
+<p>Now trigger an overflow:</p>
+<pre class="code python"><code class="language-python">large_gradient = gradient.clone()
+large_gradient[-1] = 1e4
+
+updated_overflow, stepped, recovered = simulated_amp_step(
+    parameter,
+    large_gradient,
+    scale,
+)
+
+print(&quot;\noverflow step executed:&quot;, stepped)
+print(&quot;parameter unchanged:&quot;,
+      torch.equal(updated_overflow, parameter))
+print(&quot;recovered gradient:&quot;, recovered)
+
+assert not stepped
+assert torch.equal(updated_overflow, parameter)</code></pre>
+<p>Before running, predict why scaling helps <code>1e-8</code> but causes <code>1e4</code> to overflow.</p>
+<p>Finally, add simple scale adjustment:</p>
+<pre class="code python"><code class="language-python">new_scale = ...                                # TODO 6
+print(&quot;old scale:&quot;, scale, &quot;new scale:&quot;, new_scale)</code></pre>
+<p>Use half the previous scale when the optimizer step was skipped.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Scale before converting: <code>(gradient * scale).to(torch.float16)</code>.</p></li>
+<li><p>Check with <code>torch.isfinite(...).all().item()</code>.</p></li>
+<li><p>Convert back to FP32 before dividing by the scale.</p></li>
+<li><p>Direct conversion is <code>gradient.to(torch.float16).float()</code>.</p></li>
+<li><p>Do not update parameters after detecting overflow.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does scaling and then unscaling leave the intended gradient unchanged?</p></li>
+<li><p>Why must gradient clipping happen after gradients are unscaled?</p></li>
+<li><p>Prediction: what happens if the loss scale is repeatedly increased despite frequent overflows?</p></li>
+<li><p>Debugging: the loss is finite, but an optimizer step is occasionally skipped. What should you inspect?</p></li>
+<li><p>Which memory categories are reduced by mixed-precision activations, and which FP32 states may remain unchanged?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def simulated_amp_step(parameter, gradient, scale):
+    scaled_gradient_fp16 = (
+        gradient * scale
+    ).to(torch.float16)
+
+    gradients_finite = (
+        torch.isfinite(scaled_gradient_fp16)
+        .all()
+        .item()
+    )
+
+    if not gradients_finite:
+        return parameter.clone(), False, None
+
+    recovered_gradient = (
+        scaled_gradient_fp16.float() / scale
+    )
+
+    updated_parameter = parameter - lr * recovered_gradient
+    return updated_parameter, True, recovered_gradient
+
+
+direct_fp16 = gradient.to(torch.float16).float()
+
+updated, stepped, recovered = simulated_amp_step(
+    parameter, gradient, scale
+)
+
+large_gradient = gradient.clone()
+large_gradient[-1] = 1e4
+
+updated_overflow, stepped, recovered = simulated_amp_step(
+    parameter,
+    large_gradient,
+    scale,
+)
+
+new_scale = scale / 2 if not stepped else scale</code></pre>
+<p>For the tiny gradient:</p>
+<p><span class="math display">\[10^{-8}\times1024\approx10^{-5}\]</span></p>
+<p>The scaled value fits in FP16. It can then be converted to FP32 and safely divided by 1024.</p>
+<p>For the large gradient:</p>
+<p><span class="math display">\[10^4\times1024=1.024\times10^7\]</span></p>
+<p>This exceeds FP16’s largest finite value, approximately <span class="math inline">\(6.55\times10^4\)</span>, producing infinity. The update must be skipped; otherwise the parameters and optimizer state would be corrupted.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Multiplication by <span class="math inline">\(s\)</span> during backward and division by <span class="math inline">\(s\)</span> before updating cancel algebraically.</p></li>
+<li><p>Clipping scaled gradients would compare <span class="math inline">\(s\lVert g\rVert\)</span> against the threshold, effectively changing the clipping threshold.</p></li>
+<li><p>Overflows become more frequent, causing repeated skipped updates and stalled training.</p></li>
+<li><p>Inspect gradient finiteness, the current loss scale, activation ranges, gradient norms, and the first operation producing <code>inf</code> or <code>nan</code>.</p></li>
+<li><p>Lower-precision activations and saved backward tensors use less memory. FP32 master weights and Adam’s moment states may remain FP32 and unchanged in size.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Bias correction compensates for moment estimates being initialized at zero.</p></li>
+<li><p>With zero task gradient, AdamW applies:</p></li>
+</ul>
+<p><span class="math display">\[\theta_t=(1-\eta\lambda)\theta_{t-1}\]</span></p>

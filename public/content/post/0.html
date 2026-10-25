@@ -1,0 +1,21 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>A modern LLM is built in stages. Each stage uses the <em>same</em> next-token machinery from <em>LLM Fundamentals</em>, but different data and a different objective: <strong>pre-training</strong> (trillions of web tokens, learn language and knowledge), <strong>mid-training</strong> (higher-quality and longer data, sharpen skills), <strong>supervised fine-tuning</strong> (conversations, learn to follow instructions), <strong>preference optimization</strong> (pairs of better/worse answers, learn taste), and <strong>RL with verifiable rewards</strong> (problems with checkable answers, learn to reason). <strong>Synthetic data</strong> made by other LLMs now feeds every one of them.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/d1fd93d759b1.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The stages in order. Compute is spent overwhelmingly on the left; behaviour is shaped mostly on the right.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: how big a run can a budget buy?</div>
+<p><strong>Step 1.</strong> Training FLOPs <span class="math inline">\(C\approx6ND\)</span>: <span class="math inline">\(N\)</span> parameters, <span class="math inline">\(D\)</span> tokens. Every token costs about <span class="math inline">\(2N\)</span> FLOPs forward and <span class="math inline">\(4N\)</span> backward (<em>LLM Fundamentals</em>, Session 10).</p>
+<p><strong>Step 2.</strong> A GPU delivers <span class="math inline">\(\text{MFU}\times\text{peak}\)</span> useful FLOP/s. An H100’s dense BF16 peak is <span class="math inline">\(989\times10^{12}\)</span> FLOP/s, and good runs reach 35–50% MFU.</p>
+<p><strong>Step 3.</strong> Wall time <span class="math inline">\(=\dfrac{6ND}{\text{MFU}\cdot\text{peak}\cdot\#\text{GPUs}}\)</span>.</p>
+<p><strong>Step 4.</strong> <strong>This book’s pre-training run</strong> (Chapter 5): <span class="math inline">\(N\approx123\)</span>M, <span class="math inline">\(D=328\)</span>M tokens: <span class="math inline">\(6\cdot1.23\times10^8\cdot3.28\times10^8=2.4\times10^{17}\)</span> FLOPs. At 40% MFU on one H100: <span class="math inline">\(2.4\times10^{17}/(0.4\cdot9.89\times10^{14})\approx610\)</span> s, about 10 minutes of pure compute.</p>
+<p><strong>Step 5.</strong> <strong>A Chinchilla-sized version</strong> (<span class="math inline">\(D=20N=2.5\)</span>B tokens) is <span class="math inline">\(7.5\times\)</span> that: about 1.3 H100-hours. <strong>Llama 3 8B</strong> (<span class="math inline">\(15\)</span>T tokens): <span class="math inline">\(7.2\times10^{23}\)</span> FLOPs, about <span class="math inline">\(500{,}000\)</span> H100-hours at 40% MFU. That gap is why this book pre-trains small and post-trains real models.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Same loss family everywhere; what changes is the data and which tokens count.</p></li>
+<li><p>Estimate any run with <span class="math inline">\(6ND\)</span> and MFU before spending money on it.</p></li>
+</ul>
+</div>

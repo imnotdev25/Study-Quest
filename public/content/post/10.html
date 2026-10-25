@@ -1,0 +1,17 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Three last steps before shipping. <strong>Distillation</strong> trains a small model on a big one’s outputs (offline, as SFT on teacher samples) or its per-token distribution (on-policy, RL book Topic 180; TRL’s <code>GKDTrainer</code> and <code>DistillationTrainer</code>). <strong>Merging</strong> averages fine-tuned weights. <strong>Evaluation</strong> measures the result on benchmarks the model never saw.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why averaging weights can work</div>
+<p><strong>Step 1.</strong> Fine-tuning moves weights by a <strong>task vector</strong> <span class="math inline">\(\tau_i=\theta_i-\theta_{\text{base}}\)</span>, usually small relative to <span class="math inline">\(\theta_{\text{base}}\)</span>.</p>
+<p><strong>Step 2.</strong> Near the base, the loss is roughly quadratic, and two fine-tunes from the same base sit in the same basin. Averaging <span class="math inline">\(\theta_{\text{base}}+\frac1k\sum\tau_i\)</span> often keeps most of each task’s gain (model soups, task arithmetic).</p>
+<p><strong>Step 3.</strong> It fails when task vectors interfere: TIES and DARE first drop small or sign-conflicting entries of each <span class="math inline">\(\tau_i\)</span>, then merge.</p>
+<p><strong>Step 4.</strong> It never works across different bases: weights from separate pre-training runs aren’t aligned neuron by neuron.</p>
+</div>
+<p><strong>Evaluation checklist</strong> (with <code>lighteval</code> or <code>lm-evaluation-harness</code>):</p>
+<ul>
+<li><p>Decontaminate first (Chapter 3), against <em>every</em> reported benchmark.</p></li>
+<li><p>Use the model’s chat template and the same generation settings for every model compared.</p></li>
+<li><p>Report pass@1 with several samples and a confidence interval (<em>LLM Fundamentals</em>, Sessions 43–44), plus pass@<span class="math inline">\(k\)</span> if you’ll deploy with retries.</p></li>
+<li><p>Keep a held-out set that you never look at during development, for the final number.</p></li>
+</ul>

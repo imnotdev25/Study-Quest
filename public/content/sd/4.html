@@ -1,0 +1,131 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Where caches live, the five caching patterns, eviction policies, invalidation strategies, stampede and hot-key problems, and caching for AI (semantic, prompt, and KV caches).</p>
+</div>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>You keep a water bottle on your desk instead of walking to the kitchen every time you are thirsty. A cache is that bottle: a small, fast store of things you use often. When it is empty (a <em>miss</em>), you walk to the kitchen (the database) and refill it.</p>
+</div>
+<h1 id="where-caches-live">Where Caches Live</h1>
+<figure class="tikz"><img src="figs/sd/f3c0f3535161.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The cache hierarchy</em></p>
+<h1 id="caching-patterns">Caching Patterns</h1>
+<figure class="tikz"><img src="figs/sd/5cc05a96a34a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Cache-aside (lazy loading): the application manages the cache.</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Pattern</th>
+<th style="text-align: left;">How it works</th>
+<th style="text-align: left;">When to use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Cache-aside</td>
+<td style="text-align: left;">App reads cache, on miss reads DB and fills cache</td>
+<td style="text-align: left;">Default; read-heavy; tolerant of brief staleness</td>
+</tr>
+<tr>
+<td style="text-align: left;">Read-through</td>
+<td style="text-align: left;">Cache library loads from DB on miss</td>
+<td style="text-align: left;">Same as above, cleaner code</td>
+</tr>
+<tr>
+<td style="text-align: left;">Write-through</td>
+<td style="text-align: left;">Write cache and DB synchronously</td>
+<td style="text-align: left;">Data must be read immediately after write</td>
+</tr>
+<tr>
+<td style="text-align: left;">Write-back (behind)</td>
+<td style="text-align: left;">Write cache; flush to DB asynchronously</td>
+<td style="text-align: left;">Write-heavy counters, metrics; risk of loss</td>
+</tr>
+<tr>
+<td style="text-align: left;">Write-around</td>
+<td style="text-align: left;">Write DB only; cache filled on read</td>
+<td style="text-align: left;">Data written often but rarely read</td>
+</tr>
+</tbody>
+</table>
+<p><em>Caching patterns</em></p>
+<pre class="code python"><code class="language-python">def get_product(pid):
+    key = f&quot;product:{pid}&quot;
+    val = redis.get(key)
+    if val is not None:
+        return deserialize(val)
+    # Only one caller rebuilds; others briefly wait or serve stale
+    if redis.set(f&quot;lock:{key}&quot;, 1, nx=True, ex=5):
+        try:
+            row = db.query(&quot;SELECT * FROM products WHERE id = %s&quot;, (pid,))
+            ttl = 300 + random.randint(0, 60)          # jitter avoids sync expiry
+            redis.set(key, serialize(row), ex=ttl)
+            return row
+        finally:
+            redis.delete(f&quot;lock:{key}&quot;)
+    time.sleep(0.05)
+    return get_product(pid)</code></pre>
+<h1 id="eviction-and-invalidation">Eviction and Invalidation</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Eviction</strong> (cache is full): <strong>LRU</strong> (least recently used, the default), <strong>LFU</strong> (least frequently used, better for stable popularity), <strong>TTL</strong> (time-based expiry), <strong>FIFO</strong>, and modern adaptive policies like <strong>W-TinyLFU</strong> (Caffeine) and <strong>S3-FIFO</strong>, which beat LRU on real workloads with one-hit wonders.</p>
+<p><strong>Invalidation</strong> (data changed):</p>
+<ul>
+<li><p>TTL only: simple, bounded staleness.</p></li>
+<li><p>Delete on write: after updating DB, delete the key (not update it).</p></li>
+<li><p>Event-driven: CDC stream (Debezium) emits changes; consumers invalidate.</p></li>
+<li><p>Versioned keys: <code>user:42:v7</code>; bump version to invalidate everything.</p></li>
+</ul>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>The race in cache-aside.</strong> Reader A misses, reads old value from DB. Writer B updates DB and deletes the key. A then writes the old value to cache, which stays stale until TTL. Fixes: short TTLs as a safety net, <em>delayed double delete</em> (delete again after a few hundred ms), or <em>leases</em> (Facebook’s memcache paper: the cache gives the missing reader a token, and a delete invalidates it so the stale set is rejected).</p>
+<p><strong>Stampede / thundering herd:</strong> a hot key expires and 10<span>,</span>000 requests hit the DB at once. Fixes: request coalescing (single-flight), locking, serving stale while one worker refreshes (<code>stale-while-revalidate</code>), and probabilistic early expiration (refresh with probability rising as TTL nears zero).</p>
+<p><strong>Hot keys:</strong> one key gets millions of QPS (a celebrity profile) and saturates one Redis shard. Fixes: local in-process cache in front of Redis, key replication (<code>key#1..key#N</code> read randomly), and client-side tracking (Redis 6+).</p>
+<p><strong>Cache penetration:</strong> requests for keys that do not exist bypass the cache every time. Cache negative results briefly, or put a Bloom filter in front.</p>
+</div>
+<h1 id="redis-in-practice">Redis in Practice</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Redis is a single-threaded (per shard) in-memory data-structure server: strings, hashes, lists, sets, sorted sets (leaderboards), streams, HyperLogLog (approximate counts), geospatial indexes, and vector search. Persistence via RDB snapshots and AOF logs. Scale with Redis Cluster (16<span>,</span>384 hash slots across shards). <strong>Valkey</strong>, the Linux Foundation fork created after Redis’s 2024 license change, is now widely used by cloud providers; Redis 8 later returned to an OSI license option (AGPL). <strong>Memcached</strong> is simpler, multi-threaded, and good for pure key-value caching. <strong>DragonflyDB</strong> and <strong>KeyDB</strong> are multi-threaded Redis-compatible alternatives.</p>
+</div>
+<h1 id="caching-in-ai-systems">Caching in AI Systems</h1>
+<div class="box box-newin" data-kind="newin"><div class="box-title">🆕 New in 2026</div>
+<ul>
+<li><p><strong>Exact response cache</strong>: hash(model + prompt + params) <span class="math inline">\(\to\)</span> response. Only useful at temperature 0 with repeated prompts.</p></li>
+<li><p><strong>Semantic cache</strong>: embed the query; if a past query is within a similarity threshold, return its answer. Big savings for FAQ-style traffic, but a threshold set too loose returns wrong answers.</p></li>
+<li><p><strong>Provider prompt caching</strong>: Anthropic, OpenAI, and Google cache the processed prefix of long prompts (system prompt, documents, tool definitions). Cached input tokens are billed at a fraction of normal price and cut time-to-first-token. Design prompts with stable content first and variable content last.</p></li>
+<li><p><strong>KV cache and prefix caching</strong> inside inference engines; see Chapter (inference).</p></li>
+</ul>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Social media profile pages</div>
+<p>Profiles are read 1<span>,</span>000<span class="math inline">\(\times\)</span> more than updated. Cache-aside in Redis with a 10-minute TTL and delete-on-write. Celebrity profiles also get a 5-second in-process cache on each app server to absorb hot-key traffic.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Leaderboard for a mobile game</div>
+<p>A Redis sorted set: <code>ZINCRBY</code> on score, <code>ZREVRANGE 0 99</code> for the top 100, <code>ZREVRANK</code> for a player’s rank. All <span class="math inline">\(O(\log N)\)</span>. Snapshot to the DB every minute (write-back).</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Customer support chatbot</div>
+<p>The 8<span>,</span>000-token system prompt and policy documents are placed first and cached by the provider, reducing input cost substantially and TTFT by hundreds of milliseconds. A semantic cache in front answers “how do I reset my password” variants without calling the model.</p>
+</div>
+<h1 id="deep-dive-sizing-and-reasoning-about-a-cache">Deep Dive: Sizing and Reasoning About a Cache</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Hit rate is everything.</strong> Database load <span class="math inline">\(=\)</span> total reads <span class="math inline">\(\times\)</span> (1 <span class="math inline">\(-\)</span> hit rate). Going from 90% to 99% hit rate cuts DB reads by 10<span class="math inline">\(\times\)</span>. That is why the last few percent of hit rate are worth real engineering effort.</p>
+<p><strong>Sizing example.</strong> 100M users, 20M daily active, profile object 2 KB. Caching every active profile: <span class="math inline">\(20\text{M}\times 2\,\text{KB} = 40\)</span> GB, plus about 30% overhead for keys and allocator fragmentation <span class="math inline">\(\approx\)</span> 52 GB. Three Redis shards of 25 GB each with replicas gives room to grow. If access follows a Zipf distribution (a few items very popular), caching the top 20% of items often gives 80–90% hit rate, so you may not need all of it.</p>
+<p><strong>Average latency with a cache:</strong> <span class="math inline">\(\text{hit} \times t_{\text{cache}} + (1-\text{hit}) \times (t_{\text{cache}} + t_{\text{db}})\)</span>. With 0.5 ms cache, 10 ms DB, 95% hit: <span class="math inline">\(0.5 + 0.05\times10 = 1.0\)</span> ms on average, but p99 is still the DB’s latency. Caches improve averages more than tails.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Cold cache after failure.</strong> If a cache cluster restarts empty, the hit rate drops to 0 and the database sees 10–100<span class="math inline">\(\times\)</span> its normal load, which it was never sized for. Mitigations: replicate cache data (Netflix EVCache copies across zones), warm new nodes from peers before taking traffic, rate-limit misses to the DB, and consistent hashing so losing one node only empties <span class="math inline">\(1/N\)</span> of the keyspace. Facebook’s gutter pool (Part (cases)) sends a failed node’s keys to spare servers instead of rehashing them onto healthy ones.</p>
+<p><strong>Consistency choice.</strong> Ask: what is the worst thing that happens if a user sees data that is <span class="math inline">\(T\)</span> seconds old? A product description: nothing. A price in a checkout: a pricing complaint, so re-read from the source at checkout. An account balance or permission: a security or correctness bug, so do not cache, or invalidate synchronously.</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Caching without TTLs, then serving stale data forever after a missed invalidation.</p></li>
+<li><p>All keys expiring at once after a deploy (add TTL jitter).</p></li>
+<li><p>Treating the cache as the source of truth; a restart must not lose data.</p></li>
+<li><p>Caching personalized or authorized responses under a shared key (data leak).</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Cache-aside plus TTL plus delete-on-write is the default.</p></li>
+<li><p>Plan for stampedes, hot keys, and penetration from day one.</p></li>
+<li><p>Invalidation is the hard part: bound staleness with TTLs.</p></li>
+<li><p>In AI systems, prompt and KV caching are among the largest cost levers.</p></li>
+</ul>
+</div>

@@ -1,0 +1,152 @@
+
+<h1 id="data-structure-operations">Data Structure Operations</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Structure</th>
+<th style="text-align: left;">Access / search</th>
+<th style="text-align: left;">Insert / delete</th>
+<th style="text-align: left;">Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Dynamic array</td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span> / <span class="math inline">\(O(n)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span> amortized at end; <span class="math inline">\(O(n)\)</span> middle</td>
+<td style="text-align: left;">cache friendly</td>
+</tr>
+<tr>
+<td style="text-align: left;">Hash map / set</td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span> expected</td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span> / <span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;">no order; <span class="math inline">\(O(n)\)</span> worst case</td>
+</tr>
+<tr>
+<td style="text-align: left;">Linked list</td>
+<td style="text-align: left;"><span class="math inline">\(O(n)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span> at a known node</td>
+<td style="text-align: left;">poor cache locality</td>
+</tr>
+<tr>
+<td style="text-align: left;">Stack / queue / deque</td>
+<td style="text-align: left;">top/front <span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span> / <span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;"></td>
+</tr>
+<tr>
+<td style="text-align: left;">Binary heap</td>
+<td style="text-align: left;">min <span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;">push <span class="math inline">\(O(\log n)\)</span> / pop <span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;">heapify <span class="math inline">\(O(n)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Balanced BST / ordered set</td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span> / <span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;">floor, ceiling, rank</td>
+</tr>
+<tr>
+<td style="text-align: left;">Trie</td>
+<td style="text-align: left;"><span class="math inline">\(O(L)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(L)\)</span> / <span class="math inline">\(O(L)\)</span></td>
+<td style="text-align: left;">prefix queries</td>
+</tr>
+<tr>
+<td style="text-align: left;">Union-find</td>
+<td style="text-align: left;">find <span class="math inline">\(O(\alpha(n))\)</span></td>
+<td style="text-align: left;">union <span class="math inline">\(O(\alpha(n))\)</span></td>
+<td style="text-align: left;">no edge deletion</td>
+</tr>
+<tr>
+<td style="text-align: left;">Fenwick / segment tree</td>
+<td style="text-align: left;">query <span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;">update <span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;">range queries</td>
+</tr>
+<tr>
+<td style="text-align: left;">Bloom filter</td>
+<td style="text-align: left;"><span class="math inline">\(O(k)\)</span></td>
+<td style="text-align: left;">insert <span class="math inline">\(O(k)\)</span> / no delete</td>
+<td style="text-align: left;">false positives only</td>
+</tr>
+</tbody>
+</table>
+<h1 id="algorithm-complexities">Algorithm Complexities</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Algorithm</th>
+<th style="text-align: left;">Complexity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Merge sort / heap sort</td>
+<td style="text-align: left;"><span class="math inline">\(O(n\log n)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Quicksort / quickselect</td>
+<td style="text-align: left;"><span class="math inline">\(O(n\log n)\)</span> / <span class="math inline">\(O(n)\)</span> expected</td>
+</tr>
+<tr>
+<td style="text-align: left;">Binary search</td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">BFS / DFS / topological sort</td>
+<td style="text-align: left;"><span class="math inline">\(O(V+E)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Dijkstra (binary heap)</td>
+<td style="text-align: left;"><span class="math inline">\(O((V+E)\log V)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Bellman–Ford / Floyd–Warshall</td>
+<td style="text-align: left;"><span class="math inline">\(O(VE)\)</span> / <span class="math inline">\(O(V^3)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Kruskal / Prim</td>
+<td style="text-align: left;"><span class="math inline">\(O(E\log E)\)</span> / <span class="math inline">\(O(E\log V)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">KMP / Z / Aho–Corasick</td>
+<td style="text-align: left;"><span class="math inline">\(O(n+m)\)</span> / <span class="math inline">\(O(n+m)\)</span> / <span class="math inline">\(O(n + \sum m + z)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">LIS (patience) / edit distance</td>
+<td style="text-align: left;"><span class="math inline">\(O(n\log n)\)</span> / <span class="math inline">\(O(mn)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">k-means per iteration / kNN query</td>
+<td style="text-align: left;"><span class="math inline">\(O(nkd)\)</span> / <span class="math inline">\(O(nd)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Attention (sequence <span class="math inline">\(n\)</span>, width <span class="math inline">\(d\)</span>)</td>
+<td style="text-align: left;"><span class="math inline">\(O(n^2 d)\)</span> compute</td>
+</tr>
+</tbody>
+</table>
+<h1 id="formulas-to-remember">Formulas to Remember</h1>
+<ul>
+<li><p>Stable softmax: subtract the row max; <span class="math inline">\(\log\text{softmax} = z - \text{logsumexp}(z)\)</span>.</p></li>
+<li><p>Cross-entropy gradient w.r.t. logits: <span class="math inline">\(p - y\)</span>. Sigmoid: <span class="math inline">\(\sigma&#39; = \sigma(1-\sigma)\)</span>.</p></li>
+<li><p>Attention: <span class="math inline">\(\text{softmax}(QK^\top/\sqrt{d_k})V\)</span>. KV bytes/token: <span class="math inline">\(2\cdot L\cdot H_{kv}\cdot d_k\cdot b\)</span>.</p></li>
+<li><p>AUC <span class="math inline">\(= \big(R_+ - n_+(n_++1)/2\big)/(n_+n_-)\)</span>. NDCG: <span class="math inline">\(\sum (2^{rel}-1)/\log_2(i+1)\)</span>, normalized.</p></li>
+<li><p>Cohen’s <span class="math inline">\(\kappa = (p_o - p_e)/(1 - p_e)\)</span>. PSI <span class="math inline">\(= \sum (a - e)\ln(a/e)\)</span>.</p></li>
+<li><p>Downsampling correction: <span class="math inline">\(p = q/(q + (1-q)/r)\)</span>.</p></li>
+<li><p>Bloom filter: about 10 bits per item for 1% false positives; <span class="math inline">\(k = (m/n)\ln 2\)</span>.</p></li>
+<li><p>MinHash: <span class="math inline">\(\Pr[\text{match}] = J(A,B)\)</span>; LSH candidate probability <span class="math inline">\(1 - (1 - J^r)^b\)</span>.</p></li>
+<li><p>Master theorem: compare <span class="math inline">\(f(n)\)</span> with <span class="math inline">\(n^{\log_b a}\)</span>.</p></li>
+<li><p>A/B sample size per arm for a proportion: <span class="math inline">\(\approx 16\,p(1-p)/\delta^2\)</span>.</p></li>
+</ul>
+<h1 id="sources-and-further-reading">Sources and Further Reading</h1>
+<ul>
+<li><p>Amazon.jobs, “Applied Scientist interview prep” (process and loop structure).</p></li>
+<li><p>Anthropic, “Guidance on candidates’ AI usage” (2025).</p></li>
+<li><p>Chip Huyen, <em>Introduction to Machine Learning Interviews</em> (huyenchip.com/ml-interviews-book).</p></li>
+<li><p>A. Dadashzadeh, <em>Machine-Learning-Interviews</em> (github.com/alirezadir/Machine-Learning-Interviews): DSA, ML coding, ML system design modules.</p></li>
+<li><p>Cormen, Leiserson, Rivest, Stein, <em>Introduction to Algorithms</em>; Kleinberg and Tardos, <em>Algorithm Design</em>.</p></li>
+<li><p>Chip Huyen, <em>Designing Machine Learning Systems</em>; Hastie, Tibshirani, Friedman, <em>The Elements of Statistical Learning</em>.</p></li>
+<li><p>Vaswani et al. (2017) attention; Dao et al. FlashAttention; Rafailov et al. (2023) DPO; Leviathan et al. (2023) speculative decoding; Malkov and Yashunin HNSW; Broder (1997) MinHash.</p></li>
+</ul>

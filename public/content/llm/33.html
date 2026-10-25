@@ -1,0 +1,199 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Supervised fine-tuning</strong> trains on (prompt <span class="math inline">\(x\)</span>, response <span class="math inline">\(y\)</span>) pairs. We want the model to learn <em>how to respond</em>, not to imitate prompts, so the objective is the conditional likelihood <span class="math inline">\(p_\theta(y\mid x)\)</span>. In code, this is the next-token loss with the prompt positions masked out (label <span class="math inline">\(-100\)</span> in PyTorch).</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="concept-refresh-5-minutes">1. Concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>For causal LM training, which logits predict <code>input_ids</code><span><code>[</code></span><code>:, 1:</code><span><code>]</code></span>?</p></li>
+<li><p>Why should padding targets contribute zero gradient?</p></li>
+</ol>
+<p>An SFT sequence commonly contains:</p>
+<p><span class="math display">\[[\text{prompt},\ \text{response},\ \text{EOS},\ \text{padding}]\]</span></p>
+<p>For response-only training, labels for prompt and padding tokens are replaced by <code>-100</code>:</p>
+<p><span class="math display">\[\text{labels}
+=
+[-100,\ldots,-100,\ y_1,\ldots,y_R,\text{EOS},-100,\ldots]\]</span></p>
+<p>The shifted objective is:</p>
+<p><span class="math display">\[L=
+-\frac{1}{N}
+\sum_{(b,t)\in\mathcal V}
+\log p_\theta(\text{labels}_{b,t+1}\mid x_{b,\leq t})\]</span></p>
+<p>If the response begins at position <span class="math inline">\(s\)</span>, its first token is predicted by:</p>
+<p><span class="math display">\[\text{logits}[:,s-1,:]\]</span></p>
+<p>This boundary is easy to mask incorrectly.</p>
+<p>Important distinction: ignoring prompt labels removes direct prompt-token prediction losses. It does not prevent prompt representations or embeddings from receiving gradients, because response predictions depend on the prompt through causal attention.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: response-only loss is conditional likelihood</div>
+<p><strong>Step 1.</strong> Chain rule over the concatenation: <span class="math inline">\(\log p_\theta(x,y)=\underbrace{\sum_{t\in\text{prompt}}\log p(x_t\mid x_{&lt;t})}_{\log p_\theta(x)}+\underbrace{\sum_{t\in\text{resp}}\log p(y_t\mid x,y_{&lt;t})}_{\log p_\theta(y\mid x)}\)</span>.</p>
+<p><strong>Step 2.</strong> Masking prompt labels deletes the first sum, leaving <span class="math inline">\(\log p_\theta(y\mid x)\)</span>: exactly the conditional we want.</p>
+<p><strong>Step 3.</strong> <strong>Boundary:</strong> if the response starts at position <span class="math inline">\(s\)</span>, its first token <span class="math inline">\(y_1=x_s\)</span> is predicted by logits at <span class="math inline">\(s-1\)</span>, the last prompt position. That logit must be <em>kept</em>. Masking it drops the model’s most important decision: how to begin.</p>
+<p><strong>Step 4.</strong> <strong>EOS:</strong> including EOS as a label teaches <span class="math inline">\(p(\text{stop}\mid x,y)\)</span>. Without it, the model never learns to end.</p>
+<p><strong>Step 5.</strong> <strong>Reduction:</strong> dividing by the number of response tokens <span class="math inline">\(N=\sum M\)</span> gives each response token equal weight. Dividing by <span class="math inline">\(B\cdot T\)</span> shrinks the loss of short responses and changes the effective learning rate between batches.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: build response-only SFT labels</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> prompt ids <span class="math inline">\(p_{1:P}\)</span>, response ids <span class="math inline">\(r_{1:R}\)</span>, EOS id, pad length</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\text{input}\gets[p,r,\text{EOS},\text{pad}\dots]\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\text{labels}\gets[-100]^P\,\|\,[r,\text{EOS}]\,\|\,[-100]^{\text{pad}}\)</span></div>
+<div class="algo-line" style="--d:0">loss <span class="math inline">\(=\)</span> causal LM loss with the usual shift; labels <span class="math inline">\(-100\)</span> are ignored</div>
+<div class="algo-line" style="--d:0">check: <span class="math inline">\(\sum M=R+1\)</span> per example, and the first unmasked label is <span class="math inline">\(r_1\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Construct correct response-only labels and verify the prompt–response boundary.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(91)
+
+B, T, V = 2, 8, 40
+pad_id = 0
+eos_id = 2
+ignore_index = -100
+
+input_ids = torch.tensor([
+    [11, 12, 13, 21, 22,  2, 0, 0],
+    [11, 14, 31, 32, 33,  2, 0, 0],
+])                                              # [B, T]
+
+# Response begins at index 3 in row 0 and index 2 in row 1.
+response_start = torch.tensor([3, 2])            # [B]
+
+logits = torch.randn(
+    B, T, V,
+    requires_grad=True,
+)                                                # [B, T, V]
+
+positions = ...                                  # TODO 1: [1, T]
+
+response_mask = ...                              # TODO 2: [B, T]
+response_mask &amp;= ...                             # TODO 3: exclude padding
+
+labels = input_ids.clone()
+labels = ...                                     # TODO 4: mask non-response
+
+shift_logits = ...                               # TODO 5: [B, T-1, V]
+shift_labels = ...                               # TODO 6: [B, T-1]
+
+valid_tokens = ...                               # TODO 7
+
+loss = F.cross_entropy(
+    shift_logits.reshape(-1, V),
+    shift_labels.reshape(-1),
+    ignore_index=ignore_index,
+)
+
+loss.backward()
+
+print(&quot;labels:\n&quot;, labels)
+print(&quot;valid response targets:&quot;, valid_tokens.item())
+print(&quot;loss:&quot;, loss.item())
+
+# The logit immediately before each response should predict its first token.
+for batch_index, start in enumerate(response_start):
+    prediction_position = start.item() - 1
+
+    gradient = logits.grad[
+        batch_index,
+        prediction_position,
+    ]
+
+    print(
+        f&quot;row {batch_index}:&quot;,
+        &quot;prediction position =&quot;, prediction_position,
+        &quot;target =&quot;, input_ids[batch_index, start].item(),
+        &quot;gradient norm =&quot;, gradient.norm().item(),
+    )
+
+assert valid_tokens.item() == 7</code></pre>
+<p>Now introduce a boundary bug by masking according to prediction positions instead of target positions:</p>
+<pre class="code python"><code class="language-python">wrong_keep = (
+    response_mask[:, :-1]
+    &amp; input_ids[:, 1:].ne(pad_id)
+)
+
+wrong_labels = input_ids[:, 1:].clone()
+wrong_labels = wrong_labels.masked_fill(
+    ~wrong_keep,
+    ignore_index,
+)
+
+print(
+    &quot;correct target count:&quot;,
+    shift_labels.ne(ignore_index).sum().item(),
+)
+
+print(
+    &quot;wrong target count:&quot;,
+    wrong_labels.ne(ignore_index).sum().item(),
+)</code></pre>
+<p>Which response tokens disappear from supervision?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Positions: <code>torch.arange(T)</code><span><code>[</code></span><code>None, :</code><span><code>]</code></span>.</p></li>
+<li><p>Compare positions with <code>response_start</code><span><code>[</code></span><code>:, None</code><span><code>]</code></span>.</p></li>
+<li><p>Keep response tokens, including EOS.</p></li>
+<li><p>Standard causal shifting remains <code>logits</code><span><code>[</code></span><code>:, :-1</code><span><code>]</code></span> and <code>labels</code><span><code>[</code></span><code>:, 1:</code><span><code>]</code></span>.</p></li>
+<li><p>The mask belongs to target token positions, not prediction positions.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why should EOS generally remain a supervised response token?</p></li>
+<li><p>If a response starts at index <span class="math inline">\(s\)</span>, which logit position predicts its first token?</p></li>
+<li><p>Why can prompt embeddings receive gradients even when every prompt label is <code>-100</code>?</p></li>
+<li><p>Debugging: responses are fluent but rarely stop naturally. Which masking error should you investigate?</p></li>
+<li><p>Token averaging and example averaging produce different training weights. Which one gives long responses greater influence?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">positions = torch.arange(T)[None, :]
+
+response_mask = positions &gt;= response_start[:, None]
+response_mask &amp;= input_ids.ne(pad_id)
+
+labels = input_ids.clone()
+labels = labels.masked_fill(
+    ~response_mask,
+    ignore_index,
+)
+
+shift_logits = logits[:, :-1, :]
+shift_labels = labels[:, 1:]
+
+valid_tokens = shift_labels.ne(ignore_index).sum()</code></pre>
+<p>The resulting labels are:</p>
+<pre class="code text"><code class="language-plaintext">[-100, -100, -100, 21, 22, 2, -100, -100]
+[-100, -100,   31, 32, 33, 2, -100, -100]</code></pre>
+<p>There are seven supervised targets:</p>
+<ul>
+<li><p>Row 0: <code>21, 22, EOS</code></p></li>
+<li><p>Row 1: <code>31, 32, 33, EOS</code></p></li>
+</ul>
+<p>The incorrect prediction-position mask drops the first response token from each sequence:</p>
+<ul>
+<li><p><code>21</code> from row 0</p></li>
+<li><p><code>31</code> from row 1</p></li>
+</ul>
+<p>The correct mask supervises target positions. Once labels are constructed correctly, the normal causal shift automatically pairs the preceding prompt logit with the first response token.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>EOS teaches the model when to terminate. Masking it can encourage unnecessarily long or truncated-by-limit generations.</p></li>
+<li><p>Position <span class="math inline">\(s-1\)</span>.</p></li>
+<li><p>Response states attend to prompt states, so response loss backpropagates through the prompt’s contextual computation.</p></li>
+<li><p>Check whether EOS labels were masked, removed during preprocessing, or truncated.</p></li>
+<li><p>Token averaging gives longer responses more influence because each valid token receives equal weight.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Use <code>logits</code><span><code>[</code></span><code>:, :-1, :</code><span><code>]</code></span> to predict <code>input_ids</code><span><code>[</code></span><code>:, 1:</code><span><code>]</code></span>.</p></li>
+<li><p>Padding targets must be ignored because they are batching artifacts rather than desired model outputs.</p></li>
+</ul>

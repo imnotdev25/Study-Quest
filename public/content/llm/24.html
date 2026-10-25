@@ -1,0 +1,170 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Curvature</strong> is how fast the gradient changes. Near a minimum, any smooth loss looks like a quadratic: <span class="math inline">\(L(\theta)\approx L^*+\frac12(\theta-\theta^*)^\top H(\theta-\theta^*)\)</span>, where <span class="math inline">\(H=\nabla^2L\)</span> is the Hessian (the matrix of second derivatives). Its eigenvalues <span class="math inline">\(\lambda_i\)</span> are the curvatures along its eigenvectors. Studying <span class="math inline">\(L=\frac12\theta^\top H\theta\)</span> therefore tells us how gradient descent behaves near <em>any</em> minimum.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>When one tensor feeds two loss branches, how are its gradient contributions combined?</p></li>
+<li><p>For <span class="math inline">\(a=\tanh(h)\)</span>, what is <span class="math inline">\(\partial a/\partial h\)</span>?</p></li>
+</ol>
+<p>Now consider the quadratic loss:</p>
+<p><span class="math display">\[L(\theta)=\frac{1}{2}\theta^\top H\theta\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[\theta\in\mathbb{R}^{D},
+\qquad
+H\in\mathbb{R}^{D\times D}\]</span></p>
+<p>Its gradient is:</p>
+<p><span class="math display">\[\nabla_\theta L=H\theta\]</span></p>
+<p>Gradient descent updates:</p>
+<p><span class="math display">\[\theta_{t+1}
+=
+\theta_t-\eta H\theta_t
+=
+(I-\eta H)\theta_t\]</span></p>
+<p>Along an eigenvector of <span class="math inline">\(H\)</span> with eigenvalue <span class="math inline">\(\lambda_i\)</span>:</p>
+<p><span class="math display">\[\theta_{t+1}^{(i)}
+=
+(1-\eta\lambda_i)\theta_t^{(i)}\]</span></p>
+<p>Therefore:</p>
+<ul>
+<li><p><span class="math inline">\(0&lt;\eta\lambda_i&lt;1\)</span>: smooth decay</p></li>
+<li><p><span class="math inline">\(1&lt;\eta\lambda_i&lt;2\)</span>: oscillating decay</p></li>
+<li><p><span class="math inline">\(\eta\lambda_i=2\)</span>: oscillation without decay</p></li>
+<li><p><span class="math inline">\(\eta\lambda_i&gt;2\)</span>: divergence</p></li>
+</ul>
+<p>Overall stability requires:</p>
+<p><span class="math display">\[0&lt;\eta&lt;\frac{2}{\lambda_{\max}}\]</span></p>
+<p>Large curvature constrains the learning rate. A badly conditioned loss has directions that learn at very different speeds—the familiar narrow-valley optimization problem.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the learning-rate limit <span class="math inline">\(\eta&lt;2/\lambda_{\max}\)</span></div>
+<p><strong>Step 1.</strong> Gradient of <span class="math inline">\(\frac12\theta^\top H\theta\)</span> (symmetric <span class="math inline">\(H\)</span>): <span class="math inline">\(\nabla L=H\theta\)</span>. Update: <span class="math inline">\(\theta_{t+1}=(I-\eta H)\theta_t\)</span>.</p>
+<p><strong>Step 2.</strong> Diagonalize: <span class="math inline">\(H=Q\Lambda Q^\top\)</span> with orthonormal <span class="math inline">\(Q\)</span>. Rotate: <span class="math inline">\(\tilde\theta=Q^\top\theta\)</span>. Then <span class="math inline">\(\tilde\theta_{t+1}=(I-\eta\Lambda)\tilde\theta_t\)</span>: the coordinates are decoupled.</p>
+<p><strong>Step 3.</strong> Each coordinate evolves alone: <span class="math inline">\(\tilde\theta^{(i)}_t=(1-\eta\lambda_i)^t\,\tilde\theta^{(i)}_0\)</span>.</p>
+<p><strong>Step 4.</strong> It shrinks iff <span class="math inline">\(|1-\eta\lambda_i|&lt;1\iff0&lt;\eta\lambda_i&lt;2\)</span>. This must hold for every <span class="math inline">\(i\)</span>, so <span class="math inline">\(0&lt;\eta&lt;2/\lambda_{\max}\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Best fixed step:</strong> minimize <span class="math inline">\(\max_i|1-\eta\lambda_i|\)</span>. The worst cases are the smallest and largest <span class="math inline">\(\lambda\)</span>, and they balance when <span class="math inline">\(1-\eta\lambda_{\min}=\eta\lambda_{\max}-1\)</span>, giving <span class="math inline">\(\eta^*=\frac{2}{\lambda_{\min}+\lambda_{\max}}\)</span> and rate <span class="math inline">\(\frac{\kappa-1}{\kappa+1}\)</span> with <span class="math inline">\(\kappa=\lambda_{\max}/\lambda_{\min}\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Example:</strong> <span class="math inline">\(\lambda=(1,10)\)</span>. <span class="math inline">\(\eta=0.15\)</span>: multipliers <span class="math inline">\((0.85,-0.5)\)</span>, stable with oscillation. <span class="math inline">\(\eta=0.25\)</span>: <span class="math inline">\((0.75,-1.5)\)</span>, diverges. <span class="math inline">\(\eta^*=2/11\)</span>: both have <span class="math inline">\(|\cdot|=9/11\approx0.82\)</span> per step.</p>
+<p><strong>Step 7.</strong> <strong>Sum vs mean:</strong> <span class="math inline">\(L_{\text{sum}}=B\cdot L_{\text{mean}}\)</span> has Hessian <span class="math inline">\(BH\)</span>, so switching to a sum multiplies every <span class="math inline">\(\lambda\)</span> by <span class="math inline">\(B\)</span>, and the same <span class="math inline">\(\eta\)</span> can now be unstable.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: gradient descent with a curvature check</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(\theta_0\)</span>, learning rate <span class="math inline">\(\eta\)</span>, estimate of <span class="math inline">\(\lambda_{\max}\)</span> (e.g. power iteration on Hessian–vector products)</div>
+<div class="algo-line" style="--d:0"><strong>if</strong> <span class="math inline">\(\eta\ge2/\lambda_{\max}\)</span> <strong>then</strong> warn: this step size diverges along the sharpest direction</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t=0,1,\dots\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\theta_{t+1}\gets\theta_t-\eta\nabla L(\theta_t)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Here <span class="math inline">\(H\)</span> has eigenvalues <span class="math inline">\(1\)</span> and <span class="math inline">\(10\)</span>, so predict what happens for learning rates <code>0.05</code>, <code>0.19</code>, and <code>0.21</code>.</p>
+<p>Complete the optimizer loop without using <code>torch.optim</code>.</p>
+<pre class="code python"><code class="language-python">import torch
+
+H = torch.diag(torch.tensor([1.0, 10.0]))  # [D=2, D=2]
+initial = torch.tensor([4.0, 4.0])          # [D]
+
+def train(lr, steps=15):
+    theta = initial.clone().requires_grad_()
+    history = []
+
+    for step in range(steps):
+        loss = ...                         # TODO 1: 0.5 θᵀHθ
+        loss.backward()
+
+        grad_norm = theta.grad.norm().item()
+        history.append(
+            (step, loss.item(), theta.detach().clone(), grad_norm)
+        )
+
+        with torch.no_grad():
+            ...                            # TODO 2: SGD update
+
+        ...                                # TODO 3: clear gradient
+
+    return history
+
+for lr in [0.05, 0.19, 0.21]:
+    history = train(lr)
+
+    print(f&quot;\nlr={lr}&quot;)
+    for step, loss, theta, grad_norm in history[::3]:
+        print(
+            f&quot;step={step:02d} &quot;
+            f&quot;loss={loss:10.4f} &quot;
+            f&quot;theta={theta.tolist()} &quot;
+            f&quot;|grad|={grad_norm:9.4f}&quot;
+        )</code></pre>
+<p>Then inspect each coordinate at every step for <code>lr=0.19</code>:</p>
+<pre class="code python"><code class="language-python">for step, loss, theta, _ in train(0.19, steps=10):
+    print(step, theta.tolist())</code></pre>
+<p>Explain why one coordinate decays smoothly while the other changes sign.</p>
+<p>Finally, remove the gradient-clearing line and rerun with <code>lr=0.05</code>. Predict the behavior before running it.</p>
+<p>Hints:</p>
+<ul>
+<li><p>PyTorch supports <code>theta @ H @ theta</code>.</p></li>
+<li><p>Update parameters inside <code>torch.no_grad()</code>.</p></li>
+<li><p>Gradients accumulate by default.</p></li>
+<li><p>The stability boundary is determined by the largest eigenvalue.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>What is the largest stable learning rate for this particular <span class="math inline">\(H\)</span>?</p></li>
+<li><p>At <code>lr=0.19</code>, what is the per-step multiplier for each coordinate?</p></li>
+<li><p>Why can the loss increase even when the gradient points in the locally steepest ascent direction and we step against it?</p></li>
+<li><p>Debugging: training is stable at batch size 32 but diverges after changing the loss from <code>.mean()</code> to <code>.sum()</code>. What effectively changed?</p></li>
+<li><p>Why should parameter updates normally happen under <code>torch.no_grad()</code>?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def train(lr, steps=15):
+    theta = initial.clone().requires_grad_()
+    history = []
+
+    for step in range(steps):
+        loss = 0.5 * theta @ H @ theta
+        loss.backward()
+
+        grad_norm = theta.grad.norm().item()
+        history.append(
+            (step, loss.item(), theta.detach().clone(), grad_norm)
+        )
+
+        with torch.no_grad():
+            theta -= lr * theta.grad
+
+        theta.grad = None
+
+    return history</code></pre>
+<p>Expected dynamics:</p>
+<ul>
+<li><p><code>lr=0.05</code>: both coordinates decay smoothly.</p></li>
+<li><p><code>lr=0.19</code>: the low-curvature coordinate decays smoothly; the high-curvature coordinate oscillates while decaying.</p></li>
+<li><p><code>lr=0.21</code>: the high-curvature coordinate oscillates with increasing magnitude, causing divergence.</p></li>
+</ul>
+<p>For <code>lr=0.19</code>:</p>
+<p><span class="math display">\[1-\eta\lambda_1=1-0.19(1)=0.81\]</span></p>
+<p><span class="math display">\[1-\eta\lambda_2=1-0.19(10)=-0.9\]</span></p>
+<p>The second coordinate changes sign because its multiplier is negative.</p>
+<p>If gradients are not cleared, each new gradient is added to all previous gradients. The update no longer represents ordinary gradient descent at the current parameter value.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Stability requires <span class="math inline">\(\eta&lt;2/10=0.2\)</span>. Exactly <code>0.2</code> does not converge along the high-curvature direction.</p></li>
+<li><p>The coordinate multipliers are <code>0.81</code> and <code>-0.9</code>.</p></li>
+<li><p>The negative gradient is a local direction. A step that is too large can cross the valley and reach a point with higher loss.</p></li>
+<li><p>Summing instead of averaging scales the gradient roughly with batch size, effectively increasing the learning rate.</p></li>
+<li><p>Otherwise, PyTorch records the update itself in the computation graph, increasing memory use and potentially causing incorrect graph dependencies.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ol>
+<li><p>Contributions from separate branches are added.</p></li>
+<li><p><span class="math inline">\(\partial\tanh(h)/\partial h=1-\tanh^2(h)\)</span>.</p></li>
+</ol>

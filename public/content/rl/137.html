@@ -1,0 +1,529 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>How does FQE differ from Q-learning?</p></li>
+<li><p>Why can FQE achieve zero logged Bellman error while estimating the wrong policy value?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="replace-history-weights-with-occupancy-weights">2. Replace history weights with occupancy weights</h3>
+<p>Per-decision importance sampling uses the complete action history through time <span class="math inline">\(t\)</span>:</p>
+<p><span class="math display">\[\rho_{0:t}
+=
+\underbrace{
+\prod_{k=0}^{t}
+\frac{\pi(A_k\mid S_k)}
+     {\mu(A_k\mid S_k)}
+}_{\text{probability correction for one complete history}}\]</span></p>
+<p>Many different histories may reach the same current state and action. Marginalized importance sampling averages those history weights together.</p>
+<p>Define the time-specific occupancy:</p>
+<p><span class="math display">\[d_t^\pi(s,a)
+=
+\underbrace{
+P_\pi(S_t=s,A_t=a)
+}_{\text{probability target policy occupies }(s,a)\text{ at time }t}\]</span></p>
+<p>The marginalized ratio is:</p>
+<p><span class="math display">\[w_t(s,a)
+=
+\underbrace{
+\frac{d_t^\pi(s,a)}
+     {d_t^\mu(s,a)}
+}_{\text{target-to-behavior occupancy correction}}\]</span></p>
+<p>It is a conditional average of cumulative ratios:</p>
+<p><span class="math display">\[w_t(s,a)
+=
+\underbrace{
+E_\mu[
+\rho_{0:t}
+\mid S_t=s,A_t=a
+]
+}_{\text{history ratios averaged after histories merge}}\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\hat V_{\mathrm{MIS}}
+=
+\frac1N
+\sum_{i=1}^{N}
+\sum_{t=0}^{T-1}
+\underbrace{\gamma^t}_{\text{discount}}
+\underbrace{w_t(S_t^{(i)},A_t^{(i)})}_{\text{current occupancy ratio}}
+\underbrace{R_t^{(i)}}_{\text{observed reward}}\]</span></p>
+<p>This is a Rao–Blackwellization of PDIS: conditioning and averaging remove irrelevant history variation without changing the expectation.</p>
+<p>It still requires occupancy support:</p>
+<p><span class="math display">\[d_t^\pi(s,a)&gt;0
+\Longrightarrow
+\underbrace{
+d_t^\mu(s,a)&gt;0
+}_{\text{logged policy reaches the required pair}}\]</span></p>
+<p>In realistic problems, occupancy ratios must be estimated, which can introduce bias. For an autoregressive LLM whose state is the complete prefix, histories rarely merge; MIS may offer little benefit. A compressed agent state can help only if it preserves the information needed for rewards and transitions.</p>
+<p>DPO’s reference-policy ratio is not an occupancy-ratio estimator and does not make logged deployment evaluation unbiased.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>states, actions and rewards: <span style="background-color: codeinlinebg"><code> [R, N, T]</code></span></p></li>
+<li><p>state occupancies: <span style="background-color: codeinlinebg"><code> [T+1, S]</code></span></p></li>
+<li><p>state–action occupancies and ratio tables: <span style="background-color: codeinlinebg"><code> [T, S, A]</code></span></p></li>
+<li><p>repeated estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-merged-histories-recover-effective-sample-size">3. PyTorch exercise — merged histories recover effective sample size</h3>
+<p>Action <span style="background-color: codeinlinebg"><code> 1</code></span> flips a two-state system; action <span style="background-color: codeinlinebg"><code> 0</code></span> leaves it unchanged. Reward equals the resulting next state.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 3_000
+episodes_per_repetition = 300
+horizon = 8
+gamma = 0.90
+
+num_states = 2
+num_actions = 2
+
+behavior_policy = torch.tensor([
+    [0.75, 0.25],
+    [0.75, 0.25],
+])
+
+target_policy = torch.tensor([
+    [0.25, 0.75],
+    [0.25, 0.75],
+])
+
+# next_state = state XOR action
+# Reward equals next_state.
+reward_table = torch.tensor([
+    [0.0, 1.0],
+    [1.0, 0.0],
+])
+
+discounts = gamma ** torch.arange(horizon)
+
+
+# TODO 1: Calculate exact time-indexed occupancies.
+def exact_occupancy(policy):
+    state_occupancy = ...
+
+    state_action_occupancy = ...
+
+    state_occupancy[0, 0] = 1.0
+
+    for time in range(horizon):
+        state_action_occupancy[time] = ...
+
+        for state in range(num_states):
+            for action in range(num_actions):
+                next_state = ...
+
+                state_occupancy[
+                    time + 1,
+                    next_state,
+                ] += ...
+
+    return (
+        state_occupancy,
+        state_action_occupancy,
+    )
+
+
+behavior_state_occ, behavior_sa_occ = ...
+target_state_occ, target_sa_occ = ...
+
+exact_target_value = ...
+
+
+# TODO 2: Generate behavior-policy trajectories.
+states = ...
+actions = ...
+rewards = ...
+
+current_states = torch.zeros(
+    num_repetitions,
+    episodes_per_repetition,
+    dtype=torch.long,
+)
+
+for time in range(horizon):
+    states[..., time] = ...
+
+    action_one_probabilities = ...
+
+    sampled_actions = ...
+
+    actions[..., time] = ...
+
+    rewards[..., time] = ...
+
+    current_states = ...
+
+
+# TODO 3: Calculate history and marginal weights.
+step_ratios = ...
+
+cumulative_ratios = ...
+
+marginal_ratio_table = ...
+
+time_indices = ...
+
+marginal_weights = ...
+
+
+# TODO 4: Construct three estimators.
+unweighted_estimates = ...
+
+pdis_estimates = ...
+
+mis_estimates = ...
+
+
+# TODO 5: Compare estimator error and ESS.
+all_estimates = torch.stack([
+    unweighted_estimates,
+    pdis_estimates,
+    mis_estimates,
+], dim=1)
+
+means = ...
+biases = ...
+standard_deviations = ...
+rmses = ...
+
+results = torch.stack([
+    means,
+    biases,
+    standard_deviations,
+    rmses,
+], dim=1)
+
+
+def ess_fraction(weights):
+    effective_sample_sizes = ...
+
+    return ...
+
+
+pdis_ess_fractions = ...
+mis_ess_fractions = ...
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+print(
+    &quot;Rows: unweighted behavior, PDIS, MIS\n&quot;
+    &quot;Columns: mean, bias, SD, RMSE&quot;
+)
+print(results)
+
+print(&quot;\nBehavior state occupancy:&quot;)
+print(behavior_state_occ)
+
+print(&quot;\nTarget state occupancy:&quot;)
+print(target_state_occ)
+
+print(
+    &quot;\nPDIS ESS fractions at t=0,1,3,7:&quot;
+)
+print(pdis_ess_fractions[[0, 1, 3, 7]])
+
+print(
+    &quot;MIS ESS fractions at t=0,1,3,7:&quot;
+)
+print(mis_ess_fractions[[0, 1, 3, 7]])</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the unweighted behavior estimate be above or below target value?</p></li>
+<li><p>Should exact PDIS and MIS both be unbiased?</p></li>
+<li><p>At which early timesteps will their weights be identical?</p></li>
+<li><p>Which estimator should have greater ESS after many histories merge?</p></li>
+<li><p>Can MIS recover a state–action pair never reached by the behavior policy?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>Occupancy propagation is:</p>
+<p><span class="math display">\[d_t^\pi(s,a)
+=
+\underbrace{
+d_t^\pi(s)\pi(a\mid s)
+}_{\text{state occupancy times action probability}}\]</span></p>
+<p><span class="math display">\[d_{t+1}^\pi(s&#39;)
+=
+\underbrace{
+\sum_{s,a}
+d_t^\pi(s,a)P(s&#39;\mid s,a)
+}_{\text{move occupancy through the environment}}\]</span></p>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> state ^ action</code></span> for the XOR transition.</p></li>
+<li><p>Index policy probabilities with <span style="background-color: codeinlinebg"><code> policy[states, actions]</code></span>.</p></li>
+<li><p>Marginal ratios require a time index as well as state and action.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> clamp_min(1e-12)</code></span> only for numerical protection; inspect every zero denominator.</p></li>
+<li><p>ESS should sum weights across episodes, independently for each repetition and timestep.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use only the state-occupancy ratio and omit the action ratio.</p></li>
+<li><p>Use one stationary ratio table for every timestep.</p></li>
+<li><p>Replace a zero denominator silently with a small number.</p></li>
+<li><p>Clip weights and continue claiming exact unbiasedness.</p></li>
+<li><p>Merge histories using a non-Markov state representation.</p></li>
+<li><p>Include padded tokens as real occupancy.</p></li>
+<li><p>Estimate ratios and assess them on the same small dataset without cross-fitting.</p></li>
+<li><p>Interpret DPO reference log-ratios as deployment occupancy ratios.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can MIS have lower variance than PDIS?</p></li>
+<li><p>Why does MIS still require support?</p></li>
+<li><p>Why may token-level MIS provide little benefit for an autoregressive LLM?</p></li>
+<li><p>What must a compressed agent state preserve?</p></li>
+<li><p>How could MIS be combined with FQE?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Exact occupancy:</p>
+<pre class="code python"><code class="language-python">def exact_occupancy(policy):
+    state_occupancy = torch.zeros(
+        horizon + 1,
+        num_states,
+    )
+
+    state_action_occupancy = torch.zeros(
+        horizon,
+        num_states,
+        num_actions,
+    )
+
+    state_occupancy[0, 0] = 1.0
+
+    for time in range(horizon):
+        state_action_occupancy[time] = (
+            state_occupancy[time, :, None]
+            * policy
+        )
+
+        for state in range(num_states):
+            for action in range(num_actions):
+                next_state = state ^ action
+
+                state_occupancy[
+                    time + 1,
+                    next_state,
+                ] += state_action_occupancy[
+                    time,
+                    state,
+                    action,
+                ]
+
+    return (
+        state_occupancy,
+        state_action_occupancy,
+    )
+
+
+behavior_state_occ, behavior_sa_occ = (
+    exact_occupancy(behavior_policy)
+)
+
+target_state_occ, target_sa_occ = (
+    exact_occupancy(target_policy)
+)
+
+exact_target_value = (
+    discounts[:, None, None]
+    * target_sa_occ
+    * reward_table[None, :, :]
+).sum()</code></pre>
+<p>Logged trajectories:</p>
+<pre class="code python"><code class="language-python">states = torch.zeros(
+    num_repetitions,
+    episodes_per_repetition,
+    horizon,
+    dtype=torch.long,
+)
+
+actions = torch.zeros_like(states)
+
+rewards = torch.zeros(
+    num_repetitions,
+    episodes_per_repetition,
+    horizon,
+)
+
+current_states = torch.zeros(
+    num_repetitions,
+    episodes_per_repetition,
+    dtype=torch.long,
+)
+
+for time in range(horizon):
+    states[..., time] = current_states
+
+    action_one_probabilities = (
+        behavior_policy[
+            current_states,
+            1,
+        ]
+    )
+
+    sampled_actions = (
+        torch.rand(
+            num_repetitions,
+            episodes_per_repetition,
+        )
+        &lt; action_one_probabilities
+    ).to(torch.long)
+
+    actions[..., time] = sampled_actions
+
+    rewards[..., time] = reward_table[
+        current_states,
+        sampled_actions,
+    ]
+
+    current_states = (
+        current_states ^ sampled_actions
+    )</code></pre>
+<p>Importance weights:</p>
+<pre class="code python"><code class="language-python">step_ratios = (
+    target_policy[states, actions]
+    / behavior_policy[states, actions]
+)
+
+cumulative_ratios = step_ratios.cumprod(
+    dim=-1
+)
+
+marginal_ratio_table = torch.where(
+    behavior_sa_occ &gt; 0,
+    target_sa_occ
+    / behavior_sa_occ.clamp_min(1e-12),
+    torch.zeros_like(behavior_sa_occ),
+)
+
+time_indices = torch.arange(
+    horizon
+).view(1, 1, horizon)
+
+marginal_weights = marginal_ratio_table[
+    time_indices,
+    states,
+    actions,
+]</code></pre>
+<p>Estimators:</p>
+<pre class="code python"><code class="language-python">unweighted_estimates = (
+    discounts * rewards
+).sum(dim=-1).mean(dim=1)
+
+pdis_estimates = (
+    discounts
+    * cumulative_ratios
+    * rewards
+).sum(dim=-1).mean(dim=1)
+
+mis_estimates = (
+    discounts
+    * marginal_weights
+    * rewards
+).sum(dim=-1).mean(dim=1)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">means = all_estimates.mean(dim=0)
+
+biases = means - exact_target_value
+
+standard_deviations = all_estimates.std(
+    dim=0,
+    correction=1,
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)
+
+
+def ess_fraction(weights):
+    effective_sample_sizes = (
+        weights.sum(dim=1).square()
+        / weights.square()
+        .sum(dim=1)
+        .clamp_min(1e-12)
+    )
+
+    return (
+        effective_sample_sizes.mean(dim=0)
+        / episodes_per_repetition
+    )
+
+
+pdis_ess_fractions = ess_fraction(
+    cumulative_ratios
+)
+
+mis_ess_fractions = ess_fraction(
+    marginal_weights
+)</code></pre>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Estimator</strong></th>
+<th style="text-align: left;"><strong>Mean</strong></th>
+<th style="text-align: left;"><strong>Bias</strong></th>
+<th style="text-align: left;"><strong>SD</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Estimator</strong></td>
+<td style="text-align: left;"><strong>Mean</strong></td>
+<td style="text-align: left;"><strong>Bias</strong></td>
+<td style="text-align: left;"><strong>SD</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Unweighted behavior</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 2.394</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.626</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.088</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">PDIS</td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 3.020</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 1.02</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">MIS</td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 3.020</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.105</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>At timestep seven:</p>
+<p><span class="math display">\[\operatorname{ESS}_{\mathrm{PDIS}}
+\approx
+\underbrace{0.025N}_{\text{about 8 of 300 episodes}}\]</span></p>
+<p>while:</p>
+<p><span class="math display">\[\operatorname{ESS}_{\mathrm{MIS}}
+\approx
+\underbrace{0.43N}_{\text{about 129 of 300 episodes}}\]</span></p>
+<p>PDIS remembers which exact sequence reached the current pair. MIS forgets irrelevant historical differences once those histories merge.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>MIS replaces a noisy history ratio with its conditional expectation given the current state and action.</p></li>
+<li><p>An occupancy ratio is undefined when the target reaches a pair that behavior never reaches.</p></li>
+<li><p>The complete prefix is effectively the complete history, so conditioning on it may average over no alternative histories.</p></li>
+<li><p>It must preserve reward-relevant and transition-relevant information so that the resulting process is approximately Markov.</p></li>
+<li><p>Use FQE as a model baseline and marginalized ratios to correct its TD residuals—often called marginalized doubly robust evaluation.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>FQE averages continuation values under the fixed target policy; Q-learning maximizes over actions and evaluates a changing greedy policy.</p></li>
+<li><p>Logged Bellman loss constrains only observed state–action pairs. Unsupported target actions can receive arbitrary values without affecting that loss.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> cumulative ratios ask, “How unlikely was this exact history?” Marginal ratios ask, “How unlikely is the state–action pair where it ended up?” When histories genuinely merge, the second question can retain far more effective data.</p>

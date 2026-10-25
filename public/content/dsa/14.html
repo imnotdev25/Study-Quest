@@ -1,0 +1,115 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Algorithms for data too big or too fast to store: shuffling and sampling (Fisher–Yates, reservoir, weighted, alias), probabilistic data structures (Bloom filters, count-min sketch, HyperLogLog), similarity at scale (MinHash, LSH, SimHash), random projections, and the MapReduce patterns used to process training data.</p>
+</div>
+<h1 id="shuffling">Shuffling</h1>
+<p><em>Fisher–Yates shuffle</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i \gets n-1\)</span> <strong>down to</strong> 1 <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(j \gets\)</span> uniform random integer in <span class="math inline">\([0, i]\)</span> <em>▷ inclusive of <span class="math inline">\(i\)</span></em></div>
+<div class="algo-line" style="--d:1">swap <span class="math inline">\(A[i], A[j]\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Position <span class="math inline">\(n-1\)</span> receives each element with probability <span class="math inline">\(1/n\)</span>; given that, position <span class="math inline">\(n-2\)</span> receives each remaining element with probability <span class="math inline">\(1/(n-1)\)</span>, and so on, so all <span class="math inline">\(n!\)</span> permutations have probability <span class="math inline">\(1/n!\)</span>. The classic bug, choosing <span class="math inline">\(j\)</span> from <span class="math inline">\([0, n-1]\)</span> every time, produces <span class="math inline">\(n^n\)</span> equally likely sequences, which cannot divide evenly into <span class="math inline">\(n!\)</span> permutations, so some orders are more likely.</p>
+</div>
+<h1 id="reservoir-sampling">Reservoir Sampling</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>You are handed cards one at a time and do not know how many are coming. You may hold only <span class="math inline">\(k\)</span>. Reservoir sampling tells you when to swap a new card in so that, whenever the stream stops, every card seen had an equal chance to be in your hand.</p>
+</div>
+<p><em>Reservoir sampling (<span class="math inline">\(k\)</span> items from a stream)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(R \gets\)</span> the first <span class="math inline">\(k\)</span> items</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i \gets k+1, k+2, \dots\)</span> (the <span class="math inline">\(i\)</span>-th item <span class="math inline">\(x\)</span>) <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(j \gets\)</span> uniform random integer in <span class="math inline">\([1, i]\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(j \le k\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(R[j] \gets x\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(R\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Claim:</strong> after <span class="math inline">\(n\)</span> items, each is in <span class="math inline">\(R\)</span> with probability <span class="math inline">\(k/n\)</span>. Induction: item <span class="math inline">\(i\)</span> enters with probability <span class="math inline">\(k/i\)</span>. At each later step <span class="math inline">\(t\)</span>, it is evicted only if <span class="math inline">\(j \le k\)</span> (probability <span class="math inline">\(k/t\)</span>) and <span class="math inline">\(j\)</span> hits its slot (probability <span class="math inline">\(1/k\)</span>), so it survives with probability <span class="math inline">\(1 - 1/t = (t-1)/t\)</span>. Product: <span class="math inline">\(\frac{k}{i}\cdot\frac{i}{i+1}\cdots\frac{n-1}{n} = \frac{k}{n}\)</span>. <strong>Time:</strong> <span class="math inline">\(O(n)\)</span> <strong>Space:</strong> <span class="math inline">\(O(k)\)</span>. <strong>Distributed version:</strong> assign each item a random key and keep the <span class="math inline">\(k\)</span> smallest keys per shard; merge shards by keeping the global <span class="math inline">\(k\)</span> smallest.</p>
+</div>
+<h1 id="weighted-sampling">Weighted Sampling</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>CDF + binary search</strong>: prefix sums of weights, draw <span class="math inline">\(u \sim U(0, W)\)</span>, find the first prefix <span class="math inline">\(&gt; u\)</span>. <span class="math inline">\(O(n)\)</span> setup, <span class="math inline">\(O(\log n)\)</span> per sample. (“Random pick with weight.”)</p></li>
+<li><p><strong>Alias method</strong>: <span class="math inline">\(O(n)\)</span> setup into <span class="math inline">\(n\)</span> buckets, each holding at most two outcomes with a split probability; sample in <span class="math inline">\(O(1)\)</span>: pick a bucket uniformly, then flip a biased coin. Used for word2vec’s negative sampling table and for sampling from large static categorical distributions.</p></li>
+<li><p><strong>Weighted reservoir (A-Res)</strong>: give each item key <span class="math inline">\(u^{1/w}\)</span> with <span class="math inline">\(u \sim U(0,1)\)</span> and keep the <span class="math inline">\(k\)</span> largest keys (a min-heap). One pass, weighted sampling without replacement from a stream.</p></li>
+<li><p><strong>Gumbel-max trick</strong>: <span class="math inline">\(\arg\max_i (\log p_i + g_i)\)</span> with <span class="math inline">\(g_i\)</span> Gumbel noise is an exact sample from <span class="math inline">\(p\)</span>; taking the top <span class="math inline">\(k\)</span> gives sampling without replacement. This is how sampling from softmax logits can be done without normalizing, and why “Gumbel-softmax” allows differentiable sampling.</p></li>
+</ul>
+</div>
+<h1 id="bloom-filters">Bloom Filters</h1>
+<figure class="tikz"><img src="figs/dsa/253b4ac40410.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A Bloom filter: no false negatives, tunable false positives.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A bit array of <span class="math inline">\(m\)</span> bits and <span class="math inline">\(k\)</span> hash functions. Insert sets <span class="math inline">\(k\)</span> bits; a query returns “maybe present” if all <span class="math inline">\(k\)</span> bits are set, “definitely absent” otherwise. With <span class="math inline">\(n\)</span> items, the false-positive rate is about <span class="math inline">\((1 - e^{-kn/m})^k\)</span>, minimized at <span class="math inline">\(k = \frac{m}{n}\ln 2\)</span>, giving about <span class="math inline">\(0.6185^{m/n}\)</span>: roughly <strong>10 bits per item for 1%</strong>, 14.4 bits for 0.1%. Deletion is impossible (use a counting Bloom filter or a cuckoo filter). Uses: avoid disk reads for absent keys in LSM databases, “has this URL been crawled,” cache-miss filters, and checking membership of a token sequence in a huge set before an expensive lookup.</p>
+</div>
+<h1 id="count-min-sketch">Count-Min Sketch</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A <span class="math inline">\(d \times w\)</span> counter table with one hash function per row. Increment adds to one counter per row; a query returns the <em>minimum</em> across rows. Collisions only add, so estimates never underestimate; with <span class="math inline">\(w = \lceil e/\epsilon\rceil\)</span> and <span class="math inline">\(d = \lceil\ln(1/\delta)\rceil\)</span>, the overestimate is at most <span class="math inline">\(\epsilon N\)</span> with probability <span class="math inline">\(1-\delta\)</span> (<span class="math inline">\(N\)</span> = total count). Combined with a small heap it finds <strong>heavy hitters</strong> (most frequent items) in a stream with fixed memory: trending queries, hot keys, top tokens. The <strong>Misra–Gries</strong> algorithm finds items with frequency <span class="math inline">\(&gt; n/k\)</span> deterministically using <span class="math inline">\(k-1\)</span> counters (generalizing Boyer–Moore majority vote).</p>
+</div>
+<h1 id="hyperloglog-counting-distinct-items">HyperLogLog: Counting Distinct Items</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Hash every item. In a uniform random hash, a prefix of <span class="math inline">\(r\)</span> leading zeros appears about once per <span class="math inline">\(2^r\)</span> distinct values, so the maximum observed run of leading zeros estimates <span class="math inline">\(\log_2\)</span> of the number of distinct items. HyperLogLog splits hashes into <span class="math inline">\(m\)</span> buckets by their first bits, tracks the max leading zeros per bucket, and combines with a harmonic mean, giving a standard error of about <span class="math inline">\(1.04/\sqrt m\)</span>: roughly 2% error with 12 KB of memory, for billions of distinct items. Sketches <strong>merge</strong> by taking per-bucket maxima, so per-day or per-shard sketches combine into totals. Used for unique users, distinct n-grams in a corpus, and cardinality estimates in query planners.</p>
+</div>
+<h1 id="streaming-quantiles">Streaming Quantiles</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Exact percentiles need all the data. Sketches keep an approximation: <strong>t-digest</strong> clusters values with finer resolution near the tails (accurate p99s), <strong>KLL</strong> gives guaranteed rank error, and <strong>DDSketch</strong> gives guaranteed <em>relative</em> value error with log-spaced buckets. All are mergeable, so p99 latency across thousands of servers can be computed from per-server sketches. Averaging per-server p99s is wrong.</p>
+</div>
+<h1 id="similarity-at-scale-minhash-and-lsh">Similarity at Scale: MinHash and LSH</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Finding near-duplicate documents among billions by comparing every pair is impossible. Instead, give each document a short “fingerprint” designed so that similar documents usually get matching fingerprints, then only compare documents whose fingerprints collide.</p>
+</div>
+<p><em>MinHash signatures and LSH banding</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>for</strong> each document <span class="math inline">\(d\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(S_d \gets\)</span> set of shingles (e.g. word 5-grams) of <span class="math inline">\(d\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(i \gets 1\)</span> <strong>to</strong> <span class="math inline">\(K\)</span> <strong>do</strong> <em>▷ <span class="math inline">\(K\)</span> independent hash functions</em></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(sig_d[i] \gets \min_{s \in S_d} h_i(s)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">split each signature into <span class="math inline">\(b\)</span> bands of <span class="math inline">\(r\)</span> rows (<span class="math inline">\(K = br\)</span>)</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each band <strong>do</strong></div>
+<div class="algo-line" style="--d:1">bucket documents by the hash of their <span class="math inline">\(r\)</span> values in that band</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">candidate pairs <span class="math inline">\(\gets\)</span> documents sharing at least one bucket; verify with estimated Jaccard</div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>For one random hash, <span class="math inline">\(\Pr[\min h(A) = \min h(B)] = \frac{|A\cap B|}{|A\cup B|}\)</span>, the <strong>Jaccard similarity</strong> <span class="math inline">\(J\)</span>: the minimum over <span class="math inline">\(A\cup B\)</span> is equally likely to be any element, and it is shared exactly when that element is in the intersection. So the fraction of matching signature positions estimates <span class="math inline">\(J\)</span>. With banding, two documents become candidates with probability <span class="math inline">\(1 - (1 - J^r)^b\)</span>, an S-curve that is near 0 below a threshold of about <span class="math inline">\((1/b)^{1/r}\)</span> and near 1 above it. Choosing <span class="math inline">\(b\)</span> and <span class="math inline">\(r\)</span> tunes the threshold (e.g. <span class="math inline">\(b = 20\)</span>, <span class="math inline">\(r = 5\)</span> targets <span class="math inline">\(J \approx 0.55\)</span>).</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>SimHash</strong> (Charikar) produces a 64-bit fingerprint where similar documents have small Hamming distance (each bit is the sign of a weighted sum of feature hashes); used historically by Google for near-duplicate web pages. <strong>Random hyperplane LSH</strong> hashes vectors by the signs of random projections; the probability two vectors agree on a bit is <span class="math inline">\(1 - \theta/\pi\)</span>, so it approximates cosine similarity. Modern vector search mostly uses graph indexes (HNSW) instead, but LSH remains common for deduplication.</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<p>Near-duplicate removal with MinHash + LSH is a standard step in building LLM pre-training corpora (documents with Jaccard similarity above roughly 0.7–0.8 on n-gram shingles are clustered and all but one dropped). Deduplication improves training efficiency, reduces memorization, and helps prevent benchmark contamination. Chapter 16 covers the full data pipeline.</p>
+</div>
+<h1 id="random-projections">Random Projections</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The <strong>Johnson–Lindenstrauss lemma</strong>: any <span class="math inline">\(n\)</span> points in high dimension can be projected to <span class="math inline">\(k = O(\log n / \epsilon^2)\)</span> dimensions with a random Gaussian (or <span class="math inline">\(\pm 1\)</span>) matrix while preserving all pairwise distances within a factor of <span class="math inline">\(1 \pm \epsilon\)</span>. The target dimension does not depend on the original dimension. This justifies random-projection dimensionality reduction, sketching for least squares, and some embedding compression. <strong>Count sketch</strong> and the hashing trick are sparse random projections.</p>
+</div>
+<h1 id="mapreduce-patterns">MapReduce Patterns</h1>
+<figure class="tikz"><img src="figs/dsa/32bb7d6ab0e6.svg" alt="diagram" loading="lazy"></figure>
+<p><em>MapReduce: map emits (key, value), the shuffle groups by key, reduce aggregates.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Word / n-gram count</strong>: map emits (word, 1); a <em>combiner</em> pre-sums on each mapper to cut shuffle volume; reduce sums.</p></li>
+<li><p><strong>Distributed sort</strong>: sample keys to choose range boundaries, partition by range, sort each partition locally (TeraSort).</p></li>
+<li><p><strong>Joins</strong>: reduce-side (shuffle both tables by join key) or broadcast (copy a small table to every mapper). <strong>Skewed keys</strong> (one user with millions of rows) overload one reducer: salt the hot key into sub-keys and combine afterward.</p></li>
+<li><p><strong>Inverted index</strong>: map emits (term, doc id); reduce builds posting lists.</p></li>
+<li><p><strong>Global top-<span class="math inline">\(k\)</span></strong>: local top-<span class="math inline">\(k\)</span> per mapper, then one reducer merges.</p></li>
+</ul>
+<p>Spark, Beam, and Ray Data implement these with in-memory execution; the same patterns apply.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Random sample of 1 million rows from a 10-billion-row table</div>
+<p>One machine with a stream: reservoir sampling, one pass, <span class="math inline">\(O(k)\)</span> memory. Distributed: each worker assigns each row a random 64-bit key and keeps its local 1M smallest keys in a heap; a coordinator merges to the global 1M smallest, which is a uniform sample without replacement. If an approximate size is fine, Bernoulli sampling (keep each row with probability <span class="math inline">\(10^{-4}\)</span>) is trivially parallel. For a <em>stratified</em> sample (balanced labels), run the same per stratum. For reproducibility, derive keys from a hash of the row ID plus a seed instead of a random generator.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Fisher–Yates and reservoir sampling are short algorithms with exact uniformity proofs.</p></li>
+<li><p>Bloom filters, count-min, and HyperLogLog trade small errors for tiny, mergeable memory.</p></li>
+<li><p>MinHash estimates Jaccard similarity; LSH banding finds near duplicates without all pairs.</p></li>
+<li><p>MapReduce thinking (map, combine, shuffle, reduce, handle skew) is how data pipelines scale.</p></li>
+</ul>
+</div>

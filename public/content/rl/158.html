@@ -1,0 +1,394 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does an autoregressive sequence log-ratio equal a sum of token log-ratios?</p></li>
+<li><p>What goes wrong when a summed KL observation is compared with a per-token KL target?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="broadcasting-credit-is-not-duplicating-reward">2. Broadcasting credit is not duplicating reward</h3>
+<p>A reward model or verifier often gives one score <span class="math inline">\(R_i\)</span> after the entire response. Store it once, at the terminal token:</p>
+<p><span class="math display">\[r_{it}
+=
+\underbrace{
+\mathbf 1[t=L_i-1]R_i
+}_{\text{one terminal reward}}\]</span></p>
+<p>The return from token <span class="math inline">\(t\)</span> is:</p>
+<p><span class="math display">\[G_{it}
+=
+\underbrace{
+\sum_{u=t}^{L_i-1}
+\gamma^{u-t}r_{iu}
+}_{\text{future reward after choosing token }t}
+=
+\underbrace{
+\gamma^{L_i-1-t}R_i
+}_{\text{discounted terminal score}}\]</span></p>
+<p>With <span class="math inline">\(\gamma=1\)</span>:</p>
+<p><span class="math display">\[\underbrace{G_{it}=R_i}_{\text{same return for every preceding action}}\]</span></p>
+<p>Every generated token receives credit because every token helped construct the final response—not because the environment emitted <span class="math inline">\(R_i\)</span> repeatedly.</p>
+<p>This also follows from the log-derivative identity:</p>
+<p><span class="math display">\[\log\pi_\theta(y_i\mid x_i)
+=
+\underbrace{
+\sum_t m_{it}\log\pi_\theta(a_{it}\mid s_{it})
+}_{\text{autoregressive sequence log-probability}}\]</span></p>
+<p><span class="math display">\[\nabla_\theta J
+\approx
+\underbrace{
+A_i
+\sum_t m_{it}
+\nabla_\theta\log\pi_\theta(a_{it}\mid s_{it})
+}_{\text{one sequence advantage, many token gradients}}\]</span></p>
+<p>A simple sequence advantage is:</p>
+<p><span class="math display">\[A_i
+=
+\underbrace{R_i-b(x_i)}_{\text{return minus prompt-dependent baseline}}\]</span></p>
+<p>Detach it in the actor loss:</p>
+<p><span class="math display">\[L_{\text{actor}}
+=
+-\frac1B
+\sum_i
+\underbrace{
+\operatorname{stopgrad}(A_i)
+}_{\text{fixed learning signal}}
+\underbrace{
+\sum_t m_{it}\log\pi_\theta(a_{it}\mid s_{it})
+}_{\text{trainable token log-probabilities}}\]</span></p>
+<p>For <span class="math inline">\(A_i&gt;0\)</span>, gradient descent raises probabilities of sampled tokens. For <span class="math inline">\(A_i&lt;0\)</span>, it lowers them.</p>
+<p>Do not confuse this with incorrectly assigning <span class="math inline">\(r_{it}=R_i\)</span> at every token. With <span class="math inline">\(\gamma=1\)</span>, that bug makes the first-token return approximately <span class="math inline">\(L_iR_i\)</span>.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>logits: <span style="background-color: codeinlinebg"><code> [B, T, V]</code></span></p></li>
+<li><p>actions, log-probabilities, rewards and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>lengths, rewards and sequence advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<p>DPO also sums completion-token log-probabilities, so its preference loss backpropagates through every completion token. But DPO has no sampled online return, return-to-go, or learned PPO value baseline.</p>
+<h3 class="unnumbered" id="pytorch-exercise-prove-the-two-implementations-match">3. PyTorch exercise — prove the two implementations match</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 3
+max_tokens = 5
+vocabulary_size = 4
+
+lengths = torch.tensor([2, 5, 3])
+
+valid_mask = (
+    torch.arange(max_tokens)[None, :]
+    &lt; lengths[:, None]
+).to(torch.float64)
+
+continuation_mask = (
+    torch.arange(max_tokens)[None, :]
+    &lt; (lengths - 1)[:, None]
+).to(torch.float64)
+
+actions = torch.tensor([
+    [1, 2, 0, 0, 0],
+    [0, 3, 2, 1, 0],
+    [2, 2, 3, 0, 0],
+])
+
+sequence_rewards = torch.tensor([
+    1.20,
+    -0.40,
+    0.80,
+])
+
+prompt_baselines = torch.tensor([
+    0.50,
+    0.10,
+    0.60,
+])
+
+logits = torch.nn.Parameter(
+    0.30 * torch.randn(
+        batch_size,
+        max_tokens,
+        vocabulary_size,
+    )
+)
+
+
+def undiscounted_returns(
+    token_rewards,
+    continuation_mask,
+    valid_mask,
+):
+    returns = torch.zeros_like(token_rewards)
+    running_return = torch.zeros(
+        token_rewards.shape[0]
+    )
+
+    for t in reversed(
+        range(token_rewards.shape[1])
+    ):
+        # TODO 1
+        running_return = ...
+
+        running_return = ...
+
+        returns[:, t] = running_return
+
+    return returns
+
+
+# Correct: store each sequence reward once.
+terminal_token_rewards = torch.zeros(
+    batch_size,
+    max_tokens,
+)
+
+terminal_token_rewards[
+    torch.arange(batch_size),
+    lengths - 1,
+] = sequence_rewards
+
+# Incorrect: emit the full reward at every token.
+duplicated_token_rewards = (
+    sequence_rewards[:, None]
+    * valid_mask
+)
+
+# TODO 2: Compute both return tables.
+correct_returns = ...
+duplicated_returns = ...
+
+distribution = torch.distributions.Categorical(
+    logits=logits
+)
+
+chosen_log_probabilities = (
+    distribution.log_prob(actions)
+)
+
+# TODO 3: Sequence-level detached advantage.
+sequence_advantages = ...
+
+# Implementation A: sequence log-probability.
+sequence_log_probabilities = ...
+
+sequence_actor_loss = ...
+
+# TODO 4: Implementation B—broadcast the advantage
+# over valid generated tokens.
+token_actor_terms = ...
+
+broadcast_actor_loss = ...
+
+# Two alternative reduction conventions.
+global_token_mean_loss = ...
+
+per_sequence_token_mean_loss = ...
+
+# TODO 5: Compare gradients.
+sequence_gradient = torch.autograd.grad(
+    sequence_actor_loss,
+    logits,
+    retain_graph=True,
+)[0]
+
+broadcast_gradient = torch.autograd.grad(
+    broadcast_actor_loss,
+    logits,
+    retain_graph=True,
+)[0]
+
+global_mean_gradient = torch.autograd.grad(
+    global_token_mean_loss,
+    logits,
+    retain_graph=True,
+)[0]
+
+per_sequence_mean_gradient = torch.autograd.grad(
+    per_sequence_token_mean_loss,
+    logits,
+)[0]
+
+gradient_identity_error = ...
+
+expected_global_scale = (
+    batch_size / valid_mask.sum()
+)
+
+global_scale_error = ...
+
+per_sequence_mean_cosine = (
+    F.cosine_similarity(
+        sequence_gradient.flatten(),
+        per_sequence_mean_gradient.flatten(),
+        dim=0,
+    )
+)
+
+largest_padded_gradient = (
+    sequence_gradient
+    * (1.0 - valid_mask)[..., None]
+).abs().max()
+
+print(&quot;Valid mask:\n&quot;, valid_mask)
+print(&quot;Correct token rewards:\n&quot;, terminal_token_rewards)
+print(&quot;Correct returns:\n&quot;, correct_returns)
+print(&quot;Duplicated-reward returns:\n&quot;, duplicated_returns)
+
+print(&quot;Sequence advantages:&quot;, sequence_advantages)
+print(&quot;Sequence loss:&quot;, sequence_actor_loss.item())
+print(&quot;Broadcast loss:&quot;, broadcast_actor_loss.item())
+
+print(
+    &quot;Gradient identity error:&quot;,
+    gradient_identity_error.item(),
+)
+print(
+    &quot;Global-token scaling error:&quot;,
+    global_scale_error.item(),
+)
+print(
+    &quot;Cosine with per-sequence token mean:&quot;,
+    per_sequence_mean_cosine.item(),
+)
+print(
+    &quot;Largest padded gradient:&quot;,
+    largest_padded_gradient.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the correct return at every valid token when <span class="math inline">\(\gamma=1\)</span>?</p></li>
+<li><p>What is the first return for the length-five sequence under the duplicated-reward bug?</p></li>
+<li><p>Should the sequence and broadcast actor gradients differ?</p></li>
+<li><p>For a positive advantage, does gradient descent raise or lower sampled-token probability?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Return recursion: current reward plus continuation times the running return.</p></li>
+<li><p>Reset the running value on padding using <span style="background-color: codeinlinebg"><code> valid_mask[:, t]</code></span>.</p></li>
+<li><p>Advantage: <span style="background-color: codeinlinebg"><code> (sequence_rewards - prompt_baselines).detach()</code></span>.</p></li>
+<li><p>Sequence log-probability is the masked sum over time.</p></li>
+<li><p>Broadcasting uses <span style="background-color: codeinlinebg"><code> sequence_advantages[:, None]</code></span>.</p></li>
+<li><p>A global token mean differs from the sequence loss only by a batch-dependent scalar.</p></li>
+<li><p>Dividing each sequence by its own length can change the gradient direction.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Repeat a sequence reward at every token instead of placing it once.</p></li>
+<li><p>Include prompt or padding tokens in the actor loss.</p></li>
+<li><p>Forget <span style="background-color: codeinlinebg"><code> .detach()</code></span> and update the baseline through the actor objective.</p></li>
+<li><p>Divide each sequence loss by length without recognizing the objective change.</p></li>
+<li><p>Apply softmax before <span style="background-color: codeinlinebg"><code> Categorical</code></span>, losing logit-level numerical stability.</p></li>
+<li><p>Interpret equal token returns as proof that every token was equally causal.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why may one terminal reward correctly produce gradients at every response token?</p></li>
+<li><p>Why is broadcasting <span class="math inline">\(A_i\)</span> different from emitting <span class="math inline">\(R_i\)</span> repeatedly?</p></li>
+<li><p>Does equal return-to-go imply equal causal responsibility?</p></li>
+<li><p>What changes when each sequence’s log-probability sum is divided by its length?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Return recursion:</p>
+<pre class="code python"><code class="language-python">running_return = (
+    token_rewards[:, t]
+    + continuation_mask[:, t]
+    * running_return
+)
+
+running_return = (
+    running_return
+    * valid_mask[:, t]
+)</code></pre>
+<p>Return tables:</p>
+<pre class="code python"><code class="language-python">correct_returns = undiscounted_returns(
+    terminal_token_rewards,
+    continuation_mask,
+    valid_mask,
+)
+
+duplicated_returns = undiscounted_returns(
+    duplicated_token_rewards,
+    continuation_mask,
+    valid_mask,
+)</code></pre>
+<p>Advantages and sequence loss:</p>
+<pre class="code python"><code class="language-python">sequence_advantages = (
+    sequence_rewards
+    - prompt_baselines
+).detach()
+
+sequence_log_probabilities = (
+    chosen_log_probabilities
+    * valid_mask
+).sum(dim=1)
+
+sequence_actor_loss = -(
+    sequence_advantages
+    * sequence_log_probabilities
+).mean()</code></pre>
+<p>Broadcast implementation and reductions:</p>
+<pre class="code python"><code class="language-python">token_actor_terms = (
+    sequence_advantages[:, None]
+    * chosen_log_probabilities
+    * valid_mask
+)
+
+broadcast_actor_loss = -(
+    token_actor_terms.sum(dim=1)
+).mean()
+
+global_token_mean_loss = -(
+    token_actor_terms.sum()
+    / valid_mask.sum()
+)
+
+per_sequence_token_mean_loss = -(
+    token_actor_terms.sum(dim=1)
+    / lengths
+).mean()</code></pre>
+<p>Gradient diagnostics:</p>
+<pre class="code python"><code class="language-python">gradient_identity_error = (
+    sequence_gradient
+    - broadcast_gradient
+).abs().max()
+
+global_scale_error = (
+    global_mean_gradient
+    - expected_global_scale
+    * sequence_gradient
+).abs().max()</code></pre>
+<p>The correct return table is:</p>
+<p><span class="math display">\[G^{\text{correct}}
+=
+\begin{bmatrix}
+1.2 &amp; 1.2 &amp; 0 &amp; 0 &amp; 0\\
+-0.4 &amp; -0.4 &amp; -0.4 &amp; -0.4 &amp; -0.4\\
+0.8 &amp; 0.8 &amp; 0.8 &amp; 0 &amp; 0
+\end{bmatrix}\]</span></p>
+<p>The duplicated-reward bug gives:</p>
+<p><span class="math display">\[G^{\text{bug}}_{i,0}
+=
+\underbrace{L_iR_i}_{\text{reward counted once per token}}\]</span></p>
+<p>Therefore the length-five sequence begins with:</p>
+<p><span class="math display">\[5(-0.4)=-2.0\]</span></p>
+<p>The sequence and broadcast losses—and their gradients—should match to floating-point precision. Padded-token gradients should be zero.</p>
+<p>The global-token mean has the same gradient direction but rescales it by:</p>
+<p><span class="math display">\[\underbrace{
+\frac{B}{\sum_i L_i}
+}_{3/10=0.3}\]</span></p>
+<p>A per-sequence token mean introduces a different factor <span class="math inline">\(1/L_i\)</span> for every response, so it can change both relative sequence weighting and gradient direction.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Because the gradient of a sequence log-probability is the sum of gradients for all sampled token decisions.</p></li>
+<li><p>Broadcasting uses one return as credit for several actions. Repeating the reward changes the return itself and counts the environment outcome multiple times.</p></li>
+<li><p>No. A shared terminal score provides coarse credit; it cannot identify which particular token caused success or failure.</p></li>
+<li><p>Long responses contribute less per token, changing the optimization objective and often its length preference.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Autoregressive sequence probabilities multiply across tokens; taking a logarithm converts that product into a sum.</p></li>
+<li><p>The controller interprets incompatible units as a large KL error and incorrectly changes the KL coefficient.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> store a sequence reward once, but let its return train every action that preceded it. Broadcasting detached credit is correct policy-gradient accounting; duplicating environmental reward is not.</p>

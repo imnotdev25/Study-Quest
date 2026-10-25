@@ -1,0 +1,270 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: an athlete and a coach</div>
+<p>REINFORCE is like an athlete who only learns from the final scoreboard. Actor-critic adds a coach on the sideline who says “that move was better than I expected” <em>right after each move</em>. The athlete (actor) chooses the moves. The coach (critic) predicts how things will go, and the coach’s surprise is the athlete’s lesson.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/680150ecb438.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The critic turns each transition into a TD error <span class="math inline">\(\delta_t\)</span>, which acts as the actor’s advantage.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What is an advantage, using a return and baseline?</p></li>
+<li><p>Why must the advantage be detached from the policy loss?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="actor-and-critic">2. Actor and critic</h3>
+<p>Think of two collaborators:</p>
+<ul>
+<li><p>The <strong>actor</strong> chooses what to do: <span class="math inline">\(\pi_\theta(a\mid s)\)</span>.</p></li>
+<li><p>The <strong>critic</strong> predicts how promising the current situation is: <span class="math inline">\(V_\phi(s)\)</span>.</p></li>
+</ul>
+<p>After a transition, the critic constructs a one-step prediction target:</p>
+<p><span class="math display">\[Y_t
+=
+R_{t+1}
++\gamma(1-D_t)V_\phi(S_{t+1})\]</span></p>
+<p>The difference between the target and the current prediction is the TD error:</p>
+<p><span class="math display">\[\delta_t
+=
+Y_t-V_\phi(S_t)\]</span></p>
+<p>This TD error is also a one-step advantage estimate:</p>
+<p><span class="math display">\[\hat A_t=\delta_t\]</span></p>
+<p>It tells the actor whether the sampled action worked out better or worse than the critic expected.</p>
+<p>The two losses are:</p>
+<p><span class="math display">\[L_{\text{actor}}
+=
+-\log\pi_\theta(A_t\mid S_t)\,
+\operatorname{stopgrad}(\delta_t)\]</span></p>
+<p><span class="math display">\[L_{\text{critic}}
+=
+\frac12
+\left(V_\phi(S_t)-\operatorname{stopgrad}(Y_t)\right)^2\]</span></p>
+<p>Two detachments matter:</p>
+<ul>
+<li><p>Detach <span class="math inline">\(Y_t\)</span>: the critic performs a semi-gradient TD update instead of moving both sides of its target.</p></li>
+<li><p>Detach <span class="math inline">\(\delta_t\)</span> in the actor loss: the actor should change action probabilities, not manipulate the critic to manufacture a convenient advantage.</p></li>
+</ul>
+<p>Unlike REINFORCE, actor-critic can update before the episode ends. Bootstrapping usually lowers variance, but an inaccurate critic introduces bias.</p>
+<p>For a batch:</p>
+<ul>
+<li><p>states: <span style="background-color: codeinlinebg"><code> [B, features]</code></span></p></li>
+<li><p>actor logits: <span style="background-color: codeinlinebg"><code> [B, actions]</code></span></p></li>
+<li><p>values, rewards, terminal masks: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>sampled actions and log-probabilities: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>TD advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>In LLM RL, the actor is the token policy and the critic estimates each prefix:</p>
+<p><span class="math display">\[V_\phi(x,y_{&lt;t})\]</span></p>
+<p>The critic helps answer whether the sampled next token led to a better continuation than expected. PPO-based RLHF commonly uses this actor–critic structure.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the TD error is an advantage estimate</div>
+<p><span class="math inline">\(\delta_t=r_{t+1}+\gamma V(s_{t+1})-V(s_t)\)</span>. If <span class="math inline">\(V=V^\pi\)</span> exactly, <span class="math display">\[\mathbb E[\delta_t\mid s_t,a_t]=\mathbb E[r_{t+1}+\gamma V^\pi(s_{t+1})\mid s_t,a_t]-V^\pi(s_t)=Q^\pi(s_t,a_t)-V^\pi(s_t)=A^\pi(s_t,a_t).\]</span> <strong>Losses:</strong> actor <span class="math inline">\(-\operatorname{sg}[\delta_t]\log\pi_\theta(a_t|s_t)\)</span>, critic <span class="math inline">\(\tfrac12\big(\operatorname{sg}[r+\gamma V_\phi(s&#39;)]-V_\phi(s)\big)^2\)</span>.</p>
+<p><strong>The trade:</strong> if <span class="math inline">\(V_\phi\)</span> is wrong, <span class="math inline">\(\delta_t\)</span> is biased. You give up some correctness for much lower variance and per-step updates.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>The critic learns what to expect, and the actor learns from the surprise.</p></li>
+<li><p>Detach <span class="math inline">\(\delta\)</span> in the actor loss so the actor doesn’t move the critic.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: two TD errors</div>
+<p><span class="math inline">\(\gamma=0.9\)</span>, <span class="math inline">\(V(s)=1.0\)</span>.</p>
+<ul>
+<li><p>Non-terminal: <span class="math inline">\(r=0.5\)</span>, <span class="math inline">\(V(s&#39;)=2.0\)</span>, so <span class="math inline">\(\delta=0.5+1.8-1.0=1.3\)</span>. The actor makes <span class="math inline">\(a\)</span> more likely, and the critic moves <span class="math inline">\(V(s)\)</span> up (<span class="math inline">\(1.13\)</span> with step 0.1).</p></li>
+<li><p>Terminal: <span class="math inline">\(r=0.5\)</span>, so <span class="math inline">\(\delta=0.5-1.0=-0.5\)</span>. This was worse than expected.</p></li>
+</ul>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Forgetting to detach <span class="math inline">\(\delta\)</span> in the actor loss, so the actor’s gradient reshapes the critic.</p></li>
+<li><p>Bootstrapping <span class="math inline">\(V(s&#39;)\)</span> after a terminal step.</p></li>
+<li><p>Making the actor’s learning rate much larger than the critic’s (the actor chases a noisy critic).</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: One-step online actor-critic</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> actor <span class="math inline">\(\pi_\theta\)</span>, critic <span class="math inline">\(V_\phi\)</span>, step sizes <span class="math inline">\(\beta_a,\beta_c\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(s\gets\)</span> initial state</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each step <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(a\sim\pi_\theta(\cdot|s)\)</span>; take <span class="math inline">\(a\)</span>; observe <span class="math inline">\(r,s&#39;,d\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\delta\gets r+\gamma(1-d)V_\phi(s&#39;)-V_\phi(s)\)</span> <em>▷ treated as a constant</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\phi\gets\phi+\beta_c\,\delta\,\nabla_\phi V_\phi(s)\)</span> <em>▷ critic: reduce TD error</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\theta\gets\theta+\beta_a\,\delta\,\nabla_\theta\log\pi_\theta(a|s)\)</span> <em>▷ actor: <span class="math inline">\(\delta\)</span> acts as the advantage</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(s\gets s&#39;\)</span> (reset if <span class="math inline">\(d=1\)</span>)</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-a-tiny-online-actor-critic">3. PyTorch exercise — a tiny online actor-critic</h3>
+<p>The task has two nonterminal states:</p>
+<ul>
+<li><p>At state <span style="background-color: codeinlinebg"><code> 0</code></span>, action <span style="background-color: codeinlinebg"><code> 1</code></span> continues to state <span style="background-color: codeinlinebg"><code> 1</code></span>; action <span style="background-color: codeinlinebg"><code> 0</code></span> ends with reward <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+<li><p>At state <span style="background-color: codeinlinebg"><code> 1</code></span>, action <span style="background-color: codeinlinebg"><code> 1</code></span> ends with reward <span style="background-color: codeinlinebg"><code> 1</code></span>; action <span style="background-color: codeinlinebg"><code> 0</code></span> ends with reward <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+</ul>
+<p>Complete the TODOs:</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+gamma = 1.0
+critic_weight = 0.5
+
+actor_logits = torch.nn.Parameter(
+    torch.zeros(2, 2)
+)  # [states=2, actions=2]
+
+critic_values = torch.nn.Parameter(
+    torch.zeros(2)
+)  # [states=2]
+
+optimizer = torch.optim.Adam(
+    [actor_logits, critic_values],
+    lr=0.03,
+)
+
+successes = []
+absolute_td_errors = []
+
+for episode in range(1500):
+    state = 0
+    episode_reward = 0.0
+
+    for _ in range(2):
+        policy = Categorical(logits=actor_logits[state])
+
+        # TODO 1: Sample an action and obtain its log-probability.
+        action = ...
+        log_prob = ...
+
+        action_int = action.item()
+
+        if state == 0 and action_int == 1:
+            next_state, reward, done = 1, 0.0, False
+        elif state == 1 and action_int == 1:
+            next_state, reward, done = 0, 1.0, True
+        else:
+            next_state, reward, done = 0, 0.0, True
+
+        value = critic_values[state]
+
+        # TODO 2: Construct a fixed one-step TD target.
+        with torch.no_grad():
+            next_value = ...
+            target = ...
+
+        # TODO 3: TD error / one-step advantage.
+        advantage = ...
+
+        # TODO 4: Actor and critic losses.
+        actor_loss = ...
+        critic_loss = ...
+
+        loss = actor_loss + critic_weight * critic_loss
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            [actor_logits, critic_values],
+            max_norm=5.0,
+        )
+        optimizer.step()
+
+        episode_reward += reward
+        absolute_td_errors.append(advantage.detach().abs().item())
+
+        if done:
+            break
+
+        state = next_state
+
+    successes.append(episode_reward)
+
+    if episode in [0, 49, 299, 1499]:
+        with torch.no_grad():
+            probabilities = actor_logits.softmax(dim=-1)
+            recent_success = (
+                sum(successes[-100:]) / len(successes[-100:])
+            )
+
+        print(
+            f&quot;episode={episode:4d}&quot;,
+            f&quot;success={recent_success:.3f}&quot;,
+            f&quot;P(a=1)={probabilities[:, 1].tolist()}&quot;,
+            f&quot;V={critic_values.detach().tolist()}&quot;,
+        )
+
+print(
+    &quot;Final mean |TD error|:&quot;,
+    sum(absolute_td_errors[-100:]) / 100,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action should become likely in both states?</p></li>
+<li><p>Initially, what are the actor’s four action probabilities?</p></li>
+<li><p>Near convergence, what should <span class="math inline">\(V(1)\)</span> approach?</p></li>
+<li><p>Why does useful information reach state <span style="background-color: codeinlinebg"><code> 0</code></span> later than state <span style="background-color: codeinlinebg"><code> 1</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> action = policy.sample()</code></span></p></li>
+<li><p><span style="background-color: codeinlinebg"><code> log_prob = policy.log_prob(action)</code></span></p></li>
+<li><p>Use zero next-value after termination.</p></li>
+<li><p>Otherwise use <span style="background-color: codeinlinebg"><code> critic_values[next_state]</code></span> inside <span style="background-color: codeinlinebg"><code> no_grad</code></span>.</p></li>
+<li><p>Advantage direction is <span style="background-color: codeinlinebg"><code> target - value</code></span>.</p></li>
+<li><p>Actor loss retains the leading negative sign.</p></li>
+<li><p>Critic loss is half the squared advantage.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Remove <span style="background-color: codeinlinebg"><code> .detach()</code></span> here:</p>
+<pre class="code python"><code class="language-python">actor_loss = -log_prob * advantage</code></pre>
+<p>Now the actor loss also produces gradients for <span style="background-color: codeinlinebg"><code> critic_values</code></span>. The optimizer can reduce the actor loss partly by changing the critic rather than only changing the policy.</p>
+<p>Also try removing <span style="background-color: codeinlinebg"><code> torch.no_grad()</code></span> around the target. The critic can then move the next-state value through the target, changing the intended semi-gradient update.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is the TD error usable as an advantage estimate?</p></li>
+<li><p>What does a negative TD advantage do to the sampled action?</p></li>
+<li><p>Why does actor-critic usually have lower variance than REINFORCE?</p></li>
+<li><p>Does a small critic loss guarantee a high-return policy?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">action = policy.sample()
+log_prob = policy.log_prob(action)</code></pre>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    next_value = (
+        torch.tensor(0.0)
+        if done
+        else critic_values[next_state]
+    )
+
+    target = reward + gamma * next_value</code></pre>
+<pre class="code python"><code class="language-python">advantage = target - value</code></pre>
+<pre class="code python"><code class="language-python">actor_loss = -log_prob * advantage.detach()
+critic_loss = 0.5 * advantage.pow(2)</code></pre>
+<p>Both states should eventually prefer action <span style="background-color: codeinlinebg"><code> 1</code></span>:</p>
+<pre class="code text"><code class="language-plaintext">state 0: continue
+state 1: collect reward</code></pre>
+<p>Initially:</p>
+<p><span class="math display">\[\operatorname{softmax}([0,0])=[0.5,0.5]\]</span></p>
+<p>Near convergence:</p>
+<p><span class="math display">\[V(1)\approx1\]</span></p>
+<p>and, because action <span style="background-color: codeinlinebg"><code> 1</code></span> is almost always selected in both states:</p>
+<p><span class="math display">\[V(0)
+\approx
+\gamma V(1)
+\approx1\]</span></p>
+<p>State <span style="background-color: codeinlinebg"><code> 1</code></span> observes the reward directly. State <span style="background-color: codeinlinebg"><code> 0</code></span> learns through the bootstrapped estimate <span class="math inline">\(V(1)\)</span>, so reward information propagates backward after the critic begins learning state <span style="background-color: codeinlinebg"><code> 1</code></span>.</p>
+<p>Exact values and success rates need not change monotonically because actions remain sampled.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It compares the observed one-step outcome with the critic’s expectation: positive means better than expected and negative means worse.</p></li>
+<li><p>Gradient descent decreases that action’s log-probability.</p></li>
+<li><p>It replaces a noisy complete return with an immediate reward plus a learned value estimate.</p></li>
+<li><p>No. The critic may accurately evaluate a poor policy; track episodic return or success rate as well.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(A_t=G_t-b(S_t)\)</span>.</p></li>
+<li><p>The advantage is supervision for the actor; without detachment, the policy loss can also optimize the baseline’s construction.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> the critic learns what to expect; the actor learns from the surprise. Actor-critic trades some critic bias for earlier, typically lower-variance policy updates.</p>

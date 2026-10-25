@@ -1,0 +1,542 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What are marginalized doubly robust evaluation’s two consistency routes?</p></li>
+<li><p>Why is a low-variance estimate especially dangerous when both nuisance models are wrong?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="train-nuisances-without-the-row-they-will-score">2. Train nuisances without the row they will score</h3>
+<p>A doubly robust score for logged example <span class="math inline">\(i\)</span> is:</p>
+<p><span class="math display">\[\psi_i
+=
+\underbrace{
+\sum_a\pi(a\mid x_i)\hat q(x_i,a)
+}_{\text{model-based baseline}}
++
+\underbrace{
+\frac{\pi(a_i\mid x_i)}
+     {\mu(a_i\mid x_i)}
+\left[
+R_i-\hat q(x_i,a_i)
+\right]
+}_{\text{weighted correction}}\]</span></p>
+<p>The argument that the correction repairs model error treats <span class="math inline">\(\hat q\)</span> as fixed relative to <span class="math inline">\(R_i\)</span>. If a flexible model memorizes that same outcome:</p>
+<p><span class="math display">\[\hat q(x_i,a_i)=R_i\]</span></p>
+<p>then:</p>
+<p><span class="math display">\[R_i-\hat q(x_i,a_i)
+=
+\underbrace{0}_{\text{importance correction disabled by memorization}}\]</span></p>
+<p>Cross-fitting prevents this:</p>
+<ol>
+<li><p>Divide independent units into folds <span class="math inline">\(I_1,\dots,I_K\)</span>.</p></li>
+<li><p>Fit nuisance models without fold <span class="math inline">\(I_k\)</span>.</p></li>
+<li><p>Score only <span class="math inline">\(I_k\)</span> with those models.</p></li>
+<li><p>Join all out-of-fold scores.</p></li>
+</ol>
+<p>The estimator is:</p>
+<p><span class="math display">\[\hat V_{\mathrm{CFDR}}
+=
+\frac1n
+\sum_{k=1}^{K}
+\sum_{i\in I_k}
+\left[
+\underbrace{
+\sum_a\pi(a\mid x_i)
+\hat q^{(-k)}(x_i,a)
+}_{\text{prediction trained without fold }k}
++
+\underbrace{
+\frac{\pi(a_i\mid x_i)}
+     {\hat\mu^{(-k)}(a_i\mid x_i)}
+\left(
+R_i-\hat q^{(-k)}(x_i,a_i)
+\right)
+}_{\text{out-of-fold residual correction}}
+\right]\]</span></p>
+<p>Cross-fitting reduces own-sample overfitting bias. It does not repair missing support, invalid rewards, judge bias or jointly misspecified nuisance models.</p>
+<p>For sequential LLM-agent data, split complete episodes, users or prompt clusters—not individual tokens from the same trajectory. DPO remains preference optimization; cross-fitting only protects a subsequent evaluation from label reuse.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions and rewards: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>nuisance action values: <span style="background-color: codeinlinebg"><code> [R, A]</code></span></p></li>
+<li><p>per-example DR scores: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>repeated estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-a-memorizer-produces-precise-nonsense">3. PyTorch exercise — a memorizer produces precise nonsense</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 5_000
+examples_per_repetition = 400
+num_folds = 2
+
+behavior_policy = torch.tensor([
+    0.80,
+    0.20,
+])
+
+target_policy = torch.tensor([
+    0.20,
+    0.80,
+])
+
+true_action_values = torch.tensor([
+    0.20,
+    0.80,
+])
+
+
+# TODO 1: Generate logged contextual-bandit data.
+actions = ...
+
+reward_probabilities = ...
+
+rewards = ...
+
+exact_target_value = ...
+
+
+# TODO 2: Calculate known propensity corrections.
+importance_weights = ...
+
+
+# TODO 3: Build an intentionally leaky memorizer.
+# Each row memorizes its factual reward only for its
+# observed action; the counterfactual remains zero.
+leaky_q_values = ...
+
+leaky_q_values.scatter_(
+    dim=2,
+    index=...,
+    src=...,
+)
+
+leaky_baselines = ...
+
+leaky_logged_predictions = ...
+
+leaky_dr_estimates = ...
+
+
+# TODO 4: Construct two-fold out-of-fold scores.
+fold_ids = (
+    torch.arange(examples_per_repetition)
+    % num_folds
+)
+
+cross_fitted_scores = torch.zeros_like(
+    rewards
+)
+
+cross_fitted_direct_scores = torch.zeros_like(
+    rewards
+)
+
+for fold in range(num_folds):
+    training_mask = ...
+    evaluation_mask = ...
+
+    training_actions = ...
+    training_rewards = ...
+
+    action_value_estimates = []
+
+    for action in range(2):
+        action_mask = ...
+
+        estimated_value = ...
+
+        action_value_estimates.append(
+            estimated_value
+        )
+
+    action_value_estimates = torch.stack(
+        action_value_estimates,
+        dim=1,
+    )
+
+    evaluation_actions = ...
+    evaluation_rewards = ...
+
+    model_baseline = ...
+
+    logged_predictions = ...
+
+    evaluation_weights = ...
+
+    cross_fitted_scores[
+        :,
+        evaluation_mask,
+    ] = ...
+
+    cross_fitted_direct_scores[
+        :,
+        evaluation_mask,
+    ] = ...
+
+
+cross_fitted_dr_estimates = ...
+
+cross_fitted_dm_estimates = ...
+
+ips_estimates = ...
+
+
+# TODO 5: Compare repeated estimates.
+behavior_estimates = rewards.mean(dim=1)
+
+all_estimates = torch.stack([
+    behavior_estimates,
+    ips_estimates,
+    leaky_dr_estimates,
+    cross_fitted_dm_estimates,
+    cross_fitted_dr_estimates,
+], dim=1)
+
+means = ...
+biases = ...
+standard_deviations = ...
+rmses = ...
+
+results = torch.stack([
+    means,
+    biases,
+    standard_deviations,
+    rmses,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+print(
+    &quot;Rows: behavior mean, IPS, leaky DR, &quot;
+    &quot;cross-fitted DM, cross-fitted DR&quot;
+)
+print(&quot;Columns: mean, bias, SD, RMSE&quot;)
+print(results)
+
+print(
+    &quot;Maximum leaky factual residual:&quot;,
+    (
+        rewards
+        - leaky_logged_predictions
+    ).abs().max().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the exact target-policy value?</p></li>
+<li><p>What will the memorizer’s factual residuals equal?</p></li>
+<li><p>Will leaky DR estimate be above or below the truth?</p></li>
+<li><p>Which should be noisier: IPS or cross-fitted DR?</p></li>
+<li><p>Does cross-fitting repair absent target-action support?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>The true target value is:</p>
+<p><span class="math display">\[V^\pi
+=
+\underbrace{0.20(0.20)}_{\text{action 0 contribution}}
++
+\underbrace{0.80(0.80)}_{\text{action 1 contribution}}
+=
+0.68\]</span></p>
+<p>The importance weight is:</p>
+<p><span class="math display">\[w_i
+=
+\underbrace{
+\frac{\pi(A_i)}
+     {\mu(A_i)}
+}_{\text{target-to-behavior action probability}}\]</span></p>
+<ul>
+<li><p>Create <span style="background-color: codeinlinebg"><code> leaky_q_values</code></span> with shape <span style="background-color: codeinlinebg"><code> [R, N, 2]</code></span>.</p></li>
+<li><p>Scatter with indices and sources shaped <span style="background-color: codeinlinebg"><code> [R, N, 1]</code></span>.</p></li>
+<li><p>Estimate each action mean using only the opposite fold.</p></li>
+<li><p>Every row must be scored exactly once.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> .clamp_min(1)</code></span> on fold-specific action counts.</p></li>
+<li><p>The fold-specific baseline has shape <span style="background-color: codeinlinebg"><code> [R, 1]</code></span> and broadcasts.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Train the nuisance model using the fold it will score.</p></li>
+<li><p>Split tokens while leaving adjacent tokens from the same episode in both folds.</p></li>
+<li><p>Fit feature normalization or representation learning on all evaluation outcomes.</p></li>
+<li><p>Cross-fit <span class="math inline">\(Q\)</span> but not a learned behavior or occupancy model.</p></li>
+<li><p>Select nuisance hyperparameters using final out-of-fold scores repeatedly.</p></li>
+<li><p>Treat duplicated prompts as independent folds.</p></li>
+<li><p>Forget to detach nuisance predictions during evaluation.</p></li>
+<li><p>Cross-fit a reward model but ignore systematic judge bias.</p></li>
+<li><p>Evaluate a DPO checkpoint on preference pairs used during DPO training.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does memorization disable the residual correction?</p></li>
+<li><p>What independence does cross-fitting restore?</p></li>
+<li><p>What should define a fold for agent trajectories?</p></li>
+<li><p>Does cross-fitting make a misspecified model correct?</p></li>
+<li><p>When is a separate frozen nuisance model already sufficient?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Logged data:</p>
+<pre class="code python"><code class="language-python">actions = (
+    torch.rand(
+        num_repetitions,
+        examples_per_repetition,
+    )
+    &lt; behavior_policy[1]
+).to(torch.long)
+
+reward_probabilities = true_action_values[
+    actions
+]
+
+rewards = (
+    torch.rand(
+        num_repetitions,
+        examples_per_repetition,
+    )
+    &lt; reward_probabilities
+).to(torch.float64)
+
+exact_target_value = (
+    target_policy
+    * true_action_values
+).sum()</code></pre>
+<p>Weights and leaky model:</p>
+<pre class="code python"><code class="language-python">importance_weights = (
+    target_policy[actions]
+    / behavior_policy[actions]
+)
+
+leaky_q_values = torch.zeros(
+    num_repetitions,
+    examples_per_repetition,
+    2,
+)
+
+leaky_q_values.scatter_(
+    dim=2,
+    index=actions[..., None],
+    src=rewards[..., None],
+)
+
+leaky_baselines = (
+    leaky_q_values
+    * target_policy
+).sum(dim=-1)
+
+leaky_logged_predictions = (
+    leaky_q_values
+    .gather(
+        dim=2,
+        index=actions[..., None],
+    )
+    .squeeze(-1)
+)
+
+leaky_dr_estimates = (
+    leaky_baselines
+    + importance_weights
+    * (
+        rewards
+        - leaky_logged_predictions
+    )
+).mean(dim=1)</code></pre>
+<p>Cross-fitting:</p>
+<pre class="code python"><code class="language-python">fold_ids = (
+    torch.arange(examples_per_repetition)
+    % num_folds
+)
+
+cross_fitted_scores = torch.zeros_like(
+    rewards
+)
+
+cross_fitted_direct_scores = torch.zeros_like(
+    rewards
+)
+
+for fold in range(num_folds):
+    training_mask = fold_ids != fold
+    evaluation_mask = fold_ids == fold
+
+    training_actions = actions[
+        :,
+        training_mask,
+    ]
+
+    training_rewards = rewards[
+        :,
+        training_mask,
+    ]
+
+    action_value_estimates = []
+
+    for action in range(2):
+        action_mask = (
+            training_actions == action
+        )
+
+        estimated_value = (
+            (
+                training_rewards
+                * action_mask
+            ).sum(dim=1)
+            / action_mask.sum(dim=1)
+            .clamp_min(1)
+        )
+
+        action_value_estimates.append(
+            estimated_value
+        )
+
+    action_value_estimates = torch.stack(
+        action_value_estimates,
+        dim=1,
+    )
+
+    evaluation_actions = actions[
+        :,
+        evaluation_mask,
+    ]
+
+    evaluation_rewards = rewards[
+        :,
+        evaluation_mask,
+    ]
+
+    model_baseline = (
+        action_value_estimates
+        * target_policy
+    ).sum(dim=1, keepdim=True)
+
+    logged_predictions = (
+        action_value_estimates.gather(
+            dim=1,
+            index=evaluation_actions,
+        )
+    )
+
+    evaluation_weights = (
+        target_policy[evaluation_actions]
+        / behavior_policy[evaluation_actions]
+    )
+
+    cross_fitted_scores[
+        :,
+        evaluation_mask,
+    ] = (
+        model_baseline
+        + evaluation_weights
+        * (
+            evaluation_rewards
+            - logged_predictions
+        )
+    )
+
+    cross_fitted_direct_scores[
+        :,
+        evaluation_mask,
+    ] = model_baseline
+
+
+cross_fitted_dr_estimates = (
+    cross_fitted_scores.mean(dim=1)
+)
+
+cross_fitted_dm_estimates = (
+    cross_fitted_direct_scores.mean(dim=1)
+)
+
+ips_estimates = (
+    importance_weights
+    * rewards
+).mean(dim=1)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">means = all_estimates.mean(dim=0)
+
+biases = means - exact_target_value
+
+standard_deviations = all_estimates.std(
+    dim=0,
+    correction=1,
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)</code></pre>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Estimator</strong></th>
+<th style="text-align: left;"><strong>Mean</strong></th>
+<th style="text-align: left;"><strong>Bias</strong></th>
+<th style="text-align: left;"><strong>SD</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Estimator</strong></td>
+<td style="text-align: left;"><strong>Mean</strong></td>
+<td style="text-align: left;"><strong>Bias</strong></td>
+<td style="text-align: left;"><strong>SD</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Unweighted behavior reward</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.320</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.360</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.023</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">IPS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.680</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.072</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Leaky same-row DR</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.160</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.520</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.014</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Cross-fitted direct method</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.680</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.036</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Cross-fitted DR</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.680</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.036</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The leaky estimator has the smallest standard deviation while being catastrophically wrong. Its residuals are exactly zero, so importance weighting cannot repair its counterfactual predictions.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The model copies <span class="math inline">\(R_i\)</span>, making <span class="math inline">\(R_i-\hat q(x_i,a_i)=0\)</span>; the corrective term disappears.</p></li>
+<li><p>Each scored outcome is excluded from the data used to produce its nuisance predictions.</p></li>
+<li><p>Split the largest plausibly dependent unit: usually complete episodes, users, conversations or prompt families.</p></li>
+<li><p>No. It controls own-sample overfitting; structural misspecification and missing support remain.</p></li>
+<li><p>A model trained and frozen on genuinely independent data already provides the needed separation, assuming its selection did not use evaluation outcomes.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>MDR is consistent if either its occupancy ratios are correct or its trajectory <span class="math inline">\(Q\)</span>-model is correct.</p></li>
+<li><p>Small variance measures repeatability around the estimator’s own expectation—not closeness of that expectation to truth.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> an evaluator should never grade an outcome it was allowed to memorize. Cross-fitting preserves data efficiency while ensuring every residual is genuinely out of sample.</p>

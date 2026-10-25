@@ -1,0 +1,63 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Real-life version.</strong> A dot product is a “how much do we agree” score: two people’s ratings on the same movies, multiplied and summed. Softmax turns those scores into a vote share. Temperature is how decisive the room is: low temperature, the loudest opinion wins; high temperature, everyone gets a say.</p>
+</div>
+<h2 class="unnumbered" id="dot-product-and-cosine">Dot product and cosine</h2>
+<p><span class="math inline">\(q\cdot k=\lVert q\rVert\lVert k\rVert\cos\theta\)</span>. Cosine measures direction only. The raw dot product also rewards length, which is why in the output below a key three times longer gets three times the score even though its direction is identical. Attention uses raw dot products, so the norms of queries and keys matter. That is the problem QK-norm (Toolkit II) solves.</p>
+<h2 class="unnumbered" id="softmax-and-temperature">Softmax and temperature</h2>
+<p><span class="math inline">\(\operatorname{softmax}(z/T)_i=e^{z_i/T}/\sum_je^{z_j/T}\)</span>. Adding a constant to all logits cancels between numerator and denominator, so we subtract <span class="math inline">\(\max z\)</span> before exponentiating to avoid overflow. As <span class="math inline">\(T\to0\)</span> softmax becomes argmax; as <span class="math inline">\(T\to\infty\)</span> it becomes uniform.</p>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Why attention divides by <span class="math inline">\(\sqrt d\)</span></div>
+<p><strong>Step 1.</strong> Let <span class="math inline">\(q,k\in\mathbb R^d\)</span> have independent entries with mean 0 and variance 1.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\operatorname{Var}(q_ik_i)=\mathbb E[q_i^2]\mathbb E[k_i^2]=1\)</span>, and the <span class="math inline">\(d\)</span> terms are independent, so <span class="math inline">\(\operatorname{Var}(q\cdot k)=d\)</span>.</p>
+<p><strong>Step 3.</strong> Standard deviation <span class="math inline">\(\sqrt d\)</span>: at <span class="math inline">\(d=256\)</span> scores spread over <span class="math inline">\(\pm16\)</span>, softmax saturates, and its gradients vanish. Dividing by <span class="math inline">\(\sqrt d\)</span> brings the spread back to 1.</p>
+</div>
+<h2 class="unnumbered" id="broadcasting">Broadcasting</h2>
+<p>Align shapes from the right; each dimension must be equal or 1, and size-1 dimensions are stretched without copying. <span class="math inline">\((5,1,3)-(1,4,3)\to(5,4,3)\)</span> computes every pairwise difference. The second method in the code uses <span class="math inline">\(\lVert a-b\rVert^2=\lVert a\rVert^2+\lVert b\rVert^2-2a\cdot b\)</span>, which turns the work into one matrix multiply, the form GPUs like.</p>
+<h2 class="unnumbered" id="l1-vs-l2-norms">L1 vs L2 norms</h2>
+<p><span class="math inline">\(\lVert x\rVert_1=\sum|x_i|\)</span> and <span class="math inline">\(\lVert x\rVert_2=\sqrt{\sum x_i^2}\)</span>. The unit L1 ball is a diamond with corners on the axes, so an L1-constrained optimum tends to land on a corner, where some coordinates are zero. The L2 ball is round, so it has no preferred corner. That picture is the geometric version of the soft-threshold derivation in the previous chapter. In LLMs, L2 shows up as weight decay and gradient clipping by norm; RMSNorm divides by <span class="math inline">\(\lVert x\rVert_2/\sqrt d\)</span>.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Toolkit ch. 2: dot products, softmax temperature, broadcasting.&quot;&quot;&quot;
+import numpy as np
+
+rng = np.random.default_rng(1)
+
+# Dot product vs cosine: the dot product also rewards length.
+q = np.array([1.0, 2.0, 0.0])
+K = np.array([[1.0, 2.0, 0.1],    # same direction
+              [3.0, 6.0, 0.0],    # same direction, 3x longer
+              [-2.0, 1.0, 0.0]])  # orthogonal
+dots = K @ q
+cos = dots / (np.linalg.norm(K, axis=1) * np.linalg.norm(q))
+print(f&quot;[dot] q.k    = {np.round(dots, 2)}&quot;)
+print(f&quot;[dot] cosine = {np.round(cos, 3)}&quot;)
+
+
+def softmax(z, T=1.0):
+    z = np.asarray(z) / T
+    e = np.exp(z - z.max())          # subtract max: same result, no overflow
+    return e / e.sum()
+
+
+z = np.array([2.0, 1.0, 0.1])
+for T in (0.25, 1.0, 4.0):
+    print(f&quot;[softmax] T={T:&lt;4}  {np.round(softmax(z, T), 3)}&quot;)
+print(f&quot;[softmax] shift-invariant: {np.allclose(softmax(z), softmax(z + 1000))}&quot;)
+
+# Why attention divides by sqrt(d): q.k for random unit-variance vectors has variance d.
+for d in (16, 256):
+    s = (rng.normal(size=(10_000, d)) * rng.normal(size=(10_000, d))).sum(1)
+    print(f&quot;[scale] d={d:3d}  std(q.k)={s.std():6.2f}  std(q.k/sqrt d)={(s / np.sqrt(d)).std():.2f}&quot;)
+
+# Broadcasting: all pairwise squared distances, no loops.
+A, B = rng.normal(size=(5, 3)), rng.normal(size=(4, 3))
+D1 = ((A[:, None, :] - B[None, :, :]) ** 2).sum(-1)              # (5,1,3)-(1,4,3) -&gt; (5,4,3)
+D2 = (A**2).sum(1)[:, None] + (B**2).sum(1)[None, :] - 2 * A @ B.T  # (5,1)+(1,4)-(5,4)
+print(f&quot;[broadcast] D shape {D1.shape}, two methods agree: {np.allclose(D1, D2)}&quot;)</code></pre>
+<pre class="code output"><code class="output">[dot] q.k    = [ 5. 15.  0.]
+[dot] cosine = [0.999 1.    0.   ]
+[softmax] T=0.25  [0.982 0.018 0.   ]
+[softmax] T=1.0   [0.659 0.242 0.099]
+[softmax] T=4.0   [0.417 0.324 0.259]
+[softmax] shift-invariant: True
+[scale] d= 16  std(q.k)=  3.97  std(q.k/sqrt d)=0.99
+[scale] d=256  std(q.k)= 15.82  std(q.k/sqrt d)=0.99
+[broadcast] D shape (5, 4), two methods agree: True</code></pre>

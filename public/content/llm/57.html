@@ -1,0 +1,56 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Linear attention</strong> drops the softmax so attention becomes a running sum, and decoding needs a fixed-size <strong>state</strong> instead of a growing KV cache: <span class="math inline">\(O(1)\)</span> memory per token. The price is a weaker memory. <strong>The delta rule</strong> and <strong>gating</strong> make that memory smarter, and <strong>hybrids</strong> keep a few full-attention layers for exact recall.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: linear attention is an RNN</div>
+<p><strong>Step 1.</strong> Causal attention with similarity <span class="math inline">\(\phi(q)^\top\phi(k)\)</span> instead of <span class="math inline">\(e^{q^\top k}\)</span>: <span class="math inline">\(o_t=\sum_{s\le t}(q_t^\top k_s)v_s\)</span> (taking <span class="math inline">\(\phi=\)</span> identity, no normalizer).</p>
+<p><strong>Step 2.</strong> Rearrange: <span class="math inline">\(o_t=\Big(\sum_{s\le t}v_sk_s^\top\Big)q_t=S_t^\top q_t\)</span> with <span class="math inline">\(S_t=\sum_{s\le t}k_sv_s^\top\in\mathbb R^{d_k\times d_v}\)</span>.</p>
+<p><strong>Step 3.</strong> Recurrence: <span class="math inline">\(S_t=S_{t-1}+k_tv_t^\top\)</span>. Each step costs <span class="math inline">\(O(d_kd_v)\)</span>, independent of <span class="math inline">\(t\)</span>. Training uses a chunked parallel form; both agree to <span class="math inline">\(10^{-15}\)</span> (check below).</p>
+<p><strong>Step 4.</strong> <strong>Weakness:</strong> <span class="math inline">\(S\)</span> only ever <em>adds</em>. Old associations are never removed, so after many tokens, retrieving <span class="math inline">\(S^\top q\)</span> returns a blur.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: selective state spaces (Mamba)</div>
+<p><strong>Step 1.</strong> Continuous system <span class="math inline">\(h&#39;(t)=Ah(t)+Bx(t)\)</span>, <span class="math inline">\(y=Ch\)</span>. Discretize with step <span class="math inline">\(\Delta\)</span> (zero-order hold): <span class="math inline">\(\bar A=e^{\Delta A}\)</span>, <span class="math inline">\(\bar B\approx\Delta B\)</span>, so <span class="math inline">\(h_t=\bar Ah_{t-1}+\bar Bx_t\)</span>.</p>
+<p><strong>Step 2.</strong> With diagonal <span class="math inline">\(A&lt;0\)</span>, <span class="math inline">\(\bar A\in(0,1)\)</span> is a per-channel decay: a leaky memory.</p>
+<p><strong>Step 3.</strong> <strong>Selective:</strong> make <span class="math inline">\(\Delta,B,C\)</span> functions of the current input <span class="math inline">\(x_t\)</span>. A large <span class="math inline">\(\Delta\)</span> means “reset and write this token,” and a small <span class="math inline">\(\Delta\)</span> means “ignore it and keep the state.”</p>
+<p><strong>Step 4.</strong> That’s the same structure as gated linear attention: <span class="math inline">\(S_t=\operatorname{diag}(\alpha_t)S_{t-1}+k_tv_t^\top\)</span>, with an input-dependent forget gate <span class="math inline">\(\alpha_t\)</span>.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the delta rule is one step of online regression</div>
+<p><strong>Step 1.</strong> Treat the state as a linear memory that should return <span class="math inline">\(v_t\)</span> when queried with key <span class="math inline">\(k_t\)</span>: minimize <span class="math inline">\(\mathcal L(S)=\frac12\|S^\top k_t-v_t\|^2\)</span>.</p>
+<p><strong>Step 2.</strong> Gradient: <span class="math inline">\(\nabla_S\mathcal L=k_t(S^\top k_t-v_t)^\top\)</span>.</p>
+<p><strong>Step 3.</strong> One gradient step with rate <span class="math inline">\(\beta_t\)</span>: <span class="math inline">\(S_t=S_{t-1}-\beta_tk_t(k_t^\top S_{t-1}-v_t^\top)=(I-\beta_tk_tk_t^\top)S_{t-1}+\beta_tk_tv_t^\top\)</span>. This is <strong>DeltaNet</strong> (verified below).</p>
+<p><strong>Step 4.</strong> Reading it: first <em>erase</em> what’s stored along <span class="math inline">\(k_t\)</span> (the projection <span class="math inline">\(I-\beta kk^\top\)</span>), then write <span class="math inline">\(v_t\)</span>. Overwriting, not piling up.</p>
+<p><strong>Step 5.</strong> <strong>Gated DeltaNet</strong> (used in Qwen3-Next and the Qwen3.8 “Next” line) adds a scalar decay: <span class="math inline">\(S_t=\alpha_t(I-\beta_tk_tk_t^\top)S_{t-1}+\beta_tk_tv_t^\top\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Kimi Delta Attention</strong> (Kimi Linear, then Kimi K3) makes the decay <em>per channel</em>: <span class="math inline">\(S_t=(I-\beta_tk_tk_t^\top)\operatorname{Diag}(\alpha_t)S_{t-1}+\beta_tk_tv_t^\top\)</span>, <span class="math inline">\(\alpha_t\in(0,1)^{d_k}\)</span>. In K3 the decay is bounded below: <span class="math inline">\(g=g_{\min}\sigma(e^{A_h}z)\)</span>, <span class="math inline">\(\alpha=e^g\in(e^{-5},1)\)</span>, so a 16-token chunk’s cumulative decay stays within BF16 range and the kernel can use tensor cores.</p>
+</div>
+<pre class="code text"><code class="language-plaintext">import torch
+
+torch.manual_seed(0)
+T, d = 10, 4
+q, k, v = torch.randn(3, T, d, dtype=torch.float64)
+parallel = torch.tril(q @ k.T) @ v                       # causal linear attention, all at once
+S, rec = torch.zeros(d, d, dtype=torch.float64), []
+for t in range(T):
+    S = S + torch.outer(k[t], v[t])                       # S_t = S_{t-1} + k_t v_t^T
+    rec.append(S.T @ q[t])
+print((parallel - torch.stack(rec)).abs().max())          # ~1e-15
+
+# Delta rule == one gradient step on 1/2 ||S^T k - v||^2
+S0 = torch.randn(d, d, dtype=torch.float64, requires_grad=True)
+kk = torch.nn.functional.normalize(torch.randn(d, dtype=torch.float64), dim=0)
+vv, beta = torch.randn(d, dtype=torch.float64), 0.7
+(0.5 * ((S0.T @ kk - vv) ** 2).sum()).backward()
+delta = (torch.eye(d, dtype=torch.float64) - beta * torch.outer(kk, kk)) @ S0.detach() + beta * torch.outer(kk, vv)
+print((delta - (S0.detach() - beta * S0.grad)).abs().max())  # ~1e-16</code></pre>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/3ed3ac7de751.svg" alt="diagram" loading="lazy"></figure>
+<p><em>One step of Kimi Delta Attention. The state has a fixed size however long the sequence is. Gated DeltaNet uses a scalar <span class="math inline">\(\alpha_t\)</span>; plain DeltaNet has no decay box; plain linear attention has only the write box.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: hybrids: why keep some full attention</div>
+<p><strong>Step 1.</strong> A fixed state of size <span class="math inline">\(d_kd_v\)</span> can store only about <span class="math inline">\(d_k\)</span> independent key–value pairs exactly, while a KV cache stores all <span class="math inline">\(T\)</span>. Tasks like “find the phone number mentioned 200K tokens ago” need the cache.</p>
+<p><strong>Step 2.</strong> So modern long-context models interleave: MiniMax-01 uses 7 lightning (linear) layers per softmax layer; Qwen3-Next and Qwen3.8-Flash-Next use 3 Gated DeltaNet layers per gated full-attention layer; Kimi K3 uses 3 KDA layers per gated MLA layer (69 + 24).</p>
+<p><strong>Step 3.</strong> KV memory then grows only in the full-attention quarter (or eighth) of the layers, while the linear layers carry a constant-size state.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/7171d0a749c2.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The 3:1 hybrid used by Qwen3-Next, Qwen3.8-Flash-Next (Gated DeltaNet) and Kimi K3 (KDA + gated MLA). MiniMax-01 uses 7:1.</em></p>
+</div>

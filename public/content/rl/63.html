@@ -1,0 +1,256 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: free throws vs “eventually”</div>
+<p>A basketball player who hits 30% of free throws will “eventually” score if you give them 10 tries. Saying “they score 97% of the time (pass@10)” hides that one shot usually misses. Users usually get <em>one</em> attempt, so report both numbers.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/23eb015d3161.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Very different single-shot reliabilities can look similar at large <span class="math inline">\(k\)</span>.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why learn the cost multiplier in constrained RL instead of guessing it?</p></li>
+<li><p>Why log raw task success separately from shaped reward and tool cost?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="more-retries-can-hide-unreliable-behavior">2. More retries can hide unreliable behavior</h3>
+<p>For prompt <span class="math inline">\(x\)</span>, let a stochastic agent produce success indicators:</p>
+<p><span class="math display">\[S_{x,j}\in\{0,1\}\]</span></p>
+<p>The single-run success probability is:</p>
+<p><span class="math display">\[p_x=P(S=1\mid x)\]</span></p>
+<p>With <span class="math inline">\(k\)</span> independent attempts, define:</p>
+<p><span class="math display">\[\mathrm{pass}@k
+=
+P(\text{at least one success})\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\mathrm{pass}@k
+=
+1-(1-p_x)^k\]</span></p>
+<p>If <span class="math inline">\(p_x=0.2\)</span>, then:</p>
+<p><span class="math display">\[\mathrm{pass}@8
+=
+1-0.8^8
+\approx0.832\]</span></p>
+<p>The agent still fails on about 80% of individual attempts. Pass@8 describes a retry product; it does not describe first-attempt reliability.</p>
+<p>For an agent, report both:</p>
+<ul>
+<li><p>one-shot success or per-run reliability;</p></li>
+<li><p>pass@<span class="math inline">\(k\)</span>;</p></li>
+<li><p>tool-call count, latency and cost;</p></li>
+<li><p>failure categories such as invalid action, timeout, wrong answer and unsafe behavior;</p></li>
+<li><p>prompt-level slices, such as easy versus hard tasks.</p></li>
+</ul>
+<p>Compute metrics per prompt first. Repeated rollouts for the same prompt are nested observations, so confidence intervals should bootstrap prompts rather than pretend all <span class="math inline">\(P\times K\)</span> runs are independent.</p>
+<p>For independent attempts conditional on a prompt:</p>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> success</code></span>: <span style="background-color: codeinlinebg"><code> [P, K]</code></span>;</p></li>
+<li><p>per-prompt reliability: <span style="background-color: codeinlinebg"><code> [P]</code></span>;</p></li>
+<li><p>per-prompt pass@<span class="math inline">\(k\)</span>: <span style="background-color: codeinlinebg"><code> [P]</code></span>;</p></li>
+<li><p>aggregate metric: scalar.</p></li>
+</ul>
+<p>DPO preference accuracy does not directly measure pass@<span class="math inline">\(k\)</span>. DPO trains on fixed pairs; fresh rollouts are required to measure stochastic agent success.</p>
+<p>Keep evaluation metrics detached from training. Fixed termination rules, padding masks and invalid-action masks must be identical across compared systems. A success reward should not silently include a tool-use bonus.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: an unbiased pass@k estimator</div>
+<p>With <span class="math inline">\(n\)</span> samples per task and <span class="math inline">\(c\)</span> successes: <span class="math display">\[\widehat{\text{pass@}k}=1-\frac{\binom{n-c}{k}}{\binom nk} .\]</span> The naive <span class="math inline">\(1-(1-c/n)^k\)</span> is <em>biased</em> upward for small <span class="math inline">\(n\)</span>, because it plugs a noisy <span class="math inline">\(\hat p\)</span> into a nonlinear function. Pass@<span class="math inline">\(k\)</span> also assumes independent attempts with a perfect selector. If the user must pick which attempt to trust, the real success rate is lower.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Report pass@1 for user experience and pass@<span class="math inline">\(k\)</span> for retry systems.</p></li>
+<li><p>Use the unbiased combinatorial estimator.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: <span class="math inline">\(n=10\)</span>, <span class="math inline">\(c=3\)</span>, <span class="math inline">\(k=5\)</span></div>
+<p>Unbiased: <span class="math inline">\(1-\binom75/\binom{10}5=1-21/252=0.917\)</span>. Naive: <span class="math inline">\(1-0.7^5=0.832\)</span>. The two disagree here because the naive form treats draws as with replacement, while the combinatorial one samples without replacement from the 10 you actually have.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p><span class="math inline">\(k&gt;n\)</span> (undefined, so draw more samples).</p></li>
+<li><p>Reporting only pass@<span class="math inline">\(k\)</span> to users.</p></li>
+<li><p>Counting retries that reuse one failed tool state as independent.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-measure-retry-success-without-hiding-failures">3. PyTorch exercise — measure retry success without hiding failures</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_prompts = 1_000
+num_rollouts = 8
+
+# 80% hard prompts: p(success)=0.2
+# 20% easy prompts: p(success)=0.9
+prompt_probs = torch.cat([
+    torch.full((800,), 0.2),
+    torch.full((200,), 0.9),
+])
+
+success = torch.bernoulli(
+    prompt_probs[:, None].expand(
+        num_prompts,
+        num_rollouts,
+    )
+).bool()
+
+ks = [1, 2, 4, 8]
+
+# TODO 1: One-shot success and empirical
+# per-prompt reliability.
+one_shot_rate = ...
+per_prompt_reliability = ...
+
+# TODO 2: Empirical pass@k for each k.
+pass_at_k = {
+    k: ...
+    for k in ks
+}
+
+# The known probabilities let us compute
+# the theoretical pass@k for comparison.
+# TODO 3:
+theoretical_pass_at_k = {
+    k: ...
+    for k in ks
+}
+
+hard = torch.arange(num_prompts) &lt; 800
+easy = ~hard
+
+# TODO 4: Compare hard and easy prompt groups.
+group_metrics = {
+    &quot;hard_reliability&quot;: ...,
+    &quot;easy_reliability&quot;: ...,
+    &quot;hard_pass_at_8&quot;: ...,
+    &quot;easy_pass_at_8&quot;: ...,
+}
+
+# TODO 5: Bootstrap prompt-level uncertainty
+# for the estimated reliability.
+bootstrap_indices = torch.randint(
+    low=0,
+    high=num_prompts,
+    size=(1_000, num_prompts),
+)
+
+bootstrap_means = (
+    per_prompt_reliability[bootstrap_indices]
+    .mean(dim=1)
+)
+
+reliability_ci = ...
+
+print(&quot;One-shot success:&quot;, one_shot_rate.item())
+print(
+    &quot;Mean per-prompt reliability:&quot;,
+    per_prompt_reliability.mean().item(),
+)
+
+for k in ks:
+    print(
+        f&quot;pass@{k}:&quot;,
+        pass_at_k[k].mean().item(),
+        &quot;theoretical:&quot;,
+        theoretical_pass_at_k[k].mean().item(),
+    )
+
+print(&quot;Group metrics:&quot;, group_metrics)
+print(&quot;Bootstrap 95% CI:&quot;, reliability_ci)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should pass@<span class="math inline">\(k\)</span> increase as <span class="math inline">\(k\)</span> increases?</p></li>
+<li><p>What is the theoretical pass@8 for a prompt with <span class="math inline">\(p=0.2\)</span>?</p></li>
+<li><p>Does high pass@8 imply high first-attempt reliability?</p></li>
+<li><p>Why should the bootstrap resample prompts rather than individual rollout rows?</p></li>
+</ol>
+<h4 class="unnumbered" id="hints">Hints</h4>
+<ul>
+<li><p>Convert Boolean success to floating point before taking means.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> success[:, :k].any(dim=1)</code></span> for empirical pass@<span class="math inline">\(k\)</span>.</p></li>
+<li><p>The theoretical formula is <span style="background-color: codeinlinebg"><code> 1 - (1 - prompt_probs).pow(k)</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> hard</code></span> and <span style="background-color: codeinlinebg"><code> easy</code></span> to slice prompt-level metrics.</p></li>
+<li><p>Bootstrap with <span style="background-color: codeinlinebg"><code> per_prompt_reliability[bootstrap_indices]</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.quantile</code></span> with probabilities <span style="background-color: codeinlinebg"><code> [0.025, 0.975]</code></span>.</p></li>
+</ul>
+<h4 class="unnumbered" id="debugging-experiments">Debugging experiments</h4>
+<ul>
+<li><p>Shuffle success rows between prompts before computing pass@<span class="math inline">\(k\)</span>. This destroys prompt difficulty and can hide hard-prompt failures.</p></li>
+<li><p>Compute <span style="background-color: codeinlinebg"><code> 1 - (1 - per_prompt_reliability).pow(k)</code></span> from the same eight samples. This plug-in estimate is different from observing whether at least one sampled attempt succeeded.</p></li>
+<li><p>Treat padded or timed-out traces as successes by omitting the termination mask. Pass@<span class="math inline">\(k\)</span> becomes artificially high.</p></li>
+<li><p>Use the same random seed for every policy variant. Shared rollout randomness can make differences look smaller than they are; completely unrelated seeds can also add evaluation noise.</p></li>
+<li><p>For extremely small <span class="math inline">\(p\)</span>, evaluate <span class="math inline">\(1-(1-p)^k\)</span> with <span style="background-color: codeinlinebg"><code> log1p</code></span> and <span style="background-color: codeinlinebg"><code> expm1</code></span> to reduce cancellation.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can pass@8 improve while one-shot success stays unchanged?</p></li>
+<li><p>What product behavior does high pass@8 but low one-shot success suggest?</p></li>
+<li><p>Why can treating <span class="math inline">\(P\times K\)</span> rollout rows as independent make a confidence interval too narrow?</p></li>
+<li><p>Which tool-agent failure categories should be reported separately from binary success?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>One-shot and per-prompt reliability:</p>
+<pre class="code python"><code class="language-python">one_shot_rate = (
+    success[:, 0]
+    .to(torch.float64)
+    .mean()
+)
+
+per_prompt_reliability = (
+    success
+    .to(torch.float64)
+    .mean(dim=1)
+)</code></pre>
+<p>Empirical pass@<span class="math inline">\(k\)</span>:</p>
+<pre class="code python"><code class="language-python">pass_at_k = {
+    k: (
+        success[:, :k]
+        .any(dim=1)
+        .to(torch.float64)
+    )
+    for k in ks
+}</code></pre>
+<p>Theoretical pass@<span class="math inline">\(k\)</span>:</p>
+<pre class="code python"><code class="language-python">theoretical_pass_at_k = {
+    k: (
+        1.0
+        - (1.0 - prompt_probs).pow(k)
+    )
+    for k in ks
+}</code></pre>
+<p>Group metrics:</p>
+<pre class="code python"><code class="language-python">group_metrics = {
+    &quot;hard_reliability&quot;:
+        per_prompt_reliability[hard].mean().item(),
+
+    &quot;easy_reliability&quot;:
+        per_prompt_reliability[easy].mean().item(),
+
+    &quot;hard_pass_at_8&quot;:
+        pass_at_k[8][hard].mean().item(),
+
+    &quot;easy_pass_at_8&quot;:
+        pass_at_k[8][easy].mean().item(),
+}</code></pre>
+<p>Prompt-level bootstrap interval:</p>
+<pre class="code python"><code class="language-python">reliability_ci = torch.quantile(
+    bootstrap_means,
+    torch.tensor([0.025, 0.975]),
+)</code></pre>
+<p>For <span class="math inline">\(p=0.2\)</span>:</p>
+<p><span class="math display">\[\mathrm{pass}@8
+=
+1-0.8^8
+\approx0.832\]</span></p>
+<p>For <span class="math inline">\(p=0.9\)</span>, pass@8 is approximately <span class="math inline">\(1-0.1^8\)</span>, nearly one.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>More attempts create more chances for at least one success, even when the policy itself has not improved.</p></li>
+<li><p>Users may need retries, fallback selection or best-of-<span class="math inline">\(k\)</span> serving; individual attempts remain unreliable.</p></li>
+<li><p>The same prompt contributes several correlated measurements. Prompt difficulty is shared across its rollouts.</p></li>
+<li><p>Log invalid tool calls, timeouts, wrong final answers, unsafe actions, tool count, latency and monetary cost.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The multiplier adapts the penalty until observed cost approaches the budget; a guessed value may overconstrain or underconstrain learning.</p></li>
+<li><p>Shaping and tool bonuses can rise while actual task quality falls. Raw success and cost reveal the real objective.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> evaluate both reliability and retry performance. Pass@<span class="math inline">\(k\)</span> is useful for systems that may retry, while one-shot success reveals what a user experiences on a single attempt.</p>

@@ -1,0 +1,169 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Nine systems that other systems run on: Netflix’s chaos engineering, Lyft’s Envoy, Google’s Borg, Uber’s and Pinterest’s CI, Netflix’s canary analysis, AWS Lambda’s Firecracker, Cloudflare Workers, and Google Spanner.</p>
+</div>
+<h4 id="the-common-thread.">The common thread.</h4>
+<p>Platform teams win by turning a hard, repeated problem into a standard component: a proxy, a scheduler, a deploy pipeline, an isolation primitive. The best platforms make the right thing the default thing.</p>
+<h1 id="case-netflix-chaos-engineering-and-region-evacuation">Case: Netflix: Chaos Engineering and Region Evacuation</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Streaming on AWS<br />
+<strong>Scale:</strong> Hundreds of millions of members, multiple AWS regions<br />
+<strong>Concepts:</strong> Chaos engineering, active-active regions, failover, resilience testing<br />
+<strong>Source:</strong> Netflix TechBlog; “Chaos Engineering” (Basiri et al., IEEE Software 2016)</p>
+</div>
+<h4 id="the-idea.">The idea.</h4>
+<p>After moving to AWS, Netflix assumed that any instance could disappear at any time. Rather than hope, they made it happen on purpose. <strong>Chaos Monkey</strong> (2011) randomly terminates production instances during business hours, when engineers are around to fix problems. Services that cannot survive losing an instance are found quickly.</p>
+<h4 id="escalating-scope.">Escalating scope.</h4>
+<p>The “Simian Army” extended this: Latency Monkey (injected delays), Chaos Gorilla (an entire Availability Zone), and Chaos Kong (an entire region). Netflix runs <strong>active-active</strong> across several AWS regions; in a <strong>regional evacuation</strong>, DNS and edge routing shift all members out of a region, and the remaining regions must have capacity to absorb them. Later tools (ChAP, the Chaos Automation Platform) run controlled experiments: route a small percentage of traffic through a failure injection, compare its metrics to a control group, and stop automatically if the key metric (stream starts per second) degrades.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Failures you cause deliberately are cheaper than failures that surprise you.</p></li>
+<li><p>Define a steady-state business metric (streams started per second) and test against it.</p></li>
+<li><p>Active-active only works if each remaining region has spare capacity for evacuation.</p></li>
+</ul>
+</div>
+<h1 id="case-lyft-envoy-and-the-birth-of-the-service-mesh">Case: Lyft: Envoy and the Birth of the Service Mesh</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Mobility<br />
+<strong>Scale:</strong> Hundreds of services; Envoy is now a CNCF graduated project used industry-wide<br />
+<strong>Concepts:</strong> Sidecar proxy, observability, retries, outlier detection, xDS dynamic config<br />
+<strong>Source:</strong> Matt Klein, “Announcing Envoy” (2016) and talks</p>
+</div>
+<h4 id="the-problem.">The problem.</h4>
+<p>Lyft’s move to microservices left each service with its own client libraries in several languages for retries, timeouts, and service discovery. Networking problems were hard to debug: was the slowness in the network, the load balancer, or the service?</p>
+<h4 id="the-design.">The design.</h4>
+<p><strong>Envoy</strong> is a high-performance C++ L4/L7 proxy run next to every service (the <strong>sidecar</strong> pattern). Services talk only to their local Envoy, which handles service discovery, load balancing, retries, timeouts, circuit breaking, outlier detection, TLS, and rich metrics and tracing for every hop. Configuration is pushed dynamically over gRPC APIs called <strong>xDS</strong> (listeners, routes, clusters, endpoints), so a control plane can change routing without restarts. Envoy became the data plane of Istio and the foundation of many API gateways and AI gateways.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Move cross-cutting networking out of application libraries into a uniform proxy.</p></li>
+<li><p>Consistent per-hop metrics make distributed debugging possible.</p></li>
+<li><p>Dynamic config APIs (xDS) separate the data plane from the control plane.</p></li>
+</ul>
+</div>
+<h1 id="case-google-borg-the-ancestor-of-kubernetes">Case: Google Borg: The Ancestor of Kubernetes</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Cluster management<br />
+<strong>Scale:</strong> Cells of about 10<span>,</span>000 machines running hundreds of thousands of jobs<br />
+<strong>Concepts:</strong> Bin packing, priorities and preemption, declarative jobs, high utilization<br />
+<strong>Source:</strong> Verma et al., “Large-scale cluster management at Google with Borg”, EuroSys 2015</p>
+</div>
+<h4 id="the-design.-1">The design.</h4>
+<p>A Borg <em>cell</em> is a set of machines managed by a replicated master (Borgmaster, using Paxos) and an agent on each machine (Borglet). Users submit <em>jobs</em> of <em>tasks</em> with resource requests. The scheduler scores feasible machines and <strong>bin-packs</strong> tasks to maximize utilization. Two workload types share machines: latency-sensitive production services (high priority) and batch jobs (low priority) that are <strong>preempted</strong> when production needs resources. Resource <em>reclamation</em> lets batch work use capacity that production reserved but is not using.</p>
+<h4 id="from-borg-to-kubernetes.">From Borg to Kubernetes.</h4>
+<p>Kubernetes kept the core ideas (declarative desired state, controllers, labels instead of fixed job groupings, an IP per pod) and fixed some Borg pain points, such as port conflicts from sharing a host’s IP. Pods, services, and labels are direct descendants of Borg lessons.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Mixing latency-sensitive and batch work on the same machines dramatically raises utilization.</p></li>
+<li><p>Priorities and preemption make the mix safe.</p></li>
+<li><p>Declarative, reconciled state is more robust than imperative scripts.</p></li>
+</ul>
+</div>
+<h1 id="case-uber-keeping-a-monorepo-green-with-submitqueue">Case: Uber: Keeping a Monorepo Green with SubmitQueue</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Developer platform<br />
+<strong>Scale:</strong> Thousands of engineers committing to large monorepos<br />
+<strong>Concepts:</strong> CI at scale, speculative execution, build graphs<br />
+<strong>Source:</strong> Ananthanarayanan et al., “Keeping Master Green at Scale”, EuroSys 2019</p>
+</div>
+<h4 id="the-problem.-1">The problem.</h4>
+<p>Two changes can each pass tests alone but break the build together. With hundreds of commits a day, testing each change against the latest main branch one at a time is too slow, and testing them in parallel lets breaking combinations through.</p>
+<h4 id="the-design.-2">The design.</h4>
+<p><strong>SubmitQueue</strong> orders pending changes and <em>speculates</em>: it predicts with an ML model which changes are likely to pass and how they conflict, then builds the most probable combinations in parallel (change 1; change 1 + 2; change 1 + 2 + 3…). A build graph of targets determines which changes are independent and can be tested without each other. The result is that main stays green while engineers wait minutes, not hours.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>At high commit rates, “test then merge” must be done against a speculative future main.</p></li>
+<li><p>A dependency-aware build graph lets you test only what a change affects.</p></li>
+<li><p>Predicting success lets you spend CI compute where it pays off.</p></li>
+</ul>
+</div>
+<h1 id="case-pinterest-the-one-line-change-that-cut-clone-time-99">Case: Pinterest: The One-Line Change That Cut Clone Time 99%</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Developer platform<br />
+<strong>Scale:</strong> Monorepo with years of history and many branches<br />
+<strong>Concepts:</strong> CI performance, measuring before optimizing<br />
+<strong>Source:</strong> Pinterest Engineering, “The one-line change that reduced clone times by 99%” (2022)</p>
+</div>
+<h4 id="the-problem.-2">The problem.</h4>
+<p>CI jobs for Pinterest’s main Python monorepo started by cloning the repository, which took about 40 minutes and slowed every build. The repository had a large number of branches and a long history.</p>
+<h4 id="the-fix.">The fix.</h4>
+<p>The team found the clone was fetching every branch’s refs and their history even though jobs only needed one branch. They changed the CI configuration to fetch only the needed branch (a narrower <em>refspec</em>, plus a shallow clone). Clone time dropped from about 40 minutes to about 30 seconds.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Measure each stage of a pipeline; the biggest win is often a default setting.</p></li>
+<li><p>CI jobs rarely need full history; shallow and single-branch clones are cheap wins.</p></li>
+</ul>
+</div>
+<h1 id="case-netflix-spinnaker-and-automated-canary-analysis">Case: Netflix: Spinnaker and Automated Canary Analysis</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Continuous delivery<br />
+<strong>Scale:</strong> Thousands of deployments per day across many regions<br />
+<strong>Concepts:</strong> Canary releases, statistical comparison, immutable infrastructure, pipelines<br />
+<strong>Source:</strong> Netflix/Google, “Introducing Kayenta: An open automated canary analysis tool” (2018)</p>
+</div>
+<h4 id="the-design.-3">The design.</h4>
+<p><strong>Spinnaker</strong> is a multi-cloud deployment platform that models releases as pipelines of stages (bake an image, deploy to a test environment, run tests, canary, promote, clean up), deploying immutable machine images or containers rather than changing servers in place. <strong>Kayenta</strong> does automated canary analysis. Instead of comparing a canary to the existing fleet (which differs in age, cache warmth, and so on), it deploys <em>two</em> small new clusters: a <strong>baseline</strong> running the current version and a <strong>canary</strong> running the new one, both receiving equal live traffic. It then compares many metrics with statistical tests (Mann-Whitney U) and produces a score; pipelines promote or roll back automatically based on the score.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Compare a canary against a fresh baseline, not the old fleet.</p></li>
+<li><p>Use statistics across many metrics, not a human looking at a dashboard.</p></li>
+<li><p>Immutable deployments make rollback simply “route traffic back.”</p></li>
+</ul>
+</div>
+<h1 id="case-aws-lambda-firecracker-microvms">Case: AWS Lambda: Firecracker MicroVMs</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Serverless compute<br />
+<strong>Scale:</strong> Trillions of invocations per month<br />
+<strong>Concepts:</strong> Isolation, multi-tenancy, cold starts, density<br />
+<strong>Source:</strong> Agache et al., “Firecracker: Lightweight Virtualization for Serverless Applications”, NSDI 2020</p>
+</div>
+<h4 id="the-problem.-3">The problem.</h4>
+<p>Lambda runs code from many customers on shared machines. Containers alone are not a strong enough security boundary between untrusted tenants. Traditional VMs are secure but slow to boot and heavy in memory.</p>
+<h4 id="the-design.-4">The design.</h4>
+<p><strong>Firecracker</strong> is a minimal virtual machine monitor written in Rust, using Linux KVM. It strips devices down to the essentials (virtio network and block, a serial console), which shrinks the attack surface and lets a microVM boot in about 125 ms with only a few MB of memory overhead, so thousands can run per host. Lambda keeps pools of warm execution environments and, with <strong>SnapStart</strong>, restores a snapshot of an already-initialized runtime instead of booting from scratch, cutting cold starts for heavy runtimes like Java.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>For untrusted multi-tenant code, use VM-level isolation; make the VM tiny.</p></li>
+<li><p>Snapshot-and-restore beats faster booting for cold starts.</p></li>
+<li><p>The same pattern now sandboxes AI agents’ code execution.</p></li>
+</ul>
+</div>
+<h1 id="case-cloudflare-workers-code-at-the-edge-with-v8-isolates">Case: Cloudflare Workers: Code at the Edge with V8 Isolates</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Edge compute<br />
+<strong>Scale:</strong> Runs in over 300 cities worldwide<br />
+<strong>Concepts:</strong> Isolates vs containers, cold starts, edge state, anycast<br />
+<strong>Source:</strong> Cloudflare blog, “Cloud Computing without Containers” (2018) and Durable Objects posts</p>
+</div>
+<h4 id="the-design.-5">The design.</h4>
+<p>Instead of a container or VM per customer, Workers runs customer code in <strong>V8 isolates</strong>, the sandbox the Chrome browser uses to separate tabs. Thousands of isolates share one process, each with its own memory heap. Starting an isolate takes milliseconds and uses a few MB, so code can run in every data center and start on the first request. Cloudflare can even start warming the isolate during the TLS handshake. Requests arrive at the nearest data center via <strong>anycast</strong>.</p>
+<h4 id="state-at-the-edge.">State at the edge.</h4>
+<p>Stateless code is easy to run everywhere; state is not. Cloudflare offers Workers KV (eventually consistent, read-optimized, cached globally), D1 (SQLite), R2 (object storage), and <strong>Durable Objects</strong>: a single-threaded object with its own storage, living in one location, that every request for that ID is routed to. That gives strong consistency for things like a chat room or a rate limiter, without a global database.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Lighter isolation primitives change what is economical (code in every city).</p></li>
+<li><p>Global edge compute still needs a home for state; route by key to a single owner.</p></li>
+<li><p>Isolates trade some compatibility (no arbitrary binaries) for speed and density.</p></li>
+</ul>
+</div>
+<h1 id="case-google-spanner-truetime-and-external-consistency">Case: Google Spanner: TrueTime and External Consistency</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Globally distributed SQL database<br />
+<strong>Scale:</strong> Google-wide, with millions of machines’ worth of data<br />
+<strong>Concepts:</strong> Consensus (Paxos), clock uncertainty, commit wait, distributed transactions<br />
+<strong>Source:</strong> Corbett et al., “Spanner: Google’s Globally-Distributed Database”, OSDI 2012</p>
+</div>
+<h4 id="the-problem.-4">The problem.</h4>
+<p>To give strongly consistent (linearizable) transactions across continents, a database needs every transaction to have a timestamp that respects real-time order: if T1 commits before T2 starts, T1’s timestamp must be smaller. Ordinary server clocks drift and cannot guarantee this.</p>
+<h4 id="truetime.">TrueTime.</h4>
+<p>Google data centers have GPS receivers and atomic clocks. The TrueTime API does not return a single time; it returns an interval <code>[earliest, latest]</code> guaranteed to contain the true time, with uncertainty <span class="math inline">\(\epsilon\)</span> typically a few milliseconds.</p>
+<h4 id="commit-wait.">Commit wait.</h4>
+<p>When a transaction commits with timestamp <span class="math inline">\(s\)</span> (at least <code>latest</code> when chosen), Spanner waits until <code>TT.now().earliest</code> <span class="math inline">\(&gt; s\)</span> before making the commit visible. After the wait, every machine agrees <span class="math inline">\(s\)</span> is in the past, so later transactions will get larger timestamps. Cost: each commit waits roughly <span class="math inline">\(2\epsilon\)</span>, which is why smaller clock uncertainty means faster writes.</p>
+<h4 id="the-rest-of-the-design.">The rest of the design.</h4>
+<p>Data is split into ranges (splits), each replicated by a <strong>Paxos</strong> group across zones or regions. Transactions that touch several groups use two-phase commit, where each participant is itself a Paxos group (so a “participant crash” does not block forever). Read-only transactions and snapshot reads at a timestamp need no locks.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Bounded clock uncertainty, made explicit, can replace coordination for ordering.</p></li>
+<li><p>2PC is viable when participants are replicated consensus groups.</p></li>
+<li><p>Hardware (atomic clocks) can be the key to a software guarantee.</p></li>
+</ul>
+</div>

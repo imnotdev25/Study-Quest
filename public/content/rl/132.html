@@ -1,0 +1,588 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What do coverage and selective risk measure?</p></li>
+<li><p>Why can making an uncertainty threshold stricter increase selective risk?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="ppo-changes-the-distribution-being-evaluated">2. PPO changes the distribution being evaluated</h3>
+<p>Suppose a reward model was calibrated on outputs from behavior policy <span class="math inline">\(\mu\)</span>, where only 5% of outputs were unusual. After optimization, target policy <span class="math inline">\(\pi\)</span> may produce unusual outputs 40% of the time.</p>
+<p>The relevant target risk is:</p>
+<p><span class="math display">\[R_\pi
+=
+\underbrace{
+E_{y\sim d_\pi}[\ell(y)]
+}_{\text{expected reward-model error on new-policy outputs}}\]</span></p>
+<p>An unweighted validation set instead estimates:</p>
+<p><span class="math display">\[R_\mu
+=
+\underbrace{
+E_{y\sim d_\mu}[\ell(y)]
+}_{\text{error on old-policy outputs}}\]</span></p>
+<p>These are different estimands.</p>
+<p>If the target distribution is supported by the behavior distribution, define:</p>
+<p><span class="math display">\[w(y)
+=
+\underbrace{
+\frac{d_\pi(y)}{d_\mu(y)}
+}_{\text{how much more often the new policy generates }y}\]</span></p>
+<p>Then estimate target risk from behavior-policy data:</p>
+<p><span class="math display">\[\hat R_\pi
+=
+\underbrace{
+\frac{\sum_i w_i\ell_i}
+{\sum_i w_i}
+}_{\text{self-normalized importance-weighted risk}}\]</span></p>
+<p>For an autoregressive LLM:</p>
+<p><span class="math display">\[w(y\mid x)
+=
+\underbrace{
+\frac{\pi(y\mid x)}{\mu(y\mid x)}
+}_{\text{sequence probability ratio}}
+=
+\exp\left(
+\underbrace{
+\sum_{t=1}^{T}
+\left[
+\log\pi(y_t\mid x,y_{&lt;t})
+-
+\log\mu(y_t\mid x,y_{&lt;t})
+\right]
+}_{\text{sum only over generated, unmasked tokens}}
+\right)\]</span></p>
+<p>Long sequences can produce enormous or tiny ratios. Compute in log space and confirm that behavior log-probabilities correspond to the actual temperature, masking and sampling filters.</p>
+<p>For selective prediction:</p>
+<p><span class="math display">\[\hat C_\pi(\tau)
+=
+\underbrace{
+\frac{\sum_i w_i a_i(\tau)}
+{\sum_i w_i}
+}_{\text{estimated target-policy coverage}}\]</span></p>
+<p><span class="math display">\[\hat R_\pi(\tau)
+=
+\underbrace{
+\frac{\sum_i w_i a_i(\tau)\ell_i}
+{\sum_i w_i a_i(\tau)}
+}_{\text{target risk among accepted outputs}}\]</span></p>
+<p>Importance weighting can have high variance. Its effective sample size is:</p>
+<p><span class="math display">\[\operatorname{ESS}
+=
+\underbrace{
+\frac{(\sum_i w_i)^2}
+{\sum_i w_i^2}
+}_{\text{independent, equal-weight sample equivalent}}\]</span></p>
+<p>Weight clipping increases stability but introduces bias:</p>
+<p><span class="math display">\[\tilde w_i
+=
+\underbrace{
+\min(w_i,c)
+}_{\text{bounded weight; lower variance but changed target}}\]</span></p>
+<p>DPO is offline preference optimization, but evaluation of the resulting DPO policy still requires fresh generations or valid off-policy correction. Reference-policy log-ratios inside the DPO loss do not automatically correct outcome evaluation.</p>
+<h3 class="unnumbered" id="pytorch-exercise-5-tail-traffic-becomes-40">3. PyTorch exercise — 5% tail traffic becomes 40%</h3>
+<p>The reward model has low error on ordinary outputs and high error in a rare tail. Optimization moves much more probability into that tail.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float32)
+
+num_logged_examples = 50_000
+num_target_examples = 50_000
+
+behavior_tail_probability = 0.05
+target_tail_probability = 0.40
+
+ordinary_error_sd = 0.20
+tail_error_sd = 1.20
+
+acceptance_threshold = 0.50
+maximum_weight = 3.0
+
+
+# TODO 1: Generate outputs from one policy distribution.
+def generate_batch(
+    num_examples,
+    tail_probability,
+):
+    tail_examples = ...
+
+    true_rewards = ...
+
+    error_standard_deviations = ...
+
+    predicted_rewards = ...
+
+    uncertainty = ...
+
+    accepted = ...
+
+    return (
+        true_rewards,
+        predicted_rewards,
+        uncertainty,
+        tail_examples,
+        accepted,
+    )
+
+
+logged_batch = generate_batch(
+    num_logged_examples,
+    behavior_tail_probability,
+)
+
+target_batch = generate_batch(
+    num_target_examples,
+    target_tail_probability,
+)
+
+
+# TODO 2: Calculate per-example squared losses.
+logged_losses = ...
+
+target_losses = ...
+
+
+# TODO 3: Calculate exact group density ratios.
+logged_tail_examples = logged_batch[3]
+
+importance_weights = ...
+
+clipped_weights = ...
+
+
+def weighted_mean(values, weights):
+    return ...
+
+
+# TODO 4: Compare overall target-risk estimators.
+logged_tail_mass = ...
+importance_weighted_tail_mass = ...
+clipped_weight_tail_mass = ...
+direct_target_tail_mass = ...
+
+logged_risk = ...
+importance_weighted_risk = ...
+clipped_weight_risk = ...
+direct_target_risk = ...
+
+
+# TODO 5: Compare frozen selective evaluation.
+logged_accepted = logged_batch[4]
+target_accepted = target_batch[4]
+
+logged_coverage = ...
+importance_weighted_coverage = ...
+clipped_weight_coverage = ...
+direct_target_coverage = ...
+
+
+def weighted_selective_risk(
+    losses,
+    accepted,
+    weights,
+):
+    accepted_weights = ...
+
+    return ...
+
+
+logged_selective_risk = ...
+
+importance_weighted_selective_risk = ...
+
+clipped_weight_selective_risk = ...
+
+direct_target_selective_risk = ...
+
+
+# Importance-weight diagnostics.
+raw_effective_sample_size = ...
+
+clipped_effective_sample_size = ...
+
+raw_ess_fraction = ...
+clipped_ess_fraction = ...
+
+
+results = torch.stack([
+    torch.stack([
+        logged_tail_mass,
+        logged_risk,
+        logged_coverage,
+        logged_selective_risk,
+    ]),
+    torch.stack([
+        importance_weighted_tail_mass,
+        importance_weighted_risk,
+        importance_weighted_coverage,
+        importance_weighted_selective_risk,
+    ]),
+    torch.stack([
+        clipped_weight_tail_mass,
+        clipped_weight_risk,
+        clipped_weight_coverage,
+        clipped_weight_selective_risk,
+    ]),
+    torch.stack([
+        direct_target_tail_mass,
+        direct_target_risk,
+        direct_target_coverage,
+        direct_target_selective_risk,
+    ]),
+])
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Rows: unweighted logs, importance weighted, &quot;
+    &quot;clipped weighted, direct target sample&quot;
+)
+print(
+    &quot;Columns: tail mass, overall risk, coverage, &quot;
+    &quot;selective risk&quot;
+)
+print(results)
+
+print(&quot;\nOrdinary/tail importance weights:&quot;)
+print(
+    importance_weights.min().item(),
+    importance_weights.max().item(),
+)
+
+print(&quot;Raw/clipped ESS fractions:&quot;)
+print(
+    raw_ess_fraction.item(),
+    clipped_ess_fraction.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will unweighted logged risk understate target-policy risk?</p></li>
+<li><p>What importance weight should a logged tail output receive?</p></li>
+<li><p>Should exact importance weighting approach direct on-policy evaluation?</p></li>
+<li><p>What target tail mass will clipping at <span style="background-color: codeinlinebg"><code> 3</code></span> approximately imply?</p></li>
+<li><p>Will raw importance weighting retain all 50,000 effective samples?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>For a logged tail example:</p>
+<p><span class="math display">\[w_{\text{tail}}
+=
+\underbrace{
+\frac{0.40}{0.05}
+}_{8}\]</span></p>
+<p>For an ordinary example:</p>
+<p><span class="math display">\[w_{\text{ordinary}}
+=
+\underbrace{
+\frac{0.60}{0.95}
+}_{\approx0.632}\]</span></p>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span> to construct both error scales and weights.</p></li>
+<li><p>Weighted coverage is the weighted mean of the Boolean acceptance mask.</p></li>
+<li><p>For selective risk, zero the weights of rejected examples.</p></li>
+<li><p>Direct target estimates require no weighting because those samples are already on-policy.</p></li>
+<li><p>Clipping produces an implied tail mass near <span style="background-color: codeinlinebg"><code> 0.20</code></span>, not the desired <span style="background-color: codeinlinebg"><code> 0.40</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Evaluate a new PPO checkpoint only on old-policy completions.</p></li>
+<li><p>Use stale log-probabilities from a different temperature or tokenizer.</p></li>
+<li><p>Include prompt and padding tokens in sequence probability ratios.</p></li>
+<li><p>Exponentiate large log-ratios directly and obtain overflow.</p></li>
+<li><p>Clip weights without reporting the resulting bias.</p></li>
+<li><p>Treat high nominal sample count as high effective sample size.</p></li>
+<li><p>Estimate outcomes for target actions having zero behavior-policy support.</p></li>
+<li><p>Backpropagate through evaluation weights unintentionally instead of detaching them.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does calibration under <span class="math inline">\(\mu\)</span> not guarantee calibration under <span class="math inline">\(\pi\)</span>?</p></li>
+<li><p>What support condition does importance weighting require?</p></li>
+<li><p>Why do sequence-level ratios become unstable for long completions?</p></li>
+<li><p>What tradeoff does weight clipping make?</p></li>
+<li><p>When should fresh on-policy evaluation be preferred?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Batch generation:</p>
+<pre class="code python"><code class="language-python">def generate_batch(
+    num_examples,
+    tail_probability,
+):
+    tail_examples = (
+        torch.rand(num_examples)
+        &lt; tail_probability
+    )
+
+    true_rewards = torch.randn(
+        num_examples
+    )
+
+    error_standard_deviations = torch.where(
+        tail_examples,
+        torch.tensor(tail_error_sd),
+        torch.tensor(ordinary_error_sd),
+    )
+
+    predicted_rewards = (
+        true_rewards
+        + error_standard_deviations
+        * torch.randn(num_examples)
+    )
+
+    uncertainty = (
+        torch.where(
+            tail_examples,
+            torch.tensor(0.60),
+            torch.tensor(0.20),
+        )
+        + 0.15
+        * torch.randn(num_examples)
+    ).clamp_min(0.0)
+
+    accepted = (
+        uncertainty
+        &lt;= acceptance_threshold
+    )
+
+    return (
+        true_rewards,
+        predicted_rewards,
+        uncertainty,
+        tail_examples,
+        accepted,
+    )</code></pre>
+<p>Losses and importance weights:</p>
+<pre class="code python"><code class="language-python">logged_losses = (
+    logged_batch[1]
+    - logged_batch[0]
+).square()
+
+target_losses = (
+    target_batch[1]
+    - target_batch[0]
+).square()
+
+logged_tail_examples = logged_batch[3]
+
+importance_weights = torch.where(
+    logged_tail_examples,
+    torch.tensor(
+        target_tail_probability
+        / behavior_tail_probability
+    ),
+    torch.tensor(
+        (1.0 - target_tail_probability)
+        / (
+            1.0
+            - behavior_tail_probability
+        )
+    ),
+)
+
+clipped_weights = importance_weights.clamp(
+    max=maximum_weight
+)
+
+
+def weighted_mean(values, weights):
+    return (
+        weights * values
+    ).sum() / weights.sum().clamp_min(
+        1e-12
+    )</code></pre>
+<p>Overall estimates:</p>
+<pre class="code python"><code class="language-python">logged_tail_mass = (
+    logged_tail_examples
+    .to(torch.float32)
+    .mean()
+)
+
+importance_weighted_tail_mass = weighted_mean(
+    logged_tail_examples.to(torch.float32),
+    importance_weights,
+)
+
+clipped_weight_tail_mass = weighted_mean(
+    logged_tail_examples.to(torch.float32),
+    clipped_weights,
+)
+
+direct_target_tail_mass = (
+    target_batch[3]
+    .to(torch.float32)
+    .mean()
+)
+
+logged_risk = logged_losses.mean()
+
+importance_weighted_risk = weighted_mean(
+    logged_losses,
+    importance_weights,
+)
+
+clipped_weight_risk = weighted_mean(
+    logged_losses,
+    clipped_weights,
+)
+
+direct_target_risk = target_losses.mean()</code></pre>
+<p>Selective estimates:</p>
+<pre class="code python"><code class="language-python">logged_accepted = logged_batch[4]
+target_accepted = target_batch[4]
+
+logged_coverage = (
+    logged_accepted
+    .to(torch.float32)
+    .mean()
+)
+
+importance_weighted_coverage = weighted_mean(
+    logged_accepted.to(torch.float32),
+    importance_weights,
+)
+
+clipped_weight_coverage = weighted_mean(
+    logged_accepted.to(torch.float32),
+    clipped_weights,
+)
+
+direct_target_coverage = (
+    target_accepted
+    .to(torch.float32)
+    .mean()
+)
+
+
+def weighted_selective_risk(
+    losses,
+    accepted,
+    weights,
+):
+    accepted_weights = (
+        weights
+        * accepted.to(torch.float32)
+    )
+
+    return (
+        accepted_weights * losses
+    ).sum() / accepted_weights.sum().clamp_min(
+        1e-12
+    )
+
+
+logged_selective_risk = (
+    logged_losses[
+        logged_accepted
+    ].mean()
+)
+
+importance_weighted_selective_risk = (
+    weighted_selective_risk(
+        logged_losses,
+        logged_accepted,
+        importance_weights,
+    )
+)
+
+clipped_weight_selective_risk = (
+    weighted_selective_risk(
+        logged_losses,
+        logged_accepted,
+        clipped_weights,
+    )
+)
+
+direct_target_selective_risk = (
+    target_losses[
+        target_accepted
+    ].mean()
+)</code></pre>
+<p>Effective sample size:</p>
+<pre class="code python"><code class="language-python">raw_effective_sample_size = (
+    importance_weights.sum().square()
+    / importance_weights.square().sum()
+)
+
+clipped_effective_sample_size = (
+    clipped_weights.sum().square()
+    / clipped_weights.square().sum()
+)
+
+raw_ess_fraction = (
+    raw_effective_sample_size
+    / num_logged_examples
+)
+
+clipped_ess_fraction = (
+    clipped_effective_sample_size
+    / num_logged_examples
+)</code></pre>
+<p>Typical results are:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Estimate</strong></th>
+<th style="text-align: left;"><strong>Tail mass</strong></th>
+<th style="text-align: left;"><strong>Overall risk</strong></th>
+<th style="text-align: left;"><strong>Coverage</strong></th>
+<th style="text-align: left;"><strong>Selective risk</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Estimate</strong></td>
+<td style="text-align: left;"><strong>Tail mass</strong></td>
+<td style="text-align: left;"><strong>Overall risk</strong></td>
+<td style="text-align: left;"><strong>Coverage</strong></td>
+<td style="text-align: left;"><strong>Selective risk</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Unweighted old logs</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.05</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.11</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.94</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.06</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Importance weighted</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.40</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.60</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.69</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.24</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Weights clipped at 3</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.20</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.32</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.83</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.12</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Direct target sample</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.40</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.60</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.69</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.24</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>Exact importance weighting reconstructs the target mixture but reduces the effective sample fraction to roughly:</p>
+<p><span class="math display">\[\underbrace{0.28}_{\text{about 14,000 equal-weight samples from 50,000 logs}}\]</span></p>
+<p>Clipping raises the ESS fraction to roughly <span style="background-color: codeinlinebg"><code> 0.68</code></span>, but only by underrepresenting the target tail. It is more stable because it estimates a different, easier distribution.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>PPO changes which completions are common; reward error can depend strongly on completion style or region.</p></li>
+<li><p>Every target-policy output with positive probability must also have positive behavior-policy probability.</p></li>
+<li><p>Sequence ratios multiply token ratios, so small per-token differences compound exponentially with length.</p></li>
+<li><p>It reduces variance and increases effective sample size while introducing bias toward the behavior distribution.</p></li>
+<li><p>Prefer fresh rollouts when ratios are highly variable, support is weak, decoding changed, or promotion decisions are high stakes.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Coverage is the automatically accepted fraction; selective risk is error conditional on acceptance.</p></li>
+<li><p>An overconfident failure can receive lower uncertainty than correct examples, so stricter filtering may concentrate rather than remove failures.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> reward-model calibration belongs to a policy distribution. Once PPO, GRPO, best-of-<span class="math inline">\(N\)</span>, or DPO changes that distribution, either evaluate fresh outputs or quantify the shift—old validation accuracy does not travel automatically.</p>

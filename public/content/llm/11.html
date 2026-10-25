@@ -1,0 +1,76 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A joint distribution <span class="math inline">\(p(x,y)\)</span> (or density <span class="math inline">\(f(x,y)\)</span>) describes two variables together. From it: <em>marginals</em> by summing out the other variable, <span class="math inline">\(p(x)=\sum_yp(x,y)\)</span>; <em>conditionals</em> by dividing, <span class="math inline">\(p(y\mid x)=p(x,y)/p(x)\)</span>; and <em>independence</em> when <span class="math inline">\(p(x,y)=p(x)p(y)\)</span> everywhere.</p>
+</div>
+<h2 class="unnumbered" id="two-discrete-variables">Two discrete variables</h2>
+<p>The code’s table has <span class="math inline">\(X\in\{0,1\}\)</span> in rows and <span class="math inline">\(Y\in\{0,1,2\}\)</span> in columns. Its rows don’t share a shape (<span class="math inline">\(P(Y\mid X=1)\)</span> puts most mass on 2, <span class="math inline">\(P(Y\mid X=0)\)</span> on 0), so the variables are dependent. <strong>Mutual information</strong> <span class="math inline">\(I(X;Y)=\mathrm{KL}\big(p(x,y)\,\Vert\,p(x)p(y)\big)=H(Y)-H(Y\mid X)\)</span> measures how far from independent they are, in nats: how much knowing <span class="math inline">\(X\)</span> reduces uncertainty about <span class="math inline">\(Y\)</span>. It is zero exactly when they are independent.</p>
+<h2 class="unnumbered" id="two-continuous-variables">Two continuous variables</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: <span class="math inline">\(f(x,y)=x+y\)</span> on the unit square</div>
+<p><strong>Step 1.</strong> Valid density: <span class="math inline">\(\int_0^1\!\int_0^1(x+y)\,dy\,dx=\int_0^1(x+\tfrac12)dx=1\)</span>.</p>
+<p><strong>Step 2.</strong> Marginal: <span class="math inline">\(f_X(x)=\int_0^1(x+y)dy=x+\tfrac12\)</span>. Conditional: <span class="math inline">\(f(y\mid x)=\frac{x+y}{x+1/2}\)</span>, which depends on <span class="math inline">\(x\)</span>: dependent.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(\mathbb EX=\int_0^1x(x+\tfrac12)dx=\tfrac13+\tfrac14=\tfrac7{12}\)</span>, and by symmetry <span class="math inline">\(\mathbb EY=\tfrac7{12}\)</span>.</p>
+<p><strong>Step 4.</strong> <span class="math inline">\(\mathbb E[XY]=\iint xy(x+y)=\tfrac16+\tfrac16=\tfrac13\)</span>. <span class="math inline">\(\operatorname{Cov}=\tfrac13-\tfrac{49}{144}=-\tfrac1{144}\)</span>. Slightly negative: high <span class="math inline">\(x\)</span> makes high <span class="math inline">\(y\)</span> a little less necessary to reach high density.</p>
+</div>
+<h2 class="unnumbered" id="moments-of-joint-distributions">Moments of joint distributions</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Iterated expectation and the law of total variance</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\mathbb E[X]=\mathbb E\big[\mathbb E[X\mid K]\big]\)</span>: average the conditional means, weighted by <span class="math inline">\(P(K)\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\operatorname{Var}X=\mathbb E[X^2]-(\mathbb EX)^2=\mathbb E\big[\operatorname{Var}(X\mid K)+\mathbb E[X\mid K]^2\big]-\mathbb E\big[\mathbb E[X\mid K]\big]^2\)</span>.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(\boxed{\operatorname{Var}X=\mathbb E[\operatorname{Var}(X\mid K)]+\operatorname{Var}(\mathbb E[X\mid K])}\)</span>: noise within groups plus spread between group means. For the mixture in the code, <span class="math inline">\(0.475+5.25\)</span>: almost all the variance comes from which component you are in. In RL, <span class="math inline">\(K\)</span> is the prompt, and GRPO’s group baseline removes the between-prompt term.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Joint RVs: two discrete, two continuous, moments of joint distributions, covariance and correlation.&quot;&quot;&quot;
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# 1. Two discrete variables: a joint table, marginals, conditionals, independence, mutual information.
+P = np.array([[0.20, 0.10, 0.05],
+              [0.05, 0.25, 0.35]])                             # rows X in {0,1}, columns Y in {0,1,2}
+px, py = P.sum(1), P.sum(0)
+print(f&quot;[discrete] P(X) = {px}   P(Y) = {py}   P(Y | X=1) = {np.round(P[1] / px[1], 3)}&quot;)
+print(f&quot;[discrete] independent? max |P(x,y) - P(x)P(y)| = {np.abs(P - np.outer(px, py)).max():.3f}&quot;)
+MI = (P * np.log(P / np.outer(px, py))).sum()
+print(f&quot;[discrete] mutual information I(X;Y) = KL(P_xy || P_x P_y) = {MI:.4f} nats&quot;)
+x_vals, y_vals = np.array([0, 1]), np.array([0, 1, 2])
+EX, EY = px @ x_vals, py @ y_vals
+EXY = (P * np.outer(x_vals, y_vals)).sum()
+print(f&quot;[discrete] E X {EX:.2f}  E Y {EY:.2f}  E XY {EXY:.2f}  Cov = E XY - E X E Y = {EXY - EX * EY:.4f}&quot;)
+
+# 2. Two continuous variables: f(x, y) = x + y on the unit square.
+#    Marginal f_X(x) = x + 1/2;  E X = 7/12;  E XY = 1/3;  Cov = 1/3 - 49/144 = -1/144.
+n = 600
+c = (np.arange(n) + 0.5) / n
+X, Y = np.meshgrid(c, c, indexing=&quot;ij&quot;)
+f = X + Y
+dA = 1 / n**2
+print(f&quot;[continuous] total mass {f.sum() * dA:.6f}   E X {(X * f).sum() * dA:.6f} (7/12 = {7 / 12:.6f})&quot;)
+print(f&quot;[continuous] Cov(X,Y) {(X * Y * f).sum() * dA - ((X * f).sum() * dA) ** 2:.6f}  (-1/144 = {-1 / 144:.6f})&quot;)
+u = rng.random((3_000_000, 3))
+keep = u[:, 2] * 2 &lt; u[:, 0] + u[:, 1]                         # rejection sampling from f (max 2)
+s = u[keep, :2]
+print(f&quot;[continuous] rejection-sampled {len(s):,} points: Cov {np.cov(s.T)[0, 1]:.6f}&quot;)
+
+# 3. Iterated expectation and total variance: X | K ~ N(mu_K, s_K^2), K in {0, 1} w.p. {0.3, 0.7}.
+w, mu, sd = np.array([0.3, 0.7]), np.array([-2.0, 3.0]), np.array([1.0, 0.5])
+K = rng.random(2_000_000) &lt; w[1]
+Xm = np.where(K, rng.normal(mu[1], sd[1], K.size), rng.normal(mu[0], sd[0], K.size))
+EX = w @ mu
+VarX = w @ sd**2 + w @ (mu - EX) ** 2                          # E[Var(X|K)] + Var(E[X|K])
+print(f&quot;[total] E X = E[E[X|K]] = {EX:.3f} (sim {Xm.mean():.3f});  Var X = {w @ sd**2:.3f} + {w @ (mu - EX) ** 2:.3f}&quot;
+      f&quot; = {VarX:.3f} (sim {Xm.var():.3f})&quot;)
+
+# 4. Correlation: scale-free, bounded by 1, and blind to nonlinear dependence.
+Z = rng.normal(size=1_000_000)
+W = 0.6 * Z + 0.8 * rng.normal(size=Z.size)
+print(f&quot;[corr] corr(Z, W) {np.corrcoef(Z, W)[0, 1]:.4f}   corr(5Z + 2, -3W) {np.corrcoef(5 * Z + 2, -3 * W)[0, 1]:.4f}&quot;)
+print(f&quot;[corr] Y = Z^2: corr(Z, Y) {np.corrcoef(Z, Z**2)[0, 1]:+.4f} but E[Y | |Z|&gt;2] = {np.mean(Z[np.abs(Z) &gt; 2] ** 2):.2f}&quot;
+      f&quot; vs E[Y] = {np.mean(Z**2):.2f}  (uncorrelated, not independent)&quot;)</code></pre>
+<pre class="code output"><code class="output">[discrete] P(X) = [0.35 0.65]   P(Y) = [0.25 0.35 0.4 ]   P(Y | X=1) = [0.077 0.385 0.538]
+[discrete] independent? max |P(x,y) - P(x)P(y)| = 0.113
+[discrete] mutual information I(X;Y) = KL(P_xy || P_x P_y) = 0.1622 nats
+[discrete] E X 0.65  E Y 1.15  E XY 0.95  Cov = E XY - E X E Y = 0.2025
+[continuous] total mass 1.000000   E X 0.583333 (7/12 = 0.583333)
+[continuous] Cov(X,Y) -0.006944  (-1/144 = -0.006944)
+[continuous] rejection-sampled 1,499,937 points: Cov -0.006997
+[total] E X = E[E[X|K]] = 1.500 (sim 1.499);  Var X = 0.475 + 5.250 = 5.725 (sim 5.727)
+[corr] corr(Z, W) 0.6012   corr(5Z + 2, -3W) -0.6012
+[corr] Y = Z^2: corr(Z, Y) +0.0007 but E[Y | |Z|&gt;2] = 5.74 vs E[Y] = 1.00  (uncorrelated, not independent)</code></pre>

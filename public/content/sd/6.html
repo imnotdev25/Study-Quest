@@ -1,0 +1,189 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Asynchronous communication: queues vs pub/sub, Kafka’s log model, delivery guarantees, ordering, dead-letter queues, event-driven architecture, event sourcing, CQRS, the outbox pattern, and change data capture.</p>
+</div>
+<h1 id="why-asynchronous">Why Asynchronous?</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Calling someone on the phone is synchronous: both of you must be free at the same time. Sending a text is asynchronous: you send it, carry on, and they reply when ready. Message queues are text messages between services. If the receiver is busy or down, the message waits instead of being lost.</p>
+</div>
+<p>Benefits: decoupling (producer does not know the consumer), load leveling (absorb spikes), resilience (consumer outages do not fail the user’s request), and fan-out (many consumers react to one event).</p>
+<h1 id="message-queues-point-to-point">Message Queues (Point-to-Point)</h1>
+<figure class="tikz"><img src="figs/sd/69ba7f83aeb6.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Competing consumers: each message goes to exactly one worker. Poison messages land in a dead-letter queue.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Key mechanics:</p>
+<ul>
+<li><p><strong>Acknowledgement</strong>: the consumer acks after processing. No ack within the <em>visibility timeout</em> means redelivery.</p></li>
+<li><p><strong>Dead-letter queue (DLQ)</strong>: messages that fail <span class="math inline">\(N\)</span> times are moved aside for inspection rather than blocking the queue.</p></li>
+<li><p><strong>Delivery guarantees</strong>: at-most-once (ack before processing, may lose), at-least-once (ack after, may duplicate; the common default), and effectively-once (at-least-once plus idempotent consumers).</p></li>
+<li><p><strong>Ordering</strong>: standard SQS is best-effort; SQS FIFO and Kafka partitions give order per group/key.</p></li>
+<li><p><strong>Backpressure</strong>: queue depth is the signal for autoscaling workers (KEDA in Kubernetes).</p></li>
+</ul>
+<p>Products: RabbitMQ (rich routing, AMQP), Amazon SQS (fully managed), Azure Service Bus, NATS JetStream, Redis Streams, and job frameworks like Celery, Sidekiq, BullMQ.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Image processing pipeline</div>
+<p>User uploads a photo to S3; the API enqueues <code>{photo_id}</code> and returns 202 Accepted. Workers generate thumbnails, run moderation, extract EXIF, and update the DB. Upload latency stays at 100 ms regardless of processing time, and workers scale with queue depth.</p>
+</div>
+<h1 id="pubsub-and-kafka">Pub/Sub and Kafka</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A queue is a to-do list shared by workers: each task is done once. Pub/sub is a newspaper: every subscriber gets their own copy of each edition.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/f6d6fa51056c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Kafka topic with three partitions. Every consumer group reads all messages; within a group each partition goes to one consumer.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Kafka’s model:</strong> a topic is split into <strong>partitions</strong>, each an ordered, append-only, replicated log. Producers choose a partition by key hash, so all events for one key stay in order. A <strong>consumer group</strong> divides partitions among its members; each group tracks its own <strong>offset</strong>, so groups are independent and can <em>replay</em> history. Messages are retained by time or size, not deleted on read. Parallelism within a group is capped by the partition count.</p>
+<p>Comparable systems: Redpanda (Kafka API, C++, no JVM), Apache Pulsar (tiered storage, multi-tenancy), AWS Kinesis, Google Pub/Sub, Azure Event Hubs, NATS. Kafka 4.0 removed ZooKeeper in favor of built-in KRaft consensus, and Kafka-compatible “diskless” designs (WarpStream, Confluent Freight, AutoMQ, KIP-1150) write directly to object storage to cut cross-zone network cost.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Exactly-once in Kafka</strong> = idempotent producer (sequence numbers per partition dedupe retries) + transactions (atomic writes across partitions and offset commits). This gives exactly-once for Kafka-to-Kafka stream processing. Side effects outside Kafka (sending email, charging a card) still require idempotent consumers.</p>
+<p><strong>Partition sizing:</strong> target throughput / per-partition throughput, with headroom; increasing partitions later breaks key-to-partition mapping and ordering guarantees. <strong>Rebalancing</strong> pauses consumption; use cooperative sticky assignment and static membership. <strong>Consumer lag</strong> (latest offset minus committed offset) is the key health metric. <strong>Hot partitions</strong> from skewed keys: add a salt suffix for heavy keys and re-aggregate downstream.</p>
+</div>
+<h1 id="event-driven-architecture">Event-Driven Architecture</h1>
+<figure class="tikz"><img src="figs/sd/666fabc4f726.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Producers publish facts; consumers subscribe. New consumers are added without changing the producer.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Events are immutable facts in past tense (<code>OrderPlaced</code>, <code>PaymentFailed</code>). Two styles:</p>
+<ul>
+<li><p><strong>Event notification</strong>: thin event (<code>order_id</code>); consumers call back for details.</p></li>
+<li><p><strong>Event-carried state transfer</strong>: fat event with full data; consumers keep local copies.</p></li>
+</ul>
+<p>Use a schema registry (Avro, Protobuf, JSON Schema) and enforce backward compatibility so producers can evolve without breaking consumers. Standard envelopes like <strong>CloudEvents</strong> help across teams.</p>
+</div>
+<h2 id="the-outbox-pattern-and-cdc">The Outbox Pattern and CDC</h2>
+<figure class="tikz"><img src="figs/sd/2f22a29e1971.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Transactional outbox: the event is written in the same transaction as the business data, then relayed.</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>The dual-write problem:</strong> writing to the DB and then publishing to Kafka can fail between the two steps, leaving them inconsistent. The <strong>transactional outbox</strong> writes the event to an <code>outbox</code> table in the same DB transaction; a relay (polling or CDC on the write-ahead log) publishes it. This guarantees at-least-once publication, so consumers must still be idempotent. <strong>Change data capture</strong> (Debezium, DynamoDB Streams, Postgres logical replication) also feeds caches, search indexes, and data warehouses from one source of truth.</p>
+<p><strong>Event sourcing</strong> stores the sequence of events as the source of truth; current state is a fold over events. Gains: full audit history, time travel, rebuildable projections. Costs: schema evolution of old events, snapshotting for long streams, and a steep learning curve. <strong>CQRS</strong> separates write models (normalized, validated) from read models (denormalized projections per query), often fed by events. Accept that read models are eventually consistent.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: E-commerce order flow</div>
+<p><code>OrderPlaced</code> is published via outbox. Inventory reserves stock, Payments charges the card, Notifications emails the customer, and Analytics streams to the warehouse, all independently. Adding a loyalty-points service later requires zero changes to the order service.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Ride sharing location updates</div>
+<p>Driver apps publish GPS pings every 4 seconds to a partitioned stream keyed by <code>driver_id</code>. A matching service consumes them to update a geospatial index; an ETA service and a surge-pricing service consume the same stream independently.</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Assuming exactly-once delivery; design every consumer to be idempotent.</p></li>
+<li><p>Using a queue to hide a synchronous dependency the user is waiting on.</p></li>
+<li><p>No DLQ or alerting on it, so failures pile up silently.</p></li>
+<li><p>Event spaghetti: nobody can explain the full flow. Document flows and use tracing across async hops.</p></li>
+</ul>
+</div>
+<h1 id="deep-dive-inside-kafkas-durability-guarantees">Deep Dive: Inside Kafka’s Durability Guarantees</h1>
+<figure class="tikz"><img src="figs/sd/afe4a9322a97.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A partition’s replicas. Offsets beyond the high watermark are not yet visible to consumers.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p>Each partition has one <strong>leader</strong> and several <strong>followers</strong> that copy its log. Followers caught up within <code>replica.lag.time.max.ms</code> form the <strong>in-sync replica set (ISR)</strong>.</p></li>
+<li><p>The <strong>high watermark</strong> is the highest offset copied to every ISR member. Consumers only see messages below it, so they never read data that could vanish on leader failover.</p></li>
+<li><p>Producer <code>acks</code>: <code>0</code> (fire and forget), <code>1</code> (leader wrote it; lost if the leader dies before followers copy it), <code>all</code> (every ISR member has it).</p></li>
+<li><p><code>min.insync.replicas=2</code> with <code>acks=all</code> and replication factor 3 is the standard durable setup: a write succeeds only if at least two replicas have it; you can lose one broker with no data loss and keep writing.</p></li>
+</ul>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Unclean leader election.</strong> If every ISR member is down, Kafka can either wait (unavailable) or elect an out-of-sync replica (available, but loses the messages it never received). <code>unclean.leader.election.enable=false</code> chooses consistency, the CAP trade-off in a single config flag.</p>
+<p><strong>Ordering with retries.</strong> A producer sends batches 1 and 2; batch 1 fails and is retried after batch 2 lands, so order flips. The idempotent producer (default in modern clients) tags batches with a producer ID and sequence numbers, letting the broker reject duplicates and keep order with up to 5 in-flight requests.</p>
+<p><strong>Consumer commit semantics.</strong> Commit offsets <em>after</em> processing for at-least-once. If processing writes to a database, store the offset in the <em>same</em> database transaction as the result; on restart, resume from the stored offset, which gives effectively-once without Kafka transactions.</p>
+<p><strong>Sizing example.</strong> 200K events/s at 1 KB = 200 MB/s in. Replication factor 3 means 600 MB/s of disk writes across the cluster, plus each consumer group reads 200 MB/s. Three consumer groups read 600 MB/s. At roughly 10 MB/s comfortable per partition, you need at least 20 partitions for the producer side; choose 64 or more to allow consumer parallelism and growth. Seven days retention is <span class="math inline">\(200\,\text{MB/s}\times 604{,}800\times 3 \approx 363\)</span> TB of disk, which is why tiered storage to S3 became standard.</p>
+</div>
+<h1 id="deep-dive-work-queues-schedulers-and-rule-engines">Deep Dive: Work Queues, Schedulers, and Rule Engines</h1>
+<h2 id="delegation-and-async-work">Delegation and Async Work</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Move work off the request path when the user does not need to wait for it: sending email, generating thumbnails, recomputing recommendations, calling slow third parties. The request records the intent durably (a row, an outbox event, a queue message) and returns <code>202 Accepted</code> with a status URL or later notification. Rule of thumb: if it can be retried, can take more than a few hundred milliseconds, or can fail independently, delegate it.</p>
+</div>
+<h2 id="a-postgres-skip-locked-work-queue">A Postgres <code>SKIP LOCKED</code> Work Queue</h2>
+<pre class="code text"><code class="language-plaintext">CREATE TABLE jobs (
+  id          BIGSERIAL PRIMARY KEY,
+  kind        TEXT NOT NULL,
+  payload     JSONB NOT NULL,
+  run_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  attempts    INT NOT NULL DEFAULT 0,
+  status      TEXT NOT NULL DEFAULT &#x27;queued&#x27;,   -- queued | running | done | failed
+  locked_until TIMESTAMPTZ
+);
+CREATE INDEX jobs_ready ON jobs (run_at) WHERE status = &#x27;queued&#x27;;
+
+-- each worker claims a batch without blocking other workers
+UPDATE jobs SET status = &#x27;running&#x27;, attempts = attempts + 1,
+                locked_until = now() + interval &#x27;5 minutes&#x27;
+WHERE id IN (
+  SELECT id FROM jobs
+  WHERE status = &#x27;queued&#x27; AND run_at &lt;= now()
+  ORDER BY run_at
+  LIMIT 10
+  FOR UPDATE SKIP LOCKED
+)
+RETURNING id, kind, payload;</code></pre>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><code>FOR UPDATE SKIP LOCKED</code> lets many workers poll concurrently: each locks different rows and skips rows another worker already locked, without waiting. Advantages over a separate broker: jobs can be enqueued <strong>in the same transaction</strong> as the business change (no dual write, like an outbox), you get SQL for inspection and retries, and there is one less system to run. Workers mark jobs <code>done</code> or reschedule with exponential backoff (<code>run_at = now() + 2^attempts seconds</code>) and move them to <code>failed</code> after a limit; a reaper resets <code>running</code> jobs whose <code>locked_until</code> passed (crashed workers). Libraries: GoodJob and Solid Queue (Ruby), Oban (Elixir), pg-boss and Graphile Worker (Node), River (Go). Limits: thousands of jobs per second is fine; much more, or fan-out to many consumers, belongs in a dedicated queue or log.</p>
+</div>
+<h2 id="a-distributed-task-scheduler">A Distributed Task Scheduler</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>“Run this job at 9:00 every day” or “in 30 minutes” for millions of tasks. Design: store tasks with <code>next_run_at</code> in a database indexed on that column, partitioned (by task ID hash) across scheduler instances so each partition has one owner (leases or a leader per partition, Chapter (dtx)). Each owner repeatedly claims due tasks (<code>next_run_at &lt;= now()</code>), enqueues them to a work queue for executors, and computes the next run time from the cron expression. <strong>Guarantees</strong>: at-least-once execution, so jobs must be idempotent (key by task ID plus scheduled time); handle missed runs after an outage with a policy (run once, run all, skip). For precise short delays, <strong>hierarchical timing wheels</strong> (used by Kafka and Netty) hold timers in buckets by expiry for <span class="math inline">\(O(1)\)</span> insert. Workflow engines (Temporal, Airflow) add dependencies, retries, and history.</p>
+</div>
+<h2 id="dag-workflow-orchestration">DAG Workflow Orchestration</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Multi-step pipelines (ETL, ML training, media processing) are DAGs of tasks. An orchestrator (Airflow, Dagster, Prefect, Argo Workflows, Temporal) stores the DAG and each run’s state, starts tasks whose dependencies succeeded (topological order), retries failures, supports backfills over past dates, and records lineage. Design tasks to be idempotent and to write outputs atomically (to a temporary location, then rename) so a retried task cannot leave partial results.</p>
+</div>
+<h2 id="rule-engines-and-trigger-frameworks">Rule Engines and Trigger Frameworks</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Many products let users or operators define “when X happens, if condition Y, do Z”: automation in Zapier or Slack workflows, fraud rules, alerting, marketing journeys. Architecture: events arrive on a stream; a <strong>matcher</strong> finds rules subscribed to that event type (index rules by event type and by the fields they test, so each event is checked against few rules); a <strong>condition evaluator</strong> runs a safe, sandboxed expression language (not arbitrary code) with timeouts; actions are enqueued as idempotent jobs. Concerns: rule loops (an action triggers the same rule; cap depth), per-tenant rate limits, versioning rules (evaluate events against the version active at event time), testing rules against historical events before enabling, and audit logs of every firing. Classic rule engines (Drools) use the <strong>Rete</strong> algorithm to share partial condition matches across many rules.</p>
+</div>
+<h1 id="deep-dive-choosing-queue-log-or-stream">Deep Dive: Choosing Queue, Log, or Stream</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Need</th>
+<th style="text-align: left;">Queue (SQS, RabbitMQ)</th>
+<th style="text-align: left;">Log (Kafka, Pulsar, Kinesis)</th>
+<th style="text-align: left;">Workflow engine (Temporal)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Per-message ack and redelivery</td>
+<td style="text-align: left;">native</td>
+<td style="text-align: left;">by offset only</td>
+<td style="text-align: left;">per activity</td>
+</tr>
+<tr>
+<td style="text-align: left;">Replay history</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">workflow history</td>
+</tr>
+<tr>
+<td style="text-align: left;">Many independent consumers</td>
+<td style="text-align: left;">needs fan-out (SNS)</td>
+<td style="text-align: left;">native</td>
+<td style="text-align: left;">no</td>
+</tr>
+<tr>
+<td style="text-align: left;">Ordering</td>
+<td style="text-align: left;">FIFO variants</td>
+<td style="text-align: left;">per partition</td>
+<td style="text-align: left;">per workflow</td>
+</tr>
+<tr>
+<td style="text-align: left;">Delays, timers, long waits</td>
+<td style="text-align: left;">limited</td>
+<td style="text-align: left;">poor</td>
+<td style="text-align: left;">native (days, months)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Best for</td>
+<td style="text-align: left;">background jobs</td>
+<td style="text-align: left;">event streams, CDC, analytics</td>
+<td style="text-align: left;">multi-step business processes</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Queues distribute work; pub/sub broadcasts facts; Kafka does both with replay.</p></li>
+<li><p>Order is guaranteed per partition key, not globally.</p></li>
+<li><p>At-least-once plus idempotency is the practical “exactly once.”</p></li>
+<li><p>Use the outbox pattern or CDC to avoid dual writes.</p></li>
+</ul>
+</div>

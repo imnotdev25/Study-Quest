@@ -1,0 +1,462 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>The retrieval half of retrieval-augmented generation, from first principles: lexical scoring (TF-IDF, BM25, BM25F) with a worked numeric example, learned sparse retrieval, dense embeddings and similarity metrics, how vector databases index and compress vectors (flat, IVF, HNSW, PQ, quantization, DiskANN), filtering, hybrid fusion, re-ranking and late interaction, chunking, the main types of RAG (naive, advanced, hybrid, agentic, GraphRAG, self-correcting, multimodal, and more), how to evaluate them, and how to choose a vector database.</p>
+</div>
+<h4 id="how-this-fits.">How this fits.</h4>
+<p>Chapter (search) covers search systems end to end and Chapter (genai) covers the RAG pipeline inside an LLM application. This chapter goes underneath both: the math and data structures, and the catalogue of RAG variants.</p>
+<h1 id="retrieval-in-one-picture">Retrieval in One Picture</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A RAG system answers a question in two moves: <strong>find</strong> a few relevant passages from a large collection, then <strong>ask</strong> a language model to answer using only those passages. The model is only as good as what you hand it, so most RAG engineering is really retrieval engineering.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/9afd42cd5cf1.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The retrieval stack used by most production RAG systems.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Two broad families of retrievers:</p>
+<ul>
+<li><p><strong>Sparse (lexical)</strong>: represent text as weights over vocabulary terms (most weights zero) and match on shared words. TF-IDF, BM25, SPLADE. Strong on exact terms, names, codes, rare words; weak on paraphrase.</p></li>
+<li><p><strong>Dense (semantic)</strong>: represent text as a vector of a few hundred to a few thousand floats from a neural encoder and match by vector similarity. Strong on meaning and paraphrase; weak on exact identifiers and out-of-domain vocabulary.</p></li>
+</ul>
+<p>Combining them (<strong>hybrid retrieval</strong>) and then re-ranking is the default because their errors are largely different.</p>
+</div>
+<h1 id="lexical-scoring-tf-idf">Lexical Scoring: TF-IDF</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A word tells you more about a document if the document uses it a lot (<em>term frequency</em>) and few other documents use it at all (<em>inverse document frequency</em>). “The” appears everywhere and says nothing; “mitochondria” appears in few documents and says a lot.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>For a term <span class="math inline">\(t\)</span>, document <span class="math inline">\(d\)</span>, and a collection of <span class="math inline">\(N\)</span> documents where <span class="math inline">\(t\)</span> appears in <span class="math inline">\(df(t)\)</span> of them: <span class="math display">\[\text{tf-idf}(t, d) = tf(t, d)\cdot\log\frac{N}{df(t)},\qquad
+\text{score}(q, d) = \sum_{t\in q}\text{tf-idf}(t, d).\]</span> Common variants: log-scaled term frequency <span class="math inline">\(1 + \log tf\)</span> (dampens repetition), smoothed IDF <span class="math inline">\(\log\frac{N+1}{df+1} + 1\)</span> (scikit-learn’s default, avoids division by zero), and representing documents and queries as L2-normalized TF-IDF vectors scored by cosine similarity, which removes the bias toward long documents.</p>
+</div>
+<h1 id="lexical-scoring-bm25">Lexical Scoring: BM25</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>TF-IDF has two flaws: score grows linearly with repetition (a page saying “cat” 50 times is not 50 times more relevant), and long documents win simply by containing more words. <strong>BM25</strong> (Okapi BM25, Robertson et al.) fixes both: <span class="math display">\[\text{BM25}(q, d) = \sum_{t\in q}\text{idf}(t)\cdot
+\frac{tf(t,d)\,(k_1 + 1)}{tf(t,d) + k_1\left(1 - b + b\,\frac{|d|}{\text{avgdl}}\right)},
+\qquad
+\text{idf}(t) = \ln\!\left(\frac{N - df(t) + 0.5}{df(t) + 0.5} + 1\right)\]</span> (the IDF form used by Lucene, Elasticsearch, and OpenSearch).</p>
+<ul>
+<li><p><span class="math inline">\(k_1\)</span> (typically 1.2–2.0) controls <strong>saturation</strong>: the term-frequency part approaches but never exceeds <span class="math inline">\(k_1 + 1\)</span>, however often the term repeats.</p></li>
+<li><p><span class="math inline">\(b\)</span> (typically 0.75) controls <strong>length normalization</strong>: <span class="math inline">\(b = 0\)</span> ignores length, <span class="math inline">\(b = 1\)</span> fully normalizes by <span class="math inline">\(|d|/\text{avgdl}\)</span>.</p></li>
+</ul>
+</div>
+<h2 id="worked-example">Worked Example</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Doc</th>
+<th style="text-align: left;">Text (after lowercasing)</th>
+<th style="text-align: left;">Length</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">D1</td>
+<td style="text-align: left;">cat sat on the mat</td>
+<td style="text-align: left;">5</td>
+</tr>
+<tr>
+<td style="text-align: left;">D2</td>
+<td style="text-align: left;">the dog sat</td>
+<td style="text-align: left;">3</td>
+</tr>
+<tr>
+<td style="text-align: left;">D3</td>
+<td style="text-align: left;">cat cat cat runs</td>
+<td style="text-align: left;">4</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Query: <strong>“cat mat”</strong>. <span class="math inline">\(N = 3\)</span>, <span class="math inline">\(df(\text{cat}) = 2\)</span>, <span class="math inline">\(df(\text{mat}) = 1\)</span>, <span class="math inline">\(\text{avgdl} = 4\)</span>, <span class="math inline">\(k_1 = 1.2\)</span>, <span class="math inline">\(b = 0.75\)</span>.</p>
+<p><strong>TF-IDF</strong> (raw <span class="math inline">\(tf\)</span>, natural log): <span class="math inline">\(\text{idf(cat)} = \ln(3/2) = 0.405\)</span>, <span class="math inline">\(\text{idf(mat)} = \ln 3 = 1.099\)</span>. D1 <span class="math inline">\(= 1(0.405) + 1(1.099) = \mathbf{1.504}\)</span>; D2 <span class="math inline">\(= 0\)</span>; D3 <span class="math inline">\(= 3(0.405) = \mathbf{1.216}\)</span>.</p>
+<p><strong>BM25</strong>: <span class="math inline">\(\text{idf(cat)} = \ln(1.5/2.5 + 1) = \ln 1.6 = 0.470\)</span>; <span class="math inline">\(\text{idf(mat)} = \ln(2.5/1.5 + 1) = \ln 2.667 = 0.981\)</span>.</p>
+<ul>
+<li><p>D1 (<span class="math inline">\(|d| = 5\)</span>): length factor <span class="math inline">\(k_1(1 - b + b\cdot 5/4) = 1.2 \times 1.1875 = 1.425\)</span>. Each term has <span class="math inline">\(tf = 1\)</span>: <span class="math inline">\(\frac{1 \times 2.2}{1 + 1.425} = 0.907\)</span>. Score <span class="math inline">\(= 0.470(0.907) + 0.981(0.907) = 0.426 + 0.890 = \mathbf{1.316}\)</span>.</p></li>
+<li><p>D3 (<span class="math inline">\(|d| = 4\)</span>): length factor <span class="math inline">\(1.2 \times 1.0 = 1.2\)</span>. For cat, <span class="math inline">\(tf = 3\)</span>: <span class="math inline">\(\frac{3 \times 2.2}{3 + 1.2} = 1.571\)</span>. Score <span class="math inline">\(= 0.470 \times 1.571 = \mathbf{0.739}\)</span>.</p></li>
+</ul>
+<p>Both rank D1 first, because “mat” is rare and D1 contains it. Note the saturation: in D3, three occurrences of “cat” score 1.571, only 1.57<span class="math inline">\(\times\)</span> what a single occurrence would score in a document of the same length (1.0), not 3<span class="math inline">\(\times\)</span>.</p>
+</div>
+<h2 id="variants">Variants</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>BM25F</strong> scores several fields (title, body, anchor text) with per-field weights and length normalization, combining term frequencies before saturation.</p></li>
+<li><p><strong>BM25+</strong> adds a small constant so long documents containing a term never score below short documents lacking it.</p></li>
+<li><p><strong>Phrase and proximity boosts</strong>: extra score when query terms appear close together (requires positions in the index).</p></li>
+</ul>
+</div>
+<h1 id="learned-sparse-retrieval">Learned Sparse Retrieval</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Models such as <strong>SPLADE</strong> use a transformer to produce a sparse weight vector over the vocabulary for each document and query, including <em>expansion</em> terms that do not appear in the text (a passage about “automobiles” gets weight on “car”). The result is still served from an inverted index with exact term matching and good efficiency, but with much better recall than BM25 on paraphrases. <strong>Doc2query</strong> is an older trick: generate likely questions for each document with a model and append them before BM25 indexing.</p>
+</div>
+<h1 id="dense-embeddings">Dense Embeddings</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>An embedding model turns a sentence into a list of numbers, a point in space, arranged so that sentences with similar meaning land close together. Searching becomes “find the points nearest to my question’s point.”</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Bi-encoders</strong> (dual encoders) embed queries and documents <em>independently</em>, so document vectors are computed once at indexing time and a query needs one encoder call plus a nearest-neighbor search. They are trained with contrastive losses (InfoNCE with in-batch and hard negatives) on (query, relevant passage) pairs. Many models expect different prefixes or instructions for queries and documents; using the wrong one silently lowers quality. Typical dimensions are 384–3<span>,</span>072. <strong>Matryoshka</strong> models can be truncated to fewer dimensions with modest loss, trading quality for memory.</p>
+</div>
+<h2 id="similarity-metrics">Similarity Metrics</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Metric</th>
+<th style="text-align: left;">Formula</th>
+<th style="text-align: left;">Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Cosine similarity</td>
+<td style="text-align: left;"><span class="math inline">\(\frac{a\cdot b}{\lVert a\rVert\,\lVert b\rVert}\)</span></td>
+<td style="text-align: left;">ignores length; the usual default for text</td>
+</tr>
+<tr>
+<td style="text-align: left;">Dot product (inner product)</td>
+<td style="text-align: left;"><span class="math inline">\(a\cdot b\)</span></td>
+<td style="text-align: left;">equals cosine if vectors are L2-normalized; some models are trained for raw dot product</td>
+</tr>
+<tr>
+<td style="text-align: left;">Euclidean (L2) distance</td>
+<td style="text-align: left;"><span class="math inline">\(\lVert a - b\rVert\)</span></td>
+<td style="text-align: left;">for normalized vectors <span class="math inline">\(\lVert a-b\rVert^2 = 2 - 2\cos(a,b)\)</span>, so it ranks identically to cosine</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Use the metric the embedding model was trained with. Normalizing at write time lets the database use the cheapest operation (dot product) while keeping cosine semantics. <strong>Never mix embeddings from different models</strong> (or versions) in one index: their spaces are unrelated, so changing models means re-embedding the corpus.</p>
+</div>
+<h1 id="how-vector-databases-work">How Vector Databases Work</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Exact nearest-neighbor search compares the query to every vector: <span class="math inline">\(O(Nd)\)</span> per query, fine up to perhaps a million vectors on a GPU or with SIMD, too slow beyond that. Vector databases use <strong>approximate nearest neighbor (ANN)</strong> indexes that find most of the true neighbors (measured as <strong>recall@k</strong>) while examining a small fraction of the data. Every index exposes a knob that trades recall for latency.</p>
+</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Index</th>
+<th style="text-align: left;">Idea</th>
+<th style="text-align: left;">Strengths / weaknesses</th>
+<th style="text-align: left;">Knobs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Flat (brute force)</td>
+<td style="text-align: left;">compare to all vectors</td>
+<td style="text-align: left;">exact; slow at scale</td>
+<td style="text-align: left;">none</td>
+</tr>
+<tr>
+<td style="text-align: left;">IVF</td>
+<td style="text-align: left;">k-means into <span class="math inline">\(n_{list}\)</span> cells; search the <code>nprobe</code> closest cells</td>
+<td style="text-align: left;">fast build, low memory; recall drops at cell borders</td>
+<td style="text-align: left;"><code>nlist</code>, <code>nprobe</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">HNSW</td>
+<td style="text-align: left;">multi-layer proximity graph; greedy descent then best-first search</td>
+<td style="text-align: left;">high recall at low latency; memory-hungry; slower builds and deletes</td>
+<td style="text-align: left;"><code>M</code>, <code>efConstruction</code>, <code>efSearch</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">PQ / IVF-PQ</td>
+<td style="text-align: left;">split vectors into <span class="math inline">\(m\)</span> sub-vectors, store 1-byte codebook IDs</td>
+<td style="text-align: left;">10–50<span class="math inline">\(\times\)</span> compression; lossy, re-rank with exact vectors</td>
+<td style="text-align: left;"><span class="math inline">\(m\)</span>, bits per code</td>
+</tr>
+<tr>
+<td style="text-align: left;">Scalar quantization</td>
+<td style="text-align: left;">float32 <span class="math inline">\(\to\)</span> int8 per dimension</td>
+<td style="text-align: left;">4<span class="math inline">\(\times\)</span> smaller, small recall loss</td>
+<td style="text-align: left;">range calibration</td>
+</tr>
+<tr>
+<td style="text-align: left;">Binary quantization</td>
+<td style="text-align: left;">keep only the sign bit</td>
+<td style="text-align: left;">32<span class="math inline">\(\times\)</span> smaller, Hamming distance; needs re-scoring</td>
+<td style="text-align: left;">oversampling factor</td>
+</tr>
+<tr>
+<td style="text-align: left;">DiskANN (Vamana)</td>
+<td style="text-align: left;">graph on SSD, compressed vectors in RAM</td>
+<td style="text-align: left;">billions of vectors per node</td>
+<td style="text-align: left;">graph degree, beam width</td>
+</tr>
+</tbody>
+</table>
+<p><em>ANN index families. The companion interview book’s Chapter 18 explains HNSW and PQ step by step.</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Memory math for 10M chunks with 768-dimension embeddings</strong>:</p>
+<ul>
+<li><p>float32 vectors: <span class="math inline">\(10^7 \times 768 \times 4\,\text{B} \approx 30.7\)</span> GB.</p></li>
+<li><p>HNSW graph with <span class="math inline">\(M = 16\)</span>: about <span class="math inline">\(2M\)</span> neighbor IDs of 4 bytes at layer 0, roughly 128 B per vector, plus upper layers: about 1.3–1.5 GB.</p></li>
+<li><p>int8 scalar quantization: about 7.7 GB; binary: about 0.96 GB; PQ with <span class="math inline">\(m = 96\)</span>: about 0.96 GB, plus codebooks.</p></li>
+</ul>
+<p>A common production recipe: keep compressed vectors (int8, binary, or PQ) in memory for the candidate search, retrieve 3–10<span class="math inline">\(\times\)</span> more candidates than needed (oversampling), then re-score them with full-precision vectors loaded from disk. That recovers most of the recall at a fraction of the memory. Deletes are usually tombstones cleaned up by periodic rebuilds or compaction, which is why heavy update workloads degrade HNSW recall over time.</p>
+</div>
+<h2 id="filtering">Filtering</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Real queries carry filters: tenant, permissions, language, date, product category.</p>
+<ul>
+<li><p><strong>Post-filtering</strong>: run ANN for top <span class="math inline">\(k\)</span>, then drop non-matching results. Simple, but a selective filter (1% of documents) leaves you with almost nothing; you must over-fetch heavily.</p></li>
+<li><p><strong>Pre-filtering</strong>: compute the matching set first, then search only within it (brute force if the set is small). Exact, but expensive for broad filters on a graph index.</p></li>
+<li><p><strong>In-index (filtered) search</strong>: the ANN traversal skips non-matching nodes while still using them for navigation (Qdrant, Weaviate, and others implement variants). Usually the best general option.</p></li>
+<li><p><strong>Partitioning</strong>: a separate index (namespace, collection, partition) per tenant when tenants are large and never searched together; it is also the strongest isolation.</p></li>
+</ul>
+<p>Access-control filters must be applied at query time from the user’s current permissions, never only at ingestion.</p>
+</div>
+<h2 id="choosing-a-vector-store">Choosing a Vector Store</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Option</th>
+<th style="text-align: left;">When it fits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">pgvector (Postgres)</td>
+<td style="text-align: left;">you already run Postgres; up to tens of millions of vectors; want transactions, joins, and metadata filters in SQL</td>
+</tr>
+<tr>
+<td style="text-align: left;">Elasticsearch / OpenSearch / Vespa</td>
+<td style="text-align: left;">you need strong BM25, hybrid ranking, facets, and vectors in one engine</td>
+</tr>
+<tr>
+<td style="text-align: left;">Dedicated vector DBs (Qdrant, Weaviate, Milvus, Pinecone, and others)</td>
+<td style="text-align: left;">large scale, heavy filtering, multi-tenancy features, managed operations</td>
+</tr>
+<tr>
+<td style="text-align: left;">Libraries (FAISS, hnswlib, ScaNN)</td>
+<td style="text-align: left;">embedded in your own service or batch jobs; you handle persistence and updates</td>
+</tr>
+<tr>
+<td style="text-align: left;">Object-storage-backed engines (LanceDB, turbopuffer, S3 Vectors)</td>
+<td style="text-align: left;">very large, cost-sensitive corpora where some latency is acceptable</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Decision questions: How many vectors now and in two years? Update rate? Required p99 latency and QPS? How selective are filters? Do you need hybrid lexical search? Multi-tenancy and data residency? Who operates it? A frequent mistake is adopting a new database for a corpus of 200<span>,</span>000 chunks that a Postgres table with an HNSW index serves easily.</p>
+</div>
+<h1 id="fusion-and-re-ranking">Fusion and Re-ranking</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Reciprocal rank fusion (RRF)</strong> merges ranked lists without needing comparable scores: <span class="math inline">\(\text{RRF}(d) = \sum_{r}\frac{1}{k + \text{rank}_r(d)}\)</span> with <span class="math inline">\(k \approx 60\)</span>. <strong>Weighted score fusion</strong> normalizes each retriever’s scores (min–max or z-score per query) and takes <span class="math inline">\(\alpha\cdot s_{\text{dense}} + (1-\alpha)\cdot s_{\text{sparse}}\)</span>, tuning <span class="math inline">\(\alpha\)</span> on an eval set.</p>
+<p><strong>Cross-encoder re-rankers</strong> read the query and one candidate together through a transformer and output a relevance score. They are far more accurate than bi-encoders because every query token can attend to every document token, but they cost one model call per candidate, so they run only on the top 50–200 fused candidates. LLM-based re-rankers (listwise ranking with a prompt) are stronger still and slower.</p>
+<p><strong>Late interaction (ColBERT)</strong> sits between the two: store one vector per <em>token</em> of each document; score a query by summing, for each query token, its maximum similarity to any document token (“MaxSim”). Nearly cross-encoder quality with precomputed document representations, at the cost of much larger indexes (mitigated by compression in ColBERTv2 and PLAID).</p>
+</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Model type</th>
+<th style="text-align: left;">Document encoding</th>
+<th style="text-align: left;">Query cost</th>
+<th style="text-align: left;">Quality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Bi-encoder</td>
+<td style="text-align: left;">one vector, precomputed</td>
+<td style="text-align: left;">1 encode + ANN</td>
+<td style="text-align: left;">good</td>
+</tr>
+<tr>
+<td style="text-align: left;">Late interaction (ColBERT)</td>
+<td style="text-align: left;">one vector per token, precomputed</td>
+<td style="text-align: left;">1 encode + token-level scoring</td>
+<td style="text-align: left;">better</td>
+</tr>
+<tr>
+<td style="text-align: left;">Cross-encoder</td>
+<td style="text-align: left;">none (query and doc read together)</td>
+<td style="text-align: left;">1 model call per candidate</td>
+<td style="text-align: left;">best (for re-ranking)</td>
+</tr>
+</tbody>
+</table>
+<h1 id="chunking">Chunking</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Strategy</th>
+<th style="text-align: left;">How</th>
+<th style="text-align: left;">Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Fixed size with overlap</td>
+<td style="text-align: left;">e.g. 512 tokens, 10–20% overlap</td>
+<td style="text-align: left;">baseline; uniform text</td>
+</tr>
+<tr>
+<td style="text-align: left;">Recursive / structural</td>
+<td style="text-align: left;">split on headings, then paragraphs, then sentences</td>
+<td style="text-align: left;">documents with structure (docs, wikis, Markdown, HTML)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Semantic</td>
+<td style="text-align: left;">split where embedding similarity between adjacent sentences drops</td>
+<td style="text-align: left;">long unstructured text with topic shifts</td>
+</tr>
+<tr>
+<td style="text-align: left;">Document-specific</td>
+<td style="text-align: left;">keep tables, code blocks, list items, Q&amp;A pairs intact</td>
+<td style="text-align: left;">PDFs with tables, code, FAQs</td>
+</tr>
+<tr>
+<td style="text-align: left;">Parent–child (small-to-big)</td>
+<td style="text-align: left;">index small chunks, return their larger parent section</td>
+<td style="text-align: left;">precise matching with enough context</td>
+</tr>
+<tr>
+<td style="text-align: left;">Contextual chunk headers</td>
+<td style="text-align: left;">prepend title, section path, or an LLM-written summary of the document</td>
+<td style="text-align: left;">chunks that make no sense alone</td>
+</tr>
+</tbody>
+</table>
+<p>Always store metadata with each chunk: source, URL, section path, timestamps, ACL groups, tenant, and a document version, so you can filter, cite, and update.</p>
+</div>
+<h1 id="types-of-rag">Types of RAG</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>“RAG” is a family, not one recipe. The simplest version retrieves once and answers. More advanced versions rewrite the question, search several ways, check whether what they found is good enough, search again if it is not, or walk a knowledge graph. Each step adds quality and cost.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/a33f9d0b773b.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A rough progression of RAG designs.</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">How it works</th>
+<th style="text-align: left;">Best for / trade-off</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Naive (vanilla) RAG</td>
+<td style="text-align: left;">embed query, top-<span class="math inline">\(k\)</span> chunks, stuff into prompt, generate</td>
+<td style="text-align: left;">prototypes; fails on vocabulary mismatch and multi-part questions</td>
+</tr>
+<tr>
+<td style="text-align: left;">Advanced RAG</td>
+<td style="text-align: left;">pre-retrieval (query rewriting, expansion), hybrid search, re-ranking, context compression</td>
+<td style="text-align: left;">the production default; more components to tune</td>
+</tr>
+<tr>
+<td style="text-align: left;">Modular RAG</td>
+<td style="text-align: left;">retrieval, routing, memory, and generation as swappable modules wired per use case</td>
+<td style="text-align: left;">platforms serving many teams</td>
+</tr>
+<tr>
+<td style="text-align: left;">Hybrid RAG</td>
+<td style="text-align: left;">sparse + dense retrieval fused (RRF)</td>
+<td style="text-align: left;">mixed queries with names, codes, and paraphrases</td>
+</tr>
+<tr>
+<td style="text-align: left;">Multi-query / RAG-Fusion</td>
+<td style="text-align: left;">LLM generates several rephrasings; retrieve for each; fuse</td>
+<td style="text-align: left;">ambiguous or short queries; several retrieval calls</td>
+</tr>
+<tr>
+<td style="text-align: left;">HyDE</td>
+<td style="text-align: left;">LLM writes a hypothetical answer; embed and search with it</td>
+<td style="text-align: left;">sparse questions vs long documents; risk of steering toward a wrong guess</td>
+</tr>
+<tr>
+<td style="text-align: left;">Query decomposition</td>
+<td style="text-align: left;">split a complex question into sub-questions, answer each, combine</td>
+<td style="text-align: left;">comparisons and multi-part questions</td>
+</tr>
+<tr>
+<td style="text-align: left;">Routing RAG</td>
+<td style="text-align: left;">classify the query, send it to the right index, tool, or no retrieval at all</td>
+<td style="text-align: left;">many sources; saves cost on questions needing no retrieval</td>
+</tr>
+<tr>
+<td style="text-align: left;">Parent–child / small-to-big</td>
+<td style="text-align: left;">match small chunks, return parent sections</td>
+<td style="text-align: left;">precise matching plus full context</td>
+</tr>
+<tr>
+<td style="text-align: left;">Contextual retrieval</td>
+<td style="text-align: left;">prepend an LLM-generated context sentence to each chunk before embedding and BM25 indexing</td>
+<td style="text-align: left;">chunks that lose meaning out of context; one-time indexing cost</td>
+</tr>
+<tr>
+<td style="text-align: left;">Corrective RAG (CRAG)</td>
+<td style="text-align: left;">a grader scores retrieved documents; if weak, rewrite the query or fall back to another source (e.g. web search)</td>
+<td style="text-align: left;">reducing answers built on irrelevant context</td>
+</tr>
+<tr>
+<td style="text-align: left;">Self-RAG / reflective RAG</td>
+<td style="text-align: left;">the model decides when to retrieve and critiques whether its answer is supported, then revises</td>
+<td style="text-align: left;">factuality; more calls, needs a capable model or a trained critic</td>
+</tr>
+<tr>
+<td style="text-align: left;">Agentic RAG</td>
+<td style="text-align: left;">an agent plans, issues several searches, reads results, and decides when it has enough (often with tools beyond search)</td>
+<td style="text-align: left;">multi-hop research questions; least predictable latency and cost</td>
+</tr>
+<tr>
+<td style="text-align: left;">GraphRAG</td>
+<td style="text-align: left;">extract entities and relations into a knowledge graph; summarize communities; retrieve via graph neighborhoods or community summaries</td>
+<td style="text-align: left;">“global” questions (themes across a corpus) and relationship questions; expensive indexing</td>
+</tr>
+<tr>
+<td style="text-align: left;">Conversational RAG</td>
+<td style="text-align: left;">rewrite each turn into a standalone query using chat history before retrieval</td>
+<td style="text-align: left;">chat assistants (“what about its price?”)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Multimodal RAG</td>
+<td style="text-align: left;">index images, tables, slides, or audio (via captions, OCR, or multimodal embeddings) and pass them to a multimodal model</td>
+<td style="text-align: left;">PDFs with figures, slides, product images</td>
+</tr>
+<tr>
+<td style="text-align: left;">Structured / text-to-SQL RAG</td>
+<td style="text-align: left;">generate a query against a database or API instead of searching text</td>
+<td style="text-align: left;">numbers and aggregates that text search cannot compute</td>
+</tr>
+<tr>
+<td style="text-align: left;">Cache-augmented generation (CAG)</td>
+<td style="text-align: left;">skip retrieval: preload a small, stable corpus into the context and reuse its KV cache</td>
+<td style="text-align: left;">small corpora with long-context models; limited by context size</td>
+</tr>
+</tbody>
+</table>
+<p><em>RAG variants. Names come from papers and practitioner write-ups; many systems combine several.</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>How to pick</strong>: start with advanced hybrid RAG and a re-ranker, measure retrieval recall on an eval set, and add complexity only where the failures are. If answers fail because the right chunk was never retrieved, improve chunking, hybrid search, query rewriting, or contextual retrieval. If the right chunk was retrieved but the question needs several pieces (multi-hop), add decomposition or an agentic loop. If questions are about the whole corpus (“what are the main complaints across all tickets?”), top-<span class="math inline">\(k\)</span> retrieval cannot answer them; use GraphRAG-style summaries or a map-reduce over many documents. If the corpus is small and stable, consider long-context or cache-augmented generation and skip retrieval.</p>
+</div>
+<h1 id="evaluating-rag">Evaluating RAG</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Evaluate the two halves separately, then end to end:</p>
+<ul>
+<li><p><strong>Retrieval</strong>: recall@<span class="math inline">\(k\)</span> (is a relevant chunk in the top <span class="math inline">\(k\)</span>?), precision@<span class="math inline">\(k\)</span>, MRR, NDCG@<span class="math inline">\(k\)</span> on a labeled set of questions with known relevant documents.</p></li>
+<li><p><strong>Generation</strong>: <em>faithfulness / groundedness</em> (every claim supported by the retrieved context), <em>answer relevance</em> (answers the question asked), and correctness against a reference answer. These three plus <em>context relevance</em> are often called the “RAG triad”; tools such as RAGAS, TruLens, and DeepEval automate LLM-judged versions.</p></li>
+<li><p><strong>Operational</strong>: latency per stage, tokens per answer, cost per query, citation accuracy, and “I don’t know” rate.</p></li>
+</ul>
+<p>Build the eval set from real user questions; a few hundred labeled examples sliced by question type catch most regressions. Re-run it on every change to chunking, embeddings, index parameters, re-ranker, or prompt.</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Dense-only retrieval for queries full of product codes, error messages, or names.</p></li>
+<li><p>Changing the embedding model without re-embedding the whole corpus.</p></li>
+<li><p>Post-filtering with selective permission filters, returning too few (or unauthorized) results.</p></li>
+<li><p>Tuning HNSW or IVF parameters without measuring recall against exact search.</p></li>
+<li><p>Stuffing 50 chunks into the prompt instead of re-ranking to the best 5–10.</p></li>
+<li><p>Choosing an agentic or graph design before measuring where simple RAG fails.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview</div>
+<p><strong>“Explain BM25 vs TF-IDF” in 30 seconds</strong>: both weight terms by frequency in the document and rarity across the collection; BM25 saturates term frequency (controlled by <span class="math inline">\(k_1\)</span>) and normalizes by document length relative to the average (controlled by <span class="math inline">\(b\)</span>), which fixes TF-IDF’s bias toward repetition and long documents. <strong>“When would dense retrieval lose to BM25?”</strong>: exact identifiers, rare domain terms, new vocabulary the encoder never saw, and very short keyword queries; the fix is hybrid retrieval. <strong>“Design RAG over 50M documents with per-user permissions”</strong>: chunk with metadata and ACLs, hybrid index with in-index filtering by the user’s groups, RRF, cross-encoder re-ranking, citations, and an eval set measuring recall and faithfulness (Chapter (genai)).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>TF-IDF weights frequency by rarity; BM25 adds saturation (<span class="math inline">\(k_1\)</span>) and length normalization (<span class="math inline">\(b\)</span>).</p></li>
+<li><p>Dense bi-encoders capture meaning; sparse methods capture exact terms; hybrid plus re-ranking is the default.</p></li>
+<li><p>Vector databases trade recall for speed with IVF, HNSW, and quantization; measure recall against exact search.</p></li>
+<li><p>Filtering strategy and per-query permissions are first-class design decisions.</p></li>
+<li><p>RAG types range from naive to agentic and GraphRAG; add complexity only where measured failures demand it.</p></li>
+</ul>
+</div>

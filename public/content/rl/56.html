@@ -1,0 +1,260 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a teacher who trusts the answer key too much</div>
+<p>A teacher stops correcting answers students already get right, and keeps hammering the ones they get “wrong.” That’s efficient, until the answer key has a typo. Then the teacher spends the most effort drilling students toward the typo. DPO’s gradient behaves the same way on mislabeled pairs.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/993c05e949d2.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Right side: pairs already satisfied (weight goes to 0). Left side: strongly violated pairs, which is where flipped labels end up.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What does a zero DPO preference margin imply?</p></li>
+<li><p>Why is DPO not online reinforcement learning?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-margin-determines-how-strongly-a-pair-learns">2. The margin determines how strongly a pair learns</h3>
+<p>For one preference pair, DPO uses:</p>
+<p><span class="math display">\[L(\Delta)
+=
+-\log\sigma(\beta\Delta)\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[\Delta
+=
+\left[
+\log\frac{\pi_\theta(y_w\mid x)}
+{\pi_{\mathrm{ref}}(y_w\mid x)}
+\right]
+-
+\left[
+\log\frac{\pi_\theta(y_l\mid x)}
+{\pi_{\mathrm{ref}}(y_l\mid x)}
+\right]\]</span></p>
+<p>Its derivative with respect to the margin is:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial\Delta}
+=
+-\beta\sigma(-\beta\Delta)\]</span></p>
+<p>Interpretation:</p>
+<ul>
+<li><p><span class="math inline">\(\Delta&lt;0\)</span>: the policy favors the rejected response relative to the reference, so the pair produces a large correction;</p></li>
+<li><p><span class="math inline">\(\Delta=0\)</span>: the pair is uncertain;</p></li>
+<li><p><span class="math inline">\(\Delta\gg0\)</span>: the preference is already satisfied and its gradient approaches zero.</p></li>
+</ul>
+<p>Gradient descent increases the margin because the derivative is negative.</p>
+<p>The scale <span class="math inline">\(\beta\)</span> controls the steepness:</p>
+<ul>
+<li><p>larger <span class="math inline">\(\beta\)</span>: stronger gradients around uncertain or violated pairs, but faster saturation for correctly ranked pairs;</p></li>
+<li><p>smaller <span class="math inline">\(\beta\)</span>: smoother, weaker pairwise gradients.</p></li>
+</ul>
+<p>This makes incorrect preference labels dangerous. If the policy confidently prefers the genuinely better response but the dataset label is reversed, the mislabeled example has a large negative margin and can keep producing a strong opposing gradient.</p>
+<p>DPO’s <span class="math inline">\(\beta\)</span> is a fixed scale inside its preference loss. It should not be confused with PPO’s adaptive KL coefficient, which is updated from measured online rollout KL.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>chosen and rejected sequence log-probabilities: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>policy-reference scores and margins: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>per-pair losses and margin gradients: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>reduced training loss: scalar</p></li>
+</ul>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the DPO gradient</div>
+<p><span class="math inline">\(\nabla_\theta\mathcal L=-\beta\,\sigma(-\beta\Delta)\big[\nabla\log\pi_\theta(y_w|x)-\nabla\log\pi_\theta(y_l|x)\big]\)</span>, with <span class="math inline">\(\Delta=h_w-h_l\)</span>.</p>
+<ul>
+<li><p><strong>Saturation:</strong> once <span class="math inline">\(\beta\Delta\gg0\)</span>, <span class="math inline">\(\sigma(-\beta\Delta)\to0\)</span>, so satisfied pairs stop teaching.</p></li>
+<li><p><strong>Label noise:</strong> a flipped pair the model “correctly” disagrees with has <span class="math inline">\(\beta\Delta\ll0\)</span>, so its weight goes to 1: maximal push in the wrong direction.</p></li>
+<li><p><strong><span class="math inline">\(\beta\)</span>:</strong> large <span class="math inline">\(\beta\)</span> sharpens both effects. Under label-flip probability <span class="math inline">\(\eta\)</span>, robust variants (cDPO) replace the target 1 with <span class="math inline">\(1-\eta\)</span>.</p></li>
+</ul>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>DPO downweights pairs it already satisfies, and strongly violated pairs dominate.</p></li>
+<li><p>Inspect the largest-loss pairs: that’s where noisy labels steer training.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: a clean pair vs a flipped pair</div>
+<p><span class="math inline">\(\beta=0.5\)</span>. Clean pair with <span class="math inline">\(\Delta=+4\)</span>: weight <span class="math inline">\(\sigma(-2)=0.12\)</span>. Flipped pair (labels wrong, the model disagrees) with <span class="math inline">\(\Delta=-4\)</span>: weight <span class="math inline">\(\sigma(2)=0.88\)</span>. The noisy pair pushes 7.4<span class="math inline">\(\times\)</span> harder than the clean one.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Raising <span class="math inline">\(\beta\)</span> to “learn faster.”</p></li>
+<li><p>Never auditing high-loss pairs.</p></li>
+<li><p>Treating falling DPO loss as proof of better generations.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-inspect-dpo-gradients-directly">3. PyTorch exercise — inspect DPO gradients directly</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.set_default_dtype(torch.float64)
+
+base_margins = torch.tensor([
+    -4.0, -1.0, 0.0, 1.0, 4.0
+])
+
+beta_values = [
+    0.1, 1.0, 5.0
+]
+
+for beta in beta_values:
+    margins = (
+        base_margins.clone()
+        .requires_grad_(True)
+    )
+
+    # TODO 1: Per-pair DPO losses.
+    losses = ...
+
+    # TODO 2: Gradient of the summed loss
+    # with respect to every margin.
+    margin_gradients = ...
+
+    # TODO 3: Analytic derivative.
+    analytic_gradients = ...
+
+    preference_probabilities = (
+        torch.sigmoid(
+            beta * margins.detach()
+        )
+    )
+
+    print(f&quot;\nbeta={beta}&quot;)
+
+    print(&quot;Preference probabilities:&quot;,
+          preference_probabilities)
+
+    print(&quot;Losses:&quot;,
+          losses.detach())
+
+    print(&quot;Autograd dL/dmargin:&quot;,
+          margin_gradients)
+
+    print(&quot;Analytic dL/dmargin:&quot;,
+          analytic_gradients)
+
+    print(
+        &quot;Maximum derivative error:&quot;,
+        (
+            margin_gradients
+            - analytic_gradients
+        ).abs().max().item(),
+    )
+
+# Compare a correct confident label with the same pair flipped.
+beta = 1.0
+
+correct_margin = torch.tensor(
+    4.0,
+    requires_grad=True,
+)
+
+flipped_margin = torch.tensor(
+    -4.0,
+    requires_grad=True,
+)
+
+# TODO 4: Stable losses for the correct and flipped labels.
+correct_loss = ...
+flipped_loss = ...
+
+# TODO 5: Their margin gradients.
+correct_gradient = ...
+flipped_gradient = ...
+
+print(&quot;\nLabel-noise comparison&quot;)
+print(&quot;Correct confident pair:&quot;,
+      correct_loss.item(),
+      correct_gradient.item())
+
+print(&quot;Flipped confident pair:&quot;,
+      flipped_loss.item(),
+      flipped_gradient.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>For <span class="math inline">\(\Delta=4\)</span>, which <span class="math inline">\(\beta\)</span> produces the smallest gradient magnitude?</p></li>
+<li><p>For <span class="math inline">\(\Delta=-4\)</span>, which <span class="math inline">\(\beta\)</span> produces the largest correction?</p></li>
+<li><p>What is the margin gradient when <span class="math inline">\(\Delta=0\)</span>?</p></li>
+<li><p>Which produces more loss: a confident correct pair or the same label reversed?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> -F.logsigmoid(beta * margins)</code></span>.</p></li>
+<li><p>Differentiate <span style="background-color: codeinlinebg"><code> losses.sum()</code></span> to obtain one gradient per pair without a batch-mean scale.</p></li>
+<li><p>The analytic derivative is <span style="background-color: codeinlinebg"><code> -beta * sigmoid(-beta * margin)</code></span>.</p></li>
+<li><p>A flipped label reverses the sign of the margin.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.autograd.grad</code></span> separately for the two scalar losses.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Replace <span style="background-color: codeinlinebg"><code> logsigmoid</code></span> with:</p>
+<pre class="code python"><code class="language-python">-torch.log(
+    torch.sigmoid(beta * margins)
+)</code></pre>
+<p>For large negative <span style="background-color: codeinlinebg"><code> beta * margin</code></span>, <span style="background-color: codeinlinebg"><code> sigmoid</code></span> can underflow and produce infinite loss.</p>
+<p>Next, average the loss over batches of very different sizes and compare raw gradient norms. A summed loss scales with pair count; a mean loss does not.</p>
+<p>Finally, insert one incorrectly labeled pair with a very large negative margin. Inspect whether it dominates the batch gradient despite high average preference accuracy.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why do confidently correct pairs eventually contribute little gradient?</p></li>
+<li><p>Why can increasing <span class="math inline">\(\beta\)</span> make label noise more damaging?</p></li>
+<li><p>Does low DPO training loss prove that the preference dataset is correct?</p></li>
+<li><p>Which per-pair diagnostics help identify noisy preferences?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Per-pair losses:</p>
+<pre class="code python"><code class="language-python">losses = -F.logsigmoid(
+    beta * margins
+)</code></pre>
+<p>Autograd derivative:</p>
+<pre class="code python"><code class="language-python">margin_gradients = torch.autograd.grad(
+    losses.sum(),
+    margins,
+)[0]</code></pre>
+<p>Analytic derivative:</p>
+<pre class="code python"><code class="language-python">analytic_gradients = -(
+    beta
+    * torch.sigmoid(
+        -beta * margins.detach()
+    )
+)</code></pre>
+<p>Correct and flipped losses:</p>
+<pre class="code python"><code class="language-python">correct_loss = -F.logsigmoid(
+    beta * correct_margin
+)
+
+flipped_loss = -F.logsigmoid(
+    beta * flipped_margin
+)</code></pre>
+<p>Their gradients:</p>
+<pre class="code python"><code class="language-python">correct_gradient = torch.autograd.grad(
+    correct_loss,
+    correct_margin,
+)[0]
+
+flipped_gradient = torch.autograd.grad(
+    flipped_loss,
+    flipped_margin,
+)[0]</code></pre>
+<p>At zero margin:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial\Delta}
+=
+-\beta\sigma(0)
+=
+-\frac{\beta}{2}\]</span></p>
+<p>For a confidently correct margin:</p>
+<p><span class="math display">\[\Delta=4\]</span></p>
+<p>the gradient magnitude approaches zero as <span class="math inline">\(\beta\Delta\)</span> becomes large.</p>
+<p>For the flipped label:</p>
+<p><span class="math display">\[\Delta=-4\]</span></p>
+<p>the gradient approaches:</p>
+<p><span class="math display">\[-\beta\]</span></p>
+<p>Thus, the incorrect label can produce a much larger gradient than the correctly labeled version of the same comparison.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Its implied preference probability is already near one, so the logistic loss is saturated.</p></li>
+<li><p>Larger <span class="math inline">\(\beta\)</span> increases the maximum correction from a strongly violated pair and can let mislabeled outliers dominate.</p></li>
+<li><p>No. The model can fit systematic annotation errors, positional biases or confounded preferences.</p></li>
+<li><p>Log margin and loss distributions, low-margin and negative-margin examples, per-pair gradient magnitude, annotator disagreement, response length and results grouped by data source.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A zero margin gives <span class="math inline">\(\sigma(0)=0.5\)</span>: the policy has not improved the chosen response over the rejected response relative to the reference.</p></li>
+<li><p>It trains on fixed labeled response pairs without fresh rollouts, environment rewards, exploration, advantages or a critic.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> DPO automatically downweights preferences it already satisfies, but strongly violated pairs remain influential. Inspect the largest-loss and largest-gradient pairs—those are exactly where mislabeled data can steer training hardest.</p>

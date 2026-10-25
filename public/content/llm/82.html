@@ -1,0 +1,392 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Calibration:</strong> a model is calibrated if, among predictions made with confidence 0.8, about 80% are right. <strong>ECE</strong> measures the average gap between confidence and accuracy across confidence bins. <strong>Temperature scaling</strong> divides all logits by one learned <span class="math inline">\(T&gt;0\)</span>: it softens (<span class="math inline">\(T&gt;1\)</span>) or sharpens (<span class="math inline">\(T&lt;1\)</span>) confidence without changing which class is predicted.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why can multiplying logits change selective coverage without changing top-1 accuracy?</p></li>
+<li><p>Why must selective risk be reported together with coverage?</p></li>
+</ol>
+<p>A classifier is calibrated when predictions made with confidence <span class="math inline">\(q\)</span> are correct approximately <span class="math inline">\(q\)</span> of the time:</p>
+<p><span class="math display">\[P(Y=\hat Y\mid S=q)\approx q\]</span></p>
+<p>For logits:</p>
+<p><span class="math display">\[Z\in\mathbb{R}^{N\times C}\]</span></p>
+<p>define:</p>
+<p><span class="math display">\[p_i=\operatorname{softmax}(Z_i),\qquad
+\hat y_i=\arg\max_c p_{ic},\qquad
+s_i=\max_c p_{ic}\]</span></p>
+<p>Expected Calibration Error partitions confidence into <span class="math inline">\(B\)</span> bins:</p>
+<p><span class="math display">\[\operatorname{ECE}
+=
+\sum_{b=1}^{B}
+\frac{|I_b|}{N}
+\left|
+\operatorname{acc}(I_b)
+-
+\operatorname{conf}(I_b)
+\right|\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[\operatorname{acc}(I_b)
+=
+\frac1{|I_b|}
+\sum_{i\in I_b}\mathbf1[\hat y_i=y_i]\]</span></p>
+<p><span class="math display">\[\operatorname{conf}(I_b)
+=
+\frac1{|I_b|}
+\sum_{i\in I_b}s_i\]</span></p>
+<p>Temperature scaling learns one positive scalar <span class="math inline">\(T\)</span>:</p>
+<p><span class="math display">\[p_i(T)=\operatorname{softmax}\left(\frac{Z_i}{T}\right)\]</span></p>
+<ul>
+<li><p><span class="math inline">\(T&gt;1\)</span>: softer, less confident probabilities.</p></li>
+<li><p><span class="math inline">\(T&lt;1\)</span>: sharper, more confident probabilities.</p></li>
+<li><p>Positive <span class="math inline">\(T\)</span> preserves class ranking and therefore top-1 predictions.</p></li>
+</ul>
+<p>Fit <span class="math inline">\(T\)</span> on calibration data by minimizing negative log-likelihood, then evaluate it once on untouched test data. ECE itself is bin-dependent and nondifferentiable, so it is usually a diagnostic rather than the fitting objective.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: fitting the temperature</div>
+<p><strong>Step 1.</strong> Calibrated probabilities <span class="math inline">\(p=\operatorname{softmax}(z/T)\)</span>. Dividing by <span class="math inline">\(T&gt;0\)</span> doesn’t change the argmax, so accuracy is untouched.</p>
+<p><strong>Step 2.</strong> Fit <span class="math inline">\(T\)</span> by minimizing validation NLL: <span class="math inline">\(\ell(T)=\LSE(z/T)-z_y/T\)</span>.</p>
+<p><strong>Step 3.</strong> Let <span class="math inline">\(u=z/T\)</span>, so <span class="math inline">\(\frac{\partial u_c}{\partial T}=-\frac{z_c}{T^2}\)</span>. With <span class="math inline">\(\frac{\partial\ell}{\partial u}=p-\onehot(y)\)</span>: <span class="math inline">\(\frac{d\ell}{dT}=\sum_c(p_c-\mathbb 1[c=y])\Big(-\frac{z_c}{T^2}\Big)=\frac{z_y-\mathbb E_p[z]}{T^2}\)</span>.</p>
+<p><strong>Step 4.</strong> The optimum sets the average of <span class="math inline">\(z_y-\mathbb E_p[z]\)</span> over the validation set to 0: the true-class logit equals, on average, the model’s own expected logit. Overconfident models have <span class="math inline">\(z_y&lt;\mathbb E_p[z]\)</span> on average (the confident wrong answers), so <span class="math inline">\(d\ell/dT&lt;0\)</span> at <span class="math inline">\(T=1\)</span> and <span class="math inline">\(T\)</span> grows.</p>
+<p><strong>Step 5.</strong> <strong>ECE:</strong> <span class="math inline">\(\sum_b\frac{|I_b|}{N}|\operatorname{acc}_b-\operatorname{conf}_b|\)</span>. Example: two equal bins with (conf, acc) <span class="math inline">\((0.9,0.7)\)</span> and <span class="math inline">\((0.6,0.6)\)</span>: ECE <span class="math inline">\(=0.5(0.2)+0.5(0)=0.10\)</span>.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: temperature scaling</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> validation logits <span class="math inline">\(Z\)</span>, labels <span class="math inline">\(y\)</span> (not used in training)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\log T\gets0\)</span> <em>▷ optimize <span class="math inline">\(\log T\)</span> so <span class="math inline">\(T&gt;0\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>repeat</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(L\gets\operatorname{mean}_i\big(\LSE(Z_i/T)-Z_{i,y_i}/T\big)\)</span>; step on <span class="math inline">\(\log T\)</span> (e.g. LBFGS)</div>
+<div class="algo-line" style="--d:0"><strong>until</strong> converged</div>
+<div class="algo-line" style="--d:0">apply <span class="math inline">\(\operatorname{softmax}(Z/T)\)</span> at test time; report ECE before and after</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement ECE efficiently and calibrate deliberately overconfident logits.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(351)
+
+N, C = 6_000, 4
+split = 3_000
+num_bins = 10
+
+# Labels are sampled from this true categorical distribution.
+true_logits = (
+    1.2 * torch.randn(N, C)
+)                                                   # [N,C]
+
+labels = torch.distributions.Categorical(
+    logits=true_logits
+).sample()                                          # [N]
+
+# Same ranking, but probabilities are too sharp.
+model_logits = (
+    2.5 * true_logits
+)                                                   # [N,C]
+
+calibration_logits = ...                            # TODO 1
+calibration_labels = ...                            # TODO 2
+
+test_logits = ...                                   # TODO 3
+test_labels = ...                                   # TODO 4</code></pre>
+<p>Implement ECE without looping over individual examples:</p>
+<pre class="code python"><code class="language-python">def expected_calibration_error(
+    logits,
+    labels,
+    num_bins=10,
+):
+    probabilities = ...                             # TODO 5: [N,C]
+
+    confidence, predictions = ...                   # TODO 6: [N], [N]
+    correct = ...                                   # TODO 7: [N] float
+
+    edges = torch.linspace(
+        0.0,
+        1.0,
+        num_bins + 1,
+        device=logits.device,
+    )
+
+    bin_ids = ...                                   # TODO 8: [N]
+
+    counts = torch.bincount(
+        bin_ids,
+        minlength=num_bins,
+    ).to(logits.dtype)                              # [B]
+
+    confidence_sum = torch.zeros(
+        num_bins,
+        device=logits.device,
+    )
+
+    accuracy_sum = torch.zeros_like(
+        confidence_sum
+    )
+
+    confidence_sum.scatter_add_(
+        dim=0,
+        index=bin_ids,
+        src=confidence,
+    )
+
+    accuracy_sum.scatter_add_(
+        dim=0,
+        index=bin_ids,
+        src=correct,
+    )
+
+    safe_counts = ...                               # TODO 9
+
+    bin_confidence = ...                            # TODO 10
+    bin_accuracy = ...                              # TODO 11
+    bin_weights = ...                               # TODO 12
+
+    ece = ...                                       # TODO 13
+
+    return ece, bin_accuracy, bin_confidence, counts
+
+
+raw_ece, raw_accuracy, raw_confidence, counts = (
+    expected_calibration_error(
+        test_logits,
+        test_labels,
+        num_bins,
+    )
+)
+
+print(&quot;raw test ECE:&quot;, raw_ece.item())</code></pre>
+<p>Fit the temperature using calibration-set NLL:</p>
+<pre class="code python"><code class="language-python">temperatures = torch.linspace(
+    0.5,
+    4.0,
+    71,
+)                                                   # [K]
+
+scaled_calibration_logits = (                       # TODO 14: [K,N,C]
+    ...
+)
+
+log_probabilities = ...                             # TODO 15: [K,N,C]
+
+expanded_labels = calibration_labels[None, :, None].expand(
+    temperatures.numel(),
+    -1,
+    1,
+)                                                   # [K,N,1]
+
+selected_logp = ...                                 # TODO 16: [K,N]
+
+temperature_nll = ...                               # TODO 17: [K]
+
+best_index = ...                                    # TODO 18
+best_temperature = ...                              # TODO 19
+
+print(&quot;selected temperature:&quot;,
+      best_temperature.item())</code></pre>
+<p>Evaluate on the untouched test partition:</p>
+<pre class="code python"><code class="language-python">calibrated_test_logits = ...                        # TODO 20
+
+calibrated_ece, calibrated_accuracy, \
+calibrated_confidence, calibrated_counts = (
+    expected_calibration_error(
+        calibrated_test_logits,
+        test_labels,
+        num_bins,
+    )
+)
+
+raw_predictions = test_logits.argmax(dim=-1)
+calibrated_predictions = calibrated_test_logits.argmax(dim=-1)
+
+print(&quot;calibrated test ECE:&quot;,
+      calibrated_ece.item())
+
+print(
+    &quot;predictions unchanged:&quot;,
+    torch.equal(
+        raw_predictions,
+        calibrated_predictions,
+    ),
+)
+
+assert torch.equal(
+    raw_predictions,
+    calibrated_predictions,
+)
+
+assert calibrated_ece &lt; raw_ece</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Should the selected temperature be closer to <span class="math inline">\(1\)</span> or <span class="math inline">\(2.5\)</span>?</p></li>
+<li><p>Will test accuracy change?</p></li>
+<li><p>Will a fixed <span class="math inline">\(0.9\)</span> confidence threshold accept the same examples after calibration?</p></li>
+</ul>
+<p>Hints:</p>
+<ul>
+<li><p>Split tensors with <span><code>[</code></span><code>:split</code><span><code>]</code></span> and <span><code>[</code></span><code>split:</code><span><code>]</code></span>.</p></li>
+<li><p>Use <code>torch.bucketize(confidence, edges</code><span><code>[</code></span><code>1:-1</code><span><code>]</code></span><code>)</code>.</p></li>
+<li><p>Clamp counts to at least one before division.</p></li>
+<li><p>Bin weights are <code>counts / logits.shape</code><span><code>[</code></span><code>0</code><span><code>]</code></span>.</p></li>
+<li><p>Scale all calibration logits at once using two <code>unsqueeze</code> operations.</p></li>
+<li><p>Gather the label log-probability along the final dimension.</p></li>
+<li><p>NLL reduces over examples, not candidate temperatures.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does positive temperature scaling preserve top-1 predictions?</p></li>
+<li><p>Prediction: what does <span class="math inline">\(T\to\infty\)</span> do to the class probabilities?</p></li>
+<li><p>Why is low ECE insufficient evidence that a model is well calibrated everywhere?</p></li>
+<li><p>Debugging: ECE changes substantially when using 10 versus 20 bins. What property of ECE causes this?</p></li>
+<li><p>Why must temperature be fitted on calibration data rather than the reported test benchmark?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<p>Dataset split:</p>
+<pre class="code python"><code class="language-python">calibration_logits = model_logits[:split]
+calibration_labels = labels[:split]
+
+test_logits = model_logits[split:]
+test_labels = labels[split:]</code></pre>
+<p>ECE:</p>
+<pre class="code python"><code class="language-python">def expected_calibration_error(
+    logits,
+    labels,
+    num_bins=10,
+):
+    probabilities = F.softmax(
+        logits,
+        dim=-1,
+    )
+
+    confidence, predictions = probabilities.max(
+        dim=-1
+    )
+
+    correct = predictions.eq(labels).to(logits.dtype)
+
+    edges = torch.linspace(
+        0.0,
+        1.0,
+        num_bins + 1,
+        device=logits.device,
+    )
+
+    bin_ids = torch.bucketize(
+        confidence,
+        edges[1:-1],
+    )
+
+    counts = torch.bincount(
+        bin_ids,
+        minlength=num_bins,
+    ).to(logits.dtype)
+
+    confidence_sum = torch.zeros(
+        num_bins,
+        device=logits.device,
+    )
+
+    accuracy_sum = torch.zeros_like(
+        confidence_sum
+    )
+
+    confidence_sum.scatter_add_(
+        dim=0,
+        index=bin_ids,
+        src=confidence,
+    )
+
+    accuracy_sum.scatter_add_(
+        dim=0,
+        index=bin_ids,
+        src=correct,
+    )
+
+    safe_counts = counts.clamp_min(1.0)
+
+    bin_confidence = (
+        confidence_sum / safe_counts
+    )
+
+    bin_accuracy = (
+        accuracy_sum / safe_counts
+    )
+
+    bin_weights = (
+        counts / logits.shape[0]
+    )
+
+    ece = (
+        bin_weights
+        * (bin_accuracy - bin_confidence).abs()
+    ).sum()
+
+    return ece, bin_accuracy, bin_confidence, counts</code></pre>
+<p>Temperature search:</p>
+<pre class="code python"><code class="language-python">scaled_calibration_logits = (
+    calibration_logits.unsqueeze(0)
+    / temperatures[:, None, None]
+)
+
+log_probabilities = F.log_softmax(
+    scaled_calibration_logits,
+    dim=-1,
+)
+
+selected_logp = log_probabilities.gather(
+    dim=-1,
+    index=expanded_labels,
+).squeeze(-1)
+
+temperature_nll = -selected_logp.mean(
+    dim=1
+)
+
+best_index = temperature_nll.argmin()
+
+best_temperature = temperatures[
+    best_index
+]</code></pre>
+<p>Test evaluation:</p>
+<pre class="code python"><code class="language-python">calibrated_test_logits = (
+    test_logits / best_temperature
+)</code></pre>
+<p>The reported logits were constructed as:</p>
+<p><span class="math display">\[Z_{\text{model}}=2.5Z_{\text{true}}\]</span></p>
+<p>Dividing by <span class="math inline">\(T\approx2.5\)</span> approximately recovers the data-generating probabilities:</p>
+<p><span class="math display">\[\frac{Z_{\text{model}}}{2.5}
+=
+Z_{\text{true}}\]</span></p>
+<p>Accuracy stays unchanged because division by a positive scalar preserves logit ordering. Confidence and threshold-based behavior do change.</p>
+<p>ECE has several limitations:</p>
+<ul>
+<li><p>it depends on the number and placement of bins;</p></li>
+<li><p>large groups can hide severe errors in small subgroups;</p></li>
+<li><p>positive and negative calibration errors within one bin are averaged;</p></li>
+<li><p>a finite sample may leave high-confidence bins sparse;</p></li>
+<li><p>low ECE says nothing about accuracy or distribution shift.</p></li>
+</ul>
+<p>For safety-oriented evaluation, report reliability by important context and entity type, not only one aggregate ECE.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Dividing every class logit by the same positive number preserves their ordering and <code>argmax</code>.</p></li>
+<li><p>All scaled logits approach zero, so softmax approaches the uniform distribution <span class="math inline">\(1/C\)</span>.</p></li>
+<li><p>Aggregate bins can hide subgroup, local, and high-confidence miscalibration.</p></li>
+<li><p>ECE is a discretized approximation whose result depends on bin boundaries and sample counts.</p></li>
+<li><p>Selecting <span class="math inline">\(T\)</span> on the test set adapts the system to test labels, leaking evaluation information and producing optimistic calibration estimates.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Logit scaling changes probability sharpness and therefore threshold crossings without changing the largest logit.</p></li>
+<li><p>Selective risk alone rewards excessive abstention; coverage states how often the system actually answers.</p></li>
+</ul>

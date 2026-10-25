@@ -1,0 +1,359 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>If task rewards are multiplied by <span class="math inline">\(c\)</span>, how should the KL coefficient change to preserve the same trade-off?</p></li>
+<li><p>Why should advantage normalization not silently redefine the critic’s raw return target?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-verifier-answers-did-it-work">2. A verifier answers “did it work?”</h3>
+<p>For mathematics, code and structured tasks, a deterministic verifier can produce:</p>
+<p><span class="math display">\[R(x,y)
+=
+\underbrace{
+\mathbf 1[v(x,y)=\text{pass}]
+}_{1\text{ if the answer passes; otherwise }0}\]</span></p>
+<p>Examples include exact answers, unit tests, theorem checkers and schema validators.</p>
+<p>The policy objective becomes success probability:</p>
+<p><span class="math display">\[J(\theta)
+=
+\underbrace{
+E_{y\sim\pi_\theta(\cdot\mid x)}
+[R(x,y)]
+}_{P_{\pi_\theta}(\text{success})}\]</span></p>
+<p>A policy-gradient estimate is:</p>
+<p><span class="math display">\[\nabla_\theta J
+\approx
+\underbrace{
+(R-b)
+}_{\text{success relative to baseline}}
+\underbrace{
+\nabla_\theta\log\pi_\theta(y\mid x)
+}_{\text{increase or decrease completion probability}}\]</span></p>
+<p>Verification avoids subjective reward-model scaling, but binary rewards are sparse. If every sampled completion fails, the batch reveals no successful behaviour to reinforce.</p>
+<p>Sampling <span class="math inline">\(K\)</span> independent completions from a policy with per-sample success probability <span class="math inline">\(p\)</span> gives:</p>
+<p><span class="math display">\[\operatorname{pass@}K
+=
+\underbrace{
+1-(1-p)^K
+}_{\text{probability that at least one sample succeeds}}\]</span></p>
+<p>Pass@<span class="math inline">\(K\)</span> may look strong even when pass@1 is poor. It measures a policy-plus-search system, not single-completion reliability.</p>
+<p>For <span class="math inline">\(K\)</span> completions of the same prompt, a group contains useful relative information only when some pass and some fail:</p>
+<p><span class="math display">\[P(0&lt;S&lt;K)
+=
+\underbrace{
+1-(1-p)^K-p^K
+}_{\text{not all failures and not all successes}}\]</span></p>
+<p>Hard prompts produce mostly all-failure groups; easy prompts produce mostly all-success groups. Both yield zero centered advantage.</p>
+<p>A within-prompt standardized signal is:</p>
+<p><span class="math display">\[A_{ij}
+=
+\underbrace{
+\frac{
+R_{ij}-\bar R_i
+}{
+\sqrt{
+\frac1K\sum_j(R_{ij}-\bar R_i)^2+\epsilon
+}
+}
+}_{\text{completion }j\text{ relative to the same prompt}}\]</span></p>
+<p>This will become useful for group-relative optimization, but normalization cannot create information when all rewards are equal.</p>
+<p>Verifier correctness is crucial. A policy will exploit:</p>
+<ul>
+<li><p>incomplete unit tests;</p></li>
+<li><p>parser ambiguities;</p></li>
+<li><p>accepted exceptions or timeouts;</p></li>
+<li><p>floating-point tolerances;</p></li>
+<li><p>answer leakage or formatting shortcuts.</p></li>
+</ul>
+<p>DPO instead learns from frozen preferred/rejected pairs. Verifier-based online RL generates new completions and can discover new successes—or new verifier exploits.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>success probabilities: <span style="background-color: codeinlinebg"><code> [P]</code></span></p></li>
+<li><p>sampled verifier outcomes: <span style="background-color: codeinlinebg"><code> [N, P, K]</code></span></p></li>
+<li><p>one rollout group’s rewards and advantages: <span style="background-color: codeinlinebg"><code> [P, K]</code></span></p></li>
+<li><p>toy completion-policy logits: <span style="background-color: codeinlinebg"><code> [P, K, A]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-when-does-a-group-contain-learning-signal">3. PyTorch exercise — when does a group contain learning signal?</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_prompts = 5
+group_size = 8
+num_trials = 20_000
+
+success_probabilities = torch.tensor([
+    0.02,  # very hard
+    0.10,
+    0.30,
+    0.60,
+    0.90,  # very easy
+])
+
+# TODO 1: Simulate K completions per prompt.
+simulated_successes = ...
+
+empirical_pass_at_1 = ...
+
+empirical_pass_at_k = ...
+
+# TODO 2: Probability that a group contains
+# both successes and failures.
+success_counts = ...
+
+empirical_mixed_group_rate = ...
+
+theoretical_pass_at_k = ...
+
+theoretical_mixed_group_rate = ...
+
+# One deterministic rollout batch for gradient inspection.
+batch_rewards = torch.tensor([
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 1, 0, 1, 0, 0, 1, 0],
+    [1, 0, 1, 1, 0, 1, 1, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+], dtype=torch.float64)
+
+# TODO 3: Group-relative standardized advantages.
+group_means = ...
+
+centered_rewards = ...
+
+group_variances = ...
+
+group_advantages = ...
+
+informative_groups = ...
+
+# Toy policy over two completion types.
+policy_logits = torch.nn.Parameter(
+    torch.zeros(
+        num_prompts,
+        group_size,
+        2,
+    )
+)
+
+sampled_actions = (
+    torch.arange(group_size)[None, :]
+    .expand(num_prompts, -1)
+    % 2
+)
+
+distribution = torch.distributions.Categorical(
+    logits=policy_logits
+)
+
+chosen_log_probabilities = (
+    distribution.log_prob(sampled_actions)
+)
+
+# TODO 4: Relative policy-gradient loss.
+actor_loss = ...
+
+actor_loss.backward()
+
+group_gradient_norms = (
+    policy_logits.grad
+    .flatten(start_dim=1)
+    .norm(dim=1)
+)
+
+# TODO 5: Diagnostics.
+centered_sum_error = ...
+
+largest_uniform_group_gradient = ...
+
+print(&quot;p:&quot;, success_probabilities)
+print(&quot;Empirical pass@1:&quot;, empirical_pass_at_1)
+print(&quot;Empirical pass@K:&quot;, empirical_pass_at_k)
+print(&quot;Theory pass@K:&quot;, theoretical_pass_at_k)
+
+print(
+    &quot;Empirical mixed-group rate:&quot;,
+    empirical_mixed_group_rate,
+)
+print(
+    &quot;Theory mixed-group rate:&quot;,
+    theoretical_mixed_group_rate,
+)
+
+print(&quot;Group rewards:\n&quot;, batch_rewards)
+print(&quot;Group advantages:\n&quot;, group_advantages)
+print(&quot;Informative groups:&quot;, informative_groups)
+print(&quot;Gradient norms:&quot;, group_gradient_norms)
+
+print(
+    &quot;Centered-sum error:&quot;,
+    centered_sum_error.item(),
+)
+print(
+    &quot;Largest uniform-group gradient:&quot;,
+    largest_uniform_group_gradient.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will <span style="background-color: codeinlinebg"><code> pass@8</code></span> be much larger than <span style="background-color: codeinlinebg"><code> pass@1</code></span> for <span class="math inline">\(p=0.10\)</span>?</p></li>
+<li><p>Which prompts frequently produce all-failure groups?</p></li>
+<li><p>Can an all-success group train a centered relative objective?</p></li>
+<li><p>Should uniform groups have nonzero policy gradients?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample with <span style="background-color: codeinlinebg"><code> torch.rand(N, P, K) &lt; p[None, :, None]</code></span>.</p></li>
+<li><p>Pass@1 is the average of all individual samples.</p></li>
+<li><p>Pass@K uses <span style="background-color: codeinlinebg"><code> .any(dim=2)</code></span>.</p></li>
+<li><p>A mixed group satisfies <span style="background-color: codeinlinebg"><code> 0 &lt; success_count &lt; K</code></span>.</p></li>
+<li><p>Theoretical mixed probability subtracts both all-failure and all-success probabilities.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> unbiased=False</code></span> logic: mean squared deviation.</p></li>
+<li><p>Apply <span style="background-color: codeinlinebg"><code> .detach()</code></span> to advantages in the actor loss.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Report pass@<span class="math inline">\(K\)</span> as though it were pass@1 accuracy.</p></li>
+<li><p>Normalize across unrelated prompts rather than within each prompt.</p></li>
+<li><p>Divide by a zero group standard deviation without an epsilon.</p></li>
+<li><p>Keep resampling only successful outputs and lose the actual deployment distribution.</p></li>
+<li><p>Treat verifier exceptions or timeouts as passes.</p></li>
+<li><p>Assume deterministic verification implies the specification is complete.</p></li>
+<li><p>Hide all-failure group frequency behind overall average reward.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can increasing <span class="math inline">\(K\)</span> improve pass@<span class="math inline">\(K\)</span> without improving the policy?</p></li>
+<li><p>Why do all-failure and all-success groups have zero relative advantage?</p></li>
+<li><p>What is the practical cost of increasing <span class="math inline">\(K\)</span>?</p></li>
+<li><p>Why can a highly accurate but incomplete verifier still cause reward hacking?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Simulation and pass rates:</p>
+<pre class="code python"><code class="language-python">simulated_successes = (
+    torch.rand(
+        num_trials,
+        num_prompts,
+        group_size,
+    )
+    &lt; success_probabilities[
+        None, :, None
+    ]
+)
+
+empirical_pass_at_1 = (
+    simulated_successes
+    .to(torch.float64)
+    .mean(dim=(0, 2))
+)
+
+empirical_pass_at_k = (
+    simulated_successes
+    .any(dim=2)
+    .to(torch.float64)
+    .mean(dim=0)
+)</code></pre>
+<p>Mixed-group probabilities:</p>
+<pre class="code python"><code class="language-python">success_counts = (
+    simulated_successes.sum(dim=2)
+)
+
+empirical_mixed_group_rate = (
+    (
+        (success_counts &gt; 0)
+        &amp; (success_counts &lt; group_size)
+    )
+    .to(torch.float64)
+    .mean(dim=0)
+)
+
+theoretical_pass_at_k = (
+    1.0
+    - (
+        1.0
+        - success_probabilities
+    ).pow(group_size)
+)
+
+theoretical_mixed_group_rate = (
+    1.0
+    - (
+        1.0
+        - success_probabilities
+    ).pow(group_size)
+    - success_probabilities.pow(group_size)
+)</code></pre>
+<p>Group advantages:</p>
+<pre class="code python"><code class="language-python">group_means = batch_rewards.mean(
+    dim=1,
+    keepdim=True,
+)
+
+centered_rewards = (
+    batch_rewards
+    - group_means
+)
+
+group_variances = (
+    centered_rewards.square().mean(
+        dim=1,
+        keepdim=True,
+    )
+)
+
+group_advantages = (
+    centered_rewards
+    / torch.sqrt(
+        group_variances + 1e-8
+    )
+).detach()
+
+informative_groups = (
+    group_variances.squeeze(1) &gt; 0.0
+)</code></pre>
+<p>Actor loss:</p>
+<pre class="code python"><code class="language-python">actor_loss = -(
+    group_advantages
+    * chosen_log_probabilities
+).mean()</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">centered_sum_error = (
+    group_advantages.sum(dim=1)
+).abs().max()
+
+uniform_groups = ~informative_groups
+
+largest_uniform_group_gradient = (
+    group_gradient_norms[
+        uniform_groups
+    ].max()
+)</code></pre>
+<p>For <span class="math inline">\(p=0.10\)</span> and <span class="math inline">\(K=8\)</span>:</p>
+<p><span class="math display">\[\operatorname{pass@8}
+=
+\underbrace{
+1-0.9^8
+}_{\text{at least one success}}
+\approx0.570\]</span></p>
+<p>Yet pass@1 remains only <span class="math inline">\(0.10\)</span>. Sampling found more opportunities; the underlying per-completion policy did not improve.</p>
+<p>For <span class="math inline">\(p=0.02\)</span>:</p>
+<p><span class="math display">\[P(\text{mixed group})
+=
+1-0.98^8-0.02^8
+\approx0.149\]</span></p>
+<p>Most groups still contain no successful example. Conversely, at <span class="math inline">\(p=0.90\)</span>, many groups are all successes. The first and last deterministic groups therefore have zero advantages and zero gradients.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>More samples increase the chance that at least one succeeds even if the single-sample distribution is unchanged.</p></li>
+<li><p>Subtracting the group mean gives every member zero when all rewards are identical; there is no within-prompt ranking information.</p></li>
+<li><p>Generation and verification cost grow approximately linearly with <span class="math inline">\(K\)</span>, while large groups also increase memory and rollout latency.</p></li>
+<li><p>The policy optimizes what the verifier checks. Any untested requirement becomes a potential shortcut even if checked cases are scored perfectly.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Set the new coefficient to <span class="math inline">\(c\beta\)</span>; then the entire shaped objective is multiplied by <span class="math inline">\(c\)</span> without changing the task–KL trade-off.</p></li>
+<li><p>The critic should predict the real shaped-return scale. Moving normalized targets would make its units batch-dependent and obscure calibration.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> verifiable rewards are objective only relative to the verifier’s specification. Sampling more completions helps expose rare successes, but pass@<span class="math inline">\(K\)</span> is not pass@1—and groups with no outcome diversity provide no relative learning signal.</p>

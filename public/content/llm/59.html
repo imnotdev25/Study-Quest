@@ -1,0 +1,49 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>At scale, training fails in a few recurring ways: attention logits explode, one head dumps all its attention on the first token, outputs grow without bound, and residual streams lose signal through depth. Each trick in this chapter targets one of these with a small piece of math.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: QK-norm, softcapping, z-loss and attention sinks</div>
+<p><strong>Step 1.</strong> <strong>QK-norm</strong> (Qwen3, Gemma 3/4, DeepSeek-V4): RMSNorm <span class="math inline">\(q\)</span> and <span class="math inline">\(k\)</span> per head before the dot product. A normalized vector has <span class="math inline">\(\|\hat x\|_2=\sqrt d\)</span>, so by Cauchy–Schwarz <span class="math inline">\(|q^\top k|\le d\,\max|\gamma_q|\max|\gamma_k|\)</span>: logits can’t grow just because the projection weights do.</p>
+<p><strong>Step 2.</strong> <strong>Logit softcapping</strong> (Gemma 2; Gemma 4 keeps a final cap of 30): <span class="math inline">\(z\mapsto c\tanh(z/c)\)</span>, bounded by <span class="math inline">\(\pm c\)</span>, with derivative <span class="math inline">\(1-\tanh^2(z/c)\approx1\)</span> for <span class="math inline">\(|z|\ll c\)</span>. Gentle for normal logits, a hard ceiling for outliers.</p>
+<p><strong>Step 3.</strong> <strong>z-loss</strong> (PaLM): add <span class="math inline">\(\lambda(\LSE(z))^2\)</span>. Its gradient <span class="math inline">\(2\lambda\LSE(z)\,\operatorname{softmax}(z)\)</span> pushes the log-normalizer toward 0, preventing slow drift of all logits upward.</p>
+<p><strong>Step 4.</strong> <strong>Attention sinks</strong> (gpt-oss, DeepSeek-V4): add one learned logit <span class="math inline">\(z&#39;_h\)</span> per head to the softmax denominator: <span class="math inline">\(a_{ij}=\frac{e^{z_{ij}}}{\sum_ke^{z_{ik}}+e^{z&#39;_h}}\)</span>. Rows can now sum to <em>less</em> than 1, so a head with nothing useful to read can attend to “nothing” instead of piling onto token 0.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/a10a36744c6a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Softcapping (Gemma 4’s final cap <span class="math inline">\(c=30\)</span>): almost the identity for normal logits, a hard ceiling for outliers.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: hyper-connections, and keeping them stable (mHC)</div>
+<p><strong>Step 1.</strong> <strong>Hyper-connections:</strong> widen the residual stream into <span class="math inline">\(n\)</span> parallel copies, <span class="math inline">\(X\in\mathbb R^{n\times D}\)</span>. A layer reads a mix, writes back a mix, and the copies mix with each other: <span class="math inline">\(X_{l+1}=B_lX_l+C_l\,F_l(A_lX_l)\)</span>, with <span class="math inline">\(A_l\in\mathbb R^{1\times n}\)</span>, <span class="math inline">\(B_l\in\mathbb R^{n\times n}\)</span>, <span class="math inline">\(C_l\in\mathbb R^{n\times1}\)</span>.</p>
+<p><strong>Step 2.</strong> Problem: over <span class="math inline">\(L\)</span> layers the stream is multiplied by <span class="math inline">\(B_L\cdots B_1\)</span>. If <span class="math inline">\(\|B_l\|&gt;1\)</span>, signals explode exponentially in depth, and if <span class="math inline">\(&lt;1\)</span>, they vanish.</p>
+<p><strong>Step 3.</strong> <strong>mHC</strong> (DeepSeek, used in V4 with <span class="math inline">\(n=4\)</span>) constrains <span class="math inline">\(B_l\)</span> to be <strong>doubly stochastic</strong>: entries <span class="math inline">\(\ge0\)</span>, every row and column sums to 1.</p>
+<p><strong>Step 4.</strong> Such a matrix is a convex combination of permutation matrices (Birkhoff), each with spectral norm 1, so <span class="math inline">\(\|B_l\|_2\le1\)</span>. Doubly stochastic matrices are closed under products, so <span class="math inline">\(\|B_L\cdots B_1\|_2\le1\)</span> for any depth. Mixing can’t blow up.</p>
+<p><strong>Step 5.</strong> <strong>Getting one:</strong> Sinkhorn–Knopp. Start from <span class="math inline">\(M=e^{\tilde B}\)</span> (positive), alternately divide by column sums and row sums. V4 runs 20 iterations (<code>hc_sinkhorn_iters: 20</code>); the check below reaches row and column sums of 1 and <span class="math inline">\(\|M\|_2=1.000\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Attention residuals</strong> (Kimi K3) take a different route along depth: each layer computes a softmax-weighted average over the outputs of earlier layers, <span class="math inline">\(h_l=\sum_{i&lt;l}\alpha_{i\to l}v_i\)</span>, with weights from a learned per-layer query, done over 8 blocks of 12 layers to keep memory <span class="math inline">\(O(ND)\)</span> instead of <span class="math inline">\(O(LD)\)</span>.</p>
+</div>
+<pre class="code text"><code class="language-plaintext">import torch
+
+M = torch.exp(torch.randn(4, 4, dtype=torch.float64))   # positive start
+for _ in range(20):                                      # Sinkhorn-Knopp
+    M = M / M.sum(0, keepdim=True)                       # columns sum to 1
+    M = M / M.sum(1, keepdim=True)                       # rows sum to 1
+print(M.sum(1), M.sum(0), torch.linalg.matrix_norm(M, 2))  # ~1s, spectral norm ~1.0</code></pre>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/a9860132ff1a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Manifold-constrained hyper-connections in DeepSeek-V4: four parallel residual streams, mixed by a Sinkhorn-normalized matrix so the mixing can never amplify signals through depth.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Muon: orthogonalize the momentum</div>
+<p><strong>Step 1.</strong> For a weight matrix with momentum <span class="math inline">\(M\)</span> (SVD <span class="math inline">\(M=U\Sigma V^\top\)</span>), Muon steps along <span class="math inline">\(O=UV^\top\)</span>: same singular directions, all singular values set to 1. It’s steepest descent under the spectral norm, so every direction in the update gets equal size.</p>
+<p><strong>Step 2.</strong> SVD is too slow, so apply an odd polynomial to the singular values: with <span class="math inline">\(X_0=M/\|M\|_F\)</span> (singular values in <span class="math inline">\((0,1]\)</span>), iterate <span class="math inline">\(X\gets aX+b(XX^\top)X+c(XX^\top)^2X\)</span>, which maps each <span class="math inline">\(\sigma\mapsto a\sigma+b\sigma^3+c\sigma^5\)</span> without touching <span class="math inline">\(U,V\)</span>.</p>
+<p><strong>Step 3.</strong> Coefficients <span class="math inline">\((3.4445,-4.7750,2.0315)\)</span> push small <span class="math inline">\(\sigma\)</span> up quickly. DeepSeek-V4 then finishes with 2 steps of <span class="math inline">\((2,-1.5,0.5)\)</span>, which converge to exactly 1. The check below gives singular values in <span class="math inline">\([1.0000,1.0005]\)</span>.</p>
+<p><strong>Step 4.</strong> Update: <span class="math inline">\(W\gets W(1-\eta\lambda)-\eta\gamma\sqrt{\max(n,m)}\,O\)</span>. The <span class="math inline">\(\sqrt{\max(n,m)}\)</span> factor matches AdamW’s typical update size, so learning rates transfer.</p>
+<p><strong>Step 5.</strong> <strong>QK-clip</strong> (Kimi K2’s MuonClip): if a head’s max logit <span class="math inline">\(S_{\max}\)</span> exceeds <span class="math inline">\(\tau\)</span>, rescale <span class="math inline">\(W_Q\gets W_Q\sqrt{\tau/S_{\max}}\)</span> and <span class="math inline">\(W_K\gets W_K\sqrt{\tau/S_{\max}}\)</span>. The logit <span class="math inline">\(q^\top k\)</span> scales by exactly <span class="math inline">\(\tau/S_{\max}\)</span>. DeepSeek-V4 says it doesn’t need this because QK-norm already bounds logits.</p>
+</div>
+<pre class="code text"><code class="language-plaintext">import torch
+
+G = torch.randn(64, 32, dtype=torch.float64)
+X = G / G.norm()
+for i in range(10):                                   # DeepSeek-V4&#x27;s two-stage Newton-Schulz
+    a, b, c = (3.4445, -4.7750, 2.0315) if i &lt; 8 else (2, -1.5, 0.5)
+    A = X @ X.T
+    X = a * X + b * A @ X + c * A @ A @ X
+print(torch.linalg.svdvals(X).aminmax())              # all singular values ~1</code></pre>

@@ -1,0 +1,18 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Frontier models (the latest Claude, GPT and Gemini families) follow instructions literally, reason internally before answering, call tools in parallel, and can work for hours on one task. Most old prompting tricks are unnecessary; what matters is the brief, the tools, the checks and the context.</p>
+</div>
+<ol>
+<li><p><strong>Brief like a senior colleague</strong>: the goal, why it matters, the constraints, what done looks like, and what to do when blocked. Explicit beats implied: if you want the model to make changes rather than suggest them, say so.</p></li>
+<li><p><strong>Let it think</strong>: set the reasoning effort or thinking budget for hard tasks instead of writing “think step by step”. Ask it to plan before large changes.</p></li>
+<li><p><strong>Give verification</strong>: tests, a script that checks the output, screenshots for UI. A model that can check its work iterates to correct; one that can’t stops at plausible.</p></li>
+<li><p><strong>Good tools</strong>: few, general, well-named tools with typed schemas and descriptions that say when to use them; errors that tell the model how to recover. Let independent calls run in parallel.</p></li>
+<li><p><strong>Structured outputs</strong> via the API’s schema mode, not “reply in JSON please”.</p></li>
+<li><p><strong>State in files for long work</strong>: a progress log, a todo list and git commits, so work survives context resets and can be resumed by a fresh session.</p></li>
+<li><p><strong>Subagents for breadth</strong>: searching a large codebase or the web in parallel keeps the lead agent’s context clean.</p></li>
+<li><p><strong>Calm instructions</strong>: no ALL CAPS or “you MUST”. Strong models over-apply emphasised rules; one clear sentence with a reason works better.</p></li>
+<li><p><strong>Pick the model per step</strong>: a fast cheap model for routing, extraction and simple edits; the strongest model for planning, hard debugging and review. Cache the stable prefix.</p></li>
+<li><p><strong>Review the diff, not the summary</strong>: agents report confidently. Read changes to tests, configs and security-relevant code yourself.</p></li>
+<li><p><strong>Measure</strong>: keep a small eval set of your own tasks; re-run it when you change the model, the prompt or the harness, and compare paired.</p></li>
+<li><p><strong>Security</strong>: treat web pages, documents and tool outputs as untrusted data (prompt injection); keep credentials out of the agent’s environment; sandbox shells; require approval for irreversible or outward-facing actions.</p></li>
+</ol>

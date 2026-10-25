@@ -1,0 +1,374 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: grading each round of a quiz</div>
+<p>In a multi-round quiz, the score for round 2 shouldn’t depend on what the team does in round 5. When reweighting a multi-turn router’s logs, weight each reward only by the routing choices made <em>up to</em> that point. This is the router version of per-decision IS (Topic 38).</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What residual appears in a doubly robust correction?</p></li>
+<li><p>Under what two alternatives is a doubly robust estimator consistent?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="future-actions-cannot-cause-past-rewards">2. Future actions cannot cause past rewards</h3>
+<p>For a trajectory, define the cumulative importance ratio:</p>
+<p><span class="math display">\[\rho_{0:t}
+=
+\prod_{j=0}^{t}
+\frac{\pi(a_j\mid s_j)}
+{\mu(a_j\mid s_j)}\]</span></p>
+<p>Ordinary trajectory importance sampling weights the complete return using the final ratio:</p>
+<p><span class="math display">\[\hat J_{\text{OIS}}
+=
+\frac1N\sum_i
+\rho_{0:T-1}^{(i)}
+\sum_{t=0}^{T-1}\gamma^t r_t^{(i)}\]</span></p>
+<p>This is unbiased under the usual support assumptions, but unnecessarily multiplies early rewards by ratios from future decisions.</p>
+<p>Per-decision importance sampling instead uses:</p>
+<p><span class="math display">\[\hat J_{\text{PDIS}}
+=
+\frac1N\sum_i
+\sum_{t=0}^{T-1}
+\gamma^t
+\rho_{0:t}^{(i)}
+r_t^{(i)}\]</span></p>
+<p>A reward at time <span class="math inline">\(t\)</span> depends on decisions through time <span class="math inline">\(t\)</span>, not later decisions. Removing future ratios usually lowers variance.</p>
+<p>Do not use only the current-step ratio:</p>
+<p><span class="math display">\[\frac{\pi(a_t\mid s_t)}
+{\mu(a_t\mid s_t)}\]</span></p>
+<p>Earlier actions changed the distribution of <span class="math inline">\(s_t\)</span>, so their ratios must remain in the cumulative product.</p>
+<p>For numerical stability:</p>
+<p><span class="math display">\[\log\rho_{0:t}
+=
+\sum_{j=0}^{t}
+\left[
+\log\pi(a_j\mid s_j)
+-
+\log\mu(a_j\mid s_j)
+\right]\]</span></p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>rewards, masks and selected log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>;</p></li>
+<li><p>cumulative log-ratios and ratios: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>;</p></li>
+<li><p>trajectory returns and estimates: <span style="background-color: codeinlinebg"><code> [B]</code></span> or scalar.</p></li>
+</ul>
+<p>In padded batches, invalid steps must contribute zero log-ratio and zero reward. For LLMs, PDIS matters when intermediate token, tool, latency or process rewards exist. With only one terminal sequence reward, PDIS and trajectory IS coincide.</p>
+<p>DPO optimizes fixed preference pairs; it does not replace sequential off-policy evaluation of an interactive agent.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: cumulative ratios, reset per episode</div>
+<p><span class="math inline">\(\hat V=\frac1n\sum_i\sum_t\gamma^t\rho^{(i)}_{0:t}r^{(i)}_{t+1}\)</span>, with <span class="math inline">\(\rho_{0:t}=\prod_{k\le t}\pi(a_k|h_k)/b(a_k|h_k)\)</span>. <strong>Variance</strong> still grows with <span class="math inline">\(t\)</span>: late rewards carry long products. A typical second-moment bound grows like <span class="math inline">\(\prod_k\mathbb E[\rho_k^2]\)</span>. <strong>Bookkeeping:</strong> the product resets to 1 at each episode start, and conditioning on history <span class="math inline">\(h_k\)</span> (not just <span class="math inline">\(x_k\)</span>) must match how the router actually decided.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Keep past ratios and drop future ones.</p></li>
+<li><p>Reset cumulative products at every episode boundary.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: forgetting to reset</div>
+<p>Episode 1 ends with <span class="math inline">\(\rho_{0:2}=4\)</span>. Episode 2’s first step has true ratio <span class="math inline">\(0.5\)</span>. Correct: <span class="math inline">\(\rho_{0:0}=0.5\)</span>. Without a reset: <span class="math inline">\(4\times0.5=2\)</span>, so episode 2’s first reward is counted 4<span class="math inline">\(\times\)</span> too much.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>One running product across the whole log.</p></li>
+<li><p>Propensities conditioned on the wrong history.</p></li>
+<li><p>No per-timestep ESS diagnostics.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-full-trajectory-versus-per-decision-ratios">3. PyTorch exercise — full-trajectory versus per-decision ratios</h3>
+<p>The first action becomes the second state:</p>
+<p><span class="math display">\[s_1=a_0\]</span></p>
+<p>The second reward is one when the next action matches that state.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 500
+batch_size = 512
+time_steps = 2
+gamma = 0.9
+
+behavior_one_probability = 0.20
+target_one_probability = 0.80
+
+# Shape: [repetitions, batch, time]
+actions = (
+    torch.rand(
+        num_repetitions,
+        batch_size,
+        time_steps,
+    )
+    &lt; behavior_one_probability
+).long()
+
+# TODO 1: Rewards.
+# r0 = a0
+# s1 = a0
+# r1 = 1 when a1 equals s1
+state_one = ...
+reward_zero = ...
+reward_one = ...
+
+rewards = ...
+
+discounts = torch.tensor([
+    1.0,
+    gamma,
+])
+
+discounted_rewards = ...
+
+# TODO 2: Selected behavior/target probabilities,
+# step ratios and cumulative ratios.
+behavior_action_probabilities = ...
+target_action_probabilities = ...
+
+step_log_ratios = ...
+step_ratios = ...
+
+prefix_log_ratios = ...
+prefix_ratios = ...
+
+# TODO 3: Naive and ordinary trajectory-IS estimates.
+trajectory_returns = ...
+
+naive_estimates = ...
+
+trajectory_weights = ...
+ordinary_is_estimates = ...
+
+# TODO 4: Correct PDIS and incorrect
+# current-step-only estimates.
+pdis_estimates = ...
+
+current_step_only_estimates = ...
+
+# TODO 5: Exact target value and diagnostics.
+exact_target_value = ...
+
+all_estimates = torch.stack([
+    naive_estimates,
+    ordinary_is_estimates,
+    pdis_estimates,
+    current_step_only_estimates,
+], dim=1)
+
+means = ...
+biases = ...
+standard_deviations = ...
+rmses = ...
+
+names = [
+    &quot;Naive behavior return&quot;,
+    &quot;Ordinary trajectory IS&quot;,
+    &quot;Per-decision IS&quot;,
+    &quot;Current-step-only bug&quot;,
+]
+
+print(
+    &quot;Exact target value:&quot;,
+    exact_target_value.item(),
+)
+
+for index, name in enumerate(names):
+    print(
+        name,
+        {
+            &quot;mean&quot;:
+                means[index].item(),
+            &quot;bias&quot;:
+                biases[index].item(),
+            &quot;std&quot;:
+                standard_deviations[
+                    index
+                ].item(),
+            &quot;rmse&quot;:
+                rmses[index].item(),
+        },
+    )</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the exact target-policy value?</p></li>
+<li><p>Should ordinary IS and PDIS have similar means?</p></li>
+<li><p>Which of those two should have lower variance?</p></li>
+<li><p>Why is the current-step-only estimate biased at time 1?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> state_one</code></span> is the first action.</p></li>
+<li><p>Stack the two rewards along the final dimension.</p></li>
+<li><p>Selected action probability is <span style="background-color: codeinlinebg"><code> p</code></span> for action <span style="background-color: codeinlinebg"><code> 1</code></span> and <span style="background-color: codeinlinebg"><code> 1-p</code></span> for action <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.cumsum(step_log_ratios, dim=-1)</code></span>.</p></li>
+<li><p>Ordinary IS uses the final cumulative ratio for the entire return.</p></li>
+<li><p>PDIS multiplies each discounted reward by its corresponding cumulative ratio.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Weight <span class="math inline">\(r_0\)</span> with the final trajectory ratio. The mean remains correct, but variance increases.</p></li>
+<li><p>Replace cumulative ratios with independent step ratios. The second-state distribution remains that of the behavior policy.</p></li>
+<li><p>Compute long-horizon products directly. Expect underflow, overflow and extreme variance.</p></li>
+<li><p>Let <span style="background-color: codeinlinebg"><code> cumsum</code></span> cross padding or an episode boundary. Ratios from unrelated decisions contaminate later rewards.</p></li>
+<li><p>Recompute behavior log-probabilities using new weights. Stored denominators must remain detached snapshots of the rollout policy.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does PDIS retain ratios from actions before reward <span class="math inline">\(r_t\)</span>?</p></li>
+<li><p>Why can it discard ratios from actions after <span class="math inline">\(r_t\)</span>?</p></li>
+<li><p>When do trajectory IS and PDIS become identical?</p></li>
+<li><p>Which diagnostics expose sequential importance-weight failure?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Rewards:</p>
+<pre class="code python"><code class="language-python">state_one = actions[:, :, 0]
+
+reward_zero = (
+    actions[:, :, 0]
+    .to(torch.float64)
+)
+
+reward_one = (
+    actions[:, :, 1]
+    == state_one
+).to(torch.float64)
+
+rewards = torch.stack(
+    [reward_zero, reward_one],
+    dim=-1,
+)
+
+discounted_rewards = (
+    rewards
+    * discounts[None, None, :]
+)</code></pre>
+<p>Ratios:</p>
+<pre class="code python"><code class="language-python">behavior_action_probabilities = torch.where(
+    actions == 1,
+    torch.tensor(
+        behavior_one_probability
+    ),
+    torch.tensor(
+        1.0
+        - behavior_one_probability
+    ),
+)
+
+target_action_probabilities = torch.where(
+    actions == 1,
+    torch.tensor(
+        target_one_probability
+    ),
+    torch.tensor(
+        1.0
+        - target_one_probability
+    ),
+)
+
+step_log_ratios = (
+    target_action_probabilities.log()
+    - behavior_action_probabilities.log()
+)
+
+step_ratios = step_log_ratios.exp()
+
+prefix_log_ratios = torch.cumsum(
+    step_log_ratios,
+    dim=-1,
+)
+
+prefix_ratios = prefix_log_ratios.exp()</code></pre>
+<p>Naive and ordinary IS:</p>
+<pre class="code python"><code class="language-python">trajectory_returns = (
+    discounted_rewards.sum(dim=-1)
+)
+
+naive_estimates = (
+    trajectory_returns.mean(dim=1)
+)
+
+trajectory_weights = (
+    prefix_ratios[:, :, -1]
+)
+
+ordinary_is_estimates = (
+    trajectory_weights
+    * trajectory_returns
+).mean(dim=1)</code></pre>
+<p>Per-decision estimates:</p>
+<pre class="code python"><code class="language-python">pdis_estimates = (
+    prefix_ratios
+    * discounted_rewards
+).sum(dim=-1).mean(dim=1)
+
+current_step_only_estimates = (
+    step_ratios
+    * discounted_rewards
+).sum(dim=-1).mean(dim=1)</code></pre>
+<p>Exact value and diagnostics:</p>
+<pre class="code python"><code class="language-python">target_match_probability = (
+    target_one_probability ** 2
+    + (
+        1.0
+        - target_one_probability
+    ) ** 2
+)
+
+exact_target_value = torch.tensor(
+    target_one_probability
+    + gamma
+    * target_match_probability
+)
+
+means = all_estimates.mean(dim=0)
+
+biases = (
+    means - exact_target_value
+)
+
+standard_deviations = (
+    all_estimates.std(
+        dim=0,
+        correction=1,
+    )
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)</code></pre>
+<p>Under the target policy:</p>
+<p><span class="math display">\[\mathbb E[r_0]=0.8\]</span></p>
+<p>The second action matches the first with probability:</p>
+<p><span class="math display">\[P(a_1=a_0)
+=
+0.8^2+0.2^2
+=
+0.68\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[J(\pi)
+=
+0.8+0.9(0.68)
+=
+1.412\]</span></p>
+<p>Ordinary IS and PDIS should both center near <span style="background-color: codeinlinebg"><code> 1.412</code></span>. PDIS has lower variance because <span class="math inline">\(r_0\)</span> is not multiplied by the unrelated future action ratio.</p>
+<p>The current-step-only estimator leaves <span class="math inline">\(s_1=a_0\)</span> distributed according to the behavior policy. Its expected value is:</p>
+<p><span class="math display">\[0.8+0.9[
+0.2(0.8)+0.8(0.2)
+]
+=
+1.088\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Earlier actions influence the state and therefore the distribution from which <span class="math inline">\(r_t\)</span> arises.</p></li>
+<li><p>Future actions cannot causally alter an already observed reward.</p></li>
+<li><p>When all reward occurs at the final decision, both use the same final cumulative ratio.</p></li>
+<li><p>Log ratio quantiles by position, cumulative-weight ESS, maximum weight, estimate variance, padding leakage and results versus horizon.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The correction uses <span class="math inline">\(r-\hat q(s,a)\)</span>.</p></li>
+<li><p>DR is consistent when either behavior propensities are correct or the conditional outcome model is correct, assuming support and suitable estimation conditions.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> importance weight only the decisions that could have influenced each reward. Keep past ratios, discard future ones and reset cumulative products at every episode boundary.</p>

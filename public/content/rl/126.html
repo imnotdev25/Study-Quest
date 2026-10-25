@@ -1,0 +1,499 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can separate policy and value heads still produce gradient conflict?</p></li>
+<li><p>Why is <span style="background-color: codeinlinebg"><code> value_coef=0.5</code></span> not necessarily “50% critic influence”?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="kl-regularization-gives-reward-scale-operational-meaning">2. KL regularization gives reward scale operational meaning</h3>
+<p>Consider a KL-regularized policy over actions or completions:</p>
+<p><span class="math display">\[J(\pi)
+=
+\sum_a \pi(a)r(a)
+-
+\beta D_{\mathrm{KL}}
+\left(
+\pi\|\pi_{\mathrm{ref}}
+\right)\]</span></p>
+<p>Its exact optimum is:</p>
+<p><span class="math display">\[\pi^*(a)
+=
+\frac{
+\pi_{\mathrm{ref}}(a)
+\exp(r(a)/\beta)
+}{
+\sum_b
+\pi_{\mathrm{ref}}(b)
+\exp(r(b)/\beta)
+}\]</span></p>
+<p>The important quantity is the ratio:</p>
+<p><span class="math display">\[\frac{r}{\beta}\]</span></p>
+<p>If rewards are multiplied by <span class="math inline">\(c\)</span> while <span class="math inline">\(\beta\)</span> stays fixed:</p>
+<p><span class="math display">\[\frac{cr}{\beta}
+=
+\frac{r}{\beta/c}\]</span></p>
+<p>Thus reward scaling reduces the effective KL strength from <span class="math inline">\(\beta\)</span> to <span class="math inline">\(\beta/c\)</span>. To preserve the same optimum, scale the KL coefficient too:</p>
+<p><span class="math display">\[r&#39;=cr
+\quad\Rightarrow\quad
+\beta&#39;=c\beta\]</span></p>
+<p>Adding one action-independent constant does not change the policy because it cancels during normalization:</p>
+<p><span class="math display">\[\operatorname{softmax}
+\left(
+\log\pi_{\mathrm{ref}}+\frac{r+k}{\beta}
+\right)
+=
+\operatorname{softmax}
+\left(
+\log\pi_{\mathrm{ref}}+\frac r\beta
+\right)\]</span></p>
+<p>But the limit matters: adding a constant at every token rewards longer sequences, so it is no longer action-independent when lengths vary.</p>
+<p>Nonlinear transformations such as clipping generally change the objective. A risky action returning <span style="background-color: codeinlinebg"><code> 100</code></span> with probability <span style="background-color: codeinlinebg"><code> 0.02</code></span> has expected reward <span style="background-color: codeinlinebg"><code> 2</code></span>. Clipping outcomes to <span style="background-color: codeinlinebg"><code> 1</code></span> changes its expected reward to <span style="background-color: codeinlinebg"><code> 0.02</code></span>, potentially reversing which action is preferred.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>reference probabilities: <span style="background-color: codeinlinebg"><code> [A]</code></span></p></li>
+<li><p>reward transformations: <span style="background-color: codeinlinebg"><code> [C, A]</code></span></p></li>
+<li><p>learned logits and policies: <span style="background-color: codeinlinebg"><code> [C, A]</code></span></p></li>
+<li><p>sampled outcomes: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+</ul>
+<p>In LLM RL, a reward model may preserve preference ranking while its numerical scale drifts between checkpoints. PPO consumes that scale as cardinal utility. Log raw rewards, transformed rewards, KL penalties and their relative magnitudes.</p>
+<p>If rewards are normalized, freeze the rollout-wide statistics across PPO epochs. Recomputing normalization per minibatch changes a sample’s target according to its batch companions.</p>
+<p>DPO avoids an explicit scalar reward during optimization, but its <span class="math inline">\(\beta\)</span> still controls the strength of policy log-ratio changes. It remains offline preference optimization, not online reward maximization.</p>
+<h3 class="unnumbered" id="pytorch-exercise-same-rankings-radically-different-policies">3. PyTorch exercise — same rankings, radically different policies</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+beta = 1.0
+reward_scale = 3.0
+
+reference_probabilities = torch.tensor([
+    0.80,
+    0.20,
+])
+
+base_rewards = torch.tensor([
+    0.0,
+    2.0,
+])
+
+reward_sets = torch.stack([
+    base_rewards,
+    base_rewards + 10.0,
+    base_rewards * reward_scale,
+    base_rewards.clamp(
+        min=-1.0,
+        max=1.0,
+    ),
+])
+
+case_names = [
+    &quot;raw&quot;,
+    &quot;shifted&quot;,
+    &quot;scaled&quot;,
+    &quot;clipped&quot;,
+]
+
+
+# TODO 1: Implement the exact KL-regularized optimum.
+def kl_optimal_policy(
+    rewards,
+    reference,
+    kl_coefficient,
+):
+    optimal_logits = ...
+
+    return ...
+
+
+closed_form_policies = ...
+
+
+# TODO 2: Learn all four policies through gradient ascent.
+num_cases, num_actions = reward_sets.shape
+
+policy_logits = (
+    reference_probabilities.log()
+    .expand(num_cases, -1)
+    .clone()
+    .requires_grad_(True)
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.10,
+)
+
+for _ in range(400):
+    log_probabilities = ...
+
+    probabilities = ...
+
+    expected_rewards = ...
+
+    kl_divergences = ...
+
+    objectives = ...
+
+    loss = ...
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+learned_policies = ...
+
+maximum_learning_error = ...
+
+
+# TODO 3: Test shift invariance and compensate for scaling.
+shift_invariance_error = ...
+
+fixed_beta_scaled_policy = ...
+
+adjusted_beta_scaled_policy = ...
+
+scale_preservation_error = ...
+
+effective_beta_after_scaling = ...
+
+expected_rewards_at_optimum = ...
+
+kl_at_optimum = ...
+
+
+# TODO 4: Show that outcome clipping can reverse an action.
+num_samples = 200_000
+
+safe_outcomes = ...
+
+risky_outcomes = ...
+
+raw_action_means = ...
+
+clipped_action_means = ...
+
+uniform_reference = torch.tensor([
+    0.50,
+    0.50,
+])
+
+raw_risk_policy = ...
+
+clipped_risk_policy = ...
+
+
+results = torch.cat([
+    reward_sets,
+    closed_form_policies,
+    expected_rewards_at_optimum[:, None],
+    kl_at_optimum[:, None],
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: reward a0, reward a1, &quot;
+    &quot;probability a0, probability a1, &quot;
+    &quot;expected reward, KL&quot;
+)
+print(results)
+
+print(
+    &quot;\nMaximum learned-policy error:&quot;,
+    maximum_learning_error.item(),
+)
+
+print(
+    &quot;Shift-invariance error:&quot;,
+    shift_invariance_error.item(),
+)
+
+print(
+    &quot;Effective beta after fixed-beta scaling:&quot;,
+    effective_beta_after_scaling,
+)
+
+print(
+    &quot;Scale-compensated policy error:&quot;,
+    scale_preservation_error.item(),
+)
+
+print(
+    &quot;\nRaw safe/risky reward means:&quot;,
+    raw_action_means,
+)
+
+print(
+    &quot;Clipped safe/risky reward means:&quot;,
+    clipped_action_means,
+)
+
+print(
+    &quot;Probability of risky action: raw, clipped&quot;
+)
+print(
+    raw_risk_policy[1].item(),
+    clipped_risk_policy[1].item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will adding <span style="background-color: codeinlinebg"><code> 10</code></span> to both rewards change the optimal policy?</p></li>
+<li><p>Will multiplying rewards by <span style="background-color: codeinlinebg"><code> 3</code></span> make the policy more or less concentrated?</p></li>
+<li><p>What new <span class="math inline">\(\beta\)</span> preserves the original policy after scaling?</p></li>
+<li><p>Can reward clipping reverse the preferred action?</p></li>
+<li><p>Does unchanged reward ranking imply unchanged PPO behavior?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Work in log space:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">reference.log() + rewards / beta</code></pre>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.log_softmax</code></span> during learned optimization.</p></li>
+<li><p>KL is:</p></li>
+</ul>
+<p><span class="math display">\[\sum_a
+\pi(a)
+\left[
+\log\pi(a)-\log\pi_{\mathrm{ref}}(a)
+\right]\]</span></p>
+<ul>
+<li><p>Maximize the objective by minimizing its negative.</p></li>
+<li><p>To compensate for three-times-larger rewards, use <span style="background-color: codeinlinebg"><code> 3 * beta</code></span>.</p></li>
+<li><p>Risky outcomes are <span style="background-color: codeinlinebg"><code> 100</code></span> with probability <span style="background-color: codeinlinebg"><code> 0.02</code></span>, otherwise zero.</p></li>
+<li><p>Clip individual sampled outcomes before calculating their mean.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Replace a reward-model checkpoint without checking its score scale.</p></li>
+<li><p>Standardize each PPO minibatch independently.</p></li>
+<li><p>Normalize task reward but leave the KL controller calibrated to the old scale.</p></li>
+<li><p>Clip rewards and describe the operation as purely numerical.</p></li>
+<li><p>Compare runs using only total shaped reward, hiding task and KL components.</p></li>
+<li><p>Add a constant reward per generated token and expect sequence-length neutrality.</p></li>
+<li><p>Normalize padding or failed generations as ordinary zero-reward examples.</p></li>
+<li><p>Tune PPO and DPO <span class="math inline">\(\beta\)</span> as though they represented identical objectives.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does positive reward scaling change a KL-regularized optimum?</p></li>
+<li><p>When does adding a reward constant leave the policy unchanged?</p></li>
+<li><p>Why can reward-model preference accuracy remain stable while PPO behavior changes?</p></li>
+<li><p>When might nonlinear reward clipping still be intentional?</p></li>
+<li><p>How should reward-scale changes affect PPO hyperparameters?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Closed-form policy:</p>
+<pre class="code python"><code class="language-python">def kl_optimal_policy(
+    rewards,
+    reference,
+    kl_coefficient,
+):
+    optimal_logits = (
+        reference.log()
+        + rewards / kl_coefficient
+    )
+
+    return torch.softmax(
+        optimal_logits,
+        dim=-1,
+    )
+
+
+closed_form_policies = kl_optimal_policy(
+    reward_sets,
+    reference_probabilities,
+    beta,
+)</code></pre>
+<p>Learned optimization:</p>
+<pre class="code python"><code class="language-python">for _ in range(400):
+    log_probabilities = torch.log_softmax(
+        policy_logits,
+        dim=-1,
+    )
+
+    probabilities = (
+        log_probabilities.exp()
+    )
+
+    expected_rewards = (
+        probabilities * reward_sets
+    ).sum(dim=-1)
+
+    kl_divergences = (
+        probabilities
+        * (
+            log_probabilities
+            - reference_probabilities.log()
+        )
+    ).sum(dim=-1)
+
+    objectives = (
+        expected_rewards
+        - beta * kl_divergences
+    )
+
+    loss = -objectives.mean()
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+learned_policies = torch.softmax(
+    policy_logits.detach(),
+    dim=-1,
+)
+
+maximum_learning_error = (
+    learned_policies
+    - closed_form_policies
+).abs().max()</code></pre>
+<p>Transformation diagnostics:</p>
+<pre class="code python"><code class="language-python">shift_invariance_error = (
+    closed_form_policies[0]
+    - closed_form_policies[1]
+).abs().max()
+
+fixed_beta_scaled_policy = (
+    closed_form_policies[2]
+)
+
+adjusted_beta_scaled_policy = (
+    kl_optimal_policy(
+        base_rewards * reward_scale,
+        reference_probabilities,
+        beta * reward_scale,
+    )
+)
+
+scale_preservation_error = (
+    adjusted_beta_scaled_policy
+    - closed_form_policies[0]
+).abs().max()
+
+effective_beta_after_scaling = (
+    beta / reward_scale
+)
+
+expected_rewards_at_optimum = (
+    closed_form_policies
+    * reward_sets
+).sum(dim=-1)
+
+kl_at_optimum = (
+    closed_form_policies
+    * (
+        closed_form_policies.log()
+        - reference_probabilities.log()
+    )
+).sum(dim=-1)</code></pre>
+<p>Risky reward comparison:</p>
+<pre class="code python"><code class="language-python">safe_outcomes = torch.ones(
+    num_samples
+)
+
+risky_outcomes = (
+    100.0
+    * (
+        torch.rand(num_samples) &lt; 0.02
+    ).to(torch.float64)
+)
+
+raw_action_means = torch.stack([
+    safe_outcomes.mean(),
+    risky_outcomes.mean(),
+])
+
+clipped_action_means = torch.stack([
+    safe_outcomes.clamp(max=1.0).mean(),
+    risky_outcomes.clamp(max=1.0).mean(),
+])
+
+raw_risk_policy = kl_optimal_policy(
+    raw_action_means,
+    uniform_reference,
+    beta,
+)
+
+clipped_risk_policy = kl_optimal_policy(
+    clipped_action_means,
+    uniform_reference,
+    beta,
+)</code></pre>
+<p>With reference probabilities <span style="background-color: codeinlinebg"><code> [0.8, 0.2]</code></span>, the probability of selecting the higher-reward action is approximately:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Transformation</strong></th>
+<th style="text-align: left;"><strong>Rewards</strong></th>
+<th style="text-align: left;"><strong><span class="math inline">\(P(a_1)\)</span></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Transformation</strong></td>
+<td style="text-align: left;"><strong>Rewards</strong></td>
+<td style="text-align: left;"><strong><span class="math inline">\(P(a_1)\)</span></strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Raw</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> [0, 2]</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.649</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Shifted</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> [10, 12]</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.649</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Scaled</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> [0, 6]</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.990</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Clipped</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> [0, 1]</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.405</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>Adding a constant leaves the policy unchanged. Scaling rewards by three with fixed <span class="math inline">\(\beta\)</span> produces the effective coefficient:</p>
+<p><span class="math display">\[\beta_{\text{effective}}
+=
+\frac13\]</span></p>
+<p>Using:</p>
+<p><span class="math display">\[\beta&#39;=3\]</span></p>
+<p>with the scaled rewards exactly restores the raw policy because the ratio <span class="math inline">\(r/\beta\)</span> is unchanged.</p>
+<p>For the stochastic actions:</p>
+<p><span class="math display">\[E[R_{\text{safe}}]=1\]</span></p>
+<p><span class="math display">\[E[R_{\text{risky}}]
+=
+0.02(100)=2\]</span></p>
+<p>After clipping each outcome to <span style="background-color: codeinlinebg"><code> 1</code></span>:</p>
+<p><span class="math display">\[E[R_{\text{safe,clip}}]=1\]</span></p>
+<p><span class="math display">\[E[R_{\text{risky,clip}}]=0.02\]</span></p>
+<p>The KL-optimal risky-action probability therefore moves from approximately:</p>
+<p><span class="math display">\[\sigma(2-1)\approx0.731\]</span></p>
+<p>to:</p>
+<p><span class="math display">\[\sigma(0.02-1)\approx0.273\]</span></p>
+<p>Clipping did not merely stabilize optimization; it reversed the decision objective.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Scaling increases <span class="math inline">\(r/\beta\)</span>, making reward differences stronger relative to the KL penalty.</p></li>
+<li><p>Only when the added amount is independent of the action and trajectory. Per-token constants change incentives when sequence lengths differ.</p></li>
+<li><p>Preference accuracy observes ordering, while PPO depends on score differences and their scale relative to KL, value loss and optimizer settings.</p></li>
+<li><p>It may encode a deliberate bounded-utility or robustness objective that limits sensitivity to extreme outcomes—but that change must be explicit.</p></li>
+<li><p>Revisit KL coefficients, controller targets, value-loss coefficients, value clipping, critic learning rate, gradient clipping and reward-normalization statistics.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Both heads backpropagate through the same transformer representation, even if their final output heads are separate.</p></li>
+<li><p>Its real influence is <span class="math inline">\(c_v\lVert g_V\rVert\)</span> relative to <span class="math inline">\(\lVert g_\pi\rVert\)</span>, together with their gradient alignment.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> reward scale and KL strength form one coupled choice. Preserving reward rankings is insufficient—unless <span class="math inline">\(r/\beta\)</span> is preserved, PPO is optimizing a different policy.</p>

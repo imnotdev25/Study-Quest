@@ -1,0 +1,487 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What unintended preference can <span class="math inline">\(\gamma&lt;1\)</span> create in token-based LLM episodes?</p></li>
+<li><p>Why is an explicit token cost clearer than using discounting to encourage brevity?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="lambda-chooses-how-much-you-trust-the-critic">2. <span class="math inline">\(\lambda\)</span> chooses how much you trust the critic</h3>
+<p>GAE begins with TD residuals:</p>
+<p><span class="math display">\[\delta_t
+=
+r_t+\gamma V(s_{t+1})-V(s_t)\]</span></p>
+<p>and combines them:</p>
+<p><span class="math display">\[A_t^{\text{GAE}}
+=
+\sum_{k=0}^{H-1-t}
+(\gamma\lambda)^k\delta_{t+k}\]</span></p>
+<p>The extremes are:</p>
+<ul>
+<li><p><span class="math inline">\(\lambda=0\)</span>: one-step TD; relies heavily on the critic;</p></li>
+<li><p><span class="math inline">\(\lambda=1\)</span>: Monte Carlo-like credit; uses the complete sampled outcome.</p></li>
+</ul>
+<p>The approximate trace horizon is:</p>
+<p><span class="math display">\[\frac{1}{1-\gamma\lambda}\]</span></p>
+<p>If <span class="math inline">\(\gamma=1,\lambda=0.95\)</span>, that is about 20 tokens.</p>
+<p>A low <span class="math inline">\(\lambda\)</span> is effective when the critic recognizes consequences early. If the critic cannot distinguish the states created by a good versus bad action, the early TD residual can be zero. Terminal evidence is then attenuated by:</p>
+<p><span class="math display">\[(\gamma\lambda)^{H-1}\]</span></p>
+<p>A larger <span class="math inline">\(\lambda\)</span> repairs this bias but imports more terminal-reward noise. This is the GAE bias–variance tradeoff.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>rewards and values: <span style="background-color: codeinlinebg"><code> [N, H]</code></span>, <span style="background-color: codeinlinebg"><code> [N, H + 1]</code></span></p></li>
+<li><p>candidate <span class="math inline">\(\lambda\)</span> values: <span style="background-color: codeinlinebg"><code> [G]</code></span></p></li>
+<li><p>first-step advantages and gradient samples: <span style="background-color: codeinlinebg"><code> [N, G]</code></span></p></li>
+</ul>
+<p>Advantages must be detached before actor backpropagation. Episode-boundary masks must stop the recursion; otherwise another response’s reward can leak backward.</p>
+<p>DPO has no critic, TD residual or GAE parameter. Its chosen/rejected sequence gradients come directly from fixed preference pairs.</p>
+<h3 class="unnumbered" id="pytorch-exercise-a-blind-critic-erases-delayed-credit">3. PyTorch exercise — a blind critic erases delayed credit</h3>
+<p>At token zero, the policy chooses action <span style="background-color: codeinlinebg"><code> 0</code></span> or <span style="background-color: codeinlinebg"><code> 1</code></span>:</p>
+<p><span class="math display">\[P(R=1\mid a=0)=0.2,\qquad
+P(R=1\mid a=1)=0.8\]</span></p>
+<p>The exact policy gradient at <span class="math inline">\(p=0.5\)</span> is:</p>
+<p><span class="math display">\[p(1-p)(0.8-0.2)=0.15\]</span></p>
+<p>Compare:</p>
+<ul>
+<li><p>a <strong>blind critic</strong> that predicts <span style="background-color: codeinlinebg"><code> 0.5</code></span> after either action;</p></li>
+<li><p>an <strong>informed critic</strong> that predicts <span style="background-color: codeinlinebg"><code> 0.2</code></span> or <span style="background-color: codeinlinebg"><code> 0.8</code></span> after observing the action.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 100_000
+horizon = 20
+
+gamma = 1.0
+
+lambdas = torch.tensor([
+    0.00,
+    0.80,
+    0.95,
+    1.00,
+])
+
+policy_probability = torch.tensor(0.50)
+
+action_reward_means = torch.tensor([
+    0.20,  # action 0
+    0.80,  # action 1
+])
+
+num_lambdas = lambdas.numel()
+
+
+# TODO 1: Generate actions, terminal rewards
+# and score-function gradients.
+actions = ...
+
+conditional_reward_means = ...
+
+terminal_rewards = ...
+
+score_gradients = ...
+
+exact_policy_gradient = ...
+
+
+# TODO 2: Build token rewards and two critics.
+token_rewards = ...
+
+token_rewards[:, -1] = ...
+
+blind_values = ...
+blind_values[:, -1] = ...
+
+informed_values = ...
+
+informed_values[:, 0] = ...
+
+informed_values[:, 1:horizon] = ...
+
+
+# TODO 3: Return first-step GAE for every lambda.
+def first_step_gae(
+    rewards,
+    values,
+):
+    td_residuals = ...
+
+    running_advantages = ...
+
+    for token_index in reversed(
+        range(horizon)
+    ):
+        running_advantages = ...
+
+    return running_advantages
+
+
+blind_first_advantages = first_step_gae(
+    token_rewards,
+    blind_values,
+)
+
+informed_first_advantages = first_step_gae(
+    token_rewards,
+    informed_values,
+)
+
+
+# TODO 4: Convert advantages to gradient samples.
+blind_gradient_samples = ...
+
+informed_gradient_samples = ...
+
+blind_gradient_estimates = ...
+informed_gradient_estimates = ...
+
+blind_biases = ...
+informed_biases = ...
+
+blind_gradient_stds = ...
+informed_gradient_stds = ...
+
+blind_standard_errors = ...
+informed_standard_errors = ...
+
+
+# TODO 5: Analytical shrinkage and trace horizons.
+terminal_trace_multipliers = ...
+
+theoretical_blind_gradients = ...
+
+effective_trace_horizons = torch.full_like(
+    lambdas,
+    float(&quot;inf&quot;),
+)
+
+finite_horizon_mask = ...
+
+effective_trace_horizons[
+    finite_horizon_mask
+] = ...
+
+
+results = torch.stack([
+    lambdas,
+    terminal_trace_multipliers,
+    theoretical_blind_gradients,
+    blind_gradient_estimates,
+    blind_biases,
+    blind_gradient_stds,
+    informed_gradient_estimates,
+    informed_biases,
+    informed_gradient_stds,
+    effective_trace_horizons,
+], dim=1)
+
+torch.set_printoptions(
+    precision=5,
+    sci_mode=False,
+)
+
+print(
+    &quot;Exact policy gradient:&quot;,
+    exact_policy_gradient.item(),
+)
+
+print(
+    &quot;\nColumns: lambda, terminal multiplier, &quot;
+    &quot;theoretical blind gradient, &quot;
+    &quot;observed blind gradient, blind bias, blind SD, &quot;
+    &quot;informed gradient, informed bias, informed SD, &quot;
+    &quot;trace horizon&quot;
+)
+print(results)
+
+print(
+    &quot;\nMaximum blind theory error:&quot;,
+    (
+        blind_gradient_estimates
+        - theoretical_blind_gradients
+    ).abs().max().item(),
+)
+
+print(
+    &quot;Standard errors: blind, informed&quot;
+)
+print(blind_standard_errors)
+print(informed_standard_errors)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What gradient should the blind critic produce at <span class="math inline">\(\lambda=0\)</span>?</p></li>
+<li><p>What should the informed critic produce at <span class="math inline">\(\lambda=0\)</span>?</p></li>
+<li><p>Approximately how much terminal signal survives with <span class="math inline">\(\lambda=0.95\)</span> across 19 steps?</p></li>
+<li><p>Which setting has the greatest gradient variance?</p></li>
+<li><p>Does increasing <span class="math inline">\(\lambda\)</span> always improve learning?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample action <span style="background-color: codeinlinebg"><code> 1</code></span> with probability <span style="background-color: codeinlinebg"><code> 0.5</code></span>.</p></li>
+<li><p>Bernoulli score gradient:</p></li>
+</ul>
+<p><span class="math display">\[\nabla_\theta\log\pi(a)=a-p\]</span></p>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> token_rewards</code></span> is zero except at the final step.</p></li>
+<li><p>The blind critic predicts <span style="background-color: codeinlinebg"><code> 0.5</code></span> at all nonterminal positions.</p></li>
+<li><p>The informed critic predicts <span style="background-color: codeinlinebg"><code> 0.5</code></span> before the action and its action-conditional reward mean afterward.</p></li>
+<li><p>Expand each TD residual from <span style="background-color: codeinlinebg"><code> [N]</code></span> to <span style="background-color: codeinlinebg"><code> [N, 1]</code></span> before combining it with all lambdas.</p></li>
+<li><p>Detach GAE advantages before multiplying by score gradients.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use <span class="math inline">\(\lambda=0.95\)</span> without checking sequence length.</p></li>
+<li><p>Train the actor through the critic’s value graph.</p></li>
+<li><p>Compute GAE separately on partial chunks without correct bootstrap values.</p></li>
+<li><p>Let traces cross EOS, truncation or reset boundaries.</p></li>
+<li><p>Tune <span class="math inline">\(\lambda\)</span> while reporting only mean reward, not critic error.</p></li>
+<li><p>Reduce <span class="math inline">\(\lambda\)</span> to suppress variance while ignoring gradient shrinkage.</p></li>
+<li><p>Compare runs with different <span class="math inline">\(\gamma\lambda\)</span> horizons as though their credit assignment were identical.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does the blind critic lose the action signal at low <span class="math inline">\(\lambda\)</span>?</p></li>
+<li><p>Why can the informed critic use <span class="math inline">\(\lambda=0\)</span> without bias here?</p></li>
+<li><p>What does increasing <span class="math inline">\(\lambda\)</span> add to the informed estimate?</p></li>
+<li><p>Which critic diagnostics should accompany a <span class="math inline">\(\lambda\)</span> sweep?</p></li>
+<li><p>Is <span class="math inline">\(\lambda\)</span> part of the deployment objective?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Sampling and exact gradient:</p>
+<pre class="code python"><code class="language-python">actions = (
+    torch.rand(num_episodes)
+    &lt; policy_probability
+).to(torch.float64)
+
+conditional_reward_means = (
+    action_reward_means[
+        actions.to(torch.long)
+    ]
+)
+
+terminal_rewards = (
+    torch.rand(num_episodes)
+    &lt; conditional_reward_means
+).to(torch.float64)
+
+score_gradients = (
+    actions - policy_probability
+)
+
+exact_policy_gradient = (
+    policy_probability
+    * (1.0 - policy_probability)
+    * (
+        action_reward_means[1]
+        - action_reward_means[0]
+    )
+)</code></pre>
+<p>Rewards and critics:</p>
+<pre class="code python"><code class="language-python">token_rewards = torch.zeros(
+    num_episodes,
+    horizon,
+)
+
+token_rewards[:, -1] = terminal_rewards
+
+blind_values = torch.full(
+    (
+        num_episodes,
+        horizon + 1,
+    ),
+    0.50,
+)
+
+blind_values[:, -1] = 0.0
+
+informed_values = torch.zeros(
+    num_episodes,
+    horizon + 1,
+)
+
+informed_values[:, 0] = 0.50
+
+informed_values[:, 1:horizon] = (
+    conditional_reward_means[:, None]
+)</code></pre>
+<p>GAE recursion:</p>
+<pre class="code python"><code class="language-python">def first_step_gae(
+    rewards,
+    values,
+):
+    td_residuals = (
+        rewards
+        + gamma * values[:, 1:]
+        - values[:, :-1]
+    )
+
+    running_advantages = torch.zeros(
+        num_episodes,
+        num_lambdas,
+    )
+
+    for token_index in reversed(
+        range(horizon)
+    ):
+        running_advantages = (
+            td_residuals[
+                :, token_index
+            ][:, None]
+            + gamma
+            * lambdas[None, :]
+            * running_advantages
+        )
+
+    return running_advantages</code></pre>
+<p>Gradient statistics:</p>
+<pre class="code python"><code class="language-python">blind_gradient_samples = (
+    score_gradients[:, None]
+    * blind_first_advantages.detach()
+)
+
+informed_gradient_samples = (
+    score_gradients[:, None]
+    * informed_first_advantages.detach()
+)
+
+blind_gradient_estimates = (
+    blind_gradient_samples.mean(dim=0)
+)
+
+informed_gradient_estimates = (
+    informed_gradient_samples.mean(dim=0)
+)
+
+blind_biases = (
+    blind_gradient_estimates
+    - exact_policy_gradient
+)
+
+informed_biases = (
+    informed_gradient_estimates
+    - exact_policy_gradient
+)
+
+blind_gradient_stds = (
+    blind_gradient_samples.std(
+        dim=0,
+        correction=0,
+    )
+)
+
+informed_gradient_stds = (
+    informed_gradient_samples.std(
+        dim=0,
+        correction=0,
+    )
+)
+
+blind_standard_errors = (
+    blind_gradient_stds
+    / math.sqrt(num_episodes)
+)
+
+informed_standard_errors = (
+    informed_gradient_stds
+    / math.sqrt(num_episodes)
+)</code></pre>
+<p>Analytical quantities:</p>
+<pre class="code python"><code class="language-python">terminal_trace_multipliers = (
+    (gamma * lambdas).pow(
+        horizon - 1
+    )
+)
+
+theoretical_blind_gradients = (
+    terminal_trace_multipliers
+    * exact_policy_gradient
+)
+
+finite_horizon_mask = (
+    gamma * lambdas &lt; 1.0
+)
+
+effective_trace_horizons[
+    finite_horizon_mask
+] = (
+    1.0
+    / (
+        1.0
+        - gamma
+        * lambdas[
+            finite_horizon_mask
+        ]
+    )
+)</code></pre>
+<p>For the blind critic:</p>
+<p><span class="math display">\[\hat g_\lambda
+=
+\lambda^{19}(0.15)\]</span></p>
+<p>Therefore, the expected gradients are approximately:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong><span class="math inline">\(\lambda\)</span></strong></th>
+<th style="text-align: left;"><strong>Terminal multiplier</strong></th>
+<th style="text-align: left;"><strong>Blind gradient</strong></th>
+<th style="text-align: left;"><strong>Informed gradient</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong><span class="math inline">\(\lambda\)</span></strong></td>
+<td style="text-align: left;"><strong>Terminal multiplier</strong></td>
+<td style="text-align: left;"><strong>Blind gradient</strong></td>
+<td style="text-align: left;"><strong>Informed gradient</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">0.00</td>
+<td style="text-align: left;">0.0000</td>
+<td style="text-align: left;">0.0000</td>
+<td style="text-align: left;">0.1500</td>
+</tr>
+<tr>
+<td style="text-align: left;">0.80</td>
+<td style="text-align: left;">0.0144</td>
+<td style="text-align: left;">0.0022</td>
+<td style="text-align: left;">0.1500</td>
+</tr>
+<tr>
+<td style="text-align: left;">0.95</td>
+<td style="text-align: left;">0.3774</td>
+<td style="text-align: left;">0.0566</td>
+<td style="text-align: left;">0.1500</td>
+</tr>
+<tr>
+<td style="text-align: left;">1.00</td>
+<td style="text-align: left;">1.0000</td>
+<td style="text-align: left;">0.1500</td>
+<td style="text-align: left;">0.1500</td>
+</tr>
+</tbody>
+</table>
+<p>The informed critic creates an immediate TD residual:</p>
+<p><span class="math display">\[\delta_0
+=
+\mu_a-0.5\]</span></p>
+<p>Its score-weighted value is always:</p>
+<p><span class="math display">\[(a-0.5)(\mu_a-0.5)=0.15\]</span></p>
+<p>Later terminal noise has conditional mean zero. Increasing <span class="math inline">\(\lambda\)</span> therefore retains the same expected gradient but adds more terminal-reward variance.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It predicts the same next-state value after both actions, so the first TD residual contains no information about which action was better.</p></li>
+<li><p>Its next-state value already encodes the action-dependent expected reward; one-step TD contains the complete expected policy-gradient signal.</p></li>
+<li><p>It adds increasingly distant TD residuals—here, mostly terminal Bernoulli noise.</p></li>
+<li><p>Log value loss, explained variance, calibration by timestep/action, TD-residual variance, advantage variance and gradient signal-to-noise ratio.</p></li>
+<li><p>No. <span class="math inline">\(\lambda\)</span> changes the estimator’s reliance on bootstrapping versus sampled returns; unlike <span class="math inline">\(\gamma\)</span>, it does not define the underlying discounted-return objective.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>It exponentially weakens credit for earlier tokens and therefore implicitly favors shorter responses or tokenizations.</p></li>
+<li><p>A token cost assigns a direct, linear price to length; discounting produces nonlinear position-dependent attenuation.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> tune <span class="math inline">\(\lambda\)</span> together with critic quality and sequence length. Low <span class="math inline">\(\lambda\)</span> is excellent when the critic recognizes action consequences; when it does not, the terminal learning signal can vanish exponentially before reaching the decision that caused it.</p>

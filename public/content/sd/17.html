@@ -1,0 +1,212 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How LLM applications are built: tokens and context windows, prompt and context engineering, RAG pipelines, embeddings and vector search, agents and tool use (MCP, A2A), LLM gateways and model routing, guardrails and prompt-injection defense, evaluation, and cost control.</p>
+</div>
+<h1 id="llm-basics-for-system-designers">LLM Basics for System Designers</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A large language model is a very well-read autocomplete. Given some text, it predicts the next word piece (a <em>token</em>), adds it, and repeats. It only knows what it learned in training plus what you put in the prompt. It cannot look things up unless you give it tools, and it can sound confident while being wrong. Most GenAI system design is about feeding it the right information and checking what comes out.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Facts that shape architecture:</p>
+<ul>
+<li><p><strong>Tokens</strong>: about 4 characters or 0.75 English words each. Pricing, rate limits, and latency are all per token. Output tokens cost 3–5<span class="math inline">\(\times\)</span> more than input and are generated one at a time.</p></li>
+<li><p><strong>Context window</strong>: the maximum tokens per request (input plus output), now commonly 128K to 1M+. Bigger contexts cost more, are slower, and models can miss details in the middle.</p></li>
+<li><p><strong>Stateless</strong>: the API remembers nothing between calls. Your system stores conversation history and re-sends what is relevant.</p></li>
+<li><p><strong>Non-deterministic</strong>: the same input can give different outputs. Systems need validation, retries, and evaluations instead of exact tests.</p></li>
+<li><p><strong>Latency</strong>: time-to-first-token (TTFT) plus output length <span class="math inline">\(\times\)</span> time-per-output-token. Stream tokens to users.</p></li>
+<li><p><strong>Reasoning models</strong> spend extra “thinking” tokens before answering: better on hard problems, but slower and pricier. Many APIs let you set a thinking budget.</p></li>
+</ul>
+</div>
+<figure class="tikz"><img src="figs/sd/2c220bd83189.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Reference architecture for an LLM application.</em></p>
+<h1 id="prompt-and-context-engineering">Prompt and Context Engineering</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Prompt engineering</strong> is writing clear instructions: role, task, constraints, output format, and examples (few-shot). <strong>Context engineering</strong> is the broader systems problem: deciding which information goes into the limited context window on each call: system instructions, retrieved documents, conversation history (summarized when long), tool definitions, memory, and the user’s request.</p>
+<p>Practical rules:</p>
+<ul>
+<li><p>Put stable content first (system prompt, tool schemas, documents) so prompt caching applies; variable content last.</p></li>
+<li><p>Ask for <strong>structured output</strong> (JSON Schema). Most providers and inference engines support constrained decoding that guarantees valid JSON.</p></li>
+<li><p>Keep only what helps: irrelevant context lowers quality and raises cost.</p></li>
+<li><p>Version prompts like code and gate changes with evals (Chapter (cicd)).</p></li>
+</ul>
+</div>
+<h1 id="retrieval-augmented-generation-rag">Retrieval-Augmented Generation (RAG)</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>RAG is an open-book exam. Instead of hoping the model memorized your company handbook, you look up the relevant pages and hand them over with the question: “Answer using these pages.” Answers become current, specific, and citeable.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/459469bbc05d.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A production RAG pipeline: offline ingestion and online retrieval.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Ingestion:</strong> parse documents (layout-aware PDF parsing, tables, OCR), split into chunks of a few hundred tokens with overlap or along document structure (headings, sections), attach metadata (source, date, ACLs, tenant), embed each chunk, and store in a vector index alongside a keyword (BM25) index.</p>
+<p><strong>Retrieval:</strong> rewrite the user’s question (resolve “it” from conversation, expand acronyms), run <strong>hybrid search</strong> (vector plus BM25, merged with reciprocal rank fusion), filter by metadata and permissions, then <strong>rerank</strong> the top 50–100 with a cross-encoder to pick the best 5–10.</p>
+<p><strong>Generation:</strong> prompt the model to answer only from the provided context and cite sources; say “I don’t know” when the context is insufficient.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Where RAG fails and the fixes:</strong></p>
+<ul>
+<li><p><em>Bad chunks</em> (a table split in half): structure-aware chunking; <strong>contextual retrieval</strong> (prepend an LLM-written summary of the parent document to each chunk before embedding); parent-document retrieval (match small chunks, return the larger section).</p></li>
+<li><p><em>Vocabulary mismatch</em>: hybrid search; HyDE (embed a hypothetical answer).</p></li>
+<li><p><em>Multi-hop questions</em>: <strong>agentic RAG</strong>, where the model issues several searches iteratively; <strong>GraphRAG</strong>, which extracts an entity graph for questions about relationships and global themes.</p></li>
+<li><p><em>Stale or unauthorized results</em>: incremental re-indexing via CDC; enforce document ACLs at query time, never only at ingestion.</p></li>
+<li><p><em>Long context vs RAG</em>: with 1M-token windows you can sometimes skip retrieval for small corpora, using prompt caching to keep it affordable. RAG still wins on cost, latency, freshness, and access control for large or changing corpora.</p></li>
+</ul>
+<p>Measure retrieval separately from generation: recall@k and MRR for retrieval; faithfulness (is the answer supported by context?) and answer relevance for generation (RAGAS-style metrics).</p>
+</div>
+<h2 id="embeddings-and-vector-search">Embeddings and Vector Search</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>An embedding model turns text (or images) into a vector, typically 256–3<span>,</span>072 dimensions, where similar meaning means nearby vectors (cosine similarity). Matryoshka embeddings can be truncated to fewer dimensions with small quality loss, saving storage. Index choices are covered in Chapter (data) (HNSW, IVF, DiskANN, quantization). Rule of thumb: 10M chunks <span class="math inline">\(\times\)</span> 1<span>,</span>024 dims <span class="math inline">\(\times\)</span> 4 bytes <span class="math inline">\(\approx\)</span> 41 GB of raw vectors, before index overhead; binary or int8 quantization cuts this 4–32<span class="math inline">\(\times\)</span>, with a rescoring pass to recover accuracy.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Enterprise knowledge assistant</div>
+<p>Employees ask questions across Confluence, Google Drive, and Jira. Connectors sync changes hourly; chunks carry the source’s ACL group list; search filters by the asking user’s groups. Answers include links to sources. Hit rate and “thumbs down” rates are tracked per data source to find poor ingestion.</p>
+</div>
+<h1 id="agents-and-tool-use">Agents and Tool Use</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A chatbot answers. An agent <em>does</em>. Give the model a set of tools (search the web, query a database, send an email) and let it decide, step by step, which tool to use until the task is done, like an intern with a to-do list and access to a few apps.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/146c93226900.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The agent loop (ReAct style): reason, act, observe, repeat.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Tool calling:</strong> you describe tools with JSON Schemas; the model returns a structured call; your code executes it and returns the result. The model never executes anything directly.</p>
+<p><strong>Protocols:</strong></p>
+<ul>
+<li><p><strong>Model Context Protocol (MCP)</strong>: an open standard (introduced by Anthropic, now broadly adopted across vendors and IDEs) for connecting models to tools, data sources, and prompts through MCP servers. Write a tool integration once, use it from any MCP-compatible client.</p></li>
+<li><p><strong>Agent-to-Agent (A2A)</strong>: an open protocol (started by Google, now under the Linux Foundation) for agents built by different vendors to discover each other’s capabilities and delegate tasks.</p></li>
+</ul>
+<p><strong>Patterns</strong>, simplest first: prompt chaining (fixed steps), routing (classify then dispatch), parallelization (fan out and merge), orchestrator-workers (a lead agent spawns sub-agents), evaluator-optimizer (one model drafts, another critiques). Start with a fixed workflow and only add autonomy where the task actually needs it.</p>
+<p><strong>Memory:</strong> short-term (the conversation, summarized as it grows) and long-term (facts and preferences saved to a store and retrieved later).</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Production agents are distributed systems with an unreliable planner:</p>
+<ul>
+<li><p><strong>Durability:</strong> run long tasks in a durable workflow engine (Chapter (dtx)) so crashes resume from the last step, not from scratch.</p></li>
+<li><p><strong>Idempotent tools:</strong> the model may call the same tool twice; tools with side effects need idempotency keys.</p></li>
+<li><p><strong>Budgets:</strong> cap steps, tokens, wall time, and dollars per task.</p></li>
+<li><p><strong>Least privilege:</strong> scoped, short-lived credentials per tool; read-only by default; human approval for irreversible actions (payments, deletes, external emails).</p></li>
+<li><p><strong>Sandboxing:</strong> code execution and browser use in isolated microVMs or containers with no access to internal networks or secrets.</p></li>
+<li><p><strong>Observability:</strong> trace every step (prompt, tool call, result, tokens) so you can replay and debug failed runs.</p></li>
+<li><p><strong>Context management:</strong> long runs overflow the window; compact history, store intermediate results in files or memory, and give sub-agents clean, focused contexts.</p></li>
+</ul>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Customer support agent</div>
+<p>Tools: <code>lookup_order</code>, <code>issue_refund</code> (requires approval above $100), <code>search_kb</code>, <code>escalate_to_human</code>. Routing sends simple FAQ questions to a small fast model and complex cases to a larger one. Every conversation is traced and a sample is scored daily by an LLM judge for correctness and policy compliance.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Coding agent</div>
+<p>The agent reads the repository, edits files, and runs tests inside a sandboxed container per task. Its loop ends when tests pass or the step budget is spent. Output is a pull request reviewed by a human, never a direct push to main.</p>
+</div>
+<h1 id="llm-gateways-and-model-routing">LLM Gateways and Model Routing</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>An <strong>LLM gateway</strong> is an API gateway specialized for models (LiteLLM, Portkey, Kong AI Gateway, Envoy AI Gateway, cloud offerings). It provides one API across providers, per-team keys and token budgets, provider failover, retries with backoff, response and semantic caching, PII redaction, request logging, and cost attribution.</p>
+<p><strong>Model routing</strong> sends each request to the cheapest model that can handle it: a classifier or rules decide small vs large model, or a cascade tries the small model first and escalates when confidence is low. Typical savings are large, because most traffic is easy.</p>
+</div>
+<h1 id="guardrails-and-safety">Guardrails and Safety</h1>
+<figure class="tikz"><img src="figs/sd/d7cb4af772f9.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Guardrails around the model.</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Prompt injection</strong> is the top LLM security risk: instructions hidden in retrieved documents, web pages, emails, or tool results that the model obeys. There is no complete fix at the model level, so design as if the model can be hijacked:</p>
+<ul>
+<li><p>Treat all retrieved and tool content as untrusted data, clearly delimited.</p></li>
+<li><p>Apply least privilege: an agent that reads untrusted email should not also hold credentials to send money. Avoid combining (1) access to private data, (2) exposure to untrusted content, and (3) ability to send data out.</p></li>
+<li><p>Require human confirmation for sensitive actions; validate tool arguments in code, not in the prompt.</p></li>
+<li><p>Use classifier models (e.g. Llama Guard style safety models, injection detectors) as extra layers, not the only layer.</p></li>
+<li><p>Block data exfiltration paths such as auto-rendered images and links to unknown domains.</p></li>
+</ul>
+<p>Other risks from the OWASP Top 10 for LLM Applications: sensitive information disclosure, supply chain (untrusted model weights), excessive agency, system prompt leakage, vector store poisoning, misinformation, and unbounded consumption (cost attacks).</p>
+</div>
+<h1 id="evaluation-and-llmops">Evaluation and LLMOps</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>You cannot improve what you do not measure, and LLM output cannot be checked with <code>assertEqual</code>.</p>
+<ul>
+<li><p><strong>Offline evals</strong>: a golden dataset of inputs with expected outputs or rubrics. Score with code (exact match, JSON validity, unit tests), LLM-as-judge (calibrated against human labels), and human review.</p></li>
+<li><p><strong>Online evals</strong>: user feedback, task success, escalation rate, A/B tests, and sampled LLM-judge scores on live traffic.</p></li>
+<li><p><strong>Tracing</strong>: Langfuse, LangSmith, Arize Phoenix, Braintrust, or OpenTelemetry GenAI conventions.</p></li>
+</ul>
+</div>
+<h1 id="deep-dive-building-rag-that-works">Deep Dive: Building RAG That Works</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Hybrid search with Reciprocal Rank Fusion.</strong> Vector search finds paraphrases; BM25 finds exact terms (error codes, product names, people). Merge their ranked lists with RRF, which needs no score normalization: <span class="math display">\[\text{RRF}(d) = \sum_{r \in \text{rankers}} \frac{1}{k + \text{rank}_r(d)}, \quad k \approx 60\]</span> A document ranked 1st by BM25 and 10th by vectors scores <span class="math inline">\(1/61 + 1/70\)</span>, beating one ranked 5th by only one list.</p>
+<p><strong>Chunk sizing.</strong> Too small and chunks lose context (“it increased by 20%” with no subject); too large and the embedding blurs several topics and wastes context. Start around 300–800 tokens following document structure, with 10–20% overlap, and tune on your eval set.</p>
+<p><strong>Context budget.</strong> With a 16K budget: system prompt 1K, conversation summary 1K, retrieved chunks 8 <span class="math inline">\(\times\)</span> 600 = 4.8K, user question 0.2K, reserved output 2K. Stuffing 50 chunks rarely helps; models miss details in the middle of long contexts, and cost scales with every token.</p>
+</div>
+<pre class="code python"><code class="language-python">def answer(question, user, history):
+    q = rewrite_query(question, history)              # resolve &quot;it&quot;, acronyms
+    vec = vector_index.search(embed(q), k=50, filter={&quot;acl&quot;: user.groups})
+    kw  = bm25_index.search(q, k=50, filter={&quot;acl&quot;: user.groups})
+    candidates = rrf_merge(vec, kw)[:60]
+    top = reranker.rank(q, candidates)[:8]            # cross-encoder
+    if top[0].score &lt; MIN_RELEVANCE:
+        return &quot;I couldn&#x27;t find this in the knowledge base.&quot;
+    prompt = build_prompt(SYSTEM, history_summary(history), top, question)
+    resp = llm.generate(prompt, max_tokens=800, stream=True)
+    log_trace(q, [c.id for c in top], resp)           # for evals and debugging
+    return with_citations(resp, top)</code></pre>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Evaluation set design.</strong> Build 200–500 real questions from logs, each labeled with the documents that answer it. Measure retrieval recall@8 (is the right document in the context?) separately from answer faithfulness and correctness. Most quality problems show up as retrieval misses; fixing chunking and adding hybrid search usually beats changing the model. Re-run the set on every change to chunking, embeddings, prompts, or models (Chapter (cicd)).</p>
+<p><strong>Freshness.</strong> Use CDC or webhooks from sources to re-embed changed documents, keep a <code>doc_version</code>, and delete stale chunks. Re-embedding the whole corpus when changing embedding models is a large batch job; plan for dual indexes during the switch.</p>
+</div>
+<h1 id="deep-dive-an-agent-loop-with-guardrails">Deep Dive: An Agent Loop With Guardrails</h1>
+<pre class="code python"><code class="language-python">def run_agent(task, tools, max_steps=15, max_cost=2.00):
+    messages = [system_prompt(tools), user(task)]
+    cost = 0.0
+    for step in range(max_steps):
+        resp = llm.chat(messages, tools=tool_schemas(tools))
+        cost += resp.cost
+        if cost &gt; max_cost:
+            return fail(&quot;budget exceeded&quot;)
+        if not resp.tool_calls:
+            return resp.text                          # final answer
+        for call in resp.tool_calls:
+            tool = tools[call.name]
+            args = tool.validate(call.args)           # schema + business rules in code
+            if tool.risky and not human_approves(call):
+                result = &quot;Action rejected by user.&quot;
+            else:
+                key = f&quot;{task.id}:{step}:{call.name}&quot; # idempotency key
+                result = tool.run(args, idempotency_key=key, timeout=30)
+            messages += [resp.as_message(), tool_result(call.id, truncate(result))]
+    return fail(&quot;step limit reached&quot;)</code></pre>
+<h1 id="fine-tuning-vs-rag-vs-prompting">Fine-Tuning vs RAG vs Prompting</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Approach</th>
+<th style="text-align: left;">Best for</th>
+<th style="text-align: left;">Not for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Prompting</td>
+<td style="text-align: left;">Most tasks; fast iteration</td>
+<td style="text-align: left;">Large private knowledge</td>
+</tr>
+<tr>
+<td style="text-align: left;">RAG</td>
+<td style="text-align: left;">Private, changing, citeable knowledge</td>
+<td style="text-align: left;">Teaching a new style or format</td>
+</tr>
+<tr>
+<td style="text-align: left;">Fine-tuning (LoRA/QLoRA)</td>
+<td style="text-align: left;">Consistent format, tone, domain tasks; distilling a big model into a small one</td>
+<td style="text-align: left;">Adding fast-changing facts</td>
+</tr>
+<tr>
+<td style="text-align: left;">Preference tuning (DPO, RL)</td>
+<td style="text-align: left;">Aligning behavior with feedback</td>
+<td style="text-align: left;">Small teams without eval infrastructure</td>
+</tr>
+</tbody>
+</table>
+<p><em>Choosing how to customize a model. Try them in this order.</em></p>
+<h1 id="cost-engineering">Cost Engineering</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Monthly cost <span class="math inline">\(\approx\)</span> requests <span class="math inline">\(\times\)</span> (input tokens <span class="math inline">\(\times\)</span> input price <span class="math inline">\(+\)</span> output tokens <span class="math inline">\(\times\)</span> output price). Example: 1M requests/month, 3<span>,</span>000 input and 400 output tokens, at $3 and $15 per million tokens: <span class="math inline">\(1\text{M}\times(3{,}000\times 3 + 400\times 15)/10^6 = \$15{,}000\)</span>/month. Levers: prompt caching (often the largest), shorter prompts, model routing, batch APIs (about 50% off for non-urgent work), output length limits, semantic caching, and self-hosting open-weight models at high, steady volume.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>LLMs are stateless, probabilistic, and token-priced; design around those facts.</p></li>
+<li><p>RAG quality is mostly retrieval quality: hybrid search plus reranking plus good chunks.</p></li>
+<li><p>Agents need durability, budgets, least privilege, sandboxes, and tracing.</p></li>
+<li><p>Assume prompt injection will happen; limit what a hijacked model can do.</p></li>
+<li><p>Evals are the test suite of AI systems; gate every change on them.</p></li>
+</ul>
+</div>

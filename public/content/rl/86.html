@@ -1,0 +1,485 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: rehearsing with old match footage</div>
+<p>To estimate how a new strategy would play, a coach uses old match footage and asks, play by play, “what would happen next if we followed the new strategy from here?” FQE does this with Bellman regression: no importance-weight products, just repeated supervised learning on logged transitions.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can a zero same-data DR residual indicate leakage rather than accuracy?</p></li>
+<li><p>What should be the splitting unit when cross-fitting multi-step agent data?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="replace-importance-weight-products-with-bellman-backups">2. Replace importance-weight products with Bellman backups</h3>
+<p>Fitted Q Evaluation—FQE—evaluates a fixed target policy <span class="math inline">\(\pi\)</span> from offline transitions without multiplying trajectory importance ratios.</p>
+<p>Starting with <span class="math inline">\(\hat Q_0\)</span>, repeatedly construct:</p>
+<p><span class="math display">\[y_i
+=
+r_i+
+\gamma(1-d_i)
+\sum_{a&#39;}
+\pi(a&#39;\mid s&#39;_i)
+\hat Q_k(s&#39;_i,a&#39;)\]</span></p>
+<p>Then regress:</p>
+<p><span class="math display">\[\hat Q_{k+1}
+=
+\arg\min_Q
+\frac1N\sum_i
+\left(
+Q(s_i,a_i)-y_i
+\right)^2\]</span></p>
+<p>After convergence:</p>
+<p><span class="math display">\[\hat J_{\text{FQE}}
+=
+\mathbb E_{s_0}
+\left[
+\sum_a
+\pi(a\mid s_0)\hat Q(s_0,a)
+\right]\]</span></p>
+<p>The next action is averaged under the target policy. Using:</p>
+<p><span class="math display">\[\max_{a&#39;}Q(s&#39;,a&#39;)\]</span></p>
+<p>would evaluate a greedy policy instead of the requested target policy.</p>
+<p>FQE avoids exploding importance products, but exchanges that problem for extrapolation risk. If the target policy chooses an action absent from the logs, its <span class="math inline">\(Q\)</span>-value may remain near initialization while the observed Bellman loss still looks excellent.</p>
+<p>Practical rules:</p>
+<ul>
+<li><p>detach Bellman targets;</p></li>
+<li><p>preferably use a lagged target network;</p></li>
+<li><p>zero bootstrap values at terminal states;</p></li>
+<li><p>include the same legal-action masks used by the target policy;</p></li>
+<li><p>audit state-action coverage, not only training loss;</p></li>
+<li><p>keep the evaluated policy fixed throughout fitting.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>transitions: states, actions, rewards and dones <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>target-policy probabilities: <span style="background-color: codeinlinebg"><code> [S, A]</code></span></p></li>
+<li><p>learned <span class="math inline">\(Q\)</span>-table: <span style="background-color: codeinlinebg"><code> [S, A]</code></span></p></li>
+<li><p>Bellman targets and predictions: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+</ul>
+<p>For LLM agents, the “state” is the complete history and the “action” may be a token, tool call or structured command. This makes coverage and generalization much harder than in a small table.</p>
+<p>DPO trains a policy from preference comparisons. FQE instead estimates that policy’s interactive environmental return from logged transitions; it requires outcome-bearing logs, not merely chosen/rejected pairs.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: FQE and its failure mode</div>
+<p>Iterate <span class="math inline">\(Q_k\gets\arg\min_Q\sum_i\big(Q(s_i,a_i)-[r_i+\gamma\sum_{a&#39;}\pi(a&#39;|s&#39;_i)Q_{k-1}(s&#39;_i,a&#39;)]\big)^2\)</span> (algorithm in the box below). <strong>Strength:</strong> no products of ratios, so the variance doesn’t explode with horizon. <strong>Silent failure:</strong> the target queries <span class="math inline">\(Q(s&#39;,a&#39;)\)</span> for <span class="math inline">\(a&#39;\sim\pi\)</span>. If the logs never took <span class="math inline">\(a&#39;\)</span> at <span class="math inline">\(s&#39;\)</span>, that value is pure extrapolation, and the regression loss can still look perfect.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>FQE replaces importance products with target-policy Bellman regression.</p></li>
+<li><p>It fails silently where the target policy asks about unseen actions.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: a support gap</div>
+<p>Logs at <span class="math inline">\(s&#39;\)</span> contain only action <span class="math inline">\(L\)</span> (value 1). The target policy takes <span class="math inline">\(R\)</span> at <span class="math inline">\(s&#39;\)</span>. A linear <span class="math inline">\(Q\)</span> fit happens to extrapolate <span class="math inline">\(Q(s&#39;,R)=4\)</span>, so the FQE estimate inflates by <span class="math inline">\(\gamma\cdot3\)</span>, while the training loss on logged pairs is about 0.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Taking a <span class="math inline">\(\max\)</span> in the target (that’s control, not evaluation).</p></li>
+<li><p>Reading small Bellman loss as accuracy.</p></li>
+<li><p>No check of <span class="math inline">\(\pi\)</span>’s action coverage in the logs.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Fitted Q Evaluation (FQE)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logged transitions <span class="math inline">\((s_i,a_i,r_i,s&#39;_i,d_i)\)</span>, fixed target policy <span class="math inline">\(\pi\)</span>, iterations <span class="math inline">\(K\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Q_0\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(k=1,\dots,K\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(y_i\gets r_i+\gamma(1-d_i)\sum_{a&#39;}\pi(a&#39;|s&#39;_i)\,Q_{k-1}(s&#39;_i,a&#39;)\)</span> <em>▷ expectation under <span class="math inline">\(\pi\)</span>, not a max</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(Q_k\gets\)</span> regression fit on <span class="math inline">\(\{(s_i,a_i)\mapsto y_i\}\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\hat V(\pi)=\operatorname{mean}_{s_0}\sum_a\pi(a|s_0)\,Q_K(s_0,a)\)</span></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-good-coverage-versus-a-silent-support-gap">3. PyTorch exercise — good coverage versus a silent support gap</h3>
+<p>The MDP has states <span style="background-color: codeinlinebg"><code> 0</code></span>, <span style="background-color: codeinlinebg"><code> 1</code></span>, and terminal state <span style="background-color: codeinlinebg"><code> 2</code></span>.</p>
+<ul>
+<li><p>From state <span style="background-color: codeinlinebg"><code> 0</code></span>, action <span style="background-color: codeinlinebg"><code> 0</code></span> gives reward <span style="background-color: codeinlinebg"><code> 1</code></span> and terminates.</p></li>
+<li><p>From state <span style="background-color: codeinlinebg"><code> 0</code></span>, action <span style="background-color: codeinlinebg"><code> 1</code></span> moves to state <span style="background-color: codeinlinebg"><code> 1</code></span>.</p></li>
+<li><p>At state <span style="background-color: codeinlinebg"><code> 1</code></span>, action <span style="background-color: codeinlinebg"><code> 0</code></span> gives <span style="background-color: codeinlinebg"><code> 0</code></span>; action <span style="background-color: codeinlinebg"><code> 1</code></span> gives <span style="background-color: codeinlinebg"><code> 3</code></span>. Both terminate.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 5_000
+num_states = 3
+num_actions = 2
+terminal_state = 2
+gamma = 0.9
+
+# Behavior policy is uniform.
+first_actions = (
+    torch.rand(num_episodes) &lt; 0.5
+).long()
+
+first_states = torch.zeros(
+    num_episodes,
+    dtype=torch.long,
+)
+
+first_rewards = (
+    first_actions == 0
+).to(torch.float64)
+
+first_dones = (
+    first_actions == 0
+)
+
+first_next_states = torch.where(
+    first_dones,
+    torch.full_like(
+        first_actions,
+        terminal_state,
+    ),
+    torch.ones_like(first_actions),
+)
+
+continuing = ~first_dones
+num_second_steps = continuing.sum().item()
+
+second_actions = (
+    torch.rand(num_second_steps) &lt; 0.5
+).long()
+
+second_states = torch.ones(
+    num_second_steps,
+    dtype=torch.long,
+)
+
+second_rewards = (
+    3.0
+    * (second_actions == 1)
+    .to(torch.float64)
+)
+
+second_next_states = torch.full(
+    (num_second_steps,),
+    terminal_state,
+    dtype=torch.long,
+)
+
+second_dones = torch.ones(
+    num_second_steps,
+    dtype=torch.bool,
+)
+
+# TODO 1: Assemble the transition dataset.
+states = ...
+actions = ...
+rewards = ...
+next_states = ...
+dones = ...
+
+# Target policy probabilities: [state, action].
+target_policy = torch.tensor([
+    [0.20, 0.80],
+    [0.10, 0.90],
+    [0.50, 0.50],  # irrelevant after termination
+])
+
+
+def fit_fqe(
+    fit_states,
+    fit_actions,
+    fit_rewards,
+    fit_next_states,
+    fit_dones,
+):
+    q_table = torch.nn.Parameter(
+        torch.zeros(
+            num_states,
+            num_actions,
+        )
+    )
+
+    target_q = q_table.detach().clone()
+
+    optimizer = torch.optim.Adam(
+        [q_table],
+        lr=0.08,
+    )
+
+    for step in range(400):
+        # TODO 2: Detached target-policy Bellman target.
+        with torch.no_grad():
+            next_action_values = ...
+
+            next_values = ...
+
+            bellman_targets = ...
+
+        predictions = ...
+
+        loss = ...
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # TODO 3: Periodically update the target table.
+        if (step + 1) % 20 == 0:
+            ...
+
+    return q_table.detach(), loss.detach()
+
+
+# TODO 4: Fit using the complete dataset.
+full_q, full_loss = ...
+
+full_value = ...
+
+# Remove every state-1/action-1 transition.
+support_gap_mask = ~(
+    (states == 1)
+    &amp; (actions == 1)
+)
+
+# TODO 5: Refit and compute coverage diagnostics.
+gap_q, gap_loss = ...
+
+gap_value = ...
+
+pair_ids = ...
+
+coverage_counts = ...
+
+gap_coverage_counts = ...
+
+exact_q = torch.tensor([
+    [1.00, 2.43],
+    [0.00, 3.00],
+    [0.00, 0.00],
+])
+
+exact_initial_value = (
+    target_policy[0] * exact_q[0]
+).sum()
+
+print(&quot;Coverage counts:\n&quot;, coverage_counts)
+print(
+    &quot;Support-gap counts:\n&quot;,
+    gap_coverage_counts,
+)
+
+print(&quot;Exact Q:\n&quot;, exact_q)
+print(&quot;FQE Q:\n&quot;, full_q)
+print(&quot;Support-gap Q:\n&quot;, gap_q)
+
+print(
+    &quot;Exact initial value:&quot;,
+    exact_initial_value.item(),
+)
+
+print(
+    &quot;Full-coverage FQE value:&quot;,
+    full_value.item(),
+)
+
+print(
+    &quot;Support-gap FQE value:&quot;,
+    gap_value.item(),
+)
+
+print(&quot;Full final loss:&quot;, full_loss.item())
+print(&quot;Gap final loss:&quot;, gap_loss.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the exact value of the target policy from state <span style="background-color: codeinlinebg"><code> 0</code></span>?</p></li>
+<li><p>Which <span class="math inline">\(Q\)</span>-entry remains unsupported after filtering?</p></li>
+<li><p>What value should full-coverage FQE approach?</p></li>
+<li><p>Can the support-gap Bellman loss be small while its policy value is badly wrong?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Concatenate first-step and second-step tensors.</p></li>
+<li><p>Index <span style="background-color: codeinlinebg"><code> target_q</code></span> with <span style="background-color: codeinlinebg"><code> fit_next_states</code></span>.</p></li>
+<li><p>Multiply its action dimension by <span style="background-color: codeinlinebg"><code> target_policy[fit_next_states]</code></span>.</p></li>
+<li><p>Multiply bootstrapped values by <span style="background-color: codeinlinebg"><code> (~fit_dones).to(torch.float64)</code></span>.</p></li>
+<li><p>Copy into the target table inside <span style="background-color: codeinlinebg"><code> torch.no_grad()</code></span>.</p></li>
+<li><p>Encode a pair as <span style="background-color: codeinlinebg"><code> state * num_actions + action</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> torch.bincount(..., minlength=num_states * num_actions)</code></span> builds coverage counts.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Replace the target-policy expectation with <span style="background-color: codeinlinebg"><code> .max(dim=-1).values</code></span>. You silently evaluate another policy.</p></li>
+<li><p>Remove <span style="background-color: codeinlinebg"><code> torch.no_grad()</code></span> around Bellman targets. The critic begins chasing a target connected to itself.</p></li>
+<li><p>Bootstrap through terminal transitions. Terminal-state initialization leaks into every predecessor.</p></li>
+<li><p>Inspect only final loss. The support-gap model can fit all observed equations while assigning nonsense to unseen actions.</p></li>
+<li><p>Initialize unseen <span class="math inline">\(Q\)</span>-values to <span style="background-color: codeinlinebg"><code> 10</code></span> instead of <span style="background-color: codeinlinebg"><code> 0</code></span>. The reported value changes despite identical logged evidence.</p></li>
+<li><p>Change the target policy after fitting without refitting FQE. Its Bellman targets described the old policy.</p></li>
+<li><p>In an LLM batch, omit action masks when computing the next-policy expectation. Invalid tools or padding tokens enter the value target.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does FQE avoid trajectory importance-weight explosion?</p></li>
+<li><p>Why must the next-action expectation use the target policy?</p></li>
+<li><p>Why is low Bellman error insufficient evidence of accurate OPE?</p></li>
+<li><p>Which diagnostics should accompany an FQE estimate?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Transition dataset:</p>
+<pre class="code python"><code class="language-python">states = torch.cat([
+    first_states,
+    second_states,
+])
+
+actions = torch.cat([
+    first_actions,
+    second_actions,
+])
+
+rewards = torch.cat([
+    first_rewards,
+    second_rewards,
+])
+
+next_states = torch.cat([
+    first_next_states,
+    second_next_states,
+])
+
+dones = torch.cat([
+    first_dones,
+    second_dones,
+])</code></pre>
+<p>Bellman regression:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    next_action_values = (
+        target_q[fit_next_states]
+    )
+
+    next_values = (
+        target_policy[
+            fit_next_states
+        ]
+        * next_action_values
+    ).sum(dim=-1)
+
+    bellman_targets = (
+        fit_rewards
+        + gamma
+        * (
+            ~fit_dones
+        ).to(torch.float64)
+        * next_values
+    )
+
+predictions = q_table[
+    fit_states,
+    fit_actions,
+]
+
+loss = F.mse_loss(
+    predictions,
+    bellman_targets,
+)</code></pre>
+<p>Target-table update:</p>
+<pre class="code python"><code class="language-python">if (step + 1) % 20 == 0:
+    with torch.no_grad():
+        target_q.copy_(
+            q_table.detach()
+        )</code></pre>
+<p>Full-coverage fit:</p>
+<pre class="code python"><code class="language-python">full_q, full_loss = fit_fqe(
+    states,
+    actions,
+    rewards,
+    next_states,
+    dones,
+)
+
+full_value = (
+    target_policy[0]
+    * full_q[0]
+).sum()</code></pre>
+<p>Support-gap fit and coverage:</p>
+<pre class="code python"><code class="language-python">gap_q, gap_loss = fit_fqe(
+    states[support_gap_mask],
+    actions[support_gap_mask],
+    rewards[support_gap_mask],
+    next_states[support_gap_mask],
+    dones[support_gap_mask],
+)
+
+gap_value = (
+    target_policy[0]
+    * gap_q[0]
+).sum()
+
+pair_ids = (
+    states * num_actions
+    + actions
+)
+
+coverage_counts = torch.bincount(
+    pair_ids,
+    minlength=(
+        num_states * num_actions
+    ),
+).reshape(
+    num_states,
+    num_actions,
+)
+
+gap_pair_ids = (
+    states[support_gap_mask]
+    * num_actions
+    + actions[support_gap_mask]
+)
+
+gap_coverage_counts = torch.bincount(
+    gap_pair_ids,
+    minlength=(
+        num_states * num_actions
+    ),
+).reshape(
+    num_states,
+    num_actions,
+)</code></pre>
+<p>The exact state-one value is:</p>
+<p><span class="math display">\[V^\pi(1)
+=
+0.1(0)+0.9(3)
+=
+2.7\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[Q^\pi(0,1)
+=
+0+\gamma V^\pi(1)
+=
+0.9(2.7)
+=
+2.43\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[V^\pi(0)
+=
+0.2(1)+0.8(2.43)
+=
+2.144\]</span></p>
+<p>With complete coverage, FQE should learn approximately:</p>
+<p><span class="math display">\[\hat Q
+\approx
+\begin{bmatrix}
+1&amp;2.43\\
+0&amp;3\\
+0&amp;0
+\end{bmatrix}\]</span></p>
+<p>After removing every <span style="background-color: codeinlinebg"><code> (state=1, action=1)</code></span> transition, that entry receives no regression gradient and remains near zero. The resulting estimate approaches:</p>
+<p><span class="math display">\[\hat V(0)
+\approx
+0.2(1)+0.8(0)
+=
+0.2\]</span></p>
+<p>Yet its observed-transition Bellman loss can still be close to zero.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It learns a critic through one-step Bellman regression rather than multiplying action-probability ratios across the entire horizon.</p></li>
+<li><p>FQE estimates <span class="math inline">\(Q^\pi\)</span>; changing the next-action distribution changes the Bellman operator and therefore the evaluated policy.</p></li>
+<li><p>Bellman loss only checks logged state-action pairs. It cannot validate unsupported counterfactual actions that affect the target-policy expectation.</p></li>
+<li><p>Report state-action counts, target-policy mass on rare actions, Bellman residuals by subgroup, initialization sensitivity, target-network stability, held-out error, reward scale and estimates from alternative OPE methods.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A memorizer can make <span class="math inline">\(r-\hat q=0\)</span> on training rows while having arbitrary counterfactual predictions, disabling DR’s correction.</p></li>
+<li><p>Split whole episodes and usually group by user, prompt family or conversation so correlated information cannot cross folds.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> FQE replaces high-variance importance products with target-policy Bellman regression. It works well where logs provide coverage—and can fail silently where the target policy asks about unseen actions.</p>

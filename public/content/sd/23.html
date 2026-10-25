@@ -1,0 +1,190 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Eight systems that move messages to millions of connected clients or between thousands of services: Slack, WhatsApp, Discord, Netflix, LinkedIn, Facebook Live, McDonald’s, and Uber.</p>
+</div>
+<h4 id="the-common-thread.">The common thread.</h4>
+<p>Real-time systems split into a <em>stateful</em> edge that holds connections and a <em>stateless or sharded</em> core that decides where messages go. Almost every case below has a connection layer, a routing layer based on consistent hashing, and a fan-out step. The hard problems are reconnect storms, hot channels, and knowing where each user is connected.</p>
+<h1 id="case-slack-the-journey-of-a-message">Case: Slack: The Journey of a Message</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Workplace chat<br />
+<strong>Scale:</strong> Tens of millions of channels per host; about 500 ms global delivery<br />
+<strong>Concepts:</strong> WebSockets, consistent hashing, stateful services, regional edges, presence<br />
+<strong>Source:</strong> Slack engineering blog, “Real-time Messaging” (2023)</p>
+</div>
+<figure class="tikz"><img src="figs/sd/98d3c97ed44d.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Slack’s real-time path: send via HTTP, fan out via WebSockets.</em></p>
+<h4 id="the-components.">The components.</h4>
+<ul>
+<li><p><strong>Channel Servers (CS)</strong> are stateful, in-memory Java services holding recent history for channels. Each CS owns a set of channels via <strong>consistent hashing</strong>; at peak a host serves about 16 million channels. “Channel” is abstract: a user, a team, a file, a huddle, or a regular channel.</p></li>
+<li><p><strong>CHARMs</strong> (consistent hash ring managers) keep the ring healthy and replace a failed CS in under 20 seconds. Ring configuration lives in Consul.</p></li>
+<li><p><strong>Gateway Servers (GS)</strong> hold each user’s WebSocket and its channel subscriptions. They are the only part deployed in many regions, so users connect nearby. A region can be drained by moving users to the next healthy one.</p></li>
+<li><p><strong>Admin Servers (AS)</strong> are stateless and connect the main web application to channel servers.</p></li>
+<li><p><strong>Presence Servers</strong> track online status; clients only subscribe to presence for users visible on screen.</p></li>
+</ul>
+<h4 id="following-one-message.">Following one message.</h4>
+<p>The client sends the message by an ordinary HTTP API call to Webapp, which persists it and hands it to an Admin Server. The AS looks up the owning Channel Server on the hash ring. The CS sends it to every Gateway Server subscribed to that channel worldwide, and each GS pushes it to its connected clients. Ephemeral events like “typing…” skip persistence and go client <span class="math inline">\(\to\)</span> GS <span class="math inline">\(\to\)</span> CS <span class="math inline">\(\to\)</span> GSs directly.</p>
+<h4 id="why-sending-uses-http-not-the-socket.">Why sending uses HTTP, not the socket.</h4>
+<p>Writes need authentication, validation, persistence, and idempotency, which the regular web stack already does well. WebSockets are used where they are strong: low-latency push. This split also means a WebSocket outage does not lose messages; clients can still send and fetch over HTTP.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Separate the write path (HTTP, durable) from the push path (WebSocket, best-effort plus resync).</p></li>
+<li><p>Consistent hashing of channels to stateful servers keeps state in memory without a shared bottleneck.</p></li>
+<li><p>Only push what the user can see (presence for visible users) to cut fan-out.</p></li>
+</ul>
+</div>
+<h1 id="case-whatsapp-millions-of-connections-per-server-with-erlang">Case: WhatsApp: Millions of Connections per Server with Erlang</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Messaging<br />
+<strong>Scale:</strong> About 2M TCP connections per server (2012); 900M users with about 50 engineers (2015)<br />
+<strong>Concepts:</strong> Lightweight processes, vertical scaling, store-and-forward, simplicity<br />
+<strong>Source:</strong> WhatsApp engineering blog (2012); Rick Reed, Erlang Factory talks (2012, 2014)</p>
+</div>
+<h4 id="the-design-philosophy.">The design philosophy.</h4>
+<p>WhatsApp is the strongest counterexample to “you need hundreds of microservices.” The backend was written in <strong>Erlang</strong> on <strong>FreeBSD</strong>, running on relatively few large machines.</p>
+<ul>
+<li><p><strong>Erlang processes</strong> are extremely light (a few hundred bytes of initial memory, scheduled by the BEAM VM, not the OS). One process per connection is natural, and a crash in one process cannot corrupt another. Supervisors restart failed processes automatically: “let it crash.”</p></li>
+<li><p><strong>Kernel and VM tuning</strong> (file descriptor limits, network buffers, BEAM scheduler settings, lock contention fixes) took a single server to about 2 million concurrent TCP connections in 2012.</p></li>
+<li><p><strong>Store and forward.</strong> The server keeps a message only until the recipient’s device acknowledges it, then deletes it. Messages are stored on devices, not servers. This keeps server storage small and, later, made end-to-end encryption (Signal Protocol, 2016) a natural fit.</p></li>
+<li><p><strong>Mnesia</strong>, Erlang’s built-in distributed database, held routing and offline-message data, partitioned across nodes.</p></li>
+</ul>
+<h4 id="delivery-receipts.">Delivery receipts.</h4>
+<p>The single tick means the server stored it; two ticks mean the recipient’s device received it; blue ticks mean it was read. Each is just a small acknowledgement message flowing back, which is how the at-least-once delivery pipeline is made visible to users.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>The right runtime (Erlang/BEAM, Elixir) can replace a lot of distributed infrastructure.</p></li>
+<li><p>Not storing data you do not need (store and forward) removes whole classes of scaling problems.</p></li>
+<li><p>Small teams scale when the architecture stays simple.</p></li>
+</ul>
+</div>
+<h1 id="case-discord-fan-out-with-elixir">Case: Discord: Fan-Out with Elixir</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Chat and voice<br />
+<strong>Scale:</strong> Millions of concurrent users; servers with hundreds of thousands of members<br />
+<strong>Concepts:</strong> Actor model, fan-out, batching, back-pressure<br />
+<strong>Source:</strong> Discord engineering blog, “How Discord Scaled Elixir to 5,000,000 Concurrent Users” (2017)</p>
+</div>
+<h4 id="the-design.">The design.</h4>
+<p>Each Discord server (“guild”) is an Elixir <strong>GenServer</strong> process holding its state. Each connected user has a <em>session</em> process. When someone posts, the guild process sends the event to the session processes of every online member. For a guild with 100<span>,</span>000 online members, one event becomes 100<span>,</span>000 messages, often across many machines.</p>
+<h4 id="problems-and-fixes.">Problems and fixes.</h4>
+<ul>
+<li><p><strong>Cross-node fan-out cost.</strong> Sending to many remote processes one by one is slow. Discord built <strong>Manifold</strong>, which groups recipients by node, sends one batch per node, and lets a process on that node fan out locally. This divides network traffic and CPU on the sender.</p></li>
+<li><p><strong>Hot reads of shared data.</strong> A lookup table read by every process became a bottleneck; <strong>FastGlobal</strong> compiles rarely changing data into a module so reads are constant time with no copying.</p></li>
+<li><p><strong>Overload protection.</strong> A semaphore library limits how many concurrent requests reach a service, rejecting excess rather than queueing without bound.</p></li>
+<li><p><strong>Big guilds</strong>: relays and passive sessions (users who are not actively looking do not get every event) cut work further.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Batch fan-out per destination node instead of per recipient.</p></li>
+<li><p>Send fewer events to inactive users; fan-out cost is the product of rate and audience.</p></li>
+<li><p>Bounded concurrency (semaphores) is a simple, strong overload defense.</p></li>
+</ul>
+</div>
+<h1 id="case-netflix-zuul-push">Case: Netflix: Zuul Push</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Streaming<br />
+<strong>Scale:</strong> Millions of always-on connections<br />
+<strong>Concepts:</strong> WebSockets/SSE, push registry, reconnect storms, autoscaling on connections<br />
+<strong>Source:</strong> Netflix TechBlog, “Zuul Push Messaging Service” (2018)</p>
+</div>
+<h4 id="why-push">Why push?</h4>
+<p>Netflix’s apps used to poll the backend for things like updated recommendations. Push lets servers notify devices directly (“a new row is ready, refresh it”), reducing wasted requests and making the UI feel live.</p>
+<figure class="tikz"><img src="figs/sd/c0bc0699b447.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Netflix Zuul Push.</em></p>
+<h4 id="the-design.-1">The design.</h4>
+<p>Push servers are built on Netty (non-blocking I/O) and hold WebSocket or SSE connections. When a device connects and authenticates, the server records <code>user_id </code><span class="math inline">\(\to\)</span><code> server</code> in a <strong>push registry</strong> (a low-latency store with TTLs). Backend services publish a message through a push library to Kafka; a message processor looks up which server holds the user’s connection and forwards it there.</p>
+<h4 id="operational-lessons-reported.">Operational lessons reported.</h4>
+<ul>
+<li><p><strong>Reconnect storms.</strong> If a push server dies or is deployed, all its clients reconnect at once. Connections are given a maximum lifetime with <em>randomized</em> jitter, so reconnects are spread out, and clients back off.</p></li>
+<li><p><strong>Scale on connections, not CPU.</strong> Push servers are mostly idle CPU holding many connections; autoscale on open connection count.</p></li>
+<li><p><strong>Prefer many smaller instances</strong>, so losing one causes a smaller storm.</p></li>
+<li><p>Load balancers must support long-lived connections (and WebSocket upgrade), with idle timeouts set accordingly.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A connection registry (user to server) is the core of any push system.</p></li>
+<li><p>Plan for thundering-herd reconnects: jittered lifetimes and client backoff.</p></li>
+<li><p>Autoscale stateful connection servers on connections, not CPU.</p></li>
+</ul>
+</div>
+<h1 id="case-linkedin-the-birth-of-kafka">Case: LinkedIn: The Birth of Kafka</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Professional network<br />
+<strong>Scale:</strong> Trillions of messages per day across LinkedIn’s Kafka clusters (later years)<br />
+<strong>Concepts:</strong> Log abstraction, pub/sub, data integration, stream processing<br />
+<strong>Source:</strong> Jay Kreps, “The Log: What every software engineer should know…” (2013); Kafka paper (NetDB 2011)</p>
+</div>
+<h4 id="the-problem.">The problem.</h4>
+<p>By around 2010 LinkedIn had many data sources (databases, user activity events, metrics) and many destinations (Hadoop, search indexes, the social graph, monitoring). Connecting each source to each destination created an <span class="math inline">\(N\times M\)</span> web of custom pipelines that were fragile and slow.</p>
+<figure class="tikz"><img src="figs/sd/76221f4fee0c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>From <span class="math inline">\(N\times M\)</span> pipelines to <span class="math inline">\(N+M\)</span> connections through one log.</em></p>
+<h4 id="the-design.-2">The design.</h4>
+<p>Kafka was built around one idea: an append-only, partitioned, replicated <strong>log</strong>. Producers append; consumers read at their own pace by offset. Messages are retained by time, so slow or new consumers can replay. Performance came from simple, mechanical choices: sequential disk writes, relying on the OS page cache instead of an in-process cache, batching, and zero-copy transfer from file to network socket (<code>sendfile</code>).</p>
+<h4 id="the-bigger-idea.">The bigger idea.</h4>
+<p>Kreps argued that a log is the backbone of data integration: every database is internally a log plus a materialized view, so exposing the log lets any system build its own view. That idea underlies change data capture, event sourcing, stream processing (Kafka Streams, Flink), and the “turning the database inside out” approach.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A central log turns <span class="math inline">\(N\times M\)</span> integrations into <span class="math inline">\(N+M\)</span>.</p></li>
+<li><p>Simple storage design (sequential I/O, page cache, batching) can beat complex in-memory brokers.</p></li>
+<li><p>Retention and replay make new consumers and reprocessing cheap.</p></li>
+</ul>
+</div>
+<h1 id="case-facebook-live-surviving-the-thundering-herd">Case: Facebook Live: Surviving the Thundering Herd</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Live video<br />
+<strong>Scale:</strong> Popular streams watched by millions at once<br />
+<strong>Concepts:</strong> Edge caching, request coalescing, origin protection<br />
+<strong>Source:</strong> Facebook engineering, “Under the hood: Broadcasting live video to millions” (2015)</p>
+</div>
+<h4 id="the-problem.-1">The problem.</h4>
+<p>Live video is cut into short segments. When a celebrity goes live, a huge number of viewers request the <em>same</em> newest segment at the <em>same</em> moment, and that segment is not cached yet because it was just created. Every edge cache misses at once and forwards to the origin.</p>
+<h4 id="the-design.-3">The design.</h4>
+<p>Viewers fetch segments from edge cache servers (points of presence), which fetch from origin servers, which fetch from the encoding servers. At each layer, <strong>request coalescing</strong> holds concurrent requests for the same segment: the first request goes upstream, the rest wait and receive the same response. In the reported design this cut the load reaching the origin to a small fraction (the post describes most requests being absorbed at the edge). Broadcasters’ streams were also consistently hashed to specific encoding servers.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Coalescing is the main defense when many clients want the same new object.</p></li>
+<li><p>Every caching tier should coalesce, not just the last one.</p></li>
+<li><p>Live content behaves very differently from on-demand content: there is no warm cache to rely on.</p></li>
+</ul>
+</div>
+<h1 id="case-mcdonalds-event-driven-architecture">Case: McDonald’s: Event-Driven Architecture</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Global restaurant chain / mobile ordering<br />
+<strong>Scale:</strong> Spiky regional traffic around promotions and meal times<br />
+<strong>Concepts:</strong> Managed Kafka, schema registry, outbox, dead-letter queues<br />
+<strong>Source:</strong> McDonald’s Technical Blog, “Behind the scenes: event-driven architecture at McDonald’s” (2022)</p>
+</div>
+<h4 id="the-design.-4">The design.</h4>
+<p>McDonald’s built a shared event platform so teams (mobile ordering, loyalty, deals, operations) could publish and consume events reliably:</p>
+<ul>
+<li><p><strong>Amazon MSK</strong> (managed Kafka) as the event backbone.</p></li>
+<li><p>A <strong>schema registry</strong> that every event must be validated against before publishing, so a producer cannot break consumers with malformed data.</p></li>
+<li><p>An <strong>SDK</strong> for producers and consumers that handles serialization, validation, retries, and error handling consistently.</p></li>
+<li><p>When Kafka is unavailable, events are written to an <strong>outbox</strong> (a DynamoDB table) and published later, so producers do not lose events.</p></li>
+<li><p><strong>Dead-letter topics</strong> for events that fail processing, with tooling to inspect and replay them.</p></li>
+<li><p>Custom domain-based sharding of events and autoscaling of consumers.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A shared event platform needs governance: schemas, SDKs, and standard error handling.</p></li>
+<li><p>Plan for the broker being down (outbox fallback).</p></li>
+<li><p>Dead letters need tooling to replay, not just a place to rot.</p></li>
+</ul>
+</div>
+<h1 id="case-uber-real-time-push-to-riders-and-drivers">Case: Uber: Real-Time Push to Riders and Drivers</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Mobility<br />
+<strong>Scale:</strong> Millions of connected apps; constant state changes per trip<br />
+<strong>Concepts:</strong> Server push, streaming RPC, at-least-once delivery, sequence numbers<br />
+<strong>Source:</strong> Uber engineering blog posts on RAMEN and its gRPC migration (2020–2022)</p>
+</div>
+<h4 id="the-problem.-2">The problem.</h4>
+<p>During a trip, the rider and driver apps need a stream of updates: driver location, ETA, trip status, pricing, messages. Polling every few seconds wastes battery and data and adds latency.</p>
+<h4 id="the-design.-5">The design.</h4>
+<p>Uber built a push platform (RAMEN, “Realtime Asynchronous MEssaging Network”) that keeps a persistent connection per app. Backend services send messages with metadata (priority, time-to-live). The platform sequences messages per user, and the client acknowledges what it has received; after a reconnect the client reports its last sequence number and the server replays what is missing. Uber later moved the transport from SSE to <strong>gRPC bidirectional streaming</strong> over HTTP/2 (and investigated QUIC), which gave a standard protocol for acknowledgements and better behavior on poor mobile networks.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Sequence numbers plus client acks turn an unreliable connection into reliable delivery.</p></li>
+<li><p>Prioritize and expire messages: a stale location update is worthless.</p></li>
+<li><p>Mobile networks are hostile; choose transports that survive network changes.</p></li>
+</ul>
+</div>

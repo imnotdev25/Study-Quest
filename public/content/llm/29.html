@@ -1,0 +1,210 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Multi-head attention</strong> runs <span class="math inline">\(H\)</span> small attentions in parallel, each with width <span class="math inline">\(d_h=D/H\)</span>, so different heads can attend to different things. It costs the same parameters as one wide head: the <span class="math inline">\(D\)</span>-wide projections are just cut into <span class="math inline">\(H\)</span> slices. The heads’ outputs are concatenated and mixed by <span class="math inline">\(W_O\)</span>.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why are attention logits divided by <span class="math inline">\(\sqrt{d_k}\)</span>?</p></li>
+<li><p>What value should replace causally forbidden logits before softmax?</p></li>
+</ol>
+<p>For <span class="math inline">\(X\in\mathbb{R}^{B\times T\times D}\)</span>, choose <span class="math inline">\(H\)</span> heads with:</p>
+<p><span class="math display">\[d_h=\frac{D}{H}\]</span></p>
+<p>After projection, each tensor is reshaped:</p>
+<p><span class="math display">\[Q,K,V:\ [B,T,D]
+\rightarrow[B,T,H,d_h]
+\rightarrow[B,H,T,d_h]\]</span></p>
+<p>Each head independently computes:</p>
+<p><span class="math display">\[A_h=
+\operatorname{softmax}
+\left(
+\frac{Q_hK_h^\top}{\sqrt{d_h}}+M
+\right)
+\in\mathbb{R}^{B\times H\times T\times T}\]</span></p>
+<p><span class="math display">\[C_h=A_hV_h
+\in\mathbb{R}^{B\times H\times T\times d_h}\]</span></p>
+<p>Heads are concatenated and projected:</p>
+<p><span class="math display">\[C:\ [B,H,T,d_h]\rightarrow[B,T,D]\]</span></p>
+<p><span class="math display">\[Y=CW_O,\qquad W_O\in\mathbb{R}^{D\times D}\]</span></p>
+<p>At fixed <span class="math inline">\(D\)</span>, adding heads changes how features are partitioned but does not change the leading attention compute:</p>
+<p><span class="math display">\[O(BHT^2d_h)=O(BT^2D)\]</span></p>
+<p>However, explicitly stored attention probabilities require <span class="math inline">\(O(BHT^2)\)</span> memory.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: heads as slices, and the cost of attention</div>
+<p><strong>Step 1.</strong> Reshape <span class="math inline">\(Q\in\mathbb R^{B\times T\times D}\)</span> to <span class="math inline">\([B,T,H,d_h]\)</span>, then transpose to <span class="math inline">\([B,H,T,d_h]\)</span>. Head <span class="math inline">\(h\)</span> uses columns <span class="math inline">\(h d_h,\dots,(h+1)d_h-1\)</span> of <span class="math inline">\(W_Q\)</span>: no new parameters.</p>
+<p><strong>Step 2.</strong> Per head: <span class="math inline">\(C_h=\operatorname{softmax}(Q_hK_h^\top/\sqrt{d_h}+M)V_h\in\mathbb R^{B\times T\times d_h}\)</span>.</p>
+<p><strong>Step 3.</strong> Concatenate and project: <span class="math inline">\(Y=[C_1,\dots,C_H]W_O=\sum_hC_hW_O^{(h)}\)</span>, where <span class="math inline">\(W_O^{(h)}\)</span> are the matching <span class="math inline">\(d_h\)</span> rows of <span class="math inline">\(W_O\)</span>. So MHA is a <em>sum</em> of per-head contributions.</p>
+<p><strong>Step 4.</strong> Parameters: <span class="math inline">\(W_Q,W_K,W_V,W_O\)</span> are each <span class="math inline">\(D\times D\)</span>, giving <span class="math inline">\(4D^2\)</span> regardless of <span class="math inline">\(H\)</span>.</p>
+<p><strong>Step 5.</strong> Compute for scores: <span class="math inline">\(H\)</span> heads <span class="math inline">\(\times\)</span> <span class="math inline">\(T^2\)</span> pairs <span class="math inline">\(\times\)</span> <span class="math inline">\(d_h\)</span> multiply-adds <span class="math inline">\(=T^2D\)</span> per example, the same as one head of width <span class="math inline">\(D\)</span>. Memory for <span class="math inline">\(A\)</span>: <span class="math inline">\(B\cdot H\cdot T^2\)</span> numbers, which <em>does</em> grow with <span class="math inline">\(H\)</span> and is why fused kernels avoid storing it.</p>
+<p><strong>Step 6.</strong> <strong>Layout bug:</strong> reshaping <span class="math inline">\([B,T,D]\to[B,H,T,d_h]\)</span> directly (without the transpose) silently mixes tokens and features. Shapes still match, so no error is raised.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: multi-head attention</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(X\in\mathbb R^{B\times T\times D}\)</span>, heads <span class="math inline">\(H\)</span>, <span class="math inline">\(d_h=D/H\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Q,K,V\gets XW_Q,XW_K,XW_V\)</span>, each reshaped <span class="math inline">\([B,T,H,d_h]\)</span> then transposed to <span class="math inline">\([B,H,T,d_h]\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(C\gets\operatorname{softmax}(QK^\top/\sqrt{d_h}+M)V\)</span> <em>▷ all heads at once</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(C\gets\)</span> transpose to <span class="math inline">\([B,T,H,d_h]\)</span>, reshape to <span class="math inline">\([B,T,D]\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Y\gets CW_O\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement causal multi-head self-attention using one fused QKV projection.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+import torch.nn.functional as F
+
+torch.manual_seed(51)
+
+B, T, D, H = 2, 5, 12, 3
+d_h = D // H
+
+X = torch.randn(B, T, D)
+
+W_qkv = torch.randn(D, 3 * D) / math.sqrt(D)
+W_o = torch.randn(D, D) / math.sqrt(D)
+
+
+def split_heads(x):
+    # [B, T, D] -&gt; [B, H, T, d_h]
+    x = ...                                    # TODO 1
+    return ...                                 # TODO 2
+
+
+def multi_head_attention(X):
+    qkv = ...                                  # TODO 3: [B, T, 3D]
+    q, k, v = ...                              # TODO 4: each [B, T, D]
+
+    q = split_heads(q)
+    k = split_heads(k)
+    v = split_heads(v)                         # each [B, H, T, d_h]
+
+    scores = ...                               # TODO 5: [B, H, T, T]
+
+    causal_mask = torch.tril(
+        torch.ones(T, T, dtype=torch.bool)
+    )[None, None, :, :]                        # [1, 1, T, T]
+
+    scores = ...                               # TODO 6
+    weights = ...                              # TODO 7
+    context = ...                              # TODO 8: [B, H, T, d_h]
+
+    merged = ...                               # TODO 9: [B, T, D]
+    output = ...                               # TODO 10: [B, T, D]
+
+    return output, weights, q, k, v
+
+
+output, weights, q, k, v = multi_head_attention(X)
+
+print(&quot;q shape:      &quot;, q.shape)
+print(&quot;weights shape:&quot;, weights.shape)
+print(&quot;output shape: &quot;, output.shape)
+print(&quot;row sums:\n&quot;, weights.sum(dim=-1))
+
+assert output.shape == (B, T, D)
+assert torch.allclose(
+    weights.sum(dim=-1),
+    torch.ones(B, H, T),
+    atol=1e-6,
+)
+
+reference_context = F.scaled_dot_product_attention(
+    q, k, v, is_causal=True
+)
+reference = (
+    reference_context.transpose(1, 2)
+    .contiguous()
+    .view(B, T, D)
+    @ W_o
+)
+
+print(&quot;matches PyTorch:&quot;,
+      torch.allclose(output, reference, atol=1e-6))</code></pre>
+<p>Now reproduce a common silent layout bug:</p>
+<pre class="code python"><code class="language-python">qkv = X @ W_qkv
+q_raw, k_raw, _ = qkv.chunk(3, dim=-1)
+
+q_wrong = q_raw.view(B, T, H, d_h)
+k_wrong = k_raw.view(B, T, H, d_h)
+
+wrong_scores = q_wrong @ k_wrong.transpose(-2, -1)
+
+print(&quot;wrong score shape:&quot;, wrong_scores.shape)</code></pre>
+<p>Before running, predict its shape. Which dimension is being attended over: tokens or heads?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Split the fused projection with <code>qkv.chunk(3, dim=-1)</code>.</p></li>
+<li><p>Correct head layout requires <code>.view(B, T, H, d_h).transpose(1, 2)</code>.</p></li>
+<li><p>Compute <code>q @ k.transpose(-2, -1)</code>.</p></li>
+<li><p>Scale by <code>sqrt(d_h)</code>.</p></li>
+<li><p>Merge with <code>.transpose(1, 2).contiguous().view(B, T, D)</code>.</p></li>
+<li><p>Apply <code>W_o</code> after concatenating the heads.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why must <span class="math inline">\(D\)</span> be divisible by <span class="math inline">\(H\)</span> in this implementation?</p></li>
+<li><p>What shape allows one causal mask to broadcast across every batch item and head?</p></li>
+<li><p>Debugging: attention runs without an exception, but each token attends across heads instead of positions. Which missing permutation is the likely cause?</p></li>
+<li><p>Ignoring biases, how many parameters do the Q, K, V, and output projections contain in total?</p></li>
+<li><p>At fixed <span class="math inline">\(B,D,H\)</span>, what happens to explicit attention-score memory when <span class="math inline">\(T\)</span> doubles?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def split_heads(x):
+    x = x.view(B, T, H, d_h)
+    return x.transpose(1, 2)
+
+
+def multi_head_attention(X):
+    qkv = X @ W_qkv
+    q, k, v = qkv.chunk(3, dim=-1)
+
+    q = split_heads(q)
+    k = split_heads(k)
+    v = split_heads(v)
+
+    scores = q @ k.transpose(-2, -1)
+    scores = scores / math.sqrt(d_h)
+
+    causal_mask = torch.tril(
+        torch.ones(T, T, dtype=torch.bool)
+    )[None, None, :, :]
+
+    scores = scores.masked_fill(~causal_mask, float(&quot;-inf&quot;))
+    weights = torch.softmax(scores, dim=-1)
+    context = weights @ v
+
+    merged = (
+        context.transpose(1, 2)
+        .contiguous()
+        .view(B, T, D)
+    )
+    output = merged @ W_o
+
+    return output, weights, q, k, v</code></pre>
+<p>The incorrect calculation produces:</p>
+<pre class="code text"><code class="language-plaintext">[B, T, H, H]</code></pre>
+<p>Because the layout remains <span><code>[</code></span><code>B, T, H, d_h</code><span><code>]</code></span>, the matrix multiplication compares heads within each token. The intended layout <span><code>[</code></span><code>B, H, T, d_h</code><span><code>]</code></span> compares token positions independently within each head.</p>
+<p><code>transpose()</code> returns a view with changed strides. Calling <code>contiguous()</code> before <code>view()</code> creates the expected physical layout. Using <code>reshape()</code> can also work, but it may silently allocate a copy.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Each head receives <span class="math inline">\(d_h=D/H\)</span> features, which must be an integer for equal-sized heads.</p></li>
+<li><p><span><code>[</code></span><code>1, 1, T, T</code><span><code>]</code></span>.</p></li>
+<li><p>The <span><code>[</code></span><code>B,T,H,d_h</code><span><code>]</code></span><code> → </code><span><code>[</code></span><code>B,H,T,d_h</code><span><code>]</code></span> transpose is missing.</p></li>
+<li><p>QKV contains <span class="math inline">\(3D^2\)</span> parameters and the output projection contains <span class="math inline">\(D^2\)</span>, totaling:</p>
+<p><span class="math display">\[4D^2\]</span></p></li>
+<li><p>Score memory grows by <span class="math inline">\(4\times\)</span>, since it scales as <span class="math inline">\(T^2\)</span>.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Scaling by <span class="math inline">\(\sqrt{d_k}\)</span> prevents dot-product magnitude from growing with head dimension and saturating softmax.</p></li>
+<li><p>Forbidden logits should be replaced by <span class="math inline">\(-\infty\)</span>, or a sufficiently negative finite value supported by the computation dtype.</p></li>
+</ul>

@@ -1,0 +1,536 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can paired policy scores give a smaller standard error than estimating two values independently?</p></li>
+<li><p>When is row-wise pairing invalid?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="one-valid-interval-inspected-repeatedly-is-not-repeatedly-valid">2. One valid interval inspected repeatedly is not repeatedly valid</h3>
+<p>Suppose <span class="math inline">\(d_i\)</span> is an episode-level candidate-minus-control score and:</p>
+<p><span class="math display">\[\Delta
+=
+\underbrace{E[d_i]}_{\text{true policy improvement}}\]</span></p>
+<p>At one pre-specified sample size <span class="math inline">\(n\)</span>, a normal lower bound is:</p>
+<p><span class="math display">\[LCB_n
+=
+\underbrace{\bar d_n}_{\text{estimated improvement}}
+-
+\underbrace{
+z_{1-\alpha}\frac{s_n}{\sqrt n}
+}_{\text{single-look uncertainty margin}}\]</span></p>
+<p>This has approximately <span class="math inline">\(1-\alpha\)</span> coverage at that one look. If you inspect it after every evaluation batch and stop at the first positive bound:</p>
+<p><span class="math display">\[P\!\left(
+\exists k:LCB_{n_k}&gt;0
+\mid\Delta=0
+\right)
+&gt;
+\alpha\]</span></p>
+<p>Each look offers another opportunity to promote because of favorable noise.</p>
+<h4 class="unnumbered" id="planned-finite-monitoring">Planned finite monitoring</h4>
+<p>For <span class="math inline">\(K\)</span> planned looks, Bonferroni uses:</p>
+<p><span class="math display">\[\alpha_k
+=
+\underbrace{\frac{\alpha}{K}}_{\text{error budget per look}}\]</span></p>
+<p><span class="math display">\[LCB_k^{\mathrm{Bonf}}
+=
+\bar d_{n_k}
+-
+\underbrace{
+z_{1-\alpha/K}\frac{s_{n_k}}{\sqrt{n_k}}
+}_{\text{wider multiplicity-adjusted margin}}\]</span></p>
+<p>The union bound guarantees total false-promotion probability at most <span class="math inline">\(\alpha\)</span>, without requiring independent looks.</p>
+<h4 class="unnumbered" id="indefinite-bounded-score-monitoring">Indefinite bounded-score monitoring</h4>
+<p>Allocate error across looks using:</p>
+<p><span class="math display">\[\alpha_k
+=
+\underbrace{
+\frac{6\alpha}{\pi^2k^2}
+}_{\text{error budget at look }k},
+\qquad
+\sum_{k=1}^{\infty}\alpha_k=\alpha\]</span></p>
+<p>If every independent score satisfies <span class="math inline">\(a\le d_i\le b\)</span>, Hoeffding gives the radius:</p>
+<p><span class="math display">\[r_k
+=
+\underbrace{
+(b-a)
+\sqrt{
+\frac{\log(1/\alpha_k)}
+{2n_k}
+}
+}_{\text{anytime-valid uncertainty margin}}\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[P\!\left(
+\exists k:
+\Delta
+&lt;
+\underbrace{\bar d_{n_k}-r_k}_{LCB_k^{\mathrm{anytime}}}
+\right)
+\le\alpha\]</span></p>
+<p>You may stop when this lower bound exceeds zero without invalidating the guarantee.</p>
+<p>The boundedness assumption matters. Raw OPE scores can be enormous when importance weights are enormous. Clipping creates a bound but also changes the estimator and introduces bias.</p>
+<p>For LLM evaluation, repeatedly checking held-out reward after each PPO or DPO checkpoint has the same optional-stopping problem. DPO’s held-out preference accuracy also remains a preference metric—not an estimate of online environment reward.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>simulated score sequences: <span style="background-color: codeinlinebg"><code> [R, T]</code></span></p></li>
+<li><p>running means at evaluation looks: <span style="background-color: codeinlinebg"><code> [R, K]</code></span></p></li>
+<li><p>confidence radii: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+<li><p>promotion decisions: <span style="background-color: codeinlinebg"><code> [R, K]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-5-becomes-roughly-25-after-repeated-peeking">3. PyTorch exercise — 5% becomes roughly 25% after repeated peeking</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 3_000
+maximum_episodes = 2_000
+
+look_sizes = torch.arange(
+    50,
+    maximum_episodes + 1,
+    50,
+)
+
+num_looks = look_sizes.numel()
+
+family_alpha = 0.05
+
+positive_score = 0.10
+negative_score = -0.10
+score_range = positive_score - negative_score
+
+null_positive_probability = 0.50
+alternative_positive_probability = 0.54
+
+standard_normal = torch.distributions.Normal(
+    torch.tensor(0.0),
+    torch.tensor(1.0),
+)
+
+
+# TODO 1: Critical values for a single look and
+# K planned looks.
+single_look_z = ...
+
+bonferroni_z = ...
+
+
+# TODO 2: Construct the three confidence radii.
+look_sizes_float = ...
+
+single_look_radii = ...
+
+bonferroni_radii = ...
+
+look_indices = ...
+
+alpha_spending = ...
+
+anytime_radii = ...
+
+
+# TODO 3: Simulate running score means.
+def simulate_running_means(
+    positive_probability,
+):
+    positive_events = ...
+
+    scores = ...
+
+    cumulative_scores = ...
+
+    running_means = ...
+
+    return running_means
+
+
+null_running_means = ...
+
+alternative_running_means = ...
+
+
+# TODO 4: Return the fraction promoted at any look.
+def any_promotion_rate(
+    running_means,
+    radii,
+):
+    lower_bounds = ...
+
+    promoted = ...
+
+    return ...
+
+
+null_single_final_rate = ...
+
+null_repeated_rate = ...
+null_bonferroni_rate = ...
+null_anytime_rate = ...
+
+alternative_single_final_rate = ...
+
+alternative_repeated_rate = ...
+alternative_bonferroni_rate = ...
+alternative_anytime_rate = ...
+
+
+# TODO 5: Population quantities and diagnostics.
+exact_null_effect = ...
+
+exact_alternative_effect = ...
+
+sum_spent_alpha = ...
+
+results = torch.tensor([
+    [
+        null_single_final_rate,
+        null_repeated_rate,
+        null_bonferroni_rate,
+        null_anytime_rate,
+    ],
+    [
+        alternative_single_final_rate,
+        alternative_repeated_rate,
+        alternative_bonferroni_rate,
+        alternative_anytime_rate,
+    ],
+])
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Number of looks:&quot;, num_looks)
+print(&quot;Null/alternative effects:&quot;)
+print(
+    exact_null_effect,
+    exact_alternative_effect,
+)
+
+print(&quot;Single-look and Bonferroni z:&quot;)
+print(
+    single_look_z.item(),
+    bonferroni_z.item(),
+)
+
+print(&quot;Sum of spent alpha:&quot;)
+print(sum_spent_alpha.item())
+
+print(
+    &quot;Rows: null, alternative\n&quot;
+    &quot;Columns: final-only, repeated-naive, &quot;
+    &quot;Bonferroni, anytime&quot;
+)
+print(results)
+
+print(
+    &quot;Final radii: naive, Bonferroni, anytime&quot;
+)
+print(
+    single_look_radii[-1].item(),
+    bonferroni_radii[-1].item(),
+    anytime_radii[-1].item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should the final-only null promotion rate be near <span style="background-color: codeinlinebg"><code> 0.05</code></span>?</p></li>
+<li><p>Will checking the same fixed-confidence bound 40 times preserve that rate?</p></li>
+<li><p>Which method should be most conservative?</p></li>
+<li><p>Can you stop early when the anytime lower bound becomes positive?</p></li>
+<li><p>What breaks if the OPE scores are not actually bounded by <span style="background-color: codeinlinebg"><code> [-0.1, 0.1]</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>A one-sided 5% critical value is approximately <span style="background-color: codeinlinebg"><code> 1.645</code></span>.</p></li>
+<li><p>Bonferroni uses <span style="background-color: codeinlinebg"><code> family_alpha / num_looks</code></span>.</p></li>
+<li><p>Use:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">6.0 * family_alpha / (
+    math.pi**2 * look_indices.square()
+)</code></pre>
+<ul>
+<li><p>The Hoeffding radius is:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">score_range * torch.sqrt(
+    torch.log(1.0 / alpha_spending)
+    / (2.0 * look_sizes_float)
+)</code></pre>
+<ul>
+<li><p>Select cumulative sums at indices <span style="background-color: codeinlinebg"><code> look_sizes - 1</code></span>.</p></li>
+<li><p>“Repeated naive” means applying <span style="background-color: codeinlinebg"><code> single_look_radii</code></span> at every look.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Stop at the first favorable fixed-sample interval and report it as pre-specified.</p></li>
+<li><p>Add more evaluation looks without changing the error budget.</p></li>
+<li><p>Treat correlated tokens as independent observations.</p></li>
+<li><p>Use a Hoeffding bound while unbounded importance weights remain.</p></li>
+<li><p>Clip OPE scores but omit the resulting bias from the report.</p></li>
+<li><p>Change the target policy, reward metric or judge during monitoring without accounting for the new search.</p></li>
+<li><p>Select a checkpoint and certify it using the same repeatedly inspected data.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Critical values:</p>
+<pre class="code python"><code class="language-python">single_look_z = standard_normal.icdf(
+    torch.tensor(
+        1.0 - family_alpha
+    )
+)
+
+bonferroni_z = standard_normal.icdf(
+    torch.tensor(
+        1.0
+        - family_alpha / num_looks
+    )
+)</code></pre>
+<p>Confidence radii:</p>
+<pre class="code python"><code class="language-python">look_sizes_float = look_sizes.to(
+    torch.float64
+)
+
+# Under the null, scores are ±0.1,
+# so their standard deviation is 0.1.
+single_look_radii = (
+    single_look_z
+    * 0.10
+    / torch.sqrt(look_sizes_float)
+)
+
+bonferroni_radii = (
+    bonferroni_z
+    * 0.10
+    / torch.sqrt(look_sizes_float)
+)
+
+look_indices = torch.arange(
+    1,
+    num_looks + 1,
+    dtype=torch.float64,
+)
+
+alpha_spending = (
+    6.0
+    * family_alpha
+    / (
+        math.pi**2
+        * look_indices.square()
+    )
+)
+
+anytime_radii = (
+    score_range
+    * torch.sqrt(
+        torch.log(
+            1.0 / alpha_spending
+        )
+        / (
+            2.0 * look_sizes_float
+        )
+    )
+)</code></pre>
+<p>Simulation:</p>
+<pre class="code python"><code class="language-python">def simulate_running_means(
+    positive_probability,
+):
+    positive_events = (
+        torch.rand(
+            num_repetitions,
+            maximum_episodes,
+        )
+        &lt; positive_probability
+    )
+
+    scores = torch.where(
+        positive_events,
+        torch.tensor(positive_score),
+        torch.tensor(negative_score),
+    )
+
+    cumulative_scores = scores.cumsum(
+        dim=1
+    )
+
+    running_means = (
+        cumulative_scores[
+            :,
+            look_sizes - 1,
+        ]
+        / look_sizes_float[None, :]
+    )
+
+    return running_means
+
+
+null_running_means = (
+    simulate_running_means(
+        null_positive_probability
+    )
+)
+
+alternative_running_means = (
+    simulate_running_means(
+        alternative_positive_probability
+    )
+)</code></pre>
+<p>Promotion rules:</p>
+<pre class="code python"><code class="language-python">def any_promotion_rate(
+    running_means,
+    radii,
+):
+    lower_bounds = (
+        running_means
+        - radii[None, :]
+    )
+
+    promoted = (
+        lower_bounds &gt; 0.0
+    ).any(dim=1)
+
+    return (
+        promoted
+        .to(torch.float64)
+        .mean()
+    )
+
+
+null_single_final_rate = (
+    (
+        null_running_means[:, -1]
+        - single_look_radii[-1]
+        &gt; 0.0
+    )
+    .to(torch.float64)
+    .mean()
+)
+
+null_repeated_rate = any_promotion_rate(
+    null_running_means,
+    single_look_radii,
+)
+
+null_bonferroni_rate = any_promotion_rate(
+    null_running_means,
+    bonferroni_radii,
+)
+
+null_anytime_rate = any_promotion_rate(
+    null_running_means,
+    anytime_radii,
+)
+
+alternative_single_final_rate = (
+    (
+        alternative_running_means[:, -1]
+        - single_look_radii[-1]
+        &gt; 0.0
+    )
+    .to(torch.float64)
+    .mean()
+)
+
+alternative_repeated_rate = any_promotion_rate(
+    alternative_running_means,
+    single_look_radii,
+)
+
+alternative_bonferroni_rate = (
+    any_promotion_rate(
+        alternative_running_means,
+        bonferroni_radii,
+    )
+)
+
+alternative_anytime_rate = any_promotion_rate(
+    alternative_running_means,
+    anytime_radii,
+)</code></pre>
+<p>Population quantities:</p>
+<pre class="code python"><code class="language-python">exact_null_effect = (
+    null_positive_probability
+    * positive_score
+    + (
+        1.0
+        - null_positive_probability
+    )
+    * negative_score
+)
+
+exact_alternative_effect = (
+    alternative_positive_probability
+    * positive_score
+    + (
+        1.0
+        - alternative_positive_probability
+    )
+    * negative_score
+)
+
+sum_spent_alpha = (
+    alpha_spending.sum()
+)</code></pre>
+<p>The effects are:</p>
+<p><span class="math display">\[\Delta_{\mathrm{null}}
+=
+\underbrace{0.5(0.1)+0.5(-0.1)}_{\text{balanced score signs}}
+=
+0\]</span></p>
+<p><span class="math display">\[\Delta_{\mathrm{alt}}
+=
+\underbrace{0.54(0.1)+0.46(-0.1)}_{\text{slightly better candidate}}
+=
+0.008\]</span></p>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>True condition</strong></th>
+<th style="text-align: left;"><strong>Final only</strong></th>
+<th style="text-align: left;"><strong>Repeated naive</strong></th>
+<th style="text-align: left;"><strong>Bonferroni</strong></th>
+<th style="text-align: left;"><strong>Anytime</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>True condition</strong></td>
+<td style="text-align: left;"><strong>Final only</strong></td>
+<td style="text-align: left;"><strong>Repeated naive</strong></td>
+<td style="text-align: left;"><strong>Bonferroni</strong></td>
+<td style="text-align: left;"><strong>Anytime</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Null, <span class="math inline">\(\Delta=0\)</span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.05</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.25</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.01</code></span></td>
+<td style="text-align: left;">below <span style="background-color: codeinlinebg"><code> 0.01</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Alternative, <span class="math inline">\(\Delta=0.008\)</span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.97</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.99</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.79</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.22</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The exact Monte Carlo values vary by seed. The key result is that repeatedly using a nominal 5% bound produces a false-promotion rate around 25%, whereas the adjusted procedures remain below 5%.</p>
+<p>The anytime method is particularly conservative because it uses only the known score range, not an estimated variance.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Yes. It is evaluated once at its pre-specified sample size.</p></li>
+<li><p>No. Repeated opportunities to cross zero inflate the family-wise false-promotion probability.</p></li>
+<li><p>The bounded Hoeffding sequence here; its guarantee uses limited distributional information.</p></li>
+<li><p>Yes. Optional stopping is permitted at the pre-declared looks under the confidence-sequence assumptions.</p></li>
+<li><p>The Hoeffding guarantee becomes invalid. A rare, larger score could cause much more uncertainty than the radius permits.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Candidate and control scores share episode noise. Positive covariance appears with a minus sign in the variance of their difference.</p></li>
+<li><p>Pairing is invalid when rows do not represent the same task or independent sampling unit—for example, pairing unrelated episodes merely by batch position.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> decide whether evaluation is fixed-horizon or continuously monitored. A fixed-sample confidence interval is not an anytime-valid deployment gate; repeated peeking must spend error budget or use a genuine confidence sequence.</p>

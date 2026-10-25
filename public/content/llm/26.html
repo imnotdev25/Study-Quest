@@ -1,0 +1,191 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Signal propagation:</strong> at initialization, we want the size of activations (forward) and gradients (backward) to stay roughly constant through depth. Measure size by the second moment <span class="math inline">\(\mathbb E[z^2]\)</span>. Weights are random with mean 0 and variance <span class="math inline">\(\operatorname{Var}(W)\)</span>, the one number we get to choose.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>If <span class="math inline">\(\Delta=\partial L/\partial Z\)</span> and <span class="math inline">\(Z=XW+b\)</span>, what is <span class="math inline">\(\partial L/\partial W\)</span>?</p></li>
+<li><p>Why must momentum state persist across training steps?</p></li>
+</ol>
+<p>An <span class="math inline">\(L\)</span>-layer MLP computes:</p>
+<p><span class="math display">\[H_0=X\in\mathbb{R}^{B\times d_0}\]</span></p>
+<p><span class="math display">\[Z_\ell=H_{\ell-1}W_\ell+b_\ell,
+\qquad
+W_\ell\in\mathbb{R}^{d_{\ell-1}\times d_\ell}\]</span></p>
+<p><span class="math display">\[H_\ell=\operatorname{ReLU}(Z_\ell)
+\in\mathbb{R}^{B\times d_\ell}\]</span></p>
+<p>For ReLU:</p>
+<p><span class="math display">\[\operatorname{ReLU}(z)=\max(0,z),
+\qquad
+\frac{\partial H_\ell}{\partial Z_\ell}
+=\mathbf{1}[Z_\ell&gt;0]\]</span></p>
+<p>If weights are too small, activations and gradients shrink through depth. If too large, they grow until training becomes unstable.</p>
+<p>Assuming independent, zero-mean inputs and weights:</p>
+<p><span class="math display">\[\mathbb{E}[Z_\ell^2]
+\approx
+d_{\ell-1}\operatorname{Var}(W_\ell)
+\mathbb{E}[H_{\ell-1}^2]\]</span></p>
+<p>ReLU removes roughly half the squared signal, motivating Kaiming initialization:</p>
+<p><span class="math display">\[\operatorname{Var}(W_\ell)=\frac{2}{d_{\ell-1}},
+\qquad
+\operatorname{std}(W_\ell)=\sqrt{\frac{2}{d_{\ell-1}}}\]</span></p>
+<p>The goal is not identical activations at every layer, but preventing systematic exponential collapse or explosion.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Kaiming initialization <span class="math inline">\(\operatorname{Var}(W)=2/d_{\text{in}}\)</span></div>
+<p><strong>Step 1.</strong> One pre-activation: <span class="math inline">\(z_j=\sum_{i=1}^{d}h_iW_{ij}\)</span>, with <span class="math inline">\(W_{ij}\)</span> independent of <span class="math inline">\(h\)</span>, mean 0.</p>
+<p><strong>Step 2.</strong> Variance of a sum of independent zero-mean terms: <span class="math inline">\(\operatorname{Var}(z_j)=\sum_i\mathbb E[h_i^2]\,\mathbb E[W_{ij}^2]=d\,\operatorname{Var}(W)\,\mathbb E[h^2]\)</span>.</p>
+<p><strong>Step 3.</strong> ReLU of a zero-mean symmetric <span class="math inline">\(z\)</span>: <span class="math inline">\(\mathbb E[\max(0,z)^2]=\frac12\mathbb E[z^2]\)</span> (the negative half is zeroed, and the positive half carries exactly half the second moment).</p>
+<p><strong>Step 4.</strong> Combine for layer <span class="math inline">\(\ell\)</span>: <span class="math inline">\(\operatorname{Var}(z_\ell)=d_{\ell-1}\operatorname{Var}(W_\ell)\cdot\frac12\operatorname{Var}(z_{\ell-1})\)</span>.</p>
+<p><strong>Step 5.</strong> After <span class="math inline">\(L\)</span> layers: <span class="math inline">\(\operatorname{Var}(z_L)=\Big(\frac{d\operatorname{Var}(W)}{2}\Big)^L\operatorname{Var}(z_0)\)</span>. Anything other than a factor of 1 explodes or vanishes <em>exponentially</em> in depth.</p>
+<p><strong>Step 6.</strong> Set the factor to 1: <span class="math inline">\(\boxed{\operatorname{Var}(W)=2/d_{\text{in}}}\)</span>. Example: <span class="math inline">\(d=512\)</span> gives std <span class="math inline">\(\sqrt{2/512}=0.0625\)</span>.</p>
+<p><strong>Step 7.</strong> Backward has the same structure with <span class="math inline">\(d_{\text{out}}\)</span>, so “fan-out” Kaiming uses <span class="math inline">\(2/d_{\text{out}}\)</span>. Xavier (<span class="math inline">\(1/d\)</span> or <span class="math inline">\(2/(d_{\text{in}}+d_{\text{out}})\)</span>) is the version for tanh, which doesn’t halve the signal.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Kaiming-normal initialization of a ReLU MLP</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> layer widths <span class="math inline">\(d_0,\dots,d_L\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(\ell=1,\dots,L\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(W_\ell\sim\mathcal N\big(0,\ 2/d_{\ell-1}\big)\)</span> entrywise; <span class="math inline">\(b_\ell\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">check: forward a random batch and log <span class="math inline">\(\operatorname{std}(Z_\ell)\)</span> per layer; it should stay roughly flat</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Build a deep MLP and measure its activation RMS:</p>
+<p><span class="math display">\[\operatorname{RMS}(H)=
+\sqrt{\operatorname{mean}(H^2)}\]</span></p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(21)
+
+B, D, depth = 256, 128, 10
+X_base = torch.randn(B, D)
+
+
+def run_mlp(gain):
+    # std = gain / sqrt(fan_in)
+    weights = []
+
+    for _ in range(depth):
+        std = ...                              # TODO 1
+        W = (...).requires_grad_()             # TODO 2: [D, D]
+        weights.append(W)
+
+    X = X_base.clone().requires_grad_()
+    h = X
+    activation_rms = []
+
+    for W in weights:
+        z = ...                                # TODO 3
+        h = ...                                # TODO 4
+        activation_rms.append(
+            ...                                # TODO 5: scalar RMS
+        )
+
+    # Fixed-scale upstream signal for probing backward propagation
+    probe = torch.randn_like(h) / math.sqrt(h.numel())
+    loss = ...                                 # TODO 6: scalar
+    loss.backward()
+
+    input_grad_rms = X.grad.square().mean().sqrt().item()
+
+    return activation_rms, input_grad_rms
+
+
+for name, gain in [
+    (&quot;small&quot;, 1.0),
+    (&quot;kaiming&quot;, math.sqrt(2.0)),
+    (&quot;large&quot;, 2.0),
+]:
+    rms, grad_rms = run_mlp(gain)
+
+    print(f&quot;\n{name}&quot;)
+    print(&quot;activation RMS:&quot;, [round(v, 4) for v in rms])
+    print(&quot;input-gradient RMS:&quot;, f&quot;{grad_rms:.6g}&quot;)</code></pre>
+<p>Before running, predict which setup will:</p>
+<ul>
+<li><p>progressively shrink activations;</p></li>
+<li><p>approximately preserve their scale;</p></li>
+<li><p>progressively amplify activations.</p></li>
+</ul>
+<p>Debugging extension: replace ReLU with:</p>
+<pre class="code python"><code class="language-python">h = torch.relu(z - 5.0)</code></pre>
+<p>Predict what happens to the fraction of active units and the input gradient. Confirm it by recording:</p>
+<pre class="code python"><code class="language-python">active_fraction = (h &gt; 0).float().mean().item()</code></pre>
+<p>Hints:</p>
+<ul>
+<li><p>Create weights with <code>torch.randn(D, D) * std</code>.</p></li>
+<li><p>Matrix multiplication is <code>h @ W</code>.</p></li>
+<li><p>Use <code>torch.relu</code>.</p></li>
+<li><p>RMS is <code>h.square().mean().sqrt().item()</code>.</p></li>
+<li><p>A scalar probe loss can be <code>(h * probe).sum()</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>For <span class="math inline">\(H_{\ell-1}:[B,d_{\text{in}}]\)</span> and <span class="math inline">\(W_\ell:[d_{\text{in}},d_{\text{out}}]\)</span>, give the shapes of <span class="math inline">\(Z_\ell\)</span> and <span class="math inline">\(\partial L/\partial W_\ell\)</span>.</p></li>
+<li><p>Why does ReLU initialization use <span class="math inline">\(2/\text{fan-in}\)</span> rather than <span class="math inline">\(1/\text{fan-in}\)</span>?</p></li>
+<li><p>Prediction: if every layer reduces activation RMS by <span class="math inline">\(20\%\)</span>, approximately what fraction remains after 10 layers?</p></li>
+<li><p>Debugging: activation RMS looks healthy, but nearly every ReLU unit is active. What statistic should you inspect besides RMS?</p></li>
+<li><p>Why can a deep MLP have healthy forward activations but unstable gradients?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def run_mlp(gain):
+    weights = []
+
+    for _ in range(depth):
+        std = gain / math.sqrt(D)
+        W = (torch.randn(D, D) * std).requires_grad_()
+        weights.append(W)
+
+    X = X_base.clone().requires_grad_()
+    h = X
+    activation_rms = []
+
+    for W in weights:
+        z = h @ W
+        h = torch.relu(z)
+        activation_rms.append(
+            h.square().mean().sqrt().item()
+        )
+
+    probe = torch.randn_like(h) / math.sqrt(h.numel())
+    loss = (h * probe).sum()
+    loss.backward()
+
+    input_grad_rms = X.grad.square().mean().sqrt().item()
+    return activation_rms, input_grad_rms</code></pre>
+<p>Expected pattern:</p>
+<ul>
+<li><p><code>small</code>: activation RMS progressively shrinks.</p></li>
+<li><p><code>kaiming</code>: activation scale is approximately preserved.</p></li>
+<li><p><code>large</code>: activation RMS progressively grows.</p></li>
+</ul>
+<p>With <code>relu(z - 5)</code>, most preactivations fall below the threshold. The active fraction approaches zero, and the corresponding ReLU derivatives become zero. This can eliminate the gradient flowing to earlier layers.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Both <span class="math inline">\(Z_\ell\)</span> and its upstream gradient have shape <span><code>[</code></span><code>B, d_out</code><span><code>]</code></span>. The weight gradient is:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial W_\ell}
+  =
+  H_{\ell-1}^{\top}
+  \frac{\partial L}{\partial Z_\ell}
+  \in\mathbb{R}^{d_{\text{in}}\times d_{\text{out}}}\]</span></p></li>
+<li><p>ReLU sets roughly half its inputs to zero, so the factor of two compensates for the lost squared signal.</p></li>
+<li><p>Approximately:</p>
+<p><span class="math display">\[0.8^{10}\approx0.107\]</span></p>
+<p>Only about <span class="math inline">\(11\%\)</span> remains.</p></li>
+<li><p>Inspect the activation mean, preactivation distribution, active-unit fraction, and per-neuron statistics. RMS alone can hide a large positive shift.</p></li>
+<li><p>Backward propagation also depends on weight transposes, activation derivatives, residual paths, loss scaling, and correlations ignored by the initialization assumptions.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial W}=X^\top\Delta\]</span></p>
+<p>Momentum state contains information accumulated from previous gradients; resetting it converts the update back into ordinary SGD.</p>

@@ -1,0 +1,206 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A tensor is a block of memory plus a <em>shape</em> and a <em>stride</em>: element <span class="math inline">\((i,j)\)</span> lives at offset <span class="math inline">\(i\cdot s_0+j\cdot s_1\)</span>. Transposing swaps the strides without moving data. Most PyTorch confusion (view vs reshape, contiguous, squeeze) is about this one fact.</p>
+</div>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Operation</strong></th>
+<th style="text-align: left;"><strong>What it really does</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>x.T</code>, <code>transpose</code>, <code>permute</code></td>
+<td style="text-align: left;">new strides, same memory</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>view</code></td>
+<td style="text-align: left;">new shape, same memory; fails if the strides don’t allow it</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>reshape</code></td>
+<td style="text-align: left;"><code>view</code> if possible, otherwise copies</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>squeeze</code> / <code>unsqueeze</code></td>
+<td style="text-align: left;">remove / add a size-1 dimension</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>flatten(1)</code></td>
+<td style="text-align: left;">merge all dims from 1 onward, e.g. <span class="math inline">\((B,C,H,W)\to(B,CHW)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>cat</code> / <code>stack</code></td>
+<td style="text-align: left;">join along an existing / a new dimension</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>gather(dim, idx)</code></td>
+<td style="text-align: left;">pick one entry per row, e.g. the target token’s log-prob</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>a @ b</code></td>
+<td style="text-align: left;">batched matmul; leading dims broadcast</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The seven tasks at the end of the script are the ones you actually write when building a transformer: a causal mask, one-hot targets, batched outer products, top-<span class="math inline">\(k\)</span> logit filtering for sampling, a padding mask from lengths, attention with <code>einsum</code> (checked against PyTorch’s fused kernel), and <code>repeat_interleave</code> to expand grouped-query KV heads.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Toolkit ch. 3: PyTorch tensor operations, plus seven transformer-flavoured tasks.&quot;&quot;&quot;
+import torch
+
+torch.manual_seed(0)
+
+# Creation and special tensors.
+print(&quot;[create]&quot;, torch.arange(0, 10, 3).tolist(), torch.linspace(0, 1, 5).tolist())
+print(&quot;[create] eye(3) diag:&quot;, torch.eye(3).diagonal().tolist(), &quot; zeros_like:&quot;, torch.zeros_like(torch.eye(2)).shape)
+
+# Strides: view needs contiguous memory, reshape copies when it must.
+x = torch.arange(12).reshape(3, 4)
+xt = x.T
+print(f&quot;[stride] x {tuple(x.shape)} stride {x.stride()} | x.T stride {xt.stride()} contiguous={xt.is_contiguous()}&quot;)
+try:
+    xt.view(12)
+except RuntimeError:
+    print(&quot;[stride] x.T.view(12) -&gt; RuntimeError; x.T.reshape(12) -&gt;&quot;, xt.reshape(12)[:6].tolist())
+
+# squeeze / unsqueeze / flatten.
+v = torch.randn(4)
+print(f&quot;[shape] unsqueeze(0) {tuple(v.unsqueeze(0).shape)}  unsqueeze(1) {tuple(v.unsqueeze(1).shape)}&quot;
+      f&quot;  squeeze {tuple(v[None, :, None].squeeze().shape)}  flatten {tuple(torch.randn(2, 3, 4).flatten(1).shape)}&quot;)
+
+# cat vs stack.
+a, b = torch.randn(2, 3), torch.randn(2, 3)
+print(f&quot;[join] cat dim0 {tuple(torch.cat([a, b]).shape)}  stack dim0 {tuple(torch.stack([a, b]).shape)}&quot;)
+
+# Indexing: gather picks the logit of each target token -&gt; cross-entropy by hand.
+logits, y = torch.randn(4, 10), torch.tensor([3, 0, 9, 1])
+nll = -(logits.log_softmax(-1).gather(1, y[:, None]).squeeze(1)).mean()
+print(f&quot;[gather] manual CE {nll:.5f}  F.cross_entropy {torch.nn.functional.cross_entropy(logits, y):.5f}&quot;)
+
+# Batched matmul broadcasts the batch dims: (2,1,3,4) @ (5,4,6) -&gt; (2,5,3,6).
+print(&quot;[matmul]&quot;, tuple((torch.randn(2, 1, 3, 4) @ torch.randn(5, 4, 6)).shape))
+
+# Seven tasks.
+T = 5
+causal = torch.tril(torch.ones(T, T, dtype=torch.bool))                        # 1 causal mask
+onehot = torch.nn.functional.one_hot(torch.tensor([2, 0, 1]), 4)              # 2 one-hot
+outer = torch.einsum(&quot;bi,bj-&gt;bij&quot;, torch.randn(3, 4), torch.randn(3, 2))       # 3 batched outer product
+z = torch.randn(2, 8)
+kth = z.topk(3, dim=-1).values[:, -1:]
+topk = z.masked_fill(z &lt; kth, float(&quot;-inf&quot;))                                 # 4 top-k logits mask
+lens = torch.tensor([3, 5])
+pad = torch.arange(T)[None, :] &lt; lens[:, None]                               # 5 padding mask
+Q, K, V = (torch.randn(2, 4, T, 8) for _ in range(3))
+att = torch.einsum(&quot;bhqd,bhkd-&gt;bhqk&quot;, Q, K) / 8**0.5
+att = att.masked_fill(~causal, float(&quot;-inf&quot;)).softmax(-1)
+out = torch.einsum(&quot;bhqk,bhkd-&gt;bhqd&quot;, att, V)                                 # 6 attention with einsum
+ref = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=True)
+kv = torch.randn(2, 2, T, 8).repeat_interleave(2, dim=1)                      # 7 GQA: 2 kv heads -&gt; 4
+print(f&quot;[tasks] causal row2 {causal[2].int().tolist()}  onehot {onehot[0].tolist()}  outer {tuple(outer.shape)}&quot;)
+print(f&quot;[tasks] top-k kept per row {(topk &gt; float(&#x27;-inf&#x27;)).sum(1).tolist()}  pad {pad.int().tolist()}&quot;)
+print(f&quot;[tasks] einsum attention == SDPA: {torch.allclose(out, ref, atol=1e-5)}  GQA kv {tuple(kv.shape)}&quot;)</code></pre>
+<pre class="code output"><code class="output">[create] [0, 3, 6, 9] [0.0, 0.25, 0.5, 0.75, 1.0]
+[create] eye(3) diag: [1.0, 1.0, 1.0]  zeros_like: torch.Size([2, 2])
+[stride] x (3, 4) stride (4, 1) | x.T stride (1, 4) contiguous=False
+[stride] x.T.view(12) -&gt; RuntimeError; x.T.reshape(12) -&gt; [0, 4, 8, 1, 5, 9]
+[shape] unsqueeze(0) (1, 4)  unsqueeze(1) (4, 1)  squeeze (4,)  flatten (2, 12)
+[join] cat dim0 (4, 3)  stack dim0 (2, 2, 3)
+[gather] manual CE 2.72262  F.cross_entropy 2.72262
+[matmul] (2, 5, 3, 6)
+[tasks] causal row2 [1, 1, 1, 0, 0]  onehot [0, 0, 1, 0]  outer (3, 4, 2)
+[tasks] top-k kept per row [3, 3]  pad [[1, 1, 1, 0, 0], [1, 1, 1, 1, 1]]
+[tasks] einsum attention == SDPA: True  GQA kv (2, 4, 5, 8)</code></pre>
+<h2 class="unnumbered" id="the-same-ideas-in-keras">The same ideas in Keras</h2>
+<p>The TensorFlow track of the curriculum has 27 lessons, but most of them are the same models in a different API: linear models, CNNs, save/restore, transfer learning, fine-tuning, adversarial noise, DeepDream and style transfer, input pipelines, time series. Three translation rules cover almost everything:</p>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>PyTorch</strong></th>
+<th style="text-align: left;"><strong>TensorFlow / Keras</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>nn.Module.forward</code></td>
+<td style="text-align: left;"><code>keras.Model</code> / functional API</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>loss.backward()</code></td>
+<td style="text-align: left;"><code>tf.GradientTape().gradient(loss, vars)</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>DataLoader</code></td>
+<td style="text-align: left;"><code>tf.data.Dataset.shuffle().batch().prefetch()</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>torch.save(state_dict)</code></td>
+<td style="text-align: left;"><code>model.save("m.keras")</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>requires_grad_(False)</code></td>
+<td style="text-align: left;"><code>layer.trainable = False</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>torch.compile</code></td>
+<td style="text-align: left;"><code>@tf.function</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Adversarial examples, DeepDream and style transfer share one trick: take the gradient with respect to the <em>input</em> instead of the weights. FGSM moves the image by <span class="math inline">\(\epsilon\operatorname{sign}(\nabla_xL)\)</span>, the largest loss increase allowed inside an <span class="math inline">\(L_\infty\)</span> ball of radius <span class="math inline">\(\epsilon\)</span> (to first order, <span class="math inline">\(\max_{\lVert\delta\rVert_\infty\le\epsilon}\nabla_xL\cdot\delta=\epsilon\lVert\nabla_xL\rVert_1\)</span>, reached at the sign vector). DeepDream ascends a layer’s activation norm; style transfer descends a loss on Gram matrices of features.</p>
+<p>The listing below was <em>not run</em>: TensorFlow is not installed in this book’s environment. It targets the Keras 3 API.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Toolkit ch. 3b: the same ideas in TensorFlow/Keras. NOT run here (TensorFlow is not installed);
+written against the Keras 3 API (pip install tensorflow==2.20.0).&quot;&quot;&quot;
+import tensorflow as tf
+from tensorflow import keras
+
+# 1. tf.data: a streaming input pipeline (the TFRecords / Dataset API lessons).
+(x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+x_train, x_test = x_train[..., None] / 255.0, x_test[..., None] / 255.0
+train = (tf.data.Dataset.from_tensor_slices((x_train, y_train))
+         .shuffle(10_000).batch(128).prefetch(tf.data.AUTOTUNE))
+
+# 2. A small CNN with the Keras functional API.
+inp = keras.Input((28, 28, 1))
+h = keras.layers.Conv2D(32, 3, activation=&quot;relu&quot;)(inp)
+h = keras.layers.MaxPooling2D()(h)
+h = keras.layers.Conv2D(64, 3, activation=&quot;relu&quot;)(h)
+h = keras.layers.GlobalAveragePooling2D()(h)
+out = keras.layers.Dense(10)(h)                      # logits
+model = keras.Model(inp, out)
+model.compile(optimizer=keras.optimizers.AdamW(1e-3),
+              loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+              metrics=[&quot;accuracy&quot;])
+model.fit(train, epochs=2, validation_data=(x_test, y_test))
+
+# 3. Save and restore.
+model.save(&quot;mnist_cnn.keras&quot;)
+model = keras.models.load_model(&quot;mnist_cnn.keras&quot;)
+
+
+# 4. A custom training step with GradientTape (what model.fit does inside).
+@tf.function
+def train_step(x, y):
+    with tf.GradientTape() as tape:
+        loss = model.compiled_loss(y, model(x, training=True))
+    grads = tape.gradient(loss, model.trainable_variables)
+    model.optimizer.apply_gradients(zip(grads, model.trainable_variables))
+    return loss
+
+
+# 5. Adversarial example (FGSM): step the *input* along the sign of the loss gradient.
+def fgsm(x, y, eps=0.1):
+    x = tf.convert_to_tensor(x, tf.float32)
+    with tf.GradientTape() as tape:
+        tape.watch(x)
+        loss = keras.losses.sparse_categorical_crossentropy(y, model(x), from_logits=True)
+    return tf.clip_by_value(x + eps * tf.sign(tape.gradient(loss, x)), 0.0, 1.0)
+
+
+# 6. Transfer learning: freeze a pretrained backbone, train a new head, then unfreeze to fine-tune.
+base = keras.applications.MobileNetV3Small(include_top=False, weights=&quot;imagenet&quot;, pooling=&quot;avg&quot;)
+base.trainable = False
+clf = keras.Sequential([base, keras.layers.Dense(5)])</code></pre>

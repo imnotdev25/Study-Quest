@@ -1,0 +1,335 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> The <em>harness</em> is all the code around the model: the loop, the tool definitions and their implementations, the system prompt, memory files, context management, permissions and sandboxing, verification, and the user interface. The same model can score very differently in different harnesses, so a benchmark result is a result for a (model, harness) pair. <strong>Real-life version:</strong> the model is the driver, the harness is the car: steering, brakes, mirrors and the satnav.</p>
+</div>
+<h2 class="unnumbered" id="anatomy">Anatomy</h2>
+<div class="center">
+<table style="width:90%;">
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 71%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Component</strong></th>
+<th style="text-align: left;"><strong>Design questions</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Loop</td>
+<td style="text-align: left;">one tool per step or parallel calls? step and token limits? who decides “done”?</td>
+</tr>
+<tr>
+<td style="text-align: left;">Tools</td>
+<td style="text-align: left;">few general tools (bash, read, edit) or many specific ones? clear names, typed schemas, examples in the description, errors that say how to fix the call</td>
+</tr>
+<tr>
+<td style="text-align: left;">Edit format</td>
+<td style="text-align: left;">whole file, search/replace blocks, unified diff, or exact string replacement; how failures are reported</td>
+</tr>
+<tr>
+<td style="text-align: left;">Context</td>
+<td style="text-align: left;">what is loaded at start (memory files, repo map), how outputs are truncated, when to compact</td>
+</tr>
+<tr>
+<td style="text-align: left;">Permissions</td>
+<td style="text-align: left;">read-only vs write vs shell; allowlists; approval prompts; a sandbox (container, VM, OS-level) for anything risky</td>
+</tr>
+<tr>
+<td style="text-align: left;">Verification</td>
+<td style="text-align: left;">run tests, linters or type checks automatically; feed results back; refuse “done” until they pass</td>
+</tr>
+<tr>
+<td style="text-align: left;">Extensibility</td>
+<td style="text-align: left;">MCP servers for external tools, hooks on events, reusable skills or commands, subagents</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 class="unnumbered" id="a-minimal-harness">A minimal harness</h2>
+<p>The harness below has each component in miniature: typed tool schemas, a workspace that refuses paths outside itself, errors returned as observations, a permission gate on dangerous tools, output truncation, the project memory file in the system prompt, token accounting, and a definition of done that the <em>harness</em> checks by running the tests. The model is a scripted stand-in so it runs offline; it makes three realistic mistakes (an ambiguous edit, a forbidden delete, and claiming success too early), and the harness catches each one.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Agents ch. &#x27;Harnesses&#x27;: a minimal coding-agent harness. Tool registry with schemas, a ReAct loop,
+a permission gate, memory file loading, output truncation, token accounting, and a harness-side
+definition of done (it runs the tests itself before accepting &#x27;finished&#x27;).
+
+The model is a scripted stand-in so the harness runs offline. It sees only the transcript, as a real
+model would. Replace ScriptedModel.step with an API call (see ag_api.py) to drive it with an LLM.&quot;&quot;&quot;
+import json
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+FILES = {
+    &quot;AGENTS.md&quot;: &quot;# Project notes\n- Run tests with run_tests before saying you are done.\n- Never delete files.\n&quot;,
+    &quot;calc.py&quot;: &quot;def add(a, b):\n    return a - b\n\n\ndef mul(a, b):\n    return a * b\n&quot;,
+    &quot;test_calc.py&quot;: &quot;from calc import add, mul\n\nassert add(2, 3) == 5, f&#x27;add(2, 3) = {add(2, 3)}&#x27;\n&quot;
+                    &quot;assert mul(2, 3) == 6\nprint(&#x27;PASS&#x27;)\n&quot;,
+    &quot;NOTES.txt&quot;: &quot;scratch\n&quot;,
+}
+
+TOOLS = {
+    &quot;list_files&quot;: {&quot;desc&quot;: &quot;List files in the workspace.&quot;, &quot;params&quot;: {}},
+    &quot;read_file&quot;: {&quot;desc&quot;: &quot;Read a file; returns numbered lines.&quot;, &quot;params&quot;: {&quot;path&quot;: str}},
+    &quot;grep&quot;: {&quot;desc&quot;: &quot;Search all files for a regex; returns path:line: text.&quot;, &quot;params&quot;: {&quot;pattern&quot;: str}},
+    &quot;edit&quot;: {&quot;desc&quot;: &quot;Replace one exact, unique occurrence of `old` with `new` in `path`.&quot;,
+             &quot;params&quot;: {&quot;path&quot;: str, &quot;old&quot;: str, &quot;new&quot;: str}},
+    &quot;run_tests&quot;: {&quot;desc&quot;: &quot;Run the test suite; returns PASS or the failure output.&quot;, &quot;params&quot;: {}},
+    &quot;delete_file&quot;: {&quot;desc&quot;: &quot;Delete a file.&quot;, &quot;params&quot;: {&quot;path&quot;: str}, &quot;dangerous&quot;: True},
+}
+
+
+class Workspace:
+    def __init__(self, files):
+        self.root = pathlib.Path(tempfile.mkdtemp(prefix=&quot;agent_ws_&quot;))
+        for name, text in files.items():
+            (self.root / name).write_text(text)
+
+    def path(self, p):
+        full = (self.root / p).resolve()
+        if self.root.resolve() not in full.parents:          # no escaping the workspace
+            raise ValueError(&quot;path outside workspace&quot;)
+        return full
+
+    def files(self):
+        return sorted(p for p in self.root.iterdir() if p.is_file())
+
+    def list_files(self):
+        return &quot;\n&quot;.join(sorted(p.name for p in self.files()))
+
+    def read_file(self, path):
+        return &quot;\n&quot;.join(f&quot;{i + 1:3d} {l}&quot; for i, l in enumerate(self.path(path).read_text().splitlines()))
+
+    def grep(self, pattern):
+        rx = re.compile(pattern)
+        return &quot;\n&quot;.join(f&quot;{p.name}:{i + 1}: {l}&quot; for p in self.files()
+                         for i, l in enumerate(p.read_text().splitlines()) if rx.search(l)) or &quot;no matches&quot;
+
+    def edit(self, path, old, new):
+        text = self.path(path).read_text()
+        n = text.count(old)
+        if n != 1:
+            raise ValueError(f&quot;`old` occurs {n} times in {path}; it must be unique. Include more context.&quot;)
+        self.path(path).write_text(text.replace(old, new))
+        return f&quot;edited {path}&quot;
+
+    def run_tests(self):
+        r = subprocess.run([sys.executable, &quot;test_calc.py&quot;], cwd=self.root, capture_output=True, text=True, timeout=10)
+        return &quot;PASS&quot; if r.returncode == 0 else (r.stdout + r.stderr).strip().splitlines()[-1]
+
+    def delete_file(self, path):
+        self.path(path).unlink()
+        return f&quot;deleted {path}&quot;
+
+
+class Harness:
+    def __init__(self, ws, model, allow_dangerous=(), max_steps=15, max_obs_chars=300):
+        self.ws, self.model, self.allow = ws, model, set(allow_dangerous)
+        self.max_steps, self.max_obs = max_steps, max_obs_chars
+        self.input_tokens = 0
+
+    def system_prompt(self):
+        tools = &quot;\n&quot;.join(f&quot;- {n}({&#x27;, &#x27;.join(t[&#x27;params&#x27;])}): {t[&#x27;desc&#x27;]}&quot; for n, t in TOOLS.items())
+        memory = (self.ws.root / &quot;AGENTS.md&quot;).read_text()      # project memory file, loaded every session
+        return (f&quot;You are a coding agent. Use one tool per step.\nFormat: Thought: ... then &quot;
+                f&quot;Action: tool {{json args}}, or Final: &lt;summary&gt;.\nTools:\n{tools}\n\n{memory}&quot;)
+
+    def call_tool(self, name, args):
+        spec = TOOLS.get(name)
+        if spec is None:
+            return f&quot;error: unknown tool {name}&quot;
+        bad = [k for k, t in spec[&quot;params&quot;].items() if not isinstance(args.get(k), t)]
+        if bad:
+            return f&quot;error: missing or invalid arguments {bad}&quot;
+        if spec.get(&quot;dangerous&quot;) and name not in self.allow:
+            return f&quot;permission denied: {name} needs user approval (policy)&quot;
+        try:
+            out = getattr(self.ws, name)(**args)
+        except Exception as e:                                # errors become observations, not crashes
+            return f&quot;error: {e}&quot;
+        return out if len(out) &lt;= self.max_obs else out[:self.max_obs] + f&quot;... [{len(out) - self.max_obs} chars truncated]&quot;
+
+    def run(self, goal):
+        msgs = [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: self.system_prompt()}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: goal}]
+        for step in range(1, self.max_steps + 1):
+            self.input_tokens += sum(len(m[&quot;content&quot;]) for m in msgs) // 4   # whole transcript re-sent
+            act = self.model.step(msgs)
+            if &quot;final&quot; in act:
+                msgs.append({&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Final: &quot; + act[&quot;final&quot;]})
+                check = self.ws.run_tests()                    # definition of done, enforced by the harness
+                print(f&quot;[step {step:2d}] Final: {act[&#x27;final&#x27;]}  -&gt; harness verification: {check}&quot;)
+                if check == &quot;PASS&quot;:
+                    return step
+                msgs.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;Verification failed: {check}. Keep working.&quot;})
+                continue
+            msgs.append({&quot;role&quot;: &quot;assistant&quot;,
+                         &quot;content&quot;: f&quot;Thought: {act[&#x27;thought&#x27;]}\nAction: {act[&#x27;tool&#x27;]} {json.dumps(act[&#x27;args&#x27;])}&quot;})
+            obs = self.call_tool(act[&quot;tool&quot;], act[&quot;args&quot;])
+            msgs.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Observation: &quot; + obs})
+            short = obs.replace(&quot;\n&quot;, &quot; | &quot;)
+            print(f&quot;[step {step:2d}] {act[&#x27;tool&#x27;]}{json.dumps(act[&#x27;args&#x27;])[:60]}\n          -&gt; {short[:95]}&quot;)
+        return None
+
+
+class ScriptedModel:
+    &quot;&quot;&quot;Offline stand-in for an LLM: a fixed plan that reacts to what it observes.&quot;&quot;&quot;
+
+    def __init__(self):
+        self.s = 0
+
+    def step(self, msgs):
+        obs, s = msgs[-1][&quot;content&quot;], self.s
+        act = lambda t, tool, **a: {&quot;thought&quot;: t, &quot;tool&quot;: tool, &quot;args&quot;: a}
+        plan = {
+            0: lambda: act(&quot;Reproduce the failure first.&quot;, &quot;run_tests&quot;),
+            1: lambda: act(&quot;add is wrong; find it.&quot;, &quot;grep&quot;, pattern=r&quot;def add&quot;),
+            2: lambda: act(&quot;Read the file.&quot;, &quot;read_file&quot;, path=&quot;calc.py&quot;),
+            3: lambda: act(&quot;Change the return line.&quot;, &quot;edit&quot;, path=&quot;calc.py&quot;, old=&quot;return a&quot;, new=&quot;return abs(a&quot;),
+            4: lambda: act(&quot;Too vague; be specific.&quot;, &quot;edit&quot;, path=&quot;calc.py&quot;, old=&quot;return a - b&quot;, new=&quot;return abs(a - b)&quot;),
+            5: lambda: act(&quot;Tidy up the scratch file.&quot;, &quot;delete_file&quot;, path=&quot;NOTES.txt&quot;),
+            6: lambda: {&quot;final&quot;: &quot;Fixed add.&quot;},
+            7: lambda: act(&quot;abs() is wrong: add must sum.&quot;, &quot;edit&quot;, path=&quot;calc.py&quot;, old=&quot;return abs(a - b)&quot;, new=&quot;return a + b&quot;),
+            8: lambda: act(&quot;Check.&quot;, &quot;run_tests&quot;),
+            9: lambda: {&quot;final&quot;: &quot;add now returns a + b; tests pass.&quot;},
+        }
+        self.s += 1
+        return plan[s]()
+
+
+ws = Workspace(FILES)
+h = Harness(ws, ScriptedModel())
+steps = h.run(&quot;The add() test fails. Fix it.&quot;)
+print(f&quot;[harness] verified done in {steps} steps; ~{h.input_tokens:,} input tokens over the run &quot;
+      f&quot;(the full transcript is re-sent every step)&quot;)
+print(f&quot;[harness] NOTES.txt still exists: {(ws.root / &#x27;NOTES.txt&#x27;).exists()}&quot;)
+shutil.rmtree(ws.root)</code></pre>
+<pre class="code output"><code class="output">[step  1] run_tests{}
+          -&gt; AssertionError: add(2, 3) = -1
+[step  2] grep{&quot;pattern&quot;: &quot;def add&quot;}
+          -&gt; calc.py:1: def add(a, b):
+[step  3] read_file{&quot;path&quot;: &quot;calc.py&quot;}
+          -&gt;   1 def add(a, b): |   2     return a - b |   3  |   4  |   5 def mul(a, b): |   6     return a
+[step  4] edit{&quot;path&quot;: &quot;calc.py&quot;, &quot;old&quot;: &quot;return a&quot;, &quot;new&quot;: &quot;return abs(a&quot;
+          -&gt; error: `old` occurs 2 times in calc.py; it must be unique. Include more context.
+[step  5] edit{&quot;path&quot;: &quot;calc.py&quot;, &quot;old&quot;: &quot;return a - b&quot;, &quot;new&quot;: &quot;return ab
+          -&gt; edited calc.py
+[step  6] delete_file{&quot;path&quot;: &quot;NOTES.txt&quot;}
+          -&gt; permission denied: delete_file needs user approval (policy)
+[step  7] Final: Fixed add.  -&gt; harness verification: AssertionError: add(2, 3) = 1
+[step  8] edit{&quot;path&quot;: &quot;calc.py&quot;, &quot;old&quot;: &quot;return abs(a - b)&quot;, &quot;new&quot;: &quot;retu
+          -&gt; edited calc.py
+[step  9] run_tests{}
+          -&gt; PASS
+[step 10] Final: add now returns a + b; tests pass.  -&gt; harness verification: PASS
+[harness] verified done in 10 steps; ~3,049 input tokens over the run (the full transcript is re-sent every step)
+[harness] NOTES.txt still exists: True</code></pre>
+<p>Driving the same tools with a real model through the Anthropic Messages API (not run here; it needs a key and network):</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Agents ch. &#x27;Harnesses&#x27;: the same loop driven by a real model through the Anthropic Messages API.
+NOT run here (needs an API key and network). Pin the SDK version you test with: pip install anthropic==&lt;x.y.z&gt;.
+Reads the key from the ANTHROPIC_API_KEY environment variable; never hard-code it.&quot;&quot;&quot;
+import anthropic
+
+from ag_harness import FILES, TOOLS, Workspace
+
+client = anthropic.Anthropic()
+MODEL = &quot;claude-sonnet-5-5&quot;
+PY2JSON = {str: &quot;string&quot;, int: &quot;integer&quot;}
+
+tools = [{&quot;name&quot;: n, &quot;description&quot;: t[&quot;desc&quot;],
+          &quot;input_schema&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;required&quot;: list(t[&quot;params&quot;]),
+                           &quot;properties&quot;: {k: {&quot;type&quot;: PY2JSON[v]} for k, v in t[&quot;params&quot;].items()}}}
+         for n, t in TOOLS.items() if not t.get(&quot;dangerous&quot;)]          # dangerous tools simply not offered
+
+ws = Workspace(FILES)
+system = [{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;You are a coding agent. Verify with run_tests before you finish.\n\n&quot;
+           + (ws.root / &quot;AGENTS.md&quot;).read_text(),
+           &quot;cache_control&quot;: {&quot;type&quot;: &quot;ephemeral&quot;}}]                    # stable prefix -&gt; prompt cache
+messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;The add() test fails. Fix it.&quot;}]
+
+for step in range(20):
+    resp = client.messages.create(model=MODEL, max_tokens=2048, system=system, tools=tools, messages=messages)
+    messages.append({&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: resp.content})
+    if resp.stop_reason != &quot;tool_use&quot;:
+        if ws.run_tests() == &quot;PASS&quot;:                                   # the harness checks, not the model
+            break
+        messages.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Tests still fail. Keep going.&quot;})
+        continue
+    results = []
+    for block in resp.content:                                         # the model may call several tools at once
+        if block.type == &quot;tool_use&quot;:
+            try:
+                out = getattr(ws, block.name)(**block.input)
+            except Exception as e:
+                out = f&quot;error: {e}&quot;
+            results.append({&quot;type&quot;: &quot;tool_result&quot;, &quot;tool_use_id&quot;: block.id, &quot;content&quot;: out[:4000]})
+    messages.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: results})
+print(ws.run_tests(), f&quot;after {step + 1} model calls&quot;)</code></pre>
+<h2 class="unnumbered" id="popular-harnesses">Popular harnesses</h2>
+<p>Features change monthly; this table is from general knowledge, not from the current docs. Check each tool’s documentation before relying on a detail.</p>
+<div class="center">
+<table style="width:91%;">
+<colgroup>
+<col style="width: 16%" />
+<col style="width: 47%" />
+<col style="width: 28%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Harness</strong></th>
+<th style="text-align: left;"><strong>Distinctive design</strong></th>
+<th style="text-align: left;"><strong>Memory / config</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Claude Code</td>
+<td style="text-align: left;">terminal agent with bash, file and search tools; permission modes and plan mode; subagents with their own context; hooks; skills; MCP; context compaction</td>
+<td style="text-align: left;"><code>CLAUDE.md</code> (user, project, nested)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Codex CLI</td>
+<td style="text-align: left;">open-source terminal agent; OS-level sandbox with approval modes; runs locally or as cloud tasks</td>
+<td style="text-align: left;"><code>AGENTS.md</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">Gemini CLI</td>
+<td style="text-align: left;">open-source terminal agent; MCP; large context window</td>
+<td style="text-align: left;"><code>GEMINI.md</code> (configurable)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Aider</td>
+<td style="text-align: left;">pair programming in git: a tree-sitter <em>repo map</em> of signatures as context, several edit formats, a commit per change, architect/editor split</td>
+<td style="text-align: left;">conventions file, <code>.aider.conf.yml</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">OpenHands</td>
+<td style="text-align: left;">CodeAct agent: actions as code and shell in a Docker sandbox; web UI; many agent types</td>
+<td style="text-align: left;">microagents / repo instructions</td>
+</tr>
+<tr>
+<td style="text-align: left;">SWE-agent</td>
+<td style="text-align: left;">research harness built around an <em>agent–computer interface</em>: a file viewer with scrolling, search, and edits that lint before applying; <em>mini-SWE-agent</em> shows a bash-only loop of about 100 lines is competitive</td>
+<td style="text-align: left;">YAML configs</td>
+</tr>
+<tr>
+<td style="text-align: left;">Cursor (agent)</td>
+<td style="text-align: left;">IDE agent with codebase indexing, background agents</td>
+<td style="text-align: left;"><code>.cursor/rules</code>, <code>AGENTS.md</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">Cline</td>
+<td style="text-align: left;">VS Code extension with plan/act modes and per-step approvals</td>
+<td style="text-align: left;"><code>.clinerules</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">Kiro</td>
+<td style="text-align: left;">IDE with spec-driven development (requirements, design, tasks), steering files and event hooks</td>
+<td style="text-align: left;">steering files</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>What the designs agree on.</strong> Simple, general tools (a shell is the universal tool) beat many bespoke ones; edits must fail loudly when ambiguous; tests and linters close the loop; a memory file per repository; isolation (sandboxes, subagents) for safety and for context; and the human sets goals and approves risky actions.</p>

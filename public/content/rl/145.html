@@ -1,0 +1,420 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>In self-normalized DR, which component is normalized: the model baseline or the residual correction?</p></li>
+<li><p>Why can neither DR nor SNDR correct a rare-action model error when that action is absent?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-ratio-needs-covariance-aware-uncertainty">2. A ratio needs covariance-aware uncertainty</h3>
+<p>SNIS is a ratio of two sample means:</p>
+<p><span class="math display">\[\hat V
+=
+g(\hat A,\hat B)
+=
+\underbrace{
+\frac{\hat A}{\hat B}
+}_{\text{self-normalized estimate}}\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[\hat A
+=
+\underbrace{\frac1N\sum_iw_iR_i}_{\text{mean weighted reward}},
+\qquad
+\hat B
+=
+\underbrace{\frac1N\sum_iw_i}_{\text{mean raw weight}}\]</span></p>
+<p>Think of <span class="math inline">\(g(A,B)=A/B\)</span> as a surface. Its local slopes are:</p>
+<p><span class="math display">\[\nabla g(A,B)
+=
+\left[
+\underbrace{\frac1B}_{\text{sensitivity to numerator}},
+\underbrace{-\frac{A}{B^2}}_{\text{sensitivity to denominator}}
+\right]\]</span></p>
+<p>The delta method uses these slopes to approximate how sampling noise moves the ratio:</p>
+<p><span class="math display">\[\operatorname{Var}(\hat V)
+\approx
+\underbrace{
+g_A^2\operatorname{Var}(\hat A)
+}_{\text{numerator uncertainty}}
++
+\underbrace{
+g_B^2\operatorname{Var}(\hat B)
+}_{\text{denominator uncertainty}}
++
+\underbrace{
+2g_Ag_B\operatorname{Cov}(\hat A,\hat B)
+}_{\text{shared movement}}\]</span></p>
+<p>An equivalent per-episode influence score is:</p>
+<p><span class="math display">\[\phi_i
+=
+\underbrace{
+\frac{w_i(R_i-\hat V)}
+     {\hat B}
+}_{\text{episode&#39;s first-order effect on the ratio}}\]</span></p>
+<p>giving:</p>
+<p><span class="math display">\[\widehat{SE}_{\mathrm{delta}}
+=
+\underbrace{
+\frac{\operatorname{SD}(\phi_1,\ldots,\phi_N)}
+     {\sqrt N}
+}_{\text{standard error from independent episodes}}\]</span></p>
+<p>Treating <span class="math inline">\(\hat B\)</span> as fixed ignores its covariance with the numerator. That can produce badly calibrated intervals.</p>
+<p>For SNDR, replace <span class="math inline">\(R_i\)</span> with residual <span class="math inline">\(e_i\)</span> and add baseline variation:</p>
+<p><span class="math display">\[\phi_i^{\mathrm{SNDR}}
+\approx
+\underbrace{m_i-\bar m}_{\text{baseline variation}}
++
+\underbrace{
+\frac{w_i(e_i-\hat c)}
+     {\bar w}
+}_{\text{normalized-correction variation}}\]</span></p>
+<p>where <span class="math inline">\(\hat c=\sum_iw_ie_i/\sum_iw_i\)</span>.</p>
+<p>This measures sampling uncertainty only. It does not repair model bias, missing support or an invalid reward model.</p>
+<h3 class="unnumbered" id="pytorch-exercise-the-denominator-covariance-halves-the-se">3. PyTorch exercise — the denominator covariance halves the SE</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 10_000
+episodes_per_repetition = 200
+num_bootstrap_samples = 2_000
+
+behavior_policy = torch.tensor([
+    0.90,
+    0.10,
+])
+
+target_policy = torch.tensor([
+    0.50,
+    0.50,
+])
+
+reward_by_action = torch.tensor([
+    0.0,
+    1.0,
+])
+
+z_value = 1.96
+
+
+# TODO 1: Generate logged episodes.
+actions = ...
+
+rewards = ...
+
+importance_weights = ...
+
+numerator_terms = ...
+
+exact_target_value = ...
+
+
+# TODO 2: Calculate SNIS.
+mean_numerators = ...
+
+mean_weights = ...
+
+snis_estimates = ...
+
+
+# TODO 3: Calculate a naive SE that treats
+# the random denominator as fixed.
+naive_standard_errors = ...
+
+
+# TODO 4: Calculate delta-method influence scores.
+influence_scores = ...
+
+maximum_influence_mean_error = ...
+
+delta_standard_errors = ...
+
+empirical_standard_error = ...
+
+
+# TODO 5: Compare confidence-interval coverage.
+naive_lower_bounds = ...
+naive_upper_bounds = ...
+
+delta_lower_bounds = ...
+delta_upper_bounds = ...
+
+naive_coverage = ...
+
+delta_coverage = ...
+
+numerator_weight_covariances = ...
+
+
+# Bootstrap one complete dataset for comparison.
+bootstrap_indices = ...
+
+bootstrap_weights = ...
+
+bootstrap_rewards = ...
+
+bootstrap_estimates = ...
+
+bootstrap_standard_error = ...
+
+
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+print(&quot;Mean SNIS estimate:&quot;, snis_estimates.mean().item())
+
+print(&quot;Empirical SE:&quot;, empirical_standard_error.item())
+print(
+    &quot;Mean naive SE:&quot;,
+    naive_standard_errors.mean().item(),
+)
+print(
+    &quot;Mean delta SE:&quot;,
+    delta_standard_errors.mean().item(),
+)
+print(&quot;Bootstrap SE:&quot;, bootstrap_standard_error.item())
+
+print(&quot;Naive coverage:&quot;, naive_coverage.item())
+print(&quot;Delta coverage:&quot;, delta_coverage.item())
+
+print(
+    &quot;Mean numerator/weight covariance:&quot;,
+    numerator_weight_covariances.mean().item(),
+)
+
+print(
+    &quot;Maximum mean influence error:&quot;,
+    maximum_influence_mean_error.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the covariance between <span style="background-color: codeinlinebg"><code> w * reward</code></span> and <span style="background-color: codeinlinebg"><code> w</code></span> positive or negative?</p></li>
+<li><p>Because the denominator derivative is negative, does that covariance increase or reduce variance?</p></li>
+<li><p>Will the naive interval be too narrow or too wide?</p></li>
+<li><p>Should the delta-method SE approach the empirical SD?</p></li>
+<li><p>Can a well-calibrated SE remove SNIS’s finite-sample bias?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>SNIS is:</p>
+<pre class="code python"><code class="language-python">numerator_terms.mean(dim=1) / importance_weights.mean(dim=1)</code></pre>
+<p>The influence score is:</p>
+<pre class="code python"><code class="language-python">importance_weights * (
+    rewards - snis_estimates[:, None]
+) / mean_weights[:, None]</code></pre>
+<p>Its row mean should be approximately zero—in exact arithmetic, the weighted residuals sum to zero.</p>
+<p>For the bootstrap, resample complete episode indices from one repetition. Do not resample numerator and denominator independently.</p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Bootstrap weighted rewards and weights using different episode indices.</p></li>
+<li><p>Calculate <span style="background-color: codeinlinebg"><code> std(w * reward) / sqrt(N)</code></span> and ignore denominator randomness.</p></li>
+<li><p>Divide the influence-score standard deviation by <span class="math inline">\(N\)</span> instead of <span class="math inline">\(\sqrt N\)</span>.</p></li>
+<li><p>Build intervals from individual tokens belonging to correlated trajectories.</p></li>
+<li><p>Allow gradients through propensities or frozen nuisance predictions.</p></li>
+<li><p>Multiply long token-level ratios directly; use log-ratios and <span style="background-color: codeinlinebg"><code> logsumexp</code></span> for numerical stability.</p></li>
+<li><p>Interpret delta-method coverage as evidence that the reward or propensity models are valid.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Logged data:</p>
+<pre class="code python"><code class="language-python">actions = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_repetition,
+    )
+    &lt; behavior_policy[1]
+).to(torch.long)
+
+rewards = reward_by_action[actions]
+
+importance_weights = (
+    target_policy[actions]
+    / behavior_policy[actions]
+)
+
+numerator_terms = (
+    importance_weights * rewards
+)
+
+exact_target_value = (
+    target_policy * reward_by_action
+).sum()</code></pre>
+<p>SNIS:</p>
+<pre class="code python"><code class="language-python">mean_numerators = (
+    numerator_terms.mean(dim=1)
+)
+
+mean_weights = (
+    importance_weights.mean(dim=1)
+)
+
+snis_estimates = (
+    mean_numerators
+    / mean_weights.clamp_min(1e-12)
+)</code></pre>
+<p>Naive standard error:</p>
+<pre class="code python"><code class="language-python">naive_standard_errors = (
+    numerator_terms.std(
+        dim=1,
+        correction=1,
+    )
+    / (
+        math.sqrt(episodes_per_repetition)
+        * mean_weights.clamp_min(1e-12)
+    )
+)</code></pre>
+<p>Delta-method standard error:</p>
+<pre class="code python"><code class="language-python">influence_scores = (
+    importance_weights
+    * (
+        rewards
+        - snis_estimates[:, None]
+    )
+    / mean_weights[
+        :,
+        None,
+    ].clamp_min(1e-12)
+)
+
+maximum_influence_mean_error = (
+    influence_scores.mean(dim=1)
+    .abs()
+    .max()
+)
+
+delta_standard_errors = (
+    influence_scores.std(
+        dim=1,
+        correction=1,
+    )
+    / math.sqrt(episodes_per_repetition)
+)
+
+empirical_standard_error = (
+    snis_estimates.std(correction=1)
+)</code></pre>
+<p>Coverage:</p>
+<pre class="code python"><code class="language-python">naive_lower_bounds = (
+    snis_estimates
+    - z_value * naive_standard_errors
+)
+
+naive_upper_bounds = (
+    snis_estimates
+    + z_value * naive_standard_errors
+)
+
+delta_lower_bounds = (
+    snis_estimates
+    - z_value * delta_standard_errors
+)
+
+delta_upper_bounds = (
+    snis_estimates
+    + z_value * delta_standard_errors
+)
+
+naive_coverage = (
+    (
+        (naive_lower_bounds &lt;= exact_target_value)
+        &amp; (
+            exact_target_value
+            &lt;= naive_upper_bounds
+        )
+    )
+    .to(torch.float64)
+    .mean()
+)
+
+delta_coverage = (
+    (
+        (delta_lower_bounds &lt;= exact_target_value)
+        &amp; (
+            exact_target_value
+            &lt;= delta_upper_bounds
+        )
+    )
+    .to(torch.float64)
+    .mean()
+)
+
+centered_numerators = (
+    numerator_terms
+    - mean_numerators[:, None]
+)
+
+centered_weights = (
+    importance_weights
+    - mean_weights[:, None]
+)
+
+numerator_weight_covariances = (
+    (
+        centered_numerators
+        * centered_weights
+    ).sum(dim=1)
+    / (episodes_per_repetition - 1)
+)</code></pre>
+<p>Episode bootstrap:</p>
+<pre class="code python"><code class="language-python">bootstrap_indices = torch.randint(
+    low=0,
+    high=episodes_per_repetition,
+    size=(
+        num_bootstrap_samples,
+        episodes_per_repetition,
+    ),
+)
+
+bootstrap_weights = (
+    importance_weights[0][bootstrap_indices]
+)
+
+bootstrap_rewards = (
+    rewards[0][bootstrap_indices]
+)
+
+bootstrap_estimates = (
+    (
+        bootstrap_weights
+        * bootstrap_rewards
+    ).sum(dim=1)
+    / bootstrap_weights.sum(
+        dim=1
+    ).clamp_min(1e-12)
+)
+
+bootstrap_standard_error = (
+    bootstrap_estimates.std(
+        correction=1
+    )
+)</code></pre>
+<p>Typical results:</p>
+<ul>
+<li><p>mean SNIS estimate: approximately <span style="background-color: codeinlinebg"><code> 0.494</code></span>;</p></li>
+<li><p>empirical estimator SD: approximately <span style="background-color: codeinlinebg"><code> 0.061</code></span>;</p></li>
+<li><p>mean delta-method SE: approximately <span style="background-color: codeinlinebg"><code> 0.059</code></span>;</p></li>
+<li><p>bootstrap SE: usually near <span style="background-color: codeinlinebg"><code> 0.06</code></span>;</p></li>
+<li><p>delta-method 95% coverage: approximately <span style="background-color: codeinlinebg"><code> 95%</code></span>;</p></li>
+<li><p>naive mean SE: approximately <span style="background-color: codeinlinebg"><code> 0.106</code></span>;</p></li>
+<li><p>naive coverage: approximately <span style="background-color: codeinlinebg"><code> 99.5%</code></span>.</p></li>
+</ul>
+<p>The naive interval is too wide because the numerator and denominator rise together. In the delta variance:</p>
+<p><span class="math display">\[2
+\underbrace{\frac1B}_{g_A&gt;0}
+\underbrace{\left(-\frac A{B^2}\right)}_{g_B&lt;0}
+\underbrace{\operatorname{Cov}(\hat A,\hat B)}_{&gt;0}
+&lt;0\]</span></p>
+<p>so the covariance term subtracts uncertainty.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Positive: rare action observations increase both the weighted reward and total weight.</p></li>
+<li><p>It reduces variance because the two derivatives have opposite signs.</p></li>
+<li><p>Too wide in this example; it ignores the stabilizing covariance.</p></li>
+<li><p>Yes, when overlap and sample size make the linear approximation reasonable.</p></li>
+<li><p>No. Standard errors describe variation around the estimator’s expectation, not its bias from self-normalization or model misspecification.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Normalize only the importance-weighted residual correction; average the model baseline normally.</p></li>
+<li><p>The required residual is never observed, so weighting or normalization cannot correct that model error.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> a ratio estimator’s numerator and denominator move together. Use an influence-function or paired bootstrap calculation that preserves this covariance—then separately audit support and estimator bias.</p>

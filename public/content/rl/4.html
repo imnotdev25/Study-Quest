@@ -1,0 +1,295 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: how GPS finds your route</div>
+<p>GPS doesn’t try every route from your house. It works <em>backward</em> from the destination: “cells next to the goal are 1 step away, cells next to those are 2 away…” Value iteration does the same thing. Value flows outward from rewarding states like ripples on a pond, and the best action is to walk uphill on that value map.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/6bdc93447b0f.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Value <span class="math inline">\(=-\)</span>(steps to goal) with reward <span class="math inline">\(-1\)</span> per step. Darker means more valuable. The arrows show the greedy policy: always move to a darker neighbour.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What question does <span class="math inline">\(V^\pi(s)\)</span> answer?</p></li>
+<li><p>How is <span class="math inline">\(V^\pi(s)\)</span> related to <span class="math inline">\(Q^\pi(s,a)\)</span>?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="evaluation-versus-control">2. Evaluation versus control</h3>
+<p>Last session, we evaluated a fixed policy:</p>
+<p><span class="math display">\[V^\pi(s)
+=
+\sum_a \pi(a\mid s)Q^\pi(s,a)\]</span></p>
+<p>That answers:</p>
+<blockquote>
+<p>How good is my current policy?</p>
+</blockquote>
+<p>But an RL agent usually wants <strong>control</strong>:</p>
+<blockquote>
+<p>What is the best policy I can construct?</p>
+</blockquote>
+<p>Define the optimal values:</p>
+<p><span class="math display">\[V^*(s)=\max_\pi V^\pi(s)\]</span></p>
+<p><span class="math display">\[Q^*(s,a)
+=
+\mathbb E\left[
+R_{t+1}+\gamma V^*(S_{t+1})
+\mid S_t=s,A_t=a
+\right]\]</span></p>
+<p>The optimal Bellman equation is:</p>
+<p><span class="math display">\[V^*(s)
+=
+\max_a
+\sum_{s&#39;}P(s&#39;\mid s,a)
+\left[
+R(s,a,s&#39;)+\gamma V^*(s&#39;)
+\right]\]</span></p>
+<p>Compare the two backups:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Purpose</strong></th>
+<th style="text-align: left;"><strong>Combine actions using</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Purpose</strong></td>
+<td style="text-align: left;"><strong>Combine actions using</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Evaluate policy <span class="math inline">\(\pi\)</span></td>
+<td style="text-align: left;">Weighted average <span class="math inline">\(\sum_a\pi(a\mid s)Q(s,a)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Find optimal policy</td>
+<td style="text-align: left;">Best action <span class="math inline">\(\max_a Q(s,a)\)</span></td>
+</tr>
+</tbody>
+</table>
+<h3 class="unnumbered" id="intuition-planning-backward-from-good-destinations">Intuition: planning backward from good destinations</h3>
+<p>Imagine a route planner.</p>
+<p>At every junction, it asks:</p>
+<ol>
+<li><p>What does each road cost immediately?</p></li>
+<li><p>How good is the destination reached by that road?</p></li>
+<li><p>Which road has the best combined score?</p></li>
+</ol>
+<p><span class="math display">\[Q(s,a)
+=
+\text{immediate reward}
++
+\gamma\text{ future value}\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[V(s)=\max_a Q(s,a)\]</span></p>
+<p>Initially, future values may be zero. After repeated backups, information about a distant goal propagates backward through earlier states.</p>
+<p>This is <strong>value iteration</strong>:</p>
+<p><span class="math display">\[V_{k+1}(s)
+=
+\max_a
+\sum_{s&#39;}P(s&#39;\mid s,a)
+\left[
+R(s,a,s&#39;)+\gamma V_k(s&#39;)
+\right]\]</span></p>
+<p>After convergence, extract a greedy policy:</p>
+<p><span class="math display">\[\pi^*(s)=\arg\max_a Q^*(s,a)\]</span></p>
+<p>Value iteration is dynamic programming, not SGD:</p>
+<ul>
+<li><p>It does not define a differentiable loss.</p></li>
+<li><p>It does not call <span style="background-color: codeinlinebg"><code> backward()</code></span>.</p></li>
+<li><p>It assumes the transition and reward model are known.</p></li>
+<li><p>Its repeated Bellman operation converges toward a fixed point.</p></li>
+</ul>
+<h3 class="unnumbered" id="policy-iteration-versus-value-iteration">Policy iteration versus value iteration</h3>
+<p><strong>Policy iteration</strong> alternates:</p>
+<ol>
+<li><p>Evaluate the current policy.</p></li>
+<li><p>Make it greedy with respect to its values.</p></li>
+</ol>
+<p><strong>Value iteration</strong> performs shortened evaluation and improvement together by applying the <span style="background-color: codeinlinebg"><code> max</code></span> backup repeatedly.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>If we had exact <span class="math inline">\(Q(\text{prefix},\text{token})\)</span>, we could select the token with the best expected final outcome.</p>
+<p>In practice:</p>
+<ul>
+<li><p>the vocabulary is large;</p></li>
+<li><p>possible continuations grow exponentially;</p></li>
+<li><p>rewards may only arrive after the full response;</p></li>
+<li><p>the transition/reward model is not available as a manageable table.</p></li>
+</ul>
+<p>That is why LLM RL uses sampling and learned approximations rather than tabular value iteration.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: why value iteration must converge</div>
+<p>The Bellman optimality operator <span class="math inline">\((TV)(s)=\max_a\sum_{s&#39;}P(s&#39;|s,a)[r+\gamma V(s&#39;)]\)</span> is a <span class="math inline">\(\gamma\)</span>-<strong>contraction</strong>: <span class="math display">\[|(TV)(s)-(TU)(s)|\le\max_a\Big|\gamma\sum_{s&#39;}P(s&#39;|s,a)\big(V(s&#39;)-U(s&#39;)\big)\Big|\le\gamma\|V-U\|_\infty .\]</span> (The step uses <span class="math inline">\(|\max f-\max g|\le\max|f-g|\)</span>.) By Banach’s fixed-point theorem there’s exactly one fixed point <span class="math inline">\(V^*\)</span>, and <span class="math inline">\(\|V_k-V^*\|\le\gamma^k\|V_0-V^*\|\)</span>.</p>
+<p><strong>How many sweeps?</strong> To shrink the error by <span class="math inline">\(10^{-3}\)</span> you need <span class="math inline">\(k\ge\ln(10^{-3})/\ln\gamma\)</span>: about 66 sweeps for <span class="math inline">\(\gamma=0.9\)</span>, but about 690 for <span class="math inline">\(\gamma=0.99\)</span>.</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/a2986b18e8a3.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<p><strong>Policy improvement theorem:</strong> if <span class="math inline">\(\pi&#39;\)</span> is greedy with respect to <span class="math inline">\(Q^\pi\)</span>, then <span class="math inline">\(Q^\pi(s,\pi&#39;(s))\ge V^\pi(s)\)</span> for all <span class="math inline">\(s\)</span>, which implies <span class="math inline">\(V^{\pi&#39;}\ge V^\pi\)</span> everywhere. That’s why policy iteration never gets worse.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Evaluation: “how good is my plan?” Control: “what’s the best plan?”</p></li>
+<li><p>Contraction <span class="math inline">\(\Rightarrow\)</span> a unique answer and geometric convergence, but a patient <span class="math inline">\(\gamma\)</span> means slow convergence.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: value iteration on a 2-cell corridor</div>
+<p>Cells <span class="math inline">\(s_1,s_2\)</span>, goal on the right. Moving right from <span class="math inline">\(s_2\)</span> pays <span class="math inline">\(+10\)</span> and ends. Every other move pays 0. Moving left from <span class="math inline">\(s_1\)</span> stays in <span class="math inline">\(s_1\)</span>. <span class="math inline">\(\gamma=0.9\)</span>.</p>
+<ul>
+<li><p>Sweep 1: <span class="math inline">\(V(s_2)=\max(10,\ 0.9\cdot0)=10\)</span>, <span class="math inline">\(V(s_1)=0\)</span> (it still sees old values).</p></li>
+<li><p>Sweep 2: <span class="math inline">\(V(s_1)=\max(0.9V(s_2),\ 0.9V(s_1))=9\)</span>. Converged: <span class="math inline">\(V=(9,10)\)</span>, greedy policy <span class="math inline">\(=\)</span> right, right.</p></li>
+</ul>
+<p>Value travels one cell per sweep, like a ripple.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Taking <span class="math inline">\(\max\)</span> over next states instead of over actions.</p></li>
+<li><p>Stopping after a fixed sweep count without checking <span class="math inline">\(\Delta\)</span>.</p></li>
+<li><p>Extracting the policy from a <span class="math inline">\(V\)</span> that hasn’t converged.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Value iteration</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> transitions <span class="math inline">\(P\)</span>, rewards <span class="math inline">\(r\)</span>, discount <span class="math inline">\(\gamma\)</span>, tolerance <span class="math inline">\(\theta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(V(s)\gets0\)</span> for every state</div>
+<div class="algo-line" style="--d:0"><strong>repeat</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\Delta\gets0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each state <span class="math inline">\(s\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(v\gets V(s)\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(V(s)\gets\max_a\sum_{s&#39;}P(s&#39;|s,a)\big[r(s,a,s&#39;)+\gamma V(s&#39;)\big]\)</span> <em>▷ max instead of average</em></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\Delta\gets\max(\Delta,|v-V(s)|)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>until</strong> <span class="math inline">\(\Delta&lt;\theta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\pi(s)\gets\arg\max_a\sum_{s&#39;}P(s&#39;|s,a)\big[r(s,a,s&#39;)+\gamma V(s&#39;)\big]\)</span> for every <span class="math inline">\(s\)</span></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(V\approx V^*\)</span>, greedy policy <span class="math inline">\(\pi\)</span></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-implement-value-iteration">3. PyTorch exercise — implement value iteration</h3>
+<p>Use the same three-state environment:</p>
+<pre class="code python"><code class="language-python">import torch
+
+gamma = 0.9
+
+# transitions[state, action, next_state]
+transitions = torch.zeros(3, 2, 3)
+
+transitions[0, 0, 1] = 1.0  # start --progress--&gt; near goal
+transitions[0, 1, 0] = 1.0  # start --wait--&gt; start
+
+transitions[1, 0, 2] = 1.0  # near goal --progress--&gt; terminal
+transitions[1, 1, 1] = 1.0  # near goal --wait--&gt; near goal
+
+transitions[2, :, 2] = 1.0
+
+rewards = torch.tensor([
+    [0.0, -1.0],
+    [5.0, -1.0],
+    [0.0,  0.0],
+])  # [states=3, actions=2]
+
+values = torch.zeros(3)  # [states]
+
+for iteration in range(100):
+    # TODO 1:
+    # Expected next-state value for every state-action pair.
+    expected_next_values = ...
+
+    # TODO 2:
+    # One-step action values.
+    q_values = ...
+
+    # TODO 3:
+    # Keep the best action value for each state.
+    new_values = ...
+
+    delta = (new_values - values).abs().max()
+    values = new_values
+
+    if delta &lt; 1e-6:
+        break
+
+# Recompute Q using the converged values.
+# TODO 4
+q_values = ...
+
+# TODO 5: Extract the greedy action for each state.
+optimal_actions = ...
+
+print(&quot;Iterations:&quot;, iteration + 1)
+print(&quot;Optimal V:&quot;, values)
+print(&quot;Optimal Q:\n&quot;, q_values)
+print(&quot;Greedy actions:&quot;, optimal_actions)</code></pre>
+<p>Before running, predict:</p>
+<ol>
+<li><p>Which state first receives information about the <span class="math inline">\(+5\)</span> reward?</p></li>
+<li><p>How many additional backups are needed before state 0 sees it?</p></li>
+<li><p>Should either nonterminal state prefer waiting?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> transitions @ values</code></span> produces <span style="background-color: codeinlinebg"><code> [states, actions]</code></span>.</p></li>
+<li><p>Add immediate rewards after calculating expected future values.</p></li>
+<li><p>Actions are dimension <span style="background-color: codeinlinebg"><code> 1</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> torch.max</code></span> returns both values and indices.</p></li>
+<li><p>For deterministic greedy actions, use <span style="background-color: codeinlinebg"><code> argmax(dim=1)</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Replace:</p>
+<pre class="code python"><code class="language-python">q_values.max(dim=1).values</code></pre>
+<p>with:</p>
+<pre class="code python"><code class="language-python">q_values.max(dim=0).values</code></pre>
+<p>Inspect the shape. What conceptual mistake did you make?</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What is the key mathematical difference between a Bellman expectation backup and an optimality backup?</p></li>
+<li><p>Why can a reward several steps away change the value of the initial state?</p></li>
+<li><p>Does <span style="background-color: codeinlinebg"><code> argmax</code></span> produce an exploratory policy?</p></li>
+<li><p>If two actions have equal <span class="math inline">\(Q\)</span>, which one does PyTorch <span style="background-color: codeinlinebg"><code> argmax</code></span> select?</p></li>
+<li><p>Why should convergence use a tolerance rather than <span style="background-color: codeinlinebg"><code> new_values == values</code></span>?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">values = torch.zeros(3)
+
+for iteration in range(100):
+    expected_next_values = transitions @ values
+    q_values = rewards + gamma * expected_next_values
+    new_values = q_values.max(dim=1).values
+
+    delta = (new_values - values).abs().max()
+    values = new_values
+
+    if delta &lt; 1e-6:
+        break
+
+q_values = rewards + gamma * (transitions @ values)
+optimal_actions = q_values.argmax(dim=1)</code></pre>
+<p>Expected result:</p>
+<pre class="code text"><code class="language-plaintext">Optimal V:
+tensor([4.5000, 5.0000, 0.0000])
+
+Optimal Q:
+tensor([
+    [4.5000, 3.0500],
+    [5.0000, 3.5000],
+    [0.0000, 0.0000]
+])
+
+Greedy actions:
+tensor([0, 0, 0])</code></pre>
+<p>For the terminal state, both actions tie at zero. <span style="background-color: codeinlinebg"><code> argmax</code></span> returns the first one, so its reported action has no real significance.</p>
+<p>The reward reaches:</p>
+<ul>
+<li><p>state 1 during the first backup;</p></li>
+<li><p>state 0 during the second backup.</p></li>
+</ul>
+<p>Using <span style="background-color: codeinlinebg"><code> max(dim=0)</code></span> maximizes across states and returns one value per action. We need to maximize across actions separately for every state.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Expectation uses the policy-weighted average; optimality uses the maximum action value.</p></li>
+<li><p>Each Bellman backup carries estimated future value one step backward.</p></li>
+<li><p>No. It produces a deterministic greedy choice unless exploration is added separately.</p></li>
+<li><p>The first maximal index.</p></li>
+<li><p>Floating-point calculations may approach the fixed point without becoming bit-for-bit identical.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(V^\pi(s)\)</span> is the expected return from state <span class="math inline">\(s\)</span> when the agent follows policy <span class="math inline">\(\pi\)</span>.</p></li>
+<li><p><span class="math inline">\(V^\pi(s)=\sum_a\pi(a\mid s)Q^\pi(s,a)\)</span>.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> policy evaluation asks how good the current behavior is; value iteration repeatedly chooses the best-looking action and propagates its consequences backward.</p>

@@ -1,0 +1,70 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>An agent loop needs three things written down before it starts: a <strong>goal</strong> (the outcome, not the steps), a <strong>definition of done</strong> that a program can check, and a <strong>budget</strong> (steps, tokens, time, money). Without the second, the agent decides when it is finished, and models stop early or wander. <strong>Real-life version:</strong> “clean the kitchen” versus “the counters are clear, the dishwasher is running, and the bin is out. Back in 30 minutes.”</p>
+</div>
+<h2 class="unnumbered" id="goal-specification-template">Goal specification template</h2>
+<pre class="code output"><code class="output">Goal: Users can reset their password by email.
+Context: Auth lives in src/auth/; email goes through src/mail/send.py. See AGENTS.md.
+Constraints: no new dependencies; keep the public API of src/auth/__init__.py unchanged.
+Done when:
+  - tests/test_password_reset.py exists and passes (write it first)
+  - make test and make lint pass
+  - tokens expire after 30 minutes and are single-use (covered by tests)
+Budget: stop and report after 40 tool calls or if the same test fails 3 times in a row.
+Report: what changed, why, and anything you could not verify.</code></pre>
+<h2 class="unnumbered" id="loop-patterns">Loop patterns</h2>
+<div class="center">
+<table style="width:90%;">
+<colgroup>
+<col style="width: 22%" />
+<col style="width: 69%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Pattern</strong></th>
+<th style="text-align: left;"><strong>How it runs</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Verify–fix</td>
+<td style="text-align: left;">act, run the checks, feed failures back, repeat until green or the budget ends</td>
+</tr>
+<tr>
+<td style="text-align: left;">Test-first</td>
+<td style="text-align: left;">the agent writes failing tests from the spec, you review them, then it implements until they pass</td>
+</tr>
+<tr>
+<td style="text-align: left;">Plan–act–check</td>
+<td style="text-align: left;">a written plan with checkboxes in a file; the agent updates it as it goes, so a fresh session can resume</td>
+</tr>
+<tr>
+<td style="text-align: left;">Evaluator–optimiser</td>
+<td style="text-align: left;">a second model (or the same with a rubric) grades the draft; loop on the critique</td>
+</tr>
+<tr>
+<td style="text-align: left;">Spec-driven</td>
+<td style="text-align: left;">requirements <span class="math inline">\(\to\)</span> design <span class="math inline">\(\to\)</span> task list, each reviewed by a human before the next</td>
+</tr>
+<tr>
+<td style="text-align: left;">Fresh-context loop</td>
+<td style="text-align: left;">a shell loop restarts the agent with the same prompt file each iteration; all state lives in files and git (sometimes called the “Ralph” loop). Each run starts clean, so context never rots</td>
+</tr>
+<tr>
+<td style="text-align: left;">Fan-out</td>
+<td style="text-align: left;">a lead agent splits work (files, sub-questions) across parallel subagents and merges the summaries</td>
+</tr>
+<tr>
+<td style="text-align: left;">Long-running</td>
+<td style="text-align: left;">an initialiser session sets up the environment, a progress log and a feature list; later sessions read them, do one item, test, commit and update the log</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 class="unnumbered" id="guardrails-for-loops">Guardrails for loops</h2>
+<ul>
+<li><p><strong>Stop conditions</strong>: step and cost caps, “same error three times” detection, wall-clock limits.</p></li>
+<li><p><strong>Checkpoints</strong>: commit after each verified step, so a bad step is one <code>git revert</code> away.</p></li>
+<li><p><strong>Blast radius</strong>: sandbox the shell; no production credentials in the agent’s environment; human approval for deletes, pushes, deploys and spending money.</p></li>
+<li><p><strong>Reward hacking</strong>: an agent optimising “tests pass” may weaken the tests or special-case them. Protect test files, review diffs of tests separately, and keep some checks hidden from the agent. This is the RLHF over-optimisation problem from the post-training book, in a loop.</p></li>
+</ul>

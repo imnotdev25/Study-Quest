@@ -1,0 +1,12 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Alignment</strong> is getting a model to do what its developers and users intend: be <strong>helpful</strong>, <strong>honest</strong> and <strong>harmless</strong> (the “HHH” framing). In practice it’s an engineering loop: write down the intended behaviour (a <strong>spec</strong> or <strong>constitution</strong>), turn it into data, train on that data, and evaluate whether the model follows it, including in cases nobody wrote down.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/515c800b379a.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<ul>
+<li><p><strong>Constitutional AI</strong> (Anthropic, 2022): the model critiques and revises its own outputs against written principles (giving SFT data), and an AI judge applies the principles to label preference pairs (RLAIF). Code in the next chapter.</p></li>
+<li><p><strong>Deliberative alignment</strong> (OpenAI, 2024, as I recall it): train the model to recall the relevant part of the spec in its reasoning and apply it before answering, using SFT on spec-citing reasoning and then RL with a spec-aware judge.</p></li>
+<li><p><strong>The trade-off</strong> is real: every refusal of a harmful request risks refusing a similar benign one. A safety result means nothing without its over-refusal rate.</p></li>
+</ul>

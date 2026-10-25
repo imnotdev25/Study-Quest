@@ -1,0 +1,96 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: three ways to judge a runner’s time</div>
+<p>Compare a runner with (a) the others in their heat, excluding themselves (RLOO), (b) what a “safe pace” run by the same runner would score (ReMax), or (c) every runner in the whole meet, after adjusting for their heat (REINFORCE++). No coach is needed in any case: the baseline comes from other runs.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why is any action-independent baseline unbiased? (Topic 15)</p></li>
+<li><p>What did GRPO’s std division do to the 0.79–0.81 group? (Topic 43)</p></li>
+</ol>
+<h3 class="unnumbered" id="the-family">2. The family</h3>
+<p>All four drop PPO’s learned critic, which saves a model-sized network and its memory.</p>
+<ul>
+<li><p><strong>GRPO:</strong> <span class="math inline">\(\hat A_i=(R_i-\bar R_g)/\operatorname{std}_g(R)\)</span>, per prompt group.</p></li>
+<li><p><strong>RLOO</strong> (Ahmadian et al., 2024): <span class="math inline">\(\hat A_i=R_i-\frac{1}{G-1}\sum_{j\ne i}R_j\)</span>. Unbiased, no std (Topic 42).</p></li>
+<li><p><strong>ReMax</strong> (Li et al., 2023): baseline <span class="math inline">\(=\)</span> reward of the <em>greedy</em> decode for the same prompt. That needs one sample plus one greedy decode.</p></li>
+<li><p><strong>REINFORCE++</strong> (Hu et al., 2025): normalize advantages over the <em>whole batch</em> instead of per prompt. The “with baseline” variant subtracts each group’s mean, then divides by the global std. The paper argues per-prompt normalization is biased and overfits easy prompts. KL to the reference can be folded into the per-token reward.</p></li>
+</ul>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: local vs global scale</div>
+<p>Per-prompt std makes each prompt’s advantages unit-scale, whatever its real spread. A global std keeps relative scales: a prompt whose rewards differ by 0.05 gets small advantages, and one whose rewards differ by 1 gets large ones. That’s usually what you want when the reward is continuous or noisy.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Same goal (an action-independent baseline), different reference sets: others in the group, a greedy decode, or the whole batch.</p></li>
+<li><p>Global normalization keeps tiny, noisy differences small.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the noisy prompt</div>
+<p>Rewards <span class="math inline">\((0.90,0.80,0.85,0.90)\)</span>. GRPO: <span class="math inline">\((+0.78,-1.31,-0.26,+0.78)\)</span>, as big as a real success/failure gap. RLOO: <span class="math inline">\((+0.05,-0.08,-0.02,+0.05)\)</span>. REINFORCE++: <span class="math inline">\((+0.10,-0.17,-0.03,+0.10)\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>ReMax with a sampled (not greedy) baseline decode.</p></li>
+<li><p>Global normalization across prompts with very different reward types, without per-prompt centering.</p></li>
+<li><p>RLOO with <span class="math inline">\(G=1\)</span>.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-three-advantages-on-the-same-batch">3. PyTorch exercise — three advantages on the same batch</h3>
+<pre class="code python"><code class="language-python">import torch
+
+R = torch.tensor([[1.0, 0.0, 0.0, 0.0],
+                  [1.0, 1.0, 1.0, 0.0],
+                  [0.90, 0.80, 0.85, 0.90]])
+G = R.shape[1]
+# TODO 1: GRPO advantages (per-row mean and std)
+grpo = ...
+# TODO 2: RLOO advantages (leave-one-out mean)
+rloo = ...
+# TODO 3: REINFORCE++ with baseline (row-centered, then global std)
+reinforce_pp = ...</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Which method gives row 2 advantages as large as row 0’s?</p></li>
+<li><p>Why does ReMax only need one sampled response per prompt?</p></li>
+<li><p>What does dropping the critic cost?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+
+# 3 prompts x 4 responses. Prompt 2 has tiny, noisy differences (a continuous judge).
+R = torch.tensor([[1.0, 0.0, 0.0, 0.0],
+                  [1.0, 1.0, 1.0, 0.0],
+                  [0.90, 0.80, 0.85, 0.90]])
+G = R.shape[1]
+
+grpo = (R - R.mean(1, keepdim=True)) / (R.std(1, keepdim=True) + 1e-6)
+rloo = R - (R.sum(1, keepdim=True) - R) / (G - 1)
+centered = R - R.mean(1, keepdim=True)
+reinforce_pp = (centered - centered.mean()) / (centered.std() + 1e-6)   # global batch normalization
+
+torch.set_printoptions(precision=2, sci_mode=False)
+print(&quot;GRPO\n&quot;, grpo)
+print(&quot;RLOO\n&quot;, rloo)
+print(&quot;REINFORCE++ (group mean, global std)\n&quot;, reinforce_pp)</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">GRPO
+ tensor([[ 1.50, -0.50, -0.50, -0.50],
+        [ 0.50,  0.50,  0.50, -1.50],
+        [ 0.78, -1.31, -0.26,  0.78]])
+RLOO
+ tensor([[ 1.00, -0.33, -0.33, -0.33],
+        [ 0.33,  0.33,  0.33, -1.00],
+        [ 0.05, -0.08, -0.02,  0.05]])
+REINFORCE++ (group mean, global std)
+ tensor([[ 2.03, -0.68, -0.68, -0.68],
+        [ 0.68,  0.68,  0.68, -2.03],
+        [ 0.10, -0.17, -0.03,  0.10]])</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>GRPO: per-row std rescales every row to unit spread.</p></li>
+<li><p>The greedy decode provides the baseline, so no group is needed.</p></li>
+<li><p>Per-token credit: every token of a response shares one advantage, where a critic could tell tokens apart (Topic 26).</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) <span class="math inline">\(\mathbb E[b\nabla\log\pi]=b\nabla\sum\pi=0\)</span>. (2) Blew a 0.01 difference up to <span class="math inline">\(\pm1.22\)</span>.</p>
+<p><strong>Takeaway:</strong> critic-free methods differ mainly in what they compare a sample against. Choose the reference set to match how noisy and how comparable your rewards are.</p>
+<p><em>Next: PRIME, process rewards without process labels.</em></p>

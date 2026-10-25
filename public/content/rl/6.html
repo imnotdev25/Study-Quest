@@ -1,0 +1,288 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: live win-probability on a sports broadcast</div>
+<p>During a match, the broadcast shows “Team A: 62% to win.” After a goal it jumps to 80%. The model doesn’t wait for the final whistle. It updates its guess using its <em>next</em> guess. That’s TD learning: learn from “a guess, updated toward a better guess.”</p>
+<p>Neuroscience twist: dopamine neurons fire on <em>surprise</em> (the TD error), not on reward itself.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/6396ba26a8b6.svg" alt="diagram" loading="lazy"></figure>
+<p><em>TD looks one step ahead and trusts its own estimate. MC follows the real trajectory to the end.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What target does Monte Carlo prediction use?</p></li>
+<li><p>What does it mean for an RL method to bootstrap?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="temporal-difference-learning">2. Temporal-difference learning</h3>
+<p>Suppose you are travelling to a new city. You originally estimate that reaching the destination will take five hours.</p>
+<p>After one hour, the navigation system says four hours remain. You can update your original estimate immediately—you do not need to finish the journey first.</p>
+<p>That is the idea behind <strong>temporal-difference learning</strong>.</p>
+<p>TD(0) uses this one-step target:</p>
+<p><span class="math display">\[Y_t
+=
+R_{t+1}+\gamma V(S_{t+1})\]</span></p>
+<p>For a terminal transition:</p>
+<p><span class="math display">\[Y_t=R_{t+1}\]</span></p>
+<p>The TD error is:</p>
+<p><span class="math display">\[\delta_t
+=
+R_{t+1}
++\gamma(1-D_t)V(S_{t+1})
+-V(S_t)\]</span></p>
+<p>where <span class="math inline">\(D_t=1\)</span> when the transition truly terminates the episode.</p>
+<p>The tabular update is:</p>
+<p><span class="math display">\[V(S_t)
+\leftarrow
+V(S_t)+\alpha\delta_t\]</span></p>
+<p>Interpret the sign:</p>
+<ul>
+<li><p><span class="math inline">\(\delta_t&gt;0\)</span>: the transition was better than predicted, so increase <span class="math inline">\(V(S_t)\)</span>.</p></li>
+<li><p><span class="math inline">\(\delta_t&lt;0\)</span>: it was worse than predicted, so decrease <span class="math inline">\(V(S_t)\)</span>.</p></li>
+<li><p><span class="math inline">\(\delta_t\approx0\)</span>: prediction and one-step target agree.</p></li>
+</ul>
+<h3 class="unnumbered" id="monte-carlo-versus-td">Monte Carlo versus TD</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Property</strong></th>
+<th style="text-align: left;"><strong>Monte Carlo</strong></th>
+<th style="text-align: left;"><strong>TD(0)</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Property</strong></td>
+<td style="text-align: left;"><strong>Monte Carlo</strong></td>
+<td style="text-align: left;"><strong>TD(0)</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Target</td>
+<td style="text-align: left;">Complete <span class="math inline">\(G_t\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(R_{t+1}+\gamma V(S_{t+1})\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Wait for termination</td>
+<td style="text-align: left;">Yes</td>
+<td style="text-align: left;">No</td>
+</tr>
+<tr>
+<td style="text-align: left;">Bootstraps</td>
+<td style="text-align: left;">No</td>
+<td style="text-align: left;">Yes</td>
+</tr>
+<tr>
+<td style="text-align: left;">Typical target variance</td>
+<td style="text-align: left;">Higher</td>
+<td style="text-align: left;">Lower</td>
+</tr>
+<tr>
+<td style="text-align: left;">Target bias during learning</td>
+<td style="text-align: left;">Lower</td>
+<td style="text-align: left;">Higher</td>
+</tr>
+</tbody>
+</table>
+<p>TD’s target depends on an imperfect estimate, so it can initially be biased. But it avoids waiting for a noisy complete outcome.</p>
+<h3 class="unnumbered" id="connection-to-slopes-and-sgd">Connection to slopes and SGD</h3>
+<p>For a critic with parameters <span class="math inline">\(\theta\)</span>, define:</p>
+<p><span class="math display">\[L(\theta)
+=
+\frac12
+\left(
+V_\theta(S_t)-Y_t
+\right)^2\]</span></p>
+<p>The loss’s slope tells us how changing the prediction changes the error. SGD follows that slope to move <span class="math inline">\(V_\theta(S_t)\)</span> toward <span class="math inline">\(Y_t\)</span>.</p>
+<p>The target is normally treated as fixed:</p>
+<p><span class="math display">\[Y_t
+=
+R_{t+1}
++\gamma V_{\bar\theta}(S_{t+1})\]</span></p>
+<p>The bar means: do not differentiate through the next-state estimate during this update. In PyTorch, we use <span style="background-color: codeinlinebg"><code> .detach()</code></span> or <span style="background-color: codeinlinebg"><code> torch.no_grad()</code></span>.</p>
+<p>This is called a <strong>semi-gradient</strong> TD update.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>A critic can estimate the value of each generated prefix:</p>
+<p><span class="math display">\[V(x,y_{&lt;t})\]</span></p>
+<p>After generating the next token, TD can use the next prefix’s estimated value. This supplies denser learning signals than waiting only for a final response reward, although errors in the critic can propagate backward.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: how TD relates to MC</div>
+<p>TD error: <span class="math inline">\(\delta_t=r_{t+1}+\gamma V(s_{t+1})-V(s_t)\)</span>. The update is <span class="math inline">\(V(s_t)\leftarrow V(s_t)+\alpha\delta_t\)</span>.</p>
+<p><strong>Telescoping identity</strong> (holding <span class="math inline">\(V\)</span> fixed within an episode): <span class="math display">\[G_t-V(s_t)=\sum_{k=0}^{T-t-1}\gamma^k\delta_{t+k}.\]</span> So the MC error is just the discounted sum of future TD errors. TD uses only the first term, which gives lower variance but adds bias whenever <span class="math inline">\(V(s_{t+1})\)</span> is wrong.</p>
+<p><strong>Semi-gradient view:</strong> TD minimizes <span class="math inline">\(\tfrac12\big(\text{sg}[r+\gamma V(s&#39;)]-V(s)\big)^2\)</span>, where sg means stop-gradient: the target is treated as a fixed label.</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/4054395c2883.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Simulated on the classic 5-state random walk (Sutton &amp; Barto Example 6.2, 100 runs). TD learns faster here, and a larger <span class="math inline">\(\alpha\)</span> learns fast but plateaus noisier.</em></p>
+</div>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>TD = bootstrap: the target uses your own current guess.</p></li>
+<li><p>MC: unbiased, high variance. TD: biased, low variance, learns mid-episode.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: value spreads one step per episode</div>
+<p>Chain <span class="math inline">\(A\to B\to\)</span>end with reward 1 at the end. <span class="math inline">\(\alpha=0.5\)</span>, <span class="math inline">\(\gamma=1\)</span>, <span class="math inline">\(V=0\)</span>.</p>
+<ul>
+<li><p>Episode 1: at <span class="math inline">\(A\)</span>, <span class="math inline">\(\delta=0+V(B)-V(A)=0\)</span>. At <span class="math inline">\(B\)</span>, <span class="math inline">\(\delta=1-0=1\)</span>, so <span class="math inline">\(V(B)=0.5\)</span>.</p></li>
+<li><p>Episode 2: at <span class="math inline">\(A\)</span>, <span class="math inline">\(\delta=0.5\)</span>, so <span class="math inline">\(V(A)=0.25\)</span>. At <span class="math inline">\(B\)</span>, <span class="math inline">\(V(B)=0.75\)</span>.</p></li>
+</ul>
+<p>MC would update <span class="math inline">\(A\)</span> toward 1 in the very first episode. TD needs the news to travel back through <span class="math inline">\(B\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Bootstrapping from a terminal state (<span class="math inline">\(V(\text{end})\)</span> must be 0).</p></li>
+<li><p>Letting gradients flow through the target in the neural version.</p></li>
+<li><p>Updating <span class="math inline">\(V(s&#39;)\)</span> first and then using the new value in <span class="math inline">\(V(s)\)</span>’s target without meaning to.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: TD(0) prediction</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy <span class="math inline">\(\pi\)</span>, step size <span class="math inline">\(\alpha\)</span>, discount <span class="math inline">\(\gamma\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(V(s)\gets0\)</span> for every state</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each episode <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(s\gets\)</span> initial state</div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(s\)</span> is not terminal <strong>do</strong></div>
+<div class="algo-line" style="--d:2">take <span class="math inline">\(a\sim\pi(\cdot|s)\)</span>; observe <span class="math inline">\(r,s&#39;\)</span> and done flag <span class="math inline">\(d\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\delta\gets r+\gamma(1-d)V(s&#39;)-V(s)\)</span> <em>▷ TD error</em></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(V(s)\gets V(s)+\alpha\,\delta\)</span> <em>▷ update now, mid-episode</em></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(s\gets s&#39;\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-train-a-tiny-td-critic">3. PyTorch exercise — train a tiny TD critic</h3>
+<p>The environment has this deterministic path:</p>
+<pre class="code text"><code class="language-plaintext">state 0 --reward 0--&gt; state 1 --reward 5--&gt; terminal</code></pre>
+<p>Complete the TODOs:</p>
+<pre class="code python"><code class="language-python">import torch
+
+gamma = 0.9
+alpha = 0.2
+
+# Two observed transitions.
+states = torch.tensor([0, 1])
+next_states = torch.tensor([1, 2])
+rewards = torch.tensor([0.0, 5.0])
+dones = torch.tensor([0.0, 1.0])
+
+# One learnable scalar value per state.
+values = torch.nn.Parameter(torch.zeros(3))
+optimizer = torch.optim.SGD([values], lr=alpha)
+
+for step in range(100):
+    predictions = values[states]  # [transitions=2]
+
+    # TODO 1:
+    # Build fixed TD targets without gradient tracking.
+    with torch.no_grad():
+        targets = ...
+
+    # TODO 2:
+    # Use 1/2 times the sum of squared TD errors.
+    loss = ...
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    if step in [0, 1, 4, 19, 99]:
+        print(
+            f&quot;step={step:3d}&quot;,
+            f&quot;loss={loss.item():.4f}&quot;,
+            f&quot;values={values.detach().tolist()}&quot;,
+        )
+
+print(&quot;Final values:&quot;, values.detach())</code></pre>
+<p>Before running, predict the first two updates.</p>
+<p>Initially:</p>
+<p><span class="math display">\[V=[0,0,0]\]</span></p>
+<p>At the first step:</p>
+<ul>
+<li><p>state 1’s target is <span class="math inline">\(5\)</span>;</p></li>
+<li><p>state 0’s target is <span class="math inline">\(0+0.9(0)=0\)</span>.</p></li>
+</ul>
+<p>After the first update, what should <span class="math inline">\(V(1)\)</span> approximately become?</p>
+<p>On the second step, how does the learned information begin moving into <span class="math inline">\(V(0)\)</span>?</p>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Continuation mask: <span style="background-color: codeinlinebg"><code> 1.0 - dones</code></span></p></li>
+<li><p>Next values: <span style="background-color: codeinlinebg"><code> values[next_states]</code></span></p></li>
+<li><p>Loss: <span style="background-color: codeinlinebg"><code> 0.5 * error.pow(2).sum()</code></span></p></li>
+<li><p>The terminal transition must not include <span style="background-color: codeinlinebg"><code> gamma * values[2]</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Remove <span style="background-color: codeinlinebg"><code> torch.no_grad()</code></span> and train again.</p>
+<p>Inspect:</p>
+<pre class="code python"><code class="language-python">print(values.grad)</code></pre>
+<p>Now the target contributes gradients to the next-state values. The optimizer can reduce the loss by moving both the prediction and its supposed target, which is not the standard TD semi-gradient update.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can TD(0) update after every transition?</p></li>
+<li><p>What information does the sign of <span class="math inline">\(\delta_t\)</span> provide?</p></li>
+<li><p>Why must a true terminal transition have no bootstrap term?</p></li>
+<li><p>Why is detaching the TD target important when training a neural critic?</p></li>
+<li><p>Should a time-limit truncation always be treated like genuine termination?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">import torch
+
+gamma = 0.9
+alpha = 0.2
+
+states = torch.tensor([0, 1])
+next_states = torch.tensor([1, 2])
+rewards = torch.tensor([0.0, 5.0])
+dones = torch.tensor([0.0, 1.0])
+
+values = torch.nn.Parameter(torch.zeros(3))
+optimizer = torch.optim.SGD([values], lr=alpha)
+
+for step in range(100):
+    predictions = values[states]
+
+    with torch.no_grad():
+        targets = (
+            rewards
+            + gamma
+            * (1.0 - dones)
+            * values[next_states]
+        )
+
+    errors = predictions - targets
+    loss = 0.5 * errors.pow(2).sum()
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+print(values.detach())</code></pre>
+<p>Approximate final result:</p>
+<pre class="code python"><code class="language-python">tensor([4.5000, 5.0000, 0.0000])</code></pre>
+<p>These satisfy:</p>
+<p><span class="math display">\[V(1)=5\]</span></p>
+<p><span class="math display">\[V(0)=0+0.9V(1)=4.5\]</span></p>
+<h3 class="unnumbered" id="first-two-updates">First two updates</h3>
+<p>Initially:</p>
+<pre class="code python"><code class="language-python">V = [0, 0, 0]
+targets = [0, 5]</code></pre>
+<p>With <span class="math inline">\(\alpha=0.2\)</span>:</p>
+<pre class="code text"><code class="language-plaintext">V after step 1 ≈ [0, 1, 0]</code></pre>
+<p>The next targets become:</p>
+<pre class="code text"><code class="language-plaintext">target(state 0) = 0 + 0.9(1) = 0.9
+target(state 1) = 5</code></pre>
+<p>So the second update gives approximately:</p>
+<pre class="code text"><code class="language-plaintext">V after step 2 ≈ [0.18, 1.8, 0]</code></pre>
+<p>Reward information moves backward one transition through bootstrapping.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Its target needs only the immediate reward and estimated value of the next state.</p></li>
+<li><p>It indicates whether the current state was undervalued or overvalued relative to the one-step target.</p></li>
+<li><p>No future rewards exist after genuine termination, so bootstrapping would introduce fictitious value.</p></li>
+<li><p>The target should supervise the current prediction. Without detaching, gradients also alter the value used to construct that target.</p></li>
+<li><p>No. If the underlying process could continue beyond an artificial time limit, it is usually appropriate to bootstrap from the truncated next state.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The complete sampled return <span class="math inline">\(G_t\)</span>.</p></li>
+<li><p>Using an existing value estimate to construct the target for another value estimate.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> Monte Carlo asks, “What eventually happened?” TD asks, “What happened now, plus what do I currently predict happens next?”</p>

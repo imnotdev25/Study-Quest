@@ -1,0 +1,239 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>A decoder block</strong> has two residual updates. Attention mixes information <em>across tokens</em>, and the MLP processes each token <em>independently</em>: <span class="math inline">\(U=X+\operatorname{MHA}(\operatorname{LN}_1X)\)</span>, <span class="math inline">\(Y=U+\operatorname{MLP}(\operatorname{LN}_2U)\)</span>. “Pre-norm” means LN sits inside the branch, so the residual stream <span class="math inline">\(X\to U\to Y\)</span> is never normalized directly.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="concept-refresh-5-minutes">1. Concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why must attention tensors be rearranged from <span><code>[</code></span><code>B,T,H,d_h</code><span><code>]</code></span> to <span><code>[</code></span><code>B,H,T,d_h</code><span><code>]</code></span>?</p></li>
+<li><p>Where should position IDs for KV-cached continuation begin?</p></li>
+</ol>
+<p>A pre-norm decoder block combines causal attention and a position-wise MLP:</p>
+<p><span class="math display">\[U=X+\operatorname{MHA}(\operatorname{LN}_1(X))\]</span></p>
+<p><span class="math display">\[Y=U+\operatorname{MLP}(\operatorname{LN}_2(U))\]</span></p>
+<p>The residual-stream shape remains constant:</p>
+<p><span class="math display">\[X,U,Y\in\mathbb{R}^{B\times T\times D}\]</span></p>
+<p>The MLP acts independently on every token:</p>
+<p><span class="math display">\[[B,T,D]
+\rightarrow[B,T,D_{\mathrm{ff}}]
+\rightarrow[B,T,D]\]</span></p>
+<p>Usually:</p>
+<p><span class="math display">\[D_{\mathrm{ff}}\approx4D\]</span></p>
+<p>Ignoring biases, attention has approximately <span class="math inline">\(4D^2\)</span> parameters:</p>
+<p><span class="math display">\[W_Q,W_K,W_V,W_O\]</span></p>
+<p>The MLP has:</p>
+<p><span class="math display">\[2DD_{\mathrm{ff}}=8D^2\]</span></p>
+<p>Therefore, a standard block contains approximately:</p>
+<p><span class="math display">\[12D^2\]</span></p>
+<p>Attention mixes information across tokens. The MLP mixes features within each token.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: parameters and FLOPs of one block</div>
+<p><strong>Step 1.</strong> Attention: <span class="math inline">\(W_Q,W_K,W_V,W_O\in\mathbb R^{D\times D}\)</span>, giving <span class="math inline">\(4D^2\)</span>.</p>
+<p><strong>Step 2.</strong> MLP: <span class="math inline">\(W_1\in\mathbb R^{D\times D_{\text{ff}}}\)</span>, <span class="math inline">\(W_2\in\mathbb R^{D_{\text{ff}}\times D}\)</span>, giving <span class="math inline">\(2DD_{\text{ff}}=8D^2\)</span> for <span class="math inline">\(D_{\text{ff}}=4D\)</span>.</p>
+<p><strong>Step 3.</strong> Total <span class="math inline">\(\approx12D^2\)</span> per block (LN and biases are <span class="math inline">\(O(D)\)</span>). Example: <span class="math inline">\(D=4096\)</span> gives <span class="math inline">\(\approx201\)</span>M parameters per block.</p>
+<p><strong>Step 4.</strong> A matrix multiply <span class="math inline">\((1\times D)(D\times D&#39;)\)</span> costs <span class="math inline">\(DD&#39;\)</span> multiply-adds <span class="math inline">\(=2DD&#39;\)</span> FLOPs. So the forward pass costs <span class="math inline">\(\approx2\times12D^2=24D^2\)</span> FLOPs per token for the weights, plus attention’s <span class="math inline">\(\approx4TD\)</span> per token for <span class="math inline">\(QK^\top\)</span> and <span class="math inline">\(AV\)</span>.</p>
+<p><strong>Step 5.</strong> Training <span class="math inline">\(\approx3\times\)</span> forward (backward costs about twice the forward), giving the standard estimate of <span class="math inline">\(\approx6\times\)</span> parameters FLOPs per token.</p>
+<p><strong>Step 6.</strong> <strong>Residual gradient:</strong> <span class="math inline">\(\frac{\partial L}{\partial X}=\frac{\partial L}{\partial U}\big(I+J_{\text{attn}}\big)\)</span> and <span class="math inline">\(\frac{\partial L}{\partial U}=\frac{\partial L}{\partial Y}\big(I+J_{\text{mlp}}\big)\)</span>: the identity terms carry gradient straight down the stack.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: pre-norm decoder block</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> residual stream <span class="math inline">\(X\in\mathbb R^{B\times T\times D}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(U\gets X+\operatorname{MHA}_{\text{causal}}(\operatorname{LN}_1(X))\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Y\gets U+W_2\,\phi\big(W_1\operatorname{LN}_2(U)\big)\)</span> <em>▷ <span class="math inline">\(\phi\)</span> = GELU or SwiGLU, applied per token</em></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(Y\)</span> <em>▷ same shape as <span class="math inline">\(X\)</span>; stack <span class="math inline">\(N\)</span> blocks, then a final LN</em></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Complete a minimal pre-norm causal decoder block.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(71)
+
+
+class DecoderBlock(nn.Module):
+    def __init__(self, d_model=16, n_heads=4, expansion=4):
+        super().__init__()
+
+        assert d_model % n_heads == 0
+
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+
+        self.ln1 = nn.LayerNorm(d_model)
+        self.qkv = nn.Linear(d_model, 3 * d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+
+        self.ln2 = nn.LayerNorm(d_model)
+        self.fc1 = nn.Linear(d_model, expansion * d_model)
+        self.fc2 = nn.Linear(expansion * d_model, d_model)
+
+    def attention(self, x):
+        B, T, D = x.shape
+
+        qkv = ...                              # TODO 1: [B,T,3D]
+        q, k, v = ...                          # TODO 2
+
+        def split_heads(t):
+            t = ...                            # TODO 3: [B,T,H,d_h]
+            return ...                         # TODO 4: [B,H,T,d_h]
+
+        q = split_heads(q)
+        k = split_heads(k)
+        v = split_heads(v)
+
+        context = ...                          # TODO 5: causal attention
+
+        merged = ...                           # TODO 6: [B,T,D]
+        return ...                             # TODO 7: output projection
+
+    def forward(self, x):
+        # Pre-norm attention sublayer
+        x = ...                                # TODO 8: residual update
+
+        # Pre-norm MLP sublayer
+        hidden = ...                           # TODO 9: [B,T,4D]
+        x = ...                                # TODO 10: residual update
+
+        return x
+
+
+B, T, D = 2, 6, 16
+block = DecoderBlock(d_model=D, n_heads=4)
+
+X = torch.randn(B, T, D, requires_grad=True)
+Y = block(X)
+
+print(&quot;output shape:&quot;, Y.shape)
+assert Y.shape == X.shape
+
+loss = Y.square().mean()
+loss.backward()
+
+print(&quot;input grad norm:&quot;, X.grad.norm().item())
+print(&quot;QKV grad norm:&quot;, block.qkv.weight.grad.norm().item())
+print(&quot;MLP grad norm:&quot;, block.fc1.weight.grad.norm().item())</code></pre>
+<p>Now verify causal invariance:</p>
+<pre class="code python"><code class="language-python">block.eval()
+
+X_original = X.detach()
+
+X_changed = X_original.clone()
+X_changed[:, -1, :] += 100.0
+
+with torch.no_grad():
+    Y_original = block(X_original)
+    Y_changed = block(X_changed)
+
+difference = (Y_original - Y_changed).abs().amax(dim=-1)
+
+print(&quot;change per output position:\n&quot;, difference)</code></pre>
+<p>Predict which positions must remain unchanged.</p>
+<p>Debugging extension: replace:</p>
+<pre class="code python"><code class="language-python">x = x + self.attention(self.ln1(x))</code></pre>
+<p>with:</p>
+<pre class="code python"><code class="language-python">x = self.attention(self.ln1(x))</code></pre>
+<p>Which information and gradient paths disappear?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Split QKV with <code>.chunk(3, dim=-1)</code>.</p></li>
+<li><p>Fused attention expects <span><code>[</code></span><code>B,H,T,d_h</code><span><code>]</code></span>.</p></li>
+<li><p>Use <code>F.scaled_dot_product_attention(..., is_causal=True)</code>.</p></li>
+<li><p>Merge using <code>.transpose(1, 2).contiguous().view(B,T,D)</code>.</p></li>
+<li><p>The MLP is <code>fc2(gelu(fc1(ln2(x))))</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does the MLP preserve <span><code>[</code></span><code>B,T</code><span><code>]</code></span> while changing the feature dimension?</p></li>
+<li><p>Which contains more parameters with <span class="math inline">\(D_{\mathrm{ff}}=4D\)</span>: attention or the MLP?</p></li>
+<li><p>Prediction: if the final input token changes, which outputs may change under correct causal attention?</p></li>
+<li><p>Debugging: training loss is suspiciously low, but autoregressive generation fails. What block-level invariant should you test?</p></li>
+<li><p>Why can the total gradient norm conceal a disconnected attention or MLP branch?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="session-10-solution-open-after-attempting">Session 10 solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">class DecoderBlock(nn.Module):
+    def __init__(self, d_model=16, n_heads=4, expansion=4):
+        super().__init__()
+
+        assert d_model % n_heads == 0
+
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+
+        self.ln1 = nn.LayerNorm(d_model)
+        self.qkv = nn.Linear(d_model, 3 * d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+
+        self.ln2 = nn.LayerNorm(d_model)
+        self.fc1 = nn.Linear(d_model, expansion * d_model)
+        self.fc2 = nn.Linear(expansion * d_model, d_model)
+
+    def attention(self, x):
+        B, T, D = x.shape
+
+        qkv = self.qkv(x)
+        q, k, v = qkv.chunk(3, dim=-1)
+
+        def split_heads(t):
+            t = t.view(B, T, self.n_heads, self.d_head)
+            return t.transpose(1, 2)
+
+        q = split_heads(q)
+        k = split_heads(k)
+        v = split_heads(v)
+
+        context = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            dropout_p=0.0,
+            is_causal=True,
+        )
+
+        merged = (
+            context.transpose(1, 2)
+            .contiguous()
+            .view(B, T, D)
+        )
+
+        return self.out_proj(merged)
+
+    def forward(self, x):
+        x = x + self.attention(self.ln1(x))
+
+        hidden = F.gelu(self.fc1(self.ln2(x)))
+        x = x + self.fc2(hidden)
+
+        return x</code></pre>
+<p>Changing only the final input token must leave output positions <code>0</code> through <code>T-2</code> unchanged. Only the final output may change.</p>
+<p>Removing the attention residual connection eliminates:</p>
+<ul>
+<li><p>the identity information path;</p></li>
+<li><p>the direct identity-gradient path;</p></li>
+<li><p>the ability for attention to behave as a refinement of the existing residual stream.</p></li>
+</ul>
+<p>Check answers:</p>
+<ol>
+<li><p>Linear layers operate on the last dimension and treat <span><code>[</code></span><code>B,T</code><span><code>]</code></span> as leading batch dimensions.</p></li>
+<li><p>Attention has roughly <span class="math inline">\(4D^2\)</span> parameters; the MLP has <span class="math inline">\(8D^2\)</span>. The MLP has about twice as many.</p></li>
+<li><p>Only the final output may change.</p></li>
+<li><p>Test causal invariance: changing future inputs must not affect earlier outputs.</p></li>
+<li><p>Residual paths can keep the total gradient nonzero even when a learned branch is detached, unused, or saturated. Inspect per-module gradients.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>The transpose makes token positions the attention matrix dimension inside each head.</p></li>
+<li><p>Continuation position IDs should begin at the cached sequence length, adjusted for padding or packing.</p></li>
+</ul>

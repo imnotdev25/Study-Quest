@@ -1,0 +1,292 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: over-studying one old exam</div>
+<p>Re-reading the same old exam ten times eventually teaches you that exam’s quirks, not the subject. PPO epochs on a single rollout batch are the same: the first few passes learn, but later passes overfit stale data. KL early stopping says “stop when you’ve drifted too far from the policy that produced this data.”</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why should advantage-whitening statistics be computed over the rollout batch rather than each optimizer microbatch?</p></li>
+<li><p>Why does PPO ratio clipping not tightly bound complete response drift?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="kl-can-stop-stale-rollout-optimization">2. KL can stop stale-rollout optimization</h3>
+<p>PPO may run several optimizer epochs over one rollout batch. As the current policy moves away from the rollout policy, the data becomes increasingly stale.</p>
+<p>For actions sampled from the old policy:</p>
+<p><span class="math display">\[A\sim\pi_{\text{old}}\]</span></p>
+<p>define:</p>
+<p><span class="math display">\[\ell(A)
+=
+\log\pi_\theta(A)
+-
+\log\pi_{\text{old}}(A)\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[r(A)=e^{\ell(A)}
+=
+\frac{\pi_\theta(A)}
+{\pi_{\text{old}}(A)}\]</span></p>
+<p>The signed estimator:</p>
+<p><span class="math display">\[k_1=-\ell\]</span></p>
+<p>has expectation:</p>
+<p><span class="math display">\[\mathbb E_{\pi_{\text{old}}}[k_1]
+=
+D_{\mathrm{KL}}
+(\pi_{\text{old}}\Vert\pi_\theta)\]</span></p>
+<p>Individual samples—and even small minibatch means—can be negative.</p>
+<p>A nonnegative estimator is:</p>
+<p><span class="math display">\[k_3=r-1-\log r
+=
+e^\ell-1-\ell\]</span></p>
+<p>Since <span class="math inline">\(x-1-\log x\ge0\)</span>, every contribution is nonnegative. Also:</p>
+<p><span class="math display">\[\mathbb E_{\pi_{\text{old}}}[r]=1\]</span></p>
+<p>so <span class="math inline">\(k_3\)</span> has the same expected value as the reverse KL.</p>
+<p>A practical PPO rule is:</p>
+<p><span class="math display">\[\text{stop further epochs if }
+\widehat D_{\mathrm{KL}}&gt;
+cD_{\text{target}}\]</span></p>
+<p>where <span class="math inline">\(c\)</span> might be <span style="background-color: codeinlinebg"><code> 1.5</code></span> or <span style="background-color: codeinlinebg"><code> 2</code></span>. This is a heuristic safety brake, not a guarantee of policy quality.</p>
+<p>Tensor shapes for LLM PPO:</p>
+<ul>
+<li><p>stored old and current selected log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>log-ratios, ratios and KL contributions: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>response mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>masked KL estimate: scalar</p></li>
+</ul>
+<p>DPO uses policy-versus-reference ratios on fixed preference pairs. It does not compare against the rollout policy or stop online epochs using rollout KL.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: which KL, measured how</div>
+<p>The update KL is <span class="math inline">\(\mathrm{KL}(\pi_{\text{old}}\|\pi_\theta)=\mathbb E_{a\sim\pi_{\text{old}}}\big[\log\pi_{\text{old}}-\log\pi_\theta\big]\)</span>. The samples come from <span class="math inline">\(\pi_{\text{old}}\)</span>, because that’s who generated the rollout. With <span class="math inline">\(\rho=\pi_\theta/\pi_{\text{old}}\)</span> per token: <span class="math inline">\(k_1=-\log\rho\)</span> (unbiased, can be negative) and <span class="math inline">\(k_3=(\rho-1)-\log\rho\ge0\)</span> (unbiased, lower variance). <strong>Stop rule:</strong> after each minibatch (or epoch), if <span class="math inline">\(\overline{\mathrm{KL}}&gt;1.5\times\text{target}\)</span>, stop using this batch. <strong>Don’t confuse</strong> this with the reference KL (<span class="math inline">\(\pi_\theta\)</span> vs <span class="math inline">\(\pi_{\text{ref}}\)</span>), which regularizes behaviour and has a separate target (Topic 157).</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>The update KL uses the frozen rollout policy as its denominator.</p></li>
+<li><p>Aggregate over valid tokens and stop before stale epochs do harm.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: three tokens</div>
+<p><span class="math inline">\(\rho=(1.1,0.9,1.3)\)</span>. <span class="math inline">\(k_1=-\log\rho=(-0.095,0.105,-0.262)\)</span>, mean <span class="math inline">\(-0.084\)</span>: a “negative KL,” which is just noise. <span class="math inline">\(k_3=(0.0047,0.0054,0.0376)\)</span>, mean <span class="math inline">\(0.016\)</span>. With target 0.01 and a 1.5<span class="math inline">\(\times\)</span> threshold (0.015): stop.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Recomputing <span class="math inline">\(\log\pi_{\text{old}}\)</span> each epoch, so KL is always 0.</p></li>
+<li><p>Averaging over padding tokens.</p></li>
+<li><p>Using the reference model as the denominator.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: PPO epochs with KL early stopping</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> rollout batch with frozen <span class="math inline">\(\log\pi_{\text{old}}\)</span>, masks <span class="math inline">\(m\)</span>, KL target <span class="math inline">\(\kappa\)</span>, max epochs <span class="math inline">\(K\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> epoch <span class="math inline">\(=1,\dots,K\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each minibatch <strong>do</strong></div>
+<div class="algo-line" style="--d:2">PPO-clip gradient step (Topic 30)</div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\rho_t\gets\exp(\log\pi_\theta-\log\pi_{\text{old}})\)</span>; <span class="math inline">\(\widehat{\mathrm{KL}}\gets\sum_tm_t\big[(\rho_t-1)-\log\rho_t\big]/\sum_tm_t\)</span></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(\widehat{\mathrm{KL}}&gt;1.5\kappa\)</span> <strong>then</strong> <strong>return</strong> <em>▷ this batch is stale: collect new rollouts</em></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-compare-exact-and-sampled-ppo-kl">3. PyTorch exercise — compare exact and sampled PPO KL</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_samples = 4096
+target_kl = 0.05
+early_stop_multiplier = 1.5
+
+old_logits = torch.tensor([
+    0.5, 0.0, -0.5
+])
+
+current_logits = torch.tensor([
+    1.3, -0.2, -1.0
+])
+
+# TODO 1: Log-probabilities and probabilities.
+old_log_probs = ...
+current_log_probs = ...
+old_probs = ...
+
+# TODO 2: Exact KL(old || current).
+exact_reverse_kl = ...
+
+# Rollouts must come from the denominator policy.
+old_policy = Categorical(
+    logits=old_logits
+)
+
+actions = old_policy.sample((
+    num_samples,
+))
+
+# TODO 3: Select old and current log-probabilities.
+selected_old_log_probs = ...
+selected_current_log_probs = ...
+
+# TODO 4: PPO log-ratios, ratios and two KL estimators.
+log_ratios = ...
+ratios = ...
+
+signed_k1 = ...
+nonnegative_k3 = ...
+
+signed_estimate = signed_k1.mean()
+nonnegative_estimate = nonnegative_k3.mean()
+
+# TODO 5: Early-stopping decision.
+stop_threshold = ...
+should_stop = ...
+
+print(&quot;Old probabilities:&quot;,
+      old_probs)
+
+print(&quot;Current probabilities:&quot;,
+      current_log_probs.exp())
+
+print(&quot;Exact KL(old || current):&quot;,
+      exact_reverse_kl.item())
+
+print(&quot;Signed sampled estimate:&quot;,
+      signed_estimate.item())
+
+print(&quot;Nonnegative sampled estimate:&quot;,
+      nonnegative_estimate.item())
+
+print(
+    &quot;Fraction of signed contributions below zero:&quot;,
+    (
+        signed_k1 &lt; 0
+    ).to(torch.float64).mean().item(),
+)
+
+print(
+    &quot;Minimum k3 contribution:&quot;,
+    nonnegative_k3.min().item(),
+)
+
+print(&quot;Mean importance ratio:&quot;,
+      ratios.mean().item())
+
+print(&quot;Stop threshold:&quot;,
+      stop_threshold)
+
+print(&quot;Stop further PPO epochs:&quot;,
+      should_stop)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Can individual <span style="background-color: codeinlinebg"><code> signed_k1</code></span> contributions be negative?</p></li>
+<li><p>Can a correctly calculated <span style="background-color: codeinlinebg"><code> nonnegative_k3</code></span> contribution be negative?</p></li>
+<li><p>Should the sampled mean importance ratio approach one?</p></li>
+<li><p>Will this example likely trigger early stopping?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> log_softmax(dim=-1)</code></span> and exponentiate for probabilities.</p></li>
+<li><p>Exact reverse KL is weighted by <span style="background-color: codeinlinebg"><code> old_probs</code></span>.</p></li>
+<li><p>Index each log-probability vector using <span style="background-color: codeinlinebg"><code> actions</code></span>.</p></li>
+<li><p>Ratio direction is <span style="background-color: codeinlinebg"><code> current - old</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> signed_k1 = -log_ratios</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> nonnegative_k3 = ratios - 1 - log_ratios</code></span>.</p></li>
+<li><p>Compare <span style="background-color: codeinlinebg"><code> nonnegative_estimate</code></span> with <span style="background-color: codeinlinebg"><code> target_kl * early_stop_multiplier</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Sample actions from the current policy while retaining the same formula. The sampling distribution no longer matches the intended <span class="math inline">\(D_{\mathrm{KL}}(\pi_{\text{old}}\Vert\pi_\theta)\)</span>.</p>
+<p>Next, reverse the log-ratio:</p>
+<pre class="code python"><code class="language-python">log_ratios = (
+    selected_old_log_probs
+    - selected_current_log_probs
+)</code></pre>
+<p>The associated importance ratio and <span class="math inline">\(k_3\)</span> convention must also change. A nonnegative number is not automatically the desired KL.</p>
+<p>Finally, perform early stopping from one tiny minibatch. Sampling noise may stop an epoch prematurely; use the masked rollout-wide estimate or a stable aggregation.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can the signed estimator be negative even though KL is nonnegative?</p></li>
+<li><p>Why must stored old log-probabilities remain detached?</p></li>
+<li><p>What does a large mean KL but low PPO clip fraction suggest checking?</p></li>
+<li><p>Does target-KL early stopping replace independent evaluation?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Policy quantities:</p>
+<pre class="code python"><code class="language-python">old_log_probs = old_logits.log_softmax(
+    dim=-1
+)
+
+current_log_probs = (
+    current_logits.log_softmax(
+        dim=-1
+    )
+)
+
+old_probs = old_log_probs.exp()</code></pre>
+<p>Exact reverse KL:</p>
+<pre class="code python"><code class="language-python">exact_reverse_kl = (
+    old_probs
+    * (
+        old_log_probs
+        - current_log_probs
+    )
+).sum()</code></pre>
+<p>Selected log-probabilities:</p>
+<pre class="code python"><code class="language-python">selected_old_log_probs = (
+    old_log_probs[actions]
+)
+
+selected_current_log_probs = (
+    current_log_probs[actions]
+)</code></pre>
+<p>Sampled estimators:</p>
+<pre class="code python"><code class="language-python">log_ratios = (
+    selected_current_log_probs
+    - selected_old_log_probs
+)
+
+ratios = log_ratios.exp()
+
+signed_k1 = -log_ratios
+
+nonnegative_k3 = (
+    ratios
+    - 1.0
+    - log_ratios
+)</code></pre>
+<p>Early stopping:</p>
+<pre class="code python"><code class="language-python">stop_threshold = (
+    target_kl * early_stop_multiplier
+)
+
+should_stop = bool(
+    nonnegative_estimate
+    &gt; stop_threshold
+)</code></pre>
+<p>The signed contribution is:</p>
+<p><span class="math display">\[-\log
+\frac{\pi_\theta(A)}
+{\pi_{\text{old}}(A)}\]</span></p>
+<p>It is negative whenever the sampled action became more probable under the current policy. Only its old-policy expectation is guaranteed to equal a nonnegative KL.</p>
+<p>For <span class="math inline">\(k_3\)</span>:</p>
+<p><span class="math display">\[r-1-\log r\ge0\]</span></p>
+<p>for every positive ratio <span class="math inline">\(r\)</span>.</p>
+<p>The sampled mean ratio should approach:</p>
+<p><span class="math display">\[\mathbb E_{\pi_{\text{old}}}[r]
+=
+\sum_a
+\pi_{\text{old}}(a)
+\frac{\pi_\theta(a)}
+{\pi_{\text{old}}(a)}
+=
+1\]</span></p>
+<p>Large deviations from one can indicate small samples, support problems or incorrect ratio computation.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>KL is an expectation; individual sampled log-ratios may have either sign.</p></li>
+<li><p>The denominator must remain the fixed policy that generated the rollout. Allowing it to move invalidates the ratio.</p></li>
+<li><p>Verify masks, ratio direction, whether clip fraction and KL use the same tokens, and whether sequence drift is accumulating from many individually modest token changes.</p></li>
+<li><p>No. KL measures policy movement, not reward validity, factuality, safety or downstream usefulness.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Local whitening assigns credits according to arbitrary microbatch composition and can erase or reverse rollout-wide differences.</p></li>
+<li><p>Token ratios multiply across a response, so many small token-level changes can produce a large sequence-probability change.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> PPO KL diagnostics are defined by both ratio direction and sampling policy. Use the frozen rollout policy as the denominator, aggregate over valid rollout tokens and stop stale-batch optimization before clipping statistics become misleading.</p>

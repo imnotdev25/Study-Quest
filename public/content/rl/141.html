@@ -1,0 +1,464 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why must trajectory evaluation resample complete episodes rather than tokens?</p></li>
+<li><p>Which uncertainty term remains even when an episode contains infinitely many steps?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-bootstrap-cannot-invent-an-event-absent-from-the-logs">2. A bootstrap cannot invent an event absent from the logs</h3>
+<p>For one-step OPE, each logged episode contributes:</p>
+<p><span class="math display">\[Z_i
+=
+\underbrace{
+\frac{\pi(A_i)}{\mu(A_i)}
+}_{\text{target-to-behavior probability ratio}}
+\underbrace{R_i}_{\text{observed reward}}\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\hat V_{\mathrm{IPS}}
+=
+\underbrace{
+\frac1N\sum_{i=1}^{N}Z_i
+}_{\text{average importance-weighted contribution}}\]</span></p>
+<p>Positive support,</p>
+<p><span class="math display">\[\pi(a)&gt;0
+\Longrightarrow
+\underbrace{\mu(a)&gt;0}_{\text{behavior can sample the action}},\]</span></p>
+<p>is necessary but not sufficient for useful finite-sample evaluation.</p>
+<p>Suppose behavior selects an important action with probability <span style="background-color: codeinlinebg"><code> 0.01</code></span>. With <span class="math inline">\(N=100\)</span>, the probability of seeing it zero times is:</p>
+<p><span class="math display">\[P(K=0)
+=
+\underbrace{(1-0.01)^{100}}_{\text{no rare action in any episode}}
+\approx 0.366\]</span></p>
+<p>If that action receives 50% of target-policy probability, its importance weight is:</p>
+<p><span class="math display">\[w(1)
+=
+\underbrace{\frac{0.50}{0.01}}_{\text{target mass divided by logging mass}}
+=
+50\]</span></p>
+<p>When a dataset contains no such episode, a nonparametric bootstrap only resamples the observed common episodes:</p>
+<p><span class="math display">\[K=0
+\quad\Longrightarrow\quad
+\underbrace{\hat V_b^*=0\;\text{for every }b}_{\text{degenerate bootstrap distribution}}\]</span></p>
+<p>The interval <span style="background-color: codeinlinebg"><code> [0, 0]</code></span> means “the empirical dataset contains no variation,” not “the policy value is known exactly.”</p>
+<p>For LLM agents, the missing event might be a rare tool call, escalation path or high-stakes prompt type. Resampling existing trajectories cannot manufacture that branch. Likewise, bootstrapping a DPO preference dataset cannot evaluate response modes absent from its prompts and candidate completions.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions, weights and contributions: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>rare-action counts and estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+<li><p>bootstrap indices: <span style="background-color: codeinlinebg"><code> [B, N]</code></span></p></li>
+<li><p>bootstrap estimates: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-37-of-evaluations-report-false-certainty">3. PyTorch exercise — 37% of evaluations report false certainty</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 5_000
+episodes_per_repetition = 100
+num_bootstrap_samples = 5_000
+
+behavior_policy = torch.tensor([
+    0.99,
+    0.01,
+])
+
+target_policy = torch.tensor([
+    0.50,
+    0.50,
+])
+
+reward_by_action = torch.tensor([
+    0.0,
+    1.0,
+])
+
+z_value = 1.96
+
+
+# TODO 1: Generate behavior-policy episodes.
+actions = ...
+
+rewards = ...
+
+importance_weights = ...
+
+contributions = ...
+
+ips_estimates = ...
+
+rare_counts = ...
+
+
+# TODO 2: Calculate population quantities.
+exact_target_value = ...
+
+second_moment = ...
+
+true_variance = ...
+
+true_standard_error = ...
+
+empirical_standard_error = ...
+
+zero_rare_fraction = ...
+
+
+# TODO 3: Construct ordinary normal intervals.
+estimated_standard_errors = ...
+
+lower_bounds = ...
+upper_bounds = ...
+
+normal_coverage = ...
+
+
+# TODO 4: Select studies containing zero and one
+# rare episode, then bootstrap complete episodes.
+zero_study_index = ...
+
+one_study_index = ...
+
+
+def bootstrap_study(study_index):
+    indices = ...
+
+    bootstrap_estimates = ...
+
+    standard_error = ...
+
+    interval = ...
+
+    return (
+        bootstrap_estimates,
+        standard_error,
+        interval,
+    )
+
+
+zero_bootstrap = ...
+one_bootstrap = ...
+
+
+# TODO 5: Inspect weight diagnostics.
+def effective_sample_size(weights):
+    return ...
+
+
+zero_weights = ...
+one_weights = ...
+
+zero_mean_weight = ...
+one_mean_weight = ...
+
+zero_ess = ...
+one_ess = ...
+
+episodes_for_five_percent_zero_risk = ...
+
+
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+print(&quot;Mean IPS estimate:&quot;, ips_estimates.mean().item())
+
+print(&quot;True SE:&quot;, true_standard_error.item())
+print(&quot;Empirical SE:&quot;, empirical_standard_error.item())
+
+print(
+    &quot;Fraction with zero rare episodes:&quot;,
+    zero_rare_fraction.item(),
+)
+print(&quot;Normal-interval coverage:&quot;, normal_coverage.item())
+
+print(
+    &quot;Zero-event bootstrap SE and interval:&quot;,
+    zero_bootstrap[1].item(),
+    zero_bootstrap[2],
+)
+
+print(
+    &quot;One-event bootstrap SE and interval:&quot;,
+    one_bootstrap[1].item(),
+    one_bootstrap[2],
+)
+
+print(
+    &quot;Mean weights: zero-event, one-event&quot;,
+    zero_mean_weight.item(),
+    one_mean_weight.item(),
+)
+
+print(
+    &quot;ESS: zero-event, one-event&quot;,
+    zero_ess.item(),
+    one_ess.item(),
+)
+
+print(
+    &quot;Episodes needed for P(zero) &lt; 5%:&quot;,
+    episodes_for_five_percent_zero_risk,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the mean IPS estimate across repetitions approach <span style="background-color: codeinlinebg"><code> 0.50</code></span>?</p></li>
+<li><p>What interval will a zero-rare-event dataset produce?</p></li>
+<li><p>Can its calculated ESS misleadingly equal <span style="background-color: codeinlinebg"><code> 100</code></span>?</p></li>
+<li><p>Will the empirical estimator SD be closer to <span style="background-color: codeinlinebg"><code> 0.05</code></span> or <span style="background-color: codeinlinebg"><code> 0.50</code></span>?</p></li>
+<li><p>Does weight clipping preserve exact unbiasedness?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>The action is rare when a uniform sample falls below <span style="background-color: codeinlinebg"><code> behavior_policy[1]</code></span>.</p>
+<p>The second moment is:</p>
+<p><span class="math display">\[E_\mu[Z^2]
+=
+\underbrace{
+\sum_a
+\mu(a)
+\left[
+\frac{\pi(a)}{\mu(a)}R(a)
+\right]^2
+}_{\text{behavior expectation of squared contribution}}\]</span></p>
+<p>For the sample-size calculation, solve:</p>
+<p><span class="math display">\[(1-\mu_1)^N&lt;0.05\]</span></p>
+<p>The usual ESS diagnostic is:</p>
+<p><span class="math display">\[N_{\mathrm{eff}}
+=
+\underbrace{
+\frac{\left(\sum_iw_i\right)^2}
+     {\sum_iw_i^2}
+}_{\text{concentration of observed weights}}\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Inspect ESS without checking whether <span style="background-color: codeinlinebg"><code> importance_weights.mean()</code></span> is near one.</p></li>
+<li><p>Clip the weight <span style="background-color: codeinlinebg"><code> 50</code></span> to <span style="background-color: codeinlinebg"><code> 10</code></span> and continue claiming unbiased evaluation.</p></li>
+<li><p>Bootstrap individual agent tokens instead of complete trajectories.</p></li>
+<li><p>Increase bootstrap replicates while leaving the logged dataset unchanged.</p></li>
+<li><p>Treat population support as proof that the realized dataset has adequate coverage.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Logged episodes:</p>
+<pre class="code python"><code class="language-python">actions = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_repetition,
+    )
+    &lt; behavior_policy[1]
+).to(torch.long)
+
+rewards = reward_by_action[actions]
+
+importance_weights = (
+    target_policy[actions]
+    / behavior_policy[actions]
+)
+
+contributions = (
+    importance_weights * rewards
+)
+
+ips_estimates = contributions.mean(dim=1)
+
+rare_counts = (
+    actions == 1
+).sum(dim=1)</code></pre>
+<p>Population uncertainty:</p>
+<pre class="code python"><code class="language-python">exact_target_value = (
+    target_policy * reward_by_action
+).sum()
+
+all_action_contributions = (
+    target_policy
+    / behavior_policy
+    * reward_by_action
+)
+
+second_moment = (
+    behavior_policy
+    * all_action_contributions.square()
+).sum()
+
+true_variance = (
+    second_moment
+    - exact_target_value.square()
+)
+
+true_standard_error = torch.sqrt(
+    true_variance
+    / episodes_per_repetition
+)
+
+empirical_standard_error = (
+    ips_estimates.std(correction=1)
+)
+
+zero_rare_fraction = (
+    (rare_counts == 0)
+    .to(torch.float64)
+    .mean()
+)</code></pre>
+<p>Normal intervals:</p>
+<pre class="code python"><code class="language-python">estimated_standard_errors = (
+    contributions.std(
+        dim=1,
+        correction=1,
+    )
+    / math.sqrt(
+        episodes_per_repetition
+    )
+)
+
+lower_bounds = (
+    ips_estimates
+    - z_value * estimated_standard_errors
+)
+
+upper_bounds = (
+    ips_estimates
+    + z_value * estimated_standard_errors
+)
+
+normal_coverage = (
+    (
+        (lower_bounds &lt;= exact_target_value)
+        &amp; (exact_target_value &lt;= upper_bounds)
+    )
+    .to(torch.float64)
+    .mean()
+)</code></pre>
+<p>Episode bootstrap:</p>
+<pre class="code python"><code class="language-python">zero_study_index = torch.nonzero(
+    rare_counts == 0,
+    as_tuple=False,
+)[0, 0]
+
+one_study_index = torch.nonzero(
+    rare_counts == 1,
+    as_tuple=False,
+)[0, 0]
+
+
+def bootstrap_study(study_index):
+    indices = torch.randint(
+        low=0,
+        high=episodes_per_repetition,
+        size=(
+            num_bootstrap_samples,
+            episodes_per_repetition,
+        ),
+    )
+
+    bootstrap_estimates = (
+        contributions[
+            study_index,
+            indices,
+        ].mean(dim=1)
+    )
+
+    standard_error = (
+        bootstrap_estimates.std(
+            correction=1
+        )
+    )
+
+    interval = bootstrap_estimates.quantile(
+        torch.tensor([0.025, 0.975])
+    )
+
+    return (
+        bootstrap_estimates,
+        standard_error,
+        interval,
+    )
+
+
+zero_bootstrap = bootstrap_study(
+    zero_study_index
+)
+
+one_bootstrap = bootstrap_study(
+    one_study_index
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">def effective_sample_size(weights):
+    return (
+        weights.sum().square()
+        / weights.square().sum()
+        .clamp_min(1e-12)
+    )
+
+
+zero_weights = importance_weights[
+    zero_study_index
+]
+
+one_weights = importance_weights[
+    one_study_index
+]
+
+zero_mean_weight = zero_weights.mean()
+one_mean_weight = one_weights.mean()
+
+zero_ess = effective_sample_size(
+    zero_weights
+)
+
+one_ess = effective_sample_size(
+    one_weights
+)
+
+episodes_for_five_percent_zero_risk = (
+    math.ceil(
+        math.log(0.05)
+        / math.log(
+            1.0 - behavior_policy[1].item()
+        )
+    )
+)</code></pre>
+<p>Expected results:</p>
+<p><span class="math display">\[V^\pi
+=
+\underbrace{0.5(0)}_{\text{common action}}
++
+\underbrace{0.5(1)}_{\text{rare under behavior}}
+=
+0.5\]</span></p>
+<p>The true standard error is:</p>
+<p><span class="math display">\[SE
+=
+\sqrt{
+\frac{
+\underbrace{0.01(50^2)}_{E[Z^2]=25}
+-
+\underbrace{0.5^2}_{E[Z]^2}
+}{100}
+}
+\approx 0.498\]</span></p>
+<p>Typical diagnostics:</p>
+<ul>
+<li><p>mean IPS estimate: near <span style="background-color: codeinlinebg"><code> 0.50</code></span>;</p></li>
+<li><p>empirical SD: near <span style="background-color: codeinlinebg"><code> 0.50</code></span>;</p></li>
+<li><p>datasets with no rare action: about <span style="background-color: codeinlinebg"><code> 36.6%</code></span>;</p></li>
+<li><p>normal-interval coverage: roughly <span style="background-color: codeinlinebg"><code> 63%</code></span>;</p></li>
+<li><p>zero-event bootstrap: SE <span style="background-color: codeinlinebg"><code> 0</code></span>, interval <span style="background-color: codeinlinebg"><code> [0, 0]</code></span>;</p></li>
+<li><p>one-event bootstrap: SE near <span style="background-color: codeinlinebg"><code> 0.50</code></span>, usually interval around <span style="background-color: codeinlinebg"><code> [0, 1.5]</code></span>;</p></li>
+<li><p>zero-event mean weight: <span style="background-color: codeinlinebg"><code> 0.505</code></span>, exposing missing target mass;</p></li>
+<li><p>zero-event ESS: misleadingly <span style="background-color: codeinlinebg"><code> 100</code></span>;</p></li>
+<li><p>one-event ESS: approximately <span style="background-color: codeinlinebg"><code> 3.96</code></span>;</p></li>
+<li><p>episodes needed to make <span class="math inline">\(P(K=0)&lt;5\%\)</span>: <span style="background-color: codeinlinebg"><code> 299</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Yes. IPS remains unbiased across repeated datasets because population support exists.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> [0, 0]</code></span>: every bootstrap sample contains only zero contributions.</p></li>
+<li><p>Yes. All observed weights are identical, so ESS reports perfect balance while ignoring the missing rare stratum.</p></li>
+<li><p>Approximately <span style="background-color: codeinlinebg"><code> 0.50</code></span>; one rare episode changes the estimate by <span style="background-color: codeinlinebg"><code> 0.50</code></span>.</p></li>
+<li><p>No. Clipping reduces variance by changing the weights, generally introducing bias.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Tokens within an episode share history and latent task difficulty; resampling them separately destroys that dependence.</p></li>
+<li><p>The episode-level component <span class="math inline">\(\sigma_U^2/N\)</span> remains. More steps refine existing episodes but do not create additional independent episodes.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> more bootstrap draws cannot compensate for missing logged events. Inspect per-branch counts, target mass, mean weights and maximum weights—not ESS alone—and collect targeted data when a consequential policy branch is rare.</p>

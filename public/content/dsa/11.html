@@ -1,0 +1,155 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>A recipe for designing any DP (state, transition, base case, order, answer), then the major families: linear, knapsack, subsequences, two-sequence (edit distance, LCS), grids, intervals, trees, bitmasks, state machines, digits, and probability. Ends with optimizations and the DP algorithms used in ML: Viterbi, CTC, and dynamic time warping.</p>
+</div>
+<h1 id="what-dp-is">What DP Is</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>If someone asks you <span class="math inline">\(1+1+1+1+1\)</span>, you count five. If they add another <span class="math inline">\(+1\)</span>, you do not recount; you remember five and say six. Dynamic programming is remembering answers to smaller questions so you never solve the same one twice.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>DP applies when a problem has:</p>
+<ul>
+<li><p><strong>Optimal substructure</strong>: an optimal solution is built from optimal solutions of subproblems.</p></li>
+<li><p><strong>Overlapping subproblems</strong>: the same subproblems recur many times in the naive recursion.</p></li>
+</ul>
+<p>Two implementations: <strong>top-down</strong> (recursion plus memoization: natural, computes only needed states) and <strong>bottom-up</strong> (fill a table in dependency order: no recursion limit, easier to optimize space).</p>
+</div>
+<h1 id="the-five-step-recipe">The Five-Step Recipe</h1>
+<figure class="tikz"><img src="figs/dsa/0ffcf4a6df6d.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Designing a DP.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The <strong>state</strong> must capture everything needed to make the remaining decisions optimally, and nothing more. The <strong>transition</strong> usually comes from asking “what is the last decision?” (did I take item <span class="math inline">\(i\)</span>? what was the last character matched? where was the last cut?). Complexity = (number of states) <span class="math inline">\(\times\)</span> (transitions per state). If that is too slow, either the state has redundant information or the transition can be accelerated (prefix maxima, monotonic deque, binary search).</p>
+</div>
+<h1 id="linear-dp">Linear DP</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>House robber:</strong> <span class="math inline">\(dp[i] = \max(dp[i-1], dp[i-2] + A[i])\)</span> (skip house <span class="math inline">\(i\)</span>, or rob it and skip <span class="math inline">\(i-1\)</span>). <strong>Climbing stairs / decode ways:</strong> count by the last step. <strong>Word break:</strong> <span class="math inline">\(dp[i]\)</span> = can the prefix of length <span class="math inline">\(i\)</span> be segmented; <span class="math inline">\(dp[i] = \exists j: dp[j] \wedge s[j..i) \in \text{dict}\)</span>, bounded by the longest word. <strong>Coin change (minimum coins):</strong> <span class="math inline">\(dp[a] = 1 + \min_c
+dp[a - c]\)</span>. All are <span class="math inline">\(O(1)\)</span> space when only the last few values are used.</p>
+</div>
+<h1 id="knapsack">Knapsack</h1>
+<p><em>0/1 knapsack with a 1D array</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> weights <span class="math inline">\(w\)</span>, values <span class="math inline">\(v\)</span>, capacity <span class="math inline">\(C\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(dp[0..C] \gets 0\)</span> <em>▷ <span class="math inline">\(dp[c]\)</span> = best value with capacity <span class="math inline">\(c\)</span> using items so far</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each item <span class="math inline">\(i\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(c \gets C\)</span> <strong>down to</strong> <span class="math inline">\(w_i\)</span> <strong>do</strong> <em>▷ backward: each item used at most once</em></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(dp[c] \gets \max(dp[c], dp[c - w_i] + v_i)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(dp[C]\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>In the 2D form, <span class="math inline">\(dp[i][c] = \max(dp[i-1][c], dp[i-1][c-w_i] + v_i)\)</span>: either skip item <span class="math inline">\(i\)</span> or take it. With one array, iterating <span class="math inline">\(c\)</span> <strong>downward</strong> guarantees <span class="math inline">\(dp[c - w_i]\)</span> still holds the value from <em>before</em> item <span class="math inline">\(i\)</span>, so the item is not reused. Iterating <strong>upward</strong> gives the unbounded knapsack (items reusable), because <span class="math inline">\(dp[c-w_i]\)</span> may already include item <span class="math inline">\(i\)</span>. <strong>Time:</strong> <span class="math inline">\(O(nC)\)</span> <strong>Space:</strong> <span class="math inline">\(O(C)\)</span>. This is <em>pseudo-polynomial</em>: polynomial in the numeric value <span class="math inline">\(C\)</span>, exponential in its bit length; knapsack is NP-hard in general.</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“Choose a subset with a budget/target,” partition equal subset sum (target <span class="math inline">\(= \sum/2\)</span>, boolean knapsack), target sum with <span class="math inline">\(\pm\)</span> signs (count subsets with sum <span class="math inline">\((\text{total} + \text{target})/2\)</span>), coin change (unbounded), “ones and zeroes” (two-dimensional capacity). Counting combinations vs permutations: items in the outer loop counts combinations; amount in the outer loop counts ordered sequences.</p>
+</div>
+<h1 id="subsequences-lis">Subsequences: LIS</h1>
+<p><em>Longest increasing subsequence in <span class="math inline">\(O(n\log n)\)</span> (patience sorting)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(tails \gets []\)</span> <em>▷ <span class="math inline">\(tails[k]\)</span> = smallest tail of an increasing subsequence of length <span class="math inline">\(k{+}1\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each <span class="math inline">\(x\)</span> in <span class="math inline">\(A\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(i \gets\)</span> lower bound of <span class="math inline">\(x\)</span> in <span class="math inline">\(tails\)</span> <em>▷ first <span class="math inline">\(tails[i] \ge x\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(i = |tails|\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">append <span class="math inline">\(x\)</span></div>
+<div class="algo-line" style="--d:1"><strong>else</strong>  </div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(tails[i] \gets x\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(|tails|\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><span class="math inline">\(tails\)</span> stays strictly increasing. Replacing <span class="math inline">\(tails[i]\)</span> with a smaller <span class="math inline">\(x\)</span> keeps the same length but lowers the bar for extending it, which can only help later. The array is not itself an LIS, but its length equals the LIS length. The simpler <span class="math inline">\(O(n^2)\)</span> DP: <span class="math inline">\(dp[i] = 1 + \max_{j&lt;i, A[j]&lt;A[i]} dp[j]\)</span>. Variants: non-decreasing (use upper bound), Russian doll envelopes (sort by width ascending and height <em>descending</em>, then LIS on heights), number of LIS (track counts).</p>
+</div>
+<h1 id="two-sequences-edit-distance-and-lcs">Two Sequences: Edit Distance and LCS</h1>
+<p><em>Edit distance (Levenshtein)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> strings <span class="math inline">\(a\)</span> (length <span class="math inline">\(m\)</span>), <span class="math inline">\(b\)</span> (length <span class="math inline">\(n\)</span>)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(dp[i][0] \gets i\)</span>; <span class="math inline">\(dp[0][j] \gets j\)</span> <em>▷ delete all / insert all</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i \gets 1\)</span> <strong>to</strong> <span class="math inline">\(m\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(j \gets 1\)</span> <strong>to</strong> <span class="math inline">\(n\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(a_i = b_j\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(dp[i][j] \gets dp[i-1][j-1]\)</span></div>
+<div class="algo-line" style="--d:2"><strong>else</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(dp[i][j] \gets 1 + \min(dp[i-1][j],\ dp[i][j-1],\ dp[i-1][j-1])\)</span></div>
+<div class="algo-line" style="--d:3">delete insert replace</div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(dp[m][n]\)</span></div>
+</div>
+<figure class="tikz"><img src="figs/dsa/09df3606fed8.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Edit distance table for “kitten” <span class="math inline">\(\to\)</span> “sitting”: 3 edits.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>LCS</strong>: <span class="math inline">\(dp[i][j] = dp[i-1][j-1] + 1\)</span> if characters match, else <span class="math inline">\(\max(dp[i-1][j], dp[i][j-1])\)</span>. <strong>Space</strong>: each row depends only on the previous row, so <span class="math inline">\(O(\min(m,n))\)</span> space; recovering the actual alignment needs the full table or Hirschberg’s divide-and-conquer trick. Related: longest common substring (reset to 0 on mismatch), distinct subsequences (count), regular expression and wildcard matching (states <span class="math inline">\((i,j)\)</span> with special transitions for <code>*</code>), interleaving strings, shortest common supersequence (<span class="math inline">\(m + n - \text{LCS}\)</span>).</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<p><strong>Word error rate</strong> (speech recognition) and <strong>character error rate</strong> (OCR) are edit distance between hypothesis and reference, divided by reference length. <strong>BLEU/ROUGE-L</strong> use LCS. <strong>Sequence alignment</strong> in bioinformatics (Needleman–Wunsch, Smith–Waterman) is the same DP with scores. <strong>Dynamic time warping</strong> aligns two time series with <span class="math inline">\(dp[i][j] = d(x_i, y_j) + \min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])\)</span>.</p>
+</div>
+<h1 id="grids-intervals-and-trees">Grids, Intervals, and Trees</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Grid DP</strong>: unique paths, minimum path sum, maximal square (<span class="math inline">\(dp[i][j] = 1 + \min(\text{up}, \text{left}, \text{up-left})\)</span> if the cell is 1), dungeon game (fill from the bottom-right, because the needed health depends on the future).</p>
+<p><strong>Interval DP</strong>: <span class="math inline">\(dp[i][j]\)</span> = best for the subarray <span class="math inline">\([i, j]\)</span>, iterating by increasing length; transition picks a split point <span class="math inline">\(k\)</span>. <span class="math inline">\(O(n^3)\)</span>. <strong>Burst balloons</strong>: choose the balloon <span class="math inline">\(k\)</span> burst <em>last</em> in <span class="math inline">\((i, j)\)</span>, so its neighbors at that moment are <span class="math inline">\(i\)</span> and <span class="math inline">\(j\)</span>: <span class="math inline">\(dp[i][j] = \max_k dp[i][k] + dp[k][j] + A_i A_k A_j\)</span>. Thinking “last” instead of “first” makes subproblems independent. Also: matrix chain multiplication, palindrome partitioning, minimum cost to cut a stick, optimal BST.</p>
+<p><strong>Tree DP</strong>: each node returns a small tuple to its parent. <strong>House robber III</strong>: return (best if this node is robbed, best if not). <strong>Rerooting</strong>: compute answers for every node as root in <span class="math inline">\(O(n)\)</span> with one pass down and one pass up (sum of distances in a tree).</p>
+</div>
+<h1 id="bitmask-dp">Bitmask DP</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>When <span class="math inline">\(n \le 20\)</span>, a subset of items fits in an integer mask. <strong>Travelling salesman</strong>: <span class="math inline">\(dp[mask][v]\)</span> = minimum cost to visit exactly the cities in <span class="math inline">\(mask\)</span>, ending at <span class="math inline">\(v\)</span>; <span class="math inline">\(dp[mask \cup \{u\}][u] = \min(dp[mask][v] + d(v, u))\)</span>. <span class="math inline">\(O(2^n n^2)\)</span> instead of <span class="math inline">\(O(n!)\)</span>. Others: assign <span class="math inline">\(n\)</span> people to <span class="math inline">\(n\)</span> tasks, partition into <span class="math inline">\(k\)</span> equal subsets, shortest path visiting all nodes, “number of ways to wear hats.” Enumerate submasks of <span class="math inline">\(m\)</span> with <code>s = (s - 1) &amp; m</code>; iterating all submasks of all masks is <span class="math inline">\(O(3^n)\)</span>.</p>
+</div>
+<h1 id="state-machines">State Machines</h1>
+<figure class="tikz"><img src="figs/dsa/a0a8a6b41f72.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Stock trading with cooldown as a state machine.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Define one DP value per state per day and transitions along the arrows: <span class="math inline">\(hold&#39; = \max(hold, rest - p)\)</span>, <span class="math inline">\(cool&#39; = hold + p\)</span>, <span class="math inline">\(rest&#39; = \max(rest, cool)\)</span>. All stock problems fit this: at most <span class="math inline">\(k\)</span> transactions adds a transaction counter to the state; a fee subtracts on sell. The same idea models “paint houses with no two adjacent the same color” (state = last color) and regex matching (state = position in the pattern automaton).</p>
+</div>
+<h1 id="probability-and-expected-value-dp">Probability and Expected Value DP</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><span class="math inline">\(dp[s]\)</span> = probability (or expected cost) from state <span class="math inline">\(s\)</span>, combining successor states weighted by transition probabilities. Knight probability on a chessboard (<span class="math inline">\(dp[k][r][c] = \frac18\sum\)</span> of the 8 predecessors), soup servings, new 21 game (sliding-window sum of probabilities). Expected value DP is a finite-horizon <strong>Bellman equation</strong>: <span class="math inline">\(V(s) = \max_a \big[r(s,a) + \sum_{s&#39;} P(s&#39;|s,a)V(s&#39;)\big]\)</span>, the core of value iteration in reinforcement learning.</p>
+</div>
+<h1 id="digit-dp">Digit DP</h1>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>“Count integers in <span class="math inline">\([0, N]\)</span> with property <span class="math inline">\(P\)</span>” (no repeated digits, digit sum divisible by <span class="math inline">\(k\)</span>, no consecutive ones in binary). State: (position, a “tight” flag meaning the prefix equals <span class="math inline">\(N\)</span>’s prefix so the next digit is bounded, plus whatever summary <span class="math inline">\(P\)</span> needs: digit sum mod <span class="math inline">\(k\)</span>, mask of used digits, last digit). Process digits from most significant; answer for <span class="math inline">\([L, R]\)</span> is <span class="math inline">\(f(R) - f(L-1)\)</span>. <span class="math inline">\(O(\text{digits}\times\text{states}\times 10)\)</span>.</p>
+</div>
+<h1 id="dp-optimizations">DP Optimizations</h1>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<ul>
+<li><p><strong>Space rolling</strong>: keep only the rows the recurrence touches.</p></li>
+<li><p><strong>Monotonic deque</strong> for <span class="math inline">\(dp[i] = \max_{j \in [i-k, i)} dp[j] + c\)</span>: <span class="math inline">\(O(nk) \to O(n)\)</span> (Chapter 4). Example: jump game VI, constrained subsequence sum.</p></li>
+<li><p><strong>Binary search / data structures</strong> on the transition (LIS, weighted interval scheduling: sort by end time, binary search the last compatible interval).</p></li>
+<li><p><strong>Convex hull trick / Li Chao tree</strong>: transitions of the form <span class="math inline">\(\min_j (m_j x_i + b_j)\)</span> become <span class="math inline">\(O(\log n)\)</span> or amortized <span class="math inline">\(O(1)\)</span>.</p></li>
+<li><p><strong>Knuth and divide-and-conquer optimization</strong>: when the optimal split point is monotone, interval DP drops from <span class="math inline">\(O(n^3)\)</span> to <span class="math inline">\(O(n^2)\)</span> and some partition DPs from <span class="math inline">\(O(kn^2)\)</span> to <span class="math inline">\(O(kn\log n)\)</span>.</p></li>
+<li><p><strong>Matrix exponentiation</strong> for linear recurrences with huge <span class="math inline">\(n\)</span>: <span class="math inline">\(O(k^3\log n)\)</span>.</p></li>
+</ul>
+</div>
+<h1 id="dp-in-ml-viterbi-and-ctc">DP in ML: Viterbi and CTC</h1>
+<p><em>Viterbi: most likely hidden state sequence in an HMM</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> initial <span class="math inline">\(\pi\)</span>, transitions <span class="math inline">\(T[s&#39;][s]\)</span>, emissions <span class="math inline">\(E[s][o]\)</span>, observations <span class="math inline">\(o_1..o_n\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(V[1][s] \gets \log\pi_s + \log E[s][o_1]\)</span> for all <span class="math inline">\(s\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t \gets 2\)</span> <strong>to</strong> <span class="math inline">\(n\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each state <span class="math inline">\(s\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(V[t][s] \gets \log E[s][o_t] + \max_{s&#39;} \big(V[t-1][s&#39;] + \log T[s&#39;][s]\big)\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(back[t][s] \gets\)</span> the maximizing <span class="math inline">\(s&#39;\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">backtrack from <span class="math inline">\(\arg\max_s V[n][s]\)</span> using <span class="math inline">\(back\)</span></div>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<ul>
+<li><p><strong>Viterbi</strong> (<span class="math inline">\(O(nS^2)\)</span>) decodes HMMs and CRFs for part-of-speech tagging and named entity recognition. Replacing <span class="math inline">\(\max\)</span> with log-sum-exp gives the <strong>forward algorithm</strong>, which computes the total probability of the observations; forward-backward computes posteriors for training.</p></li>
+<li><p><strong>CTC loss</strong> (speech, handwriting) sums over all alignments of a label sequence to input frames using a forward DP over an extended label sequence with blanks.</p></li>
+<li><p><strong>Beam search</strong> is a greedy approximation to Viterbi when the state space (all possible prefixes of an LLM output) is too large for exact DP.</p></li>
+<li><p><strong>Bellman equations</strong> power value iteration, Q-learning, and the advantage estimates (GAE) used in PPO for RLHF.</p></li>
+<li><p>Work in <strong>log space</strong> to avoid underflow from multiplying many probabilities.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Coin change, done well</div>
+<p>“Fewest coins to make amount <span class="math inline">\(A\)</span>, or <span class="math inline">\(-1\)</span>.” Greedy fails (coins {1,3,4}, amount 6: greedy <span class="math inline">\(4+1+1\)</span>, optimal <span class="math inline">\(3+3\)</span>), so show that counterexample first. State <span class="math inline">\(dp[a]\)</span> = fewest coins for amount <span class="math inline">\(a\)</span>; transition: the last coin is some <span class="math inline">\(c\)</span>, so <span class="math inline">\(dp[a] = 1 + \min_c dp[a - c]\)</span>; base <span class="math inline">\(dp[0] = 0\)</span>, others <span class="math inline">\(\infty\)</span>; order: increasing <span class="math inline">\(a\)</span>; answer <span class="math inline">\(dp[A]\)</span> or <span class="math inline">\(-1\)</span> if infinite. <span class="math inline">\(O(A\cdot|coins|)\)</span> time, <span class="math inline">\(O(A)\)</span> space. Alternative view: BFS on amounts where each coin is an edge, since all edges have weight 1. Follow-ups: count the number of combinations (coins in the outer loop), reconstruct the coins (store the chosen coin per amount), huge <span class="math inline">\(A\)</span> with few coins (math / BFS with pruning).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Design every DP with the five steps: state, transition, base, order, answer.</p></li>
+<li><p>Find the transition by asking “what was the last decision?”</p></li>
+<li><p>Recognize the families: knapsack, LIS, two-sequence, interval, tree, bitmask, state machine.</p></li>
+<li><p>Viterbi, CTC, DTW, WER, and Bellman equations are DP inside ML systems.</p></li>
+</ul>
+</div>

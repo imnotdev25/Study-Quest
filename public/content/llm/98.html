@@ -1,0 +1,143 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> Symmetric absmax quantisation to <span class="math inline">\(b\)</span> bits: <span class="math inline">\(s=\max|x|/(2^{b-1}-1)\)</span>, <span class="math inline">\(\hat x=s\cdot\operatorname{round}(x/s)\)</span>. The error per element is at most <span class="math inline">\(s/2\)</span>, so everything depends on what sets <span class="math inline">\(\max|x|\)</span>: the <em>granularity</em> (tensor, channel, group of 128) and the <em>outliers</em>.</p>
+</div>
+<div class="center">
+<table style="width:90%;">
+<colgroup>
+<col style="width: 22%" />
+<col style="width: 30%" />
+<col style="width: 38%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Scheme</strong></th>
+<th style="text-align: left;"><strong>What is quantised</strong></th>
+<th style="text-align: left;"><strong>Why it works</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">BF16</td>
+<td style="text-align: left;">nothing (baseline)</td>
+<td style="text-align: left;">8 exponent bits, same range as fp32</td>
+</tr>
+<tr>
+<td style="text-align: left;">FP8 (e4m3) W8A8</td>
+<td style="text-align: left;">weights and activations</td>
+<td style="text-align: left;">floating point keeps relative precision for outliers</td>
+</tr>
+<tr>
+<td style="text-align: left;">INT8 W8A8 (SmoothQuant)</td>
+<td style="text-align: left;">both, after moving outliers into weights</td>
+<td style="text-align: left;">per-channel scales <span class="math inline">\(s_j\)</span>: <span class="math inline">\(XW^\top=(X/s)(Ws)^\top\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">GPTQ (W4A16)</td>
+<td style="text-align: left;">weights only</td>
+<td style="text-align: left;">quantise columns one by one, update the rest to cancel the error</td>
+</tr>
+<tr>
+<td style="text-align: left;">AWQ (W4A16)</td>
+<td style="text-align: left;">weights only</td>
+<td style="text-align: left;">scale salient input channels up before quantising</td>
+</tr>
+<tr>
+<td style="text-align: left;">KV int8/fp8</td>
+<td style="text-align: left;">the cache</td>
+<td style="text-align: left;">doubles the tokens that fit</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: AWQ: why scaling a channel protects it</div>
+<p><strong>Step 1.</strong> For input channel <span class="math inline">\(j\)</span>, <span class="math inline">\(y=\sum_jx_jw_j\)</span>. Replace <span class="math inline">\(w_j\to s_jw_j\)</span> and <span class="math inline">\(x_j\to x_j/s_j\)</span>: the product is unchanged in exact arithmetic.</p>
+<p><strong>Step 2.</strong> With group quantisation, the group’s scale is set by its largest weight, so for <span class="math inline">\(s_j\)</span> not too large the absolute rounding error on <span class="math inline">\(s_jw_j\)</span> stays about the same, <span class="math inline">\(\le\Delta/2\)</span>.</p>
+<p><strong>Step 3.</strong> Dividing back by <span class="math inline">\(s_j\)</span>, the error on <span class="math inline">\(w_j\)</span> becomes <span class="math inline">\(\le\Delta/(2s_j)\)</span>: the channel got <span class="math inline">\(s_j\times\)</span> more precision. Choose <span class="math inline">\(s_j\propto\overline{|x_j|}^{\,\alpha}\)</span> so channels with large activations, whose errors are multiplied most, get the most. Grid-search <span class="math inline">\(\alpha\)</span>.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: GPTQ in one line</div>
+<p>Minimise <span class="math inline">\(\lVert WX-\hat WX\rVert^2\)</span> row by row. With <span class="math inline">\(H=2XX^\top\)</span>, quantising weight <span class="math inline">\(q\)</span> to <span class="math inline">\(\hat w_q\)</span> and optimally adjusting the not-yet-quantised weights gives the update <span class="math inline">\(\delta=-\frac{w_q-\hat w_q}{[H^{-1}]_{qq}}(H^{-1})_{:,q}\)</span> (Optimal Brain Surgeon). GPTQ applies it column by column in a fixed order with a Cholesky factor of <span class="math inline">\(H^{-1}\)</span>, which makes 4-bit quantisation of a 70B model take hours, not weeks.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference ch. &#x27;Quantization and KV Compression&#x27;: int8/int4, outliers, AWQ scaling, FP8, KV quantisation.&quot;&quot;&quot;
+import torch
+
+torch.manual_seed(0)
+
+
+def q_sym(x, bits, dim=None, group=None):
+    &quot;&quot;&quot;Symmetric absmax quantise-dequantise. dim: reduce over this dim; group: group size on last dim.&quot;&quot;&quot;
+    qmax = 2 ** (bits - 1) - 1
+    if group:
+        shp = x.shape
+        x = x.reshape(*shp[:-1], -1, group)
+        s = x.abs().amax(-1, keepdim=True) / qmax
+        return ((x / s).round().clamp(-qmax, qmax) * s).reshape(shp)
+    s = (x.abs().amax() if dim is None else x.abs().amax(dim, keepdim=True)) / qmax
+    return (x / s).round().clamp(-qmax, qmax) * s
+
+
+rel = lambda a, b: ((a - b).norm() / b.norm()).item()
+
+W = torch.randn(1024, 1024) * 0.02
+W[:4] *= 30                                                    # a few output rows with huge weights
+print(f&quot;[int8] weight error per-tensor {rel(q_sym(W, 8), W):.4f}  per-channel {rel(q_sym(W, 8, dim=1), W):.4f}&quot;)
+
+# Activations: a few input channels carry outliers (seen in LLMs above ~6B params).
+X = torch.randn(512, 1024)
+X[:, :8] *= 40
+W = torch.randn(1024, 1024) * 0.02
+Y = X @ W.T
+print(f&quot;[int8] activation per-tensor quant, output error {rel(q_sym(X, 8) @ W.T, Y):.4f} &quot;
+      f&quot;(outliers squeeze every other channel into a few levels)&quot;)
+
+# W4 group quantisation, and AWQ: scale salient input channels up before quantising, fold 1/s into X.
+base = rel(X @ q_sym(W, 4, group=128).T, Y)
+best = (0.0, base)
+for a in (0.25, 0.5, 0.75, 1.0):
+    s = X.abs().mean(0).pow(a)
+    s = s / s.mean()
+    err = rel((X / s) @ q_sym(W * s, 4, group=128).T, Y)
+    if err &lt; best[1]:
+        best = (a, err)
+print(f&quot;[awq] int4 g128 output error: plain {base:.4f}  AWQ (alpha={best[0]}) {best[1]:.4f}&quot;)
+
+# FP8 e4m3 keeps relative precision across magnitudes; int8 per-tensor is uniform.
+if hasattr(torch, &quot;float8_e4m3fn&quot;):
+    Xs = X / X.abs().amax() * 448                              # scale to e4m3 max
+    x8 = Xs.to(torch.float8_e4m3fn).to(torch.float32) * X.abs().amax() / 448
+    print(f&quot;[fp8] activation quant, output error: e4m3 {rel(x8 @ W.T, Y):.4f}  vs int8 {rel(q_sym(X, 8) @ W.T, Y):.4f}&quot;)
+
+# KV cache in int8 (per token, per head) and its effect on attention output.
+T, hd = 2048, 128
+q, k, v = torch.randn(1, hd), torch.randn(T, hd), torch.randn(T, hd)
+att = lambda k, v: ((q @ k.T) / hd**0.5).softmax(-1) @ v
+print(f&quot;[kv] attention output error with int8 KV {rel(att(q_sym(k, 8, dim=1), q_sym(v, 8, dim=1)), att(k, v)):.4f}&quot;
+      f&quot;  int4 KV {rel(att(q_sym(k, 4, dim=1), q_sym(v, 4, dim=1)), att(k, v)):.4f}&quot;)
+
+# Capacity on one 80 GB GPU for Llama-3.1-8B (128 KiB/token of KV at bf16).
+print(&quot;[cap] weights  KV      weights GiB  KV tokens (90% of 80 GB, 2 GiB act.)&quot;)
+for wname, wb in ((&quot;bf16&quot;, 2), (&quot;fp8&quot;, 1), (&quot;int4&quot;, 0.53)):
+    for kname, kb in ((&quot;bf16&quot;, 2), (&quot;fp8&quot;, 1)):
+        w = 8.0e9 * wb
+        tokens = (0.9 * 80e9 - w - 2 * 2**30) / (32 * 8 * 128 * 2 * kb)
+        print(f&quot;[cap] {wname:5s}    {kname:5s}  {w / 2**30:9.1f}    {tokens:10,.0f}&quot;)</code></pre>
+<pre class="code output"><code class="output">[int8] weight error per-tensor 0.1323  per-channel 0.0086
+[int8] activation per-tensor quant, output error 0.0916 (outliers squeeze every other channel into a few levels)
+[awq] int4 g128 output error: plain 0.1163  AWQ (alpha=0.25) 0.0781
+[fp8] activation quant, output error: e4m3 0.0267  vs int8 0.0916
+[kv] attention output error with int8 KV 0.0083  int4 KV 0.1627
+[cap] weights  KV      weights GiB  KV tokens (90% of 80 GB, 2 GiB act.)
+[cap] bf16     bf16        14.9       410,862
+[cap] bf16     fp8         14.9       821,724
+[cap] fp8      bf16         7.5       471,897
+[cap] fp8      fp8          7.5       943,794
+[cap] int4     bf16         3.9       500,584
+[cap] int4     fp8          3.9     1,001,168</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Granularity beats bits: per-channel int8 has 15<span class="math inline">\(\times\)</span> less error than per-tensor when a few rows are large.</p></li>
+<li><p>Activation outliers are why W8A8 int8 needs SmoothQuant and why FP8 became the default on H100-class hardware (3.4<span class="math inline">\(\times\)</span> less error here).</p></li>
+<li><p>AWQ cuts int4 error by a third with one scaling vector and no retraining.</p></li>
+<li><p>Measure quality on your own evals after quantising; the capacity table is the reason to try, not proof it works.</p></li>
+</ul>
+</div>

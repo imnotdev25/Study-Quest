@@ -1,0 +1,269 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: rating a restaurant after the whole meal</div>
+<p>You don’t rate a restaurant after the first bite. You finish the meal, then think back: “the starter was fine, but overall it was great.” Monte Carlo waits until the episode ends, looks at what <em>actually</em> happened, and assigns that total to every state you passed through. No model of the kitchen is needed, but you have to finish the meal before you learn anything.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/41555f564b18.svg" alt="diagram" loading="lazy"></figure>
+<p><em>MC waits for the end, then sends the actual return back to every visited state.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What does a Bellman backup combine?</p></li>
+<li><p>Why can’t tabular value iteration be used directly for an LLM?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="learning-without-an-environment-model">2. Learning without an environment model</h3>
+<p>Dynamic programming assumed that we knew:</p>
+<p><span class="math display">\[P(s&#39;\mid s,a)
+\quad\text{and}\quad
+R(s,a,s&#39;)\]</span></p>
+<p>Usually, we do not.</p>
+<p>Monte Carlo learning replaces the environment model with sampled episodes:</p>
+<ol>
+<li><p>Follow policy <span class="math inline">\(\pi\)</span> until the episode finishes.</p></li>
+<li><p>Compute the return observed from each visited state.</p></li>
+<li><p>Average those returns.</p></li>
+</ol>
+<p>The update target for state <span class="math inline">\(S_t\)</span> is the actual sampled return:</p>
+<p><span class="math display">\[G_t
+=
+R_{t+1}+\gamma R_{t+2}+\gamma^2R_{t+3}+\cdots\]</span></p>
+<p>A simple incremental update is:</p>
+<p><span class="math display">\[V(S_t)
+\leftarrow
+V(S_t)
++
+\alpha\left[G_t-V(S_t)\right]\]</span></p>
+<p>The bracketed term is the Monte Carlo error:</p>
+<p><span class="math display">\[G_t-V(S_t)\]</span></p>
+<p>It says how far the observed outcome was from the prediction.</p>
+<p>This looks like the bandit update:</p>
+<p><span class="math display">\[\text{estimate}
+\leftarrow
+\text{estimate}
++
+\text{step size}\times\text{error}\]</span></p>
+<p>The difference is that a bandit usually learns from one immediate reward, while Monte Carlo RL learns from a complete multi-step return.</p>
+<h3 class="unnumbered" id="no-bootstrapping">No bootstrapping</h3>
+<p>Monte Carlo uses:</p>
+<p><span class="math display">\[\text{target}=G_t\]</span></p>
+<p>It does not use the current estimate <span class="math inline">\(V(S_{t+1})\)</span>. Therefore, it is <strong>model-free</strong> and <strong>non-bootstrapping</strong>.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Method</strong></th>
+<th style="text-align: left;"><strong>Target source</strong></th>
+<th style="text-align: left;"><strong>Must wait for episode end?</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Method</strong></td>
+<td style="text-align: left;"><strong>Target source</strong></td>
+<td style="text-align: left;"><strong>Must wait for episode end?</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Dynamic programming</td>
+<td style="text-align: left;">Known <span class="math inline">\(P,R\)</span> and estimated next values</td>
+<td style="text-align: left;">No</td>
+</tr>
+<tr>
+<td style="text-align: left;">Monte Carlo</td>
+<td style="text-align: left;">Complete sampled return</td>
+<td style="text-align: left;">Yes</td>
+</tr>
+<tr>
+<td style="text-align: left;">TD learning</td>
+<td style="text-align: left;">Reward plus estimated next value</td>
+<td style="text-align: left;">No</td>
+</tr>
+</tbody>
+</table>
+<p>Monte Carlo targets can have high variance. Two visits to the same state can lead to very different returns due to later action choices and environment randomness.</p>
+<h3 class="unnumbered" id="first-visit-versus-every-visit">First-visit versus every-visit</h3>
+<p>If a state occurs multiple times in one episode:</p>
+<ul>
+<li><p><strong>First-visit MC:</strong> use only its first occurrence.</p></li>
+<li><p><strong>Every-visit MC:</strong> use every occurrence.</p></li>
+</ul>
+<p>Both are valid tabular estimators under standard episodic assumptions, but they produce different finite-sample estimates.</p>
+<p>Today’s exercise uses every-visit MC.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>Generate several completions from one prompt and score each completed response. Every prefix can be paired with the eventual sequence reward.</p>
+<p>That is Monte Carlo-style supervision:</p>
+<p><span class="math display">\[V(\text{prefix}_t)\approx G_t\]</span></p>
+<p>The difficulty is credit assignment: a final score tells us whether the complete answer was good, but not precisely which token caused success or failure.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: unbiased but noisy</div>
+<ul>
+<li><p><strong>Unbiased:</strong> <span class="math inline">\(V^\pi(s)=\mathbb E_\pi[G_t\mid s_t=s]\)</span>, so each observed <span class="math inline">\(G_t\)</span> is an unbiased sample of the target.</p></li>
+<li><p><strong>Variance:</strong> with <span class="math inline">\(N\)</span> independent returns, <span class="math inline">\(\operatorname{Var}[\hat V]=\sigma_G^2/N\)</span>. Long, random episodes mean a large <span class="math inline">\(\sigma_G^2\)</span>.</p></li>
+<li><p><strong>Incremental form:</strong> <span class="math inline">\(V(s)\leftarrow V(s)+\frac{1}{N(s)}\big(G_t-V(s)\big)\)</span>, the same shape as the bandit update, just with <span class="math inline">\(G_t\)</span> as the target.</p></li>
+<li><p><strong>First-visit vs every-visit:</strong> first-visit uses only the first occurrence of <span class="math inline">\(s\)</span> per episode, which gives i.i.d., unbiased samples. Every-visit uses all occurrences: it’s biased for finite <span class="math inline">\(N\)</span>, but consistent.</p></li>
+</ul>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>MC target = the real return. No model, no bootstrapping.</p></li>
+<li><p>Price: you wait for the episode to end, and the variance grows with episode length.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: first-visit vs every-visit</div>
+<p>Episode <span class="math inline">\(A\xrightarrow{1}B\xrightarrow{2}A\xrightarrow{3}\)</span>end, <span class="math inline">\(\gamma=1\)</span>. Backward returns: <span class="math inline">\(G=6,5,3\)</span> at times <span class="math inline">\(0,1,2\)</span>.</p>
+<ul>
+<li><p>First-visit: <span class="math inline">\(V(A)=6\)</span>, <span class="math inline">\(V(B)=5\)</span>.</p></li>
+<li><p>Every-visit: <span class="math inline">\(V(A)=\frac{6+3}{2}=4.5\)</span>, <span class="math inline">\(V(B)=5\)</span>.</p></li>
+</ul>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Computing returns forward, so later rewards are missing.</p></li>
+<li><p>The first-visit check uses the wrong window (it must be “earlier in this episode”).</p></li>
+<li><p>Keeping the running <span class="math inline">\(G\)</span> across episodes.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: First-visit Monte Carlo prediction</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy <span class="math inline">\(\pi\)</span>, discount <span class="math inline">\(\gamma\)</span>, number of episodes</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(V(s)\gets0,\ N(s)\gets0\)</span> for every state</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each episode <strong>do</strong></div>
+<div class="algo-line" style="--d:1">generate <span class="math inline">\(s_0,a_0,r_1,s_1,\dots,s_T\)</span> by following <span class="math inline">\(\pi\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(G\gets0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(t=T-1\)</span> <strong>down to</strong> <span class="math inline">\(0\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(G\gets r_{t+1}+\gamma G\)</span></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(s_t\notin\{s_0,\dots,s_{t-1}\}\)</span> <strong>then</strong> <em>▷ first visit only</em></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(N(s_t)\gets N(s_t)+1\)</span></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(V(s_t)\gets V(s_t)+\frac{1}{N(s_t)}\big(G-V(s_t)\big)\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-estimate-values-from-episodes">3. PyTorch exercise — estimate values from episodes</h3>
+<p>Each valid position contains <span class="math inline">\(S_t\)</span> and the following reward <span class="math inline">\(R_{t+1}\)</span>:</p>
+<pre class="code python"><code class="language-python">import torch
+
+gamma = 0.9
+
+states = torch.tensor([
+    [0, 1, -1],  # short episode; -1 is padding
+    [0, 1,  1],
+    [0, 0,  1],
+])  # [episodes=3, time=3]
+
+rewards = torch.tensor([
+    [ 0.0,  5.0, 99.0],  # 99 is padding
+    [ 0.0, -1.0,  5.0],
+    [-1.0,  0.0,  5.0],
+])  # [episodes=3, time=3]
+
+valid = torch.tensor([
+    [1.0, 1.0, 0.0],
+    [1.0, 1.0, 1.0],
+    [1.0, 1.0, 1.0],
+])
+
+returns = torch.zeros_like(rewards)
+running_return = torch.zeros(states.shape[0])  # [episodes]
+
+# TODO 1: Compute discounted returns backward.
+for t in reversed(range(states.shape[1])):
+    running_return = ...
+    running_return = ...
+    returns[:, t] = ...
+
+value_sum = torch.zeros(2)
+visit_count = torch.zeros(2)
+
+# TODO 2: Every-visit Monte Carlo aggregation.
+for episode in range(states.shape[0]):
+    for t in range(states.shape[1]):
+        if valid[episode, t]:
+            state = ...
+            value_sum[state] += ...
+            visit_count[state] += ...
+
+# TODO 3: Average observed returns for each state.
+values = ...
+
+print(&quot;Returns:\n&quot;, returns)
+print(&quot;Visit counts:&quot;, visit_count)
+print(&quot;MC values:&quot;, values)</code></pre>
+<p>Before running, predict:</p>
+<ol>
+<li><p>Which state will have the higher estimated value?</p></li>
+<li><p>How many valid visits are there to state 0?</p></li>
+<li><p>Will the two occurrences of state 0 in episode 3 have equal returns?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span class="math inline">\(G_t=R_{t+1}+\gamma G_{t+1}\)</span>.</p></li>
+<li><p>Apply <span style="background-color: codeinlinebg"><code> valid[:, t]</code></span> before storing the return.</p></li>
+<li><p>The current state is <span style="background-color: codeinlinebg"><code> states[episode, t]</code></span>.</p></li>
+<li><p>Accumulate <span style="background-color: codeinlinebg"><code> returns[episode, t]</code></span>.</p></li>
+<li><p>Both states are visited, so ordinary division is safe here. General code should guard against zero visit counts.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Remove the validity mask while calculating returns. The padded reward <span style="background-color: codeinlinebg"><code> 99</code></span> will leak backward into the first episode.</p>
+<p>This is analogous to accidentally including padding tokens in an LLM loss.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why must ordinary Monte Carlo prediction wait until an episode ends?</p></li>
+<li><p>Does Monte Carlo use <span class="math inline">\(V(S_{t+1})\)</span> in its target?</p></li>
+<li><p>Why can two visits to the same state produce different returns?</p></li>
+<li><p>If a time-limit truncation is incorrectly treated as a true terminal state, what future information is lost?</p></li>
+<li><p>When fitting a neural critic to Monte Carlo returns, should gradients flow into the stored return targets?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">returns = torch.zeros_like(rewards)
+running_return = torch.zeros(states.shape[0])
+
+for t in reversed(range(states.shape[1])):
+    running_return = rewards[:, t] + gamma * running_return
+    running_return = running_return * valid[:, t]
+    returns[:, t] = running_return
+
+value_sum = torch.zeros(2)
+visit_count = torch.zeros(2)
+
+for episode in range(states.shape[0]):
+    for t in range(states.shape[1]):
+        if valid[episode, t]:
+            state = states[episode, t]
+            value_sum[state] += returns[episode, t]
+            visit_count[state] += 1
+
+values = value_sum / visit_count</code></pre>
+<p>Expected results:</p>
+<pre class="code text"><code class="language-plaintext">Returns:
+tensor([
+    [4.5000, 5.0000, 0.0000],
+    [3.1500, 3.5000, 5.0000],
+    [3.0500, 4.5000, 5.0000]
+])
+
+Visit counts:
+tensor([4., 4.])
+
+MC values:
+tensor([3.8000, 4.6250])</code></pre>
+<p>Notice episode 3:</p>
+<pre class="code text"><code class="language-plaintext">state sequence: [0, 0, 1]
+returns:        [3.05, 4.50, 5.00]</code></pre>
+<p>The same state has different sampled returns because the occurrences happen at different times and therefore have different remaining rewards.</p>
+<p>A safer general division is:</p>
+<pre class="code python"><code class="language-python">values = value_sum / visit_count.clamp_min(1)</code></pre>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Its target is the complete return, which is unavailable until all later rewards have been observed.</p></li>
+<li><p>No. That would introduce bootstrapping.</p></li>
+<li><p>The subsequent actions, transitions, rewards or remaining episode lengths can differ.</p></li>
+<li><p>Rewards beyond the artificial cutoff are omitted. A value estimate is often needed to bootstrap across truncation.</p></li>
+<li><p>No. Return targets are fixed sampled data; detach them if they were produced through a differentiable computation graph.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Immediate expected reward plus discounted next-state value.</p></li>
+<li><p>The transition space is enormous, and we do not possess a tractable table of transition probabilities and rewards for every prefix and token.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> Monte Carlo prediction learns by asking, “What actually happened after this state?” It avoids a model and bootstrapping, but pays with delayed updates and noisy targets.</p>

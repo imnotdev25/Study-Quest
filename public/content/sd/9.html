@@ -1,0 +1,187 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How data actually gets onto disk and back: the constraints every storage engine faces, building a key-value store step by step (file-backed dictionary, binary format, append-only log, Bitcask, LSM tree), immutable versioned files, and the architecture of a large object store such as S3: partitioned metadata, an append-only stream layer, durability through replication and erasure coding, and end-to-end checksums.</p>
+</div>
+<h1 id="the-constraints">The Constraints</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A disk is like a library where walking to a new shelf is slow but reading along a shelf is fast. Good storage engines arrange work so they mostly read and write “along the shelf” (sequentially) and rarely walk around (random access). They also assume the power can be cut at any moment.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Sequential vs random I/O</strong>: sequential writes are far faster than random writes on HDDs, and still meaningfully faster on SSDs (fewer write amplification effects in the SSD’s own flash translation layer).</p></li>
+<li><p><strong>Durability costs fsync</strong>: a write in the OS page cache is lost on power failure until <code>fsync</code> completes, which can take milliseconds. Engines batch many writes per fsync (<em>group commit</em>).</p></li>
+<li><p><strong>Torn writes</strong>: a crash can leave a half-written record. Every record needs a length and checksum so recovery can detect and discard it.</p></li>
+<li><p><strong>Three amplifications</strong> (the RUM conjecture: Read, Update, Memory, you can optimize two at the cost of the third):</p>
+<ul>
+<li><p><em>write amplification</em>: bytes written to disk per byte of user data;</p></li>
+<li><p><em>read amplification</em>: disk reads per lookup;</p></li>
+<li><p><em>space amplification</em>: disk space per byte of live data.</p></li>
+</ul></li>
+</ul>
+</div>
+<h1 id="building-a-key-value-store-step-by-step">Building a Key-Value Store Step by Step</h1>
+<h2 id="step-1-a-file-backed-dictionary">Step 1: A File-Backed Dictionary</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Keep a hash map in memory; on every write, serialize the whole map to a file. Simple and correct for tiny data, but each write costs <span class="math inline">\(O(\text{dataset size})\)</span>, and a crash in the middle of writing corrupts the file. <strong>Fix the corruption</strong>: write to a temporary file, <code>fsync</code> it, then atomically <code>rename</code> it over the old file (rename is atomic on POSIX file systems), then fsync the directory. This <em>write-temp-then-rename</em> trick is how many config stores and SQLite’s rollback journal avoid half-written files.</p>
+</div>
+<h2 id="step-2-a-custom-binary-record-format">Step 2: A Custom Binary Record Format</h2>
+<figure class="tikz"><img src="figs/sd/47e9dcdba616.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A length-prefixed, checksummed record (Bitcask’s format).</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Design rules for a binary format: put a <strong>magic number and version</strong> at the start of each file so readers can reject or migrate old formats; <strong>length-prefix</strong> variable fields (no delimiters to escape); fix the <strong>byte order</strong> (little-endian is common); include a <strong>checksum per record</strong> (CRC32C is hardware-accelerated); use a special value or flag for <strong>tombstones</strong> (deletions); and leave reserved fields or a flags byte for future extensions. Text formats (JSON lines) are easier to debug; binary formats are smaller and faster to parse.</p>
+</div>
+<h2 id="step-3-log-structured-storage">Step 3: Log-Structured Storage</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Instead of rewriting the file, <strong>append</strong> each put or delete as a record to the end of a log. Writes become sequential and fast; a crash can only damage the last record. The cost moves to reads: without an index, finding the latest value of a key means scanning the whole log, and the log grows forever with overwritten values. Every log-structured engine adds two things: an <strong>index</strong> and <strong>compaction</strong>.</p>
+</div>
+<h2 id="step-4-bitcask">Step 4: Bitcask</h2>
+<figure class="tikz"><img src="figs/sd/b7c3ac585161.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Bitcask (the storage engine from Basho’s Riak).</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Bitcask keeps a hash table (the <em>keydir</em>) of <em>every</em> key in memory, mapping to the file and byte offset of its latest value. A read is one hash lookup plus at most one disk read. A write appends to the active file and updates the keydir. When the active file reaches a size limit it is closed (immutable) and a new one is opened. <strong>Compaction (merge)</strong> reads old files, keeps only live values, and writes new files plus <strong>hint files</strong> (key <span class="math inline">\(\to\)</span> offset) so that startup can rebuild the keydir quickly without scanning all data. <strong>Trade-offs</strong>: excellent read and write latency and simple crash recovery, but <em>all keys must fit in RAM</em> and range queries are impossible (hash index). Good fit: many small values with frequent updates and a bounded key count (sessions, counters).</p>
+</div>
+<h2 id="step-5-the-lsm-tree">Step 5: The LSM Tree</h2>
+<figure class="tikz"><img src="figs/sd/e29104fc9bbd.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The LSM write path.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Write path</strong>: append to the write-ahead log (for crash recovery), then insert into the in-memory <strong>memtable</strong>, a sorted structure such as a skip list. When the memtable is full it becomes immutable and is flushed to disk as an <strong>SSTable</strong> (sorted string table): a file of sorted key–value pairs split into blocks, followed by an index block, a Bloom filter, and a footer. After the flush, that portion of the WAL can be deleted.</p>
+<p><strong>Read path</strong>: check the memtable, then the immutable memtable, then SSTables from newest to oldest. For each SSTable: check its <strong>Bloom filter</strong> (skip the file if the key is definitely absent), binary search the <strong>sparse index</strong> (one entry per block, e.g. the first key of every 4 KB block) to find a block, read and search that block (often cached in a block cache). Range scans merge sorted iterators from all levels. Deletes write <strong>tombstones</strong> that hide older values until compaction removes both.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Compaction strategies and amplification.</strong></p>
+<ul>
+<li><p><strong>Size-tiered</strong> (Cassandra’s default, early HBase): merge several SSTables of similar size into one bigger one. Lower write amplification, but a key can exist in many files (higher read amplification) and a merge temporarily needs extra space roughly equal to the inputs (up to 2<span class="math inline">\(\times\)</span> space amplification).</p></li>
+<li><p><strong>Leveled</strong> (LevelDB, RocksDB default): each level is about 10<span class="math inline">\(\times\)</span> larger than the previous and holds non-overlapping SSTables, so a lookup checks at most one file per level. Reads and space are efficient; write amplification can reach 10–30<span class="math inline">\(\times\)</span> because data is rewritten at each level.</p></li>
+<li><p><strong>Hybrids</strong> (RocksDB universal, ScyllaDB incremental) trade between them.</p></li>
+</ul>
+<p>Compaction competes with foreground traffic for I/O; if writes outpace compaction, L0 files pile up and reads slow, so engines <em>stall</em> writes. That was one of Discord’s Cassandra problems (Part (cases)). Tombstone-heavy workloads (queues on Cassandra) are a known anti-pattern because reads must skip many tombstones.</p>
+</div>
+<h1 id="immutable-versioned-data-files">Immutable Versioned Data Files</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Data lakes take immutability further. Table formats such as <strong>Apache Iceberg</strong> and <strong>Delta Lake</strong> store data in immutable columnar files (Parquet) on object storage. A table version is a <strong>manifest</strong>: a list of the data files that make up the table at that moment, plus statistics. A write creates new data files and a new manifest, then atomically swaps a single pointer (catalog entry or log record) to the new version. Consequences: readers always see a consistent snapshot, <em>time travel</em> queries read an old manifest, concurrent writers use optimistic concurrency on the pointer swap, and deletes are either rewrites of affected files or “delete files” merged at read time. Old files are garbage-collected after a retention period.</p>
+</div>
+<h1 id="object-storage-vs-a-database">Object Storage vs a Database</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"></th>
+<th style="text-align: left;">Object store (S3, GCS)</th>
+<th style="text-align: left;">Database</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Unit</td>
+<td style="text-align: left;">whole object, written once (overwrite = new version)</td>
+<td style="text-align: left;">row or document, updated in place</td>
+</tr>
+<tr>
+<td style="text-align: left;">Queries</td>
+<td style="text-align: left;">get by key, list by prefix</td>
+<td style="text-align: left;">indexes, joins, transactions</td>
+</tr>
+<tr>
+<td style="text-align: left;">Size</td>
+<td style="text-align: left;">bytes to terabytes per object</td>
+<td style="text-align: left;">small records</td>
+</tr>
+<tr>
+<td style="text-align: left;">Latency</td>
+<td style="text-align: left;">tens of ms first byte</td>
+<td style="text-align: left;">sub-ms to ms</td>
+</tr>
+<tr>
+<td style="text-align: left;">Cost</td>
+<td style="text-align: left;">very cheap per GB</td>
+<td style="text-align: left;">expensive per GB</td>
+</tr>
+<tr>
+<td style="text-align: left;">Use</td>
+<td style="text-align: left;">images, video, backups, logs, data lake files, model weights</td>
+<td style="text-align: left;">metadata, state, anything queried</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The standard pattern: <strong>bytes in the object store, metadata in a database</strong>. A photo row in Postgres holds the owner, caption, dimensions, and the object key; the image itself lives in S3 and is served through a CDN. Never store large blobs in the primary database: they bloat backups, replication, and the buffer cache.</p>
+</div>
+<h1 id="architecture-of-an-object-store">Architecture of an Object Store</h1>
+<figure class="tikz"><img src="figs/sd/5db3709fe1a4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Layered object storage, following the published design of Windows Azure Storage (Calder et al., SOSP 2011).</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Amazon has not published S3’s internals in detail, but Microsoft’s paper on Windows Azure Storage describes the same kind of system and is the clearest public reference. It has three layers:</p>
+<ol>
+<li><p><strong>Front end</strong>: stateless servers that authenticate requests and route them, caching the partition map.</p></li>
+<li><p><strong>Partition layer</strong>: holds the <em>object index</em> (bucket, key, version <span class="math inline">\(\to\)</span> location of the bytes, size, checksum, metadata). The index is split into <strong>key ranges</strong>, each served by one partition server. A <strong>partition manager</strong> assigns ranges to servers, splits hot or large ranges, merges cold ones, and records the assignment in a <strong>partition map table</strong>, which front ends cache.</p></li>
+<li><p><strong>Stream layer</strong>: stores bytes in large <strong>append-only extents</strong> (hundreds of MB to GB) replicated across storage nodes. An extent is appended to until it reaches its size limit, then <strong>sealed</strong> (immutable). Sealed extents can be erasure-coded and moved freely.</p></li>
+</ol>
+</div>
+<h2 id="range-partitioning-vs-consistent-hashing-for-storage">Range Partitioning vs Consistent Hashing for Storage</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Object stores must support <strong>listing by prefix</strong> (<code>list photos/2026/10/</code>), which requires keys in sorted order: <strong>range partitioning</strong> keeps nearby keys on the same server, so a list is a sequential scan of one or a few ranges. Consistent hashing would scatter a prefix across every node. The cost of range partitioning is <strong>hot ranges</strong>: sequential keys (timestamps, incrementing IDs) all land in the last range. The partition manager splits hot ranges automatically, and S3 documentation historically advised spreading load across prefixes; S3 now scales a prefix to thousands of requests per second and splits automatically, but very sudden spikes on a new prefix can still see throttling while it scales.</p>
+</div>
+<h2 id="metadata-database-design">Metadata Database Design</h2>
+<pre class="code text"><code class="language-plaintext">CREATE TABLE buckets (
+  bucket_id   BIGINT PRIMARY KEY,
+  name        TEXT UNIQUE NOT NULL,
+  owner_id    BIGINT NOT NULL,
+  versioning  BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at  TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE objects (
+  bucket_id   BIGINT NOT NULL,
+  object_key  TEXT   NOT NULL,          -- sorted: enables prefix listing
+  version_id  BIGINT NOT NULL,          -- newer versions sort first (store negated)
+  is_latest   BOOLEAN NOT NULL,
+  is_delete_marker BOOLEAN NOT NULL DEFAULT FALSE,
+  size_bytes  BIGINT NOT NULL,
+  checksum    BYTEA  NOT NULL,          -- e.g. SHA-256 or CRC32C of content
+  locations   JSONB  NOT NULL,          -- extent ids + offsets, or EC stripe ids
+  PRIMARY KEY (bucket_id, object_key, version_id)
+);
+CREATE TABLE multipart_parts (
+  upload_id   UUID   NOT NULL,
+  part_number INT    NOT NULL,          -- 1..10000
+  size_bytes  BIGINT NOT NULL,
+  checksum    BYTEA  NOT NULL,
+  locations   JSONB  NOT NULL,
+  PRIMARY KEY (upload_id, part_number)
+);</code></pre>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A PUT writes the bytes to the stream layer first, then commits one metadata row; the object becomes visible only when the row commits, which is how an object store gives atomic, all-or-nothing uploads. A failure after the bytes are written leaves orphaned bytes, which a garbage collector reclaims by comparing extents with live metadata. <strong>Consistency</strong>: S3 has provided strong read-after-write consistency for PUTs and DELETEs (including listing) since December 2020.</p>
+</div>
+<h1 id="durability-and-replication">Durability and Replication</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Replication</strong> keeps <span class="math inline">\(r\)</span> full copies (typically 3) on different racks or zones: simple and fast to read and repair, 3<span class="math inline">\(\times\)</span> storage. <strong>Erasure coding</strong> splits data into <span class="math inline">\(k\)</span> data fragments plus <span class="math inline">\(m\)</span> parity fragments; any <span class="math inline">\(k\)</span> of the <span class="math inline">\(k+m\)</span> reconstruct it. A <span class="math inline">\((6, 3)\)</span> Reed–Solomon code tolerates 3 lost fragments at 1.5<span class="math inline">\(\times\)</span> storage. Systems write new data replicated (low latency, appends are easy) and erasure-code sealed extents in the background. Placement spreads fragments across failure domains (disks, hosts, racks, zones), so one rack or zone failure loses at most what the code can tolerate.</p>
+<p><strong>Durability math</strong> depends on how quickly lost fragments are repaired: the risk is losing <span class="math inline">\(m+1\)</span> fragments of the same stripe before repair finishes. Faster repair (spreading reconstruction across many nodes), more parity, and independent failure domains all increase durability. S3 advertises 99.999999999% (11 nines) annual durability for its standard class.</p>
+</div>
+<h1 id="end-to-end-checksums">End-to-End Checksums</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Data can be silently damaged anywhere: a flipped bit in RAM, a buggy network card, a disk returning the wrong sector. A checksum is a fingerprint computed when data is created and checked every time it is read or moved. If the fingerprint does not match, the system knows the copy is bad and uses another.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>End to end</strong> means the checksum is computed by the client (or the first server) and travels with the data through every hop: front end, stream layer, disk, and back. Each hop verifies before acknowledging; storage nodes verify on read and during background <strong>scrubbing</strong> (periodically reading all data to find bit rot before a user does). TCP’s 16-bit checksum and disk ECC are not enough at petabyte scale; rare silent errors become daily events. S3 lets clients send CRC32C, CRC32, SHA-1, or SHA-256 checksums with uploads and stores them for verification on download. Large objects use per-part checksums plus a checksum of checksums.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Facebook Haystack: many small photos</div>
+<p>Storing billions of small photos as individual files made metadata lookups (inode reads) the bottleneck: several disk seeks per photo. Haystack (OSDI 2010) packs many photos into large append-only volume files and keeps a compact in-memory index (photo id <span class="math inline">\(\to\)</span> offset, size) per volume, so a read is one seek. Deleted photos are flagged and reclaimed by compaction. This is Bitcask’s idea applied to blobs, and the same idea behind byte-range indexed object storage in general.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Interview: design a key-value store</div>
+<p>Start with the API and data size. If keys fit in memory and range queries are not needed: Bitcask-style log plus hash index. If data is larger than RAM or range scans are needed: LSM tree (write-heavy) or B-tree (read-heavy). Then add a WAL, checksummed records, compaction, and snapshots. For distribution: partition (consistent hashing or ranges), replicate (leader-based or leaderless quorums), and choose a consistency model (Chapter (data), Dynamo in Part (cases)).</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Forgetting fsync, or trusting a write that only reached the page cache.</p></li>
+<li><p>Overwriting files in place without temp-file-and-rename.</p></li>
+<li><p>Records without lengths and checksums, so recovery cannot find torn writes.</p></li>
+<li><p>Storing large blobs in the primary database.</p></li>
+<li><p>Sequential keys on range-partitioned stores without planning for hot ranges.</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Append-only logs make writes fast and crash-safe; indexes and compaction make them practical.</p></li>
+<li><p>Bitcask: hash index in RAM, one seek per read, no range scans. LSM: memtable, WAL, SSTables, Bloom filters, compaction.</p></li>
+<li><p>Object stores separate a range-partitioned metadata index from an append-only byte layer.</p></li>
+<li><p>Durability comes from replication or erasure coding across failure domains, fast repair, and end-to-end checksums.</p></li>
+</ul>
+</div>

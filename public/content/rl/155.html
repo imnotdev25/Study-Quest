@@ -1,0 +1,514 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can an importance ratio outside PPO’s clipping interval still receive a gradient?</p></li>
+<li><p>Why does PPO clipping not guarantee satisfaction of a safety-cost constraint?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="one-rollout-batch-becomes-stale-during-optimization">2. One rollout batch becomes stale during optimization</h3>
+<p>PPO usually performs several gradient epochs over one rollout batch. The denominator remains the policy that originally collected that batch:</p>
+<p><span class="math display">\[\rho_t
+=
+\underbrace{
+\exp\!\left(
+\log\pi_\theta(a_t\mid s_t)
+-
+\operatorname{stopgrad}
+\log\pi_{\text{old}}(a_t\mid s_t)
+\right)
+}_{\text{current policy relative to rollout policy}}\]</span></p>
+<p>As optimization continues, <span class="math inline">\(\pi_\theta\)</span> moves away from <span class="math inline">\(\pi_{\text{old}}\)</span>. Clipping limits parts of the surrogate, but does not prevent the full distributions from drifting.</p>
+<p>A useful sampled forward-KL estimator is:</p>
+<p><span class="math display">\[\widehat{D}_{\mathrm{KL}}
+=
+\frac1N\sum_t
+\underbrace{
+\left[
+(\rho_t-1)-\log\rho_t
+\right]
+}_{\ge0\text{ for every sample}}\]</span></p>
+<p>It is preferable diagnostically to just averaging <span class="math inline">\(-\log\rho_t\)</span>, which can be negative on a finite batch.</p>
+<p>Ratio concentration can be summarized with:</p>
+<p><span class="math display">\[\operatorname{ESS}
+=
+\underbrace{
+\frac{
+\left(\sum_t\rho_t\right)^2
+}{
+\sum_t\rho_t^2
+}
+}_{\text{effective weight count}}\]</span></p>
+<p><span class="math display">\[\operatorname{ESS\ fraction}
+=
+\underbrace{\frac{\operatorname{ESS}}N}_{1\text{ is ideal; smaller means concentrated weights}}\]</span></p>
+<p>Token-level ESS is only a diagnostic because tokens from one trajectory are not independent episodes.</p>
+<p>Useful stopping signals are:</p>
+<ul>
+<li><p>approximate or exact KL exceeds a target;</p></li>
+<li><p>clipping fraction grows rapidly;</p></li>
+<li><p>ratio tails become extreme;</p></li>
+<li><p>ESS fraction falls;</p></li>
+<li><p>policy objective stops improving.</p></li>
+</ul>
+<p>For constrained PPO, update the safety multiplier once from each new rollout’s raw episode costs. Updating it once per PPO epoch would count the same safety evidence repeatedly.</p>
+<p>DPO also reuses fixed data for many epochs, but it is offline preference optimization. It does not have an old on-policy rollout distribution that becomes stale in this PPO sense.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>logits: <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span></p></li>
+<li><p>chosen log-probabilities, ratios and advantages: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>valid mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>valid ratios used by ESS: <span style="background-color: codeinlinebg"><code> [N_valid]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-stop-before-ratios-become-stale">3. PyTorch exercise — stop before ratios become stale</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 64
+horizon = 8
+num_actions = 4
+
+clip_epsilon = 0.20
+target_kl = 0.02
+maximum_epochs = 30
+learning_rate = 0.08
+
+safety_multiplier = torch.tensor(0.80)
+
+lengths = torch.randint(
+    low=4,
+    high=horizon + 1,
+    size=(batch_size,),
+)
+
+valid_mask = (
+    torch.arange(horizon)[None, :]
+    &lt; lengths[:, None]
+).to(torch.float64)
+
+
+def masked_mean(values, mask):
+    # TODO 1
+    return ...
+
+
+old_logits = 0.5 * torch.randn(
+    batch_size,
+    horizon,
+    num_actions,
+)
+
+old_distribution = torch.distributions.Categorical(
+    logits=old_logits
+)
+
+# Rollout data are frozen.
+with torch.no_grad():
+    actions = ...
+    old_log_probabilities = ...
+
+reward_advantages = torch.randn(
+    batch_size,
+    horizon,
+)
+
+cost_advantages = (
+    0.5 * torch.randn(
+        batch_size,
+        horizon,
+    )
+)
+
+# Combine first, then normalize in one common scale.
+raw_actor_advantages = ...
+
+advantage_mean = ...
+advantage_variance = ...
+
+actor_advantages = ...
+
+new_logits = torch.nn.Parameter(
+    old_logits.clone()
+)
+
+optimizer = torch.optim.Adam(
+    [new_logits],
+    lr=learning_rate,
+)
+
+old_log_all = torch.log_softmax(
+    old_logits,
+    dim=-1,
+)
+old_probabilities = torch.softmax(
+    old_logits,
+    dim=-1,
+)
+
+history = []
+
+for epoch in range(maximum_epochs):
+    new_distribution = (
+        torch.distributions.Categorical(
+            logits=new_logits
+        )
+    )
+
+    new_log_probabilities = (
+        new_distribution.log_prob(actions)
+    )
+
+    # TODO 2: PPO ratios and clipped objective.
+    log_ratios = ...
+    ratios = ...
+
+    unclipped_surrogate = ...
+
+    clipped_surrogate = ...
+
+    surrogate = ...
+
+    actor_loss = ...
+
+    optimizer.zero_grad()
+    actor_loss.backward()
+
+    torch.nn.utils.clip_grad_norm_(
+        [new_logits],
+        max_norm=1.0,
+    )
+
+    optimizer.step()
+
+    # Recompute diagnostics after the update.
+    with torch.no_grad():
+        updated_distribution = (
+            torch.distributions.Categorical(
+                logits=new_logits
+            )
+        )
+
+        updated_log_probabilities = (
+            updated_distribution.log_prob(
+                actions
+            )
+        )
+
+        updated_log_ratios = ...
+        updated_ratios = ...
+
+        # TODO 3: Nonnegative sampled KL.
+        approximate_kl_tokens = ...
+
+        approximate_kl = ...
+
+        # TODO 4: Exact categorical KL.
+        new_log_all = ...
+
+        exact_kl_tokens = ...
+
+        exact_kl = ...
+
+        outside_clip = ...
+
+        clip_fraction = ...
+
+        valid_ratios = ...
+
+        # TODO 5: ESS and ratio tails.
+        effective_sample_size = ...
+
+        ess_fraction = ...
+
+        ratio_p05 = ...
+        ratio_p95 = ...
+
+        history.append(torch.stack([
+            torch.tensor(epoch + 1.0),
+            approximate_kl,
+            exact_kl,
+            clip_fraction,
+            ess_fraction,
+            ratio_p05,
+            ratio_p95,
+        ]))
+
+    # Early stopping uses post-update statistics.
+    if approximate_kl &gt; target_kl:
+        break
+
+history = torch.stack(history)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: epoch, approximate KL, exact KL, &quot;
+    &quot;clip fraction, ESS fraction, ratio p05, ratio p95&quot;
+)
+print(history)
+
+print(
+    &quot;Stopped after epochs:&quot;,
+    int(history[-1, 0].item()),
+)
+
+# One dual update for this rollout—not one per PPO epoch.
+episode_costs = torch.linspace(
+    0.80,
+    1.40,
+    batch_size,
+)
+
+cost_limit = 1.00
+dual_lr = 0.10
+
+with torch.no_grad():
+    updated_safety_multiplier = ...
+
+print(
+    &quot;Safety multiplier: old, updated&quot;,
+    safety_multiplier.item(),
+    updated_safety_multiplier.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What are every ratio and the KL before the first gradient update?</p></li>
+<li><p>As epochs accumulate, should clip fraction rise or fall?</p></li>
+<li><p>Should ESS fraction generally move toward one or away from one?</p></li>
+<li><p>What happens if old log-probabilities are recomputed from the updated policy each epoch?</p></li>
+<li><p>Why would updating the safety multiplier on every epoch be wrong?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Normalize using only valid positions.</p></li>
+<li><p>Ratio: <span style="background-color: codeinlinebg"><code> exp(new_log_prob - old_log_prob)</code></span>.</p></li>
+<li><p>PPO uses the minimum of unclipped and clipped surrogates.</p></li>
+<li><p>Sampled KL: <span style="background-color: codeinlinebg"><code> (ratio - 1) - log_ratio</code></span>.</p></li>
+<li><p>Exact KL requires probabilities for every action.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.quantile(valid_ratios, q)</code></span>.</p></li>
+<li><p>Stop only after recomputing metrics following the optimizer step.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Reset the old policy after each PPO epoch, making every ratio appear close to one.</p></li>
+<li><p>Ignore <span style="background-color: codeinlinebg"><code> isfinite()</code></span> failures when exponentiating extreme log-ratios.</p></li>
+<li><p>Treat token-level ESS as the number of independent episodes.</p></li>
+<li><p>Average KL over padding.</p></li>
+<li><p>Continue because the clipped objective appears flat even while exact KL grows.</p></li>
+<li><p>Update the safety multiplier repeatedly from the same rollout costs.</p></li>
+<li><p>Normalize reward and cost advantages separately, changing their relative scale.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can clipping fraction be high while KL remains moderate?</p></li>
+<li><p>What does a falling ESS fraction reveal?</p></li>
+<li><p>Why should early stopping use post-update rather than pre-update KL?</p></li>
+<li><p>Is target-KL stopping a mathematical trust-region guarantee?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Masked mean and frozen rollout data:</p>
+<pre class="code python"><code class="language-python">def masked_mean(values, mask):
+    return (
+        values * mask
+    ).sum() / mask.sum()
+
+with torch.no_grad():
+    actions = old_distribution.sample()
+
+    old_log_probabilities = (
+        old_distribution.log_prob(actions)
+    )</code></pre>
+<p>Combined normalized advantages:</p>
+<pre class="code python"><code class="language-python">raw_actor_advantages = (
+    reward_advantages
+    - safety_multiplier.detach()
+    * cost_advantages
+) * valid_mask
+
+advantage_mean = masked_mean(
+    raw_actor_advantages,
+    valid_mask,
+)
+
+advantage_variance = masked_mean(
+    (
+        raw_actor_advantages
+        - advantage_mean
+    ).square(),
+    valid_mask,
+)
+
+actor_advantages = (
+    (
+        raw_actor_advantages
+        - advantage_mean
+    )
+    / torch.sqrt(
+        advantage_variance + 1e-8
+    )
+).detach() * valid_mask</code></pre>
+<p>PPO objective:</p>
+<pre class="code python"><code class="language-python">log_ratios = (
+    new_log_probabilities
+    - old_log_probabilities
+)
+
+ratios = torch.exp(log_ratios)
+
+unclipped_surrogate = (
+    ratios * actor_advantages
+)
+
+clipped_surrogate = (
+    ratios.clamp(
+        1.0 - clip_epsilon,
+        1.0 + clip_epsilon,
+    )
+    * actor_advantages
+)
+
+surrogate = torch.minimum(
+    unclipped_surrogate,
+    clipped_surrogate,
+)
+
+actor_loss = -masked_mean(
+    surrogate,
+    valid_mask,
+)</code></pre>
+<p>Post-update ratios and KL:</p>
+<pre class="code python"><code class="language-python">updated_log_ratios = (
+    updated_log_probabilities
+    - old_log_probabilities
+)
+
+updated_ratios = torch.exp(
+    updated_log_ratios
+)
+
+approximate_kl_tokens = (
+    updated_ratios
+    - 1.0
+    - updated_log_ratios
+)
+
+approximate_kl = masked_mean(
+    approximate_kl_tokens,
+    valid_mask,
+)
+
+new_log_all = torch.log_softmax(
+    new_logits,
+    dim=-1,
+)
+
+exact_kl_tokens = (
+    old_probabilities
+    * (
+        old_log_all
+        - new_log_all
+    )
+).sum(dim=-1)
+
+exact_kl = masked_mean(
+    exact_kl_tokens,
+    valid_mask,
+)</code></pre>
+<p>Clip fraction and ESS:</p>
+<pre class="code python"><code class="language-python">outside_clip = (
+    (
+        updated_ratios
+        &lt; 1.0 - clip_epsilon
+    )
+    | (
+        updated_ratios
+        &gt; 1.0 + clip_epsilon
+    )
+).to(torch.float64)
+
+clip_fraction = masked_mean(
+    outside_clip,
+    valid_mask,
+)
+
+valid_ratios = updated_ratios[
+    valid_mask.bool()
+]
+
+effective_sample_size = (
+    valid_ratios.sum().square()
+    / valid_ratios.square().sum()
+)
+
+ess_fraction = (
+    effective_sample_size
+    / valid_ratios.numel()
+)
+
+ratio_p05 = torch.quantile(
+    valid_ratios,
+    0.05,
+)
+
+ratio_p95 = torch.quantile(
+    valid_ratios,
+    0.95,
+)</code></pre>
+<p>Single dual update:</p>
+<pre class="code python"><code class="language-python">updated_safety_multiplier = torch.clamp(
+    safety_multiplier
+    + dual_lr
+    * (
+        episode_costs.mean()
+        - cost_limit
+    ),
+    min=0.0,
+)</code></pre>
+<p>Before optimization:</p>
+<p><span class="math display">\[\rho_t
+=
+\underbrace{
+\exp(\log\pi_{\text{old}}-\log\pi_{\text{old}})
+}_{\exp(0)}
+=1\]</span></p>
+<p>so KL is zero and ESS fraction is one.</p>
+<p>As epochs reuse the batch, the expected pattern is:</p>
+<ul>
+<li><p>KL rises;</p></li>
+<li><p>ratio tails spread;</p></li>
+<li><p>clipping fraction rises;</p></li>
+<li><p>ESS fraction falls;</p></li>
+<li><p>early stopping triggers after several epochs.</p></li>
+</ul>
+<p>The exact stopping epoch depends on the sampled batch and optimizer dynamics; that is why diagnostics are measured rather than assumed.</p>
+<p>The episode-cost mean is:</p>
+<p><span class="math display">\[\bar C
+=
+\underbrace{\frac{0.80+1.40}{2}}_{1.10}\]</span></p>
+<p>so the multiplier changes once:</p>
+<p><span class="math display">\[\nu_{\text{new}}
+=
+\underbrace{0.80}_{\text{old price}}
++
+\underbrace{0.10(1.10-1.00)}_{\text{rollout violation}}
+=
+0.81\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Many small token-level ratios can cross <span style="background-color: codeinlinebg"><code> 0.8</code></span> or <span style="background-color: codeinlinebg"><code> 1.2</code></span> while the average full-distribution divergence remains moderate.</p></li>
+<li><p>Importance weight is concentrating on fewer samples, making the reused batch less representative of the current policy.</p></li>
+<li><p>The optimizer step itself creates the policy movement that must be checked.</p></li>
+<li><p>No. It is a practical guardrail; exact trust-region methods constrain an explicit divergence approximation.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Clipping suppresses only excessive improvement. Out-of-range movement in a harmful direction still receives a corrective gradient.</p></li>
+<li><p>PPO clipping limits policy-update incentives, whereas safety requires a separate raw-cost constraint and dual update.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> rollout reuse is useful only while the current policy remains close to the policy that generated the data. Freeze old log-probabilities, watch KL, ratio tails and ESS, and never count one rollout’s safety evidence multiple times.</p>

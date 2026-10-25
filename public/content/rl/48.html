@@ -1,0 +1,330 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a lazy weather forecaster</div>
+<p>A forecaster in a mild city who always predicts “20<span class="math inline">\(^\circ\)</span>C” gets a small average error, because the weather rarely moves far from 20. But they’re useless: they never tell you whether tomorrow is warmer or colder. A critic that predicts the average return everywhere has the same flaw: a low loss, and no information.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/c9b5d65c1364.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What does a high PPO token clip fraction usually indicate?</p></li>
+<li><p>Why must old rollout log-probabilities remain fixed during PPO updates?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-critic-must-predict-variation-not-merely-small-numbers">2. A critic must predict variation, not merely small numbers</h3>
+<p>PPO’s critic predicts expected return:</p>
+<p><span class="math display">\[V_\phi(s_t)\approx \hat R_t\]</span></p>
+<p>Its masked regression loss is usually:</p>
+<p><span class="math display">\[L_V
+=
+\frac{
+\sum_{i,t}
+M_{i,t}
+\left[
+V_\phi(s_{i,t})-\hat R_{i,t}
+\right]^2
+}{
+\sum_{i,t}M_{i,t}
+}\]</span></p>
+<p>Value loss alone can be misleading:</p>
+<ul>
+<li><p>if returns are tiny, a useless critic can have tiny MSE;</p></li>
+<li><p>multiplying rewards by <span style="background-color: codeinlinebg"><code> 100</code></span> multiplies MSE by roughly <span style="background-color: codeinlinebg"><code> 10,000</code></span>;</p></li>
+<li><p>padding can make loss appear smaller if included in the denominator;</p></li>
+<li><p>a critic predicting only the mean may reduce loss without ranking good and bad states.</p></li>
+</ul>
+<p>A scale-relative diagnostic is explained variance:</p>
+<p><span class="math display">\[\operatorname{EV}
+=
+1-
+\frac{
+\operatorname{Var}(\hat R-V_\phi)
+}{
+\operatorname{Var}(\hat R)
+}\]</span></p>
+<p>Interpretation:</p>
+<ul>
+<li><p><span class="math inline">\(1\)</span>: perfect predictions;</p></li>
+<li><p><span class="math inline">\(0\)</span>: no better than predicting a constant mean;</p></li>
+<li><p><span class="math inline">\(&lt;0\)</span>: worse than that constant baseline.</p></li>
+</ul>
+<p>EV does not replace value loss. It becomes unstable when return variance is nearly zero, so log both the return variance and EV.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>critic inputs: <span style="background-color: codeinlinebg"><code> [B, T, features]</code></span></p></li>
+<li><p>predicted values, returns and mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>masked value loss and explained variance: scalar</p></li>
+</ul>
+<p>Return and advantage targets should be detached from critic backpropagation. DPO ordinarily has no value critic because it optimizes fixed preference comparisons rather than online return estimates.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: explained variance</div>
+<p><span class="math display">\[\mathrm{EV}=1-\frac{\operatorname{Var}[G-V]}{\operatorname{Var}[G]} .\]</span> EV <span class="math inline">\(=1\)</span> is perfect. EV <span class="math inline">\(=0\)</span> is no better than predicting the mean. EV <span class="math inline">\(&lt;0\)</span> is worse than a constant. <strong>Why loss alone misleads:</strong> the MSE of the constant critic equals <span class="math inline">\(\operatorname{Var}[G]\)</span>. If returns barely vary, that’s tiny, yet EV <span class="math inline">\(=0\)</span>. Compute everything over masked (real) response tokens, with detached targets, and also log the raw scale of returns. A critic that’s 90% accurate on a scale of 0.01 still might not help.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Low value loss doesn’t mean a useful critic.</p></li>
+<li><p>Track explained variance alongside loss.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: explained variance</div>
+<p>Returns <span class="math inline">\(G=(1,2,3,4)\)</span>, <span class="math inline">\(\operatorname{Var}=1.25\)</span>. Critic <span class="math inline">\(V=(1.2,1.9,3.1,3.8)\)</span>: residuals <span class="math inline">\((-0.2,0.1,-0.1,0.2)\)</span>, <span class="math inline">\(\operatorname{Var}=0.025\)</span>, so EV <span class="math inline">\(=0.98\)</span>. Constant critic <span class="math inline">\(V=2.5\)</span>: residual variance <span class="math inline">\(=1.25\)</span>, so EV <span class="math inline">\(=0\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Including padding positions.</p></li>
+<li><p>Using different variance conventions in numerator and denominator.</p></li>
+<li><p>Computing EV on normalized targets but reporting raw loss.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-train-and-diagnose-a-tiny-critic">3. PyTorch exercise — train and diagnose a tiny critic</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 64
+max_tokens = 6
+
+# One informative state feature per token.
+features = torch.randn(
+    batch_size,
+    max_tokens,
+    1,
+)
+
+lengths = torch.randint(
+    low=2,
+    high=max_tokens + 1,
+    size=(batch_size,),
+)
+
+positions = torch.arange(max_tokens)[None, :]
+
+# TODO 1: Valid-token mask [B, T].
+mask = ...
+
+# Synthetic return target:
+# R = 2 * feature - 0.5 + noise
+returns = (
+    2.0 * features.squeeze(-1)
+    - 0.5
+    + 0.2 * torch.randn(
+        batch_size,
+        max_tokens,
+    )
+)
+
+critic = torch.nn.Linear(1, 1)
+
+optimizer = torch.optim.Adam(
+    critic.parameters(),
+    lr=0.05,
+)
+
+def masked_metrics(predictions, targets, mask):
+    valid_predictions = predictions[mask]
+    valid_targets = targets[mask]
+
+    residuals = (
+        valid_targets - valid_predictions
+    )
+
+    # TODO 2: MSE, target variance and explained variance.
+    mse = ...
+    target_variance = ...
+    residual_variance = ...
+    explained_variance = ...
+
+    return mse, target_variance, explained_variance
+
+with torch.no_grad():
+    initial_predictions = critic(
+        features
+    ).squeeze(-1)
+
+    initial_metrics = masked_metrics(
+        initial_predictions,
+        returns,
+        mask,
+    )
+
+# TODO 3: Train the critic using masked MSE.
+for step in range(200):
+    predictions = critic(
+        features
+    ).squeeze(-1)
+
+    value_loss = ...
+
+    optimizer.zero_grad()
+    value_loss.backward()
+    optimizer.step()
+
+with torch.no_grad():
+    final_predictions = critic(
+        features
+    ).squeeze(-1)
+
+    final_metrics = masked_metrics(
+        final_predictions,
+        returns,
+        mask,
+    )
+
+    valid_return_mean = returns[mask].mean()
+
+    constant_predictions = torch.full_like(
+        returns,
+        valid_return_mean,
+    )
+
+    reversed_predictions = -returns
+
+    constant_metrics = masked_metrics(
+        constant_predictions,
+        returns,
+        mask,
+    )
+
+    reversed_metrics = masked_metrics(
+        reversed_predictions,
+        returns,
+        mask,
+    )
+
+    # TODO 4: Scale targets and predictions together by 100.
+    scaled_returns = ...
+    scaled_predictions = ...
+
+    scaled_metrics = masked_metrics(
+        scaled_predictions,
+        scaled_returns,
+        mask,
+    )
+
+print(
+    &quot;Initial (MSE, variance, EV):&quot;,
+    tuple(x.item() for x in initial_metrics),
+)
+
+print(
+    &quot;Trained (MSE, variance, EV):&quot;,
+    tuple(x.item() for x in final_metrics),
+)
+
+print(
+    &quot;Constant predictor:&quot;,
+    tuple(x.item() for x in constant_metrics),
+)
+
+print(
+    &quot;Reversed predictor:&quot;,
+    tuple(x.item() for x in reversed_metrics),
+)
+
+print(
+    &quot;Scaled by 100:&quot;,
+    tuple(x.item() for x in scaled_metrics),
+)
+
+print(&quot;Learned weight:&quot;, critic.weight.item())
+print(&quot;Learned bias:&quot;, critic.bias.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What weight and bias should the trained critic approach?</p></li>
+<li><p>What EV should the constant-mean predictor have?</p></li>
+<li><p>Can the reversed predictor have negative EV?</p></li>
+<li><p>What happens to MSE and EV after scaling targets and predictions by <span style="background-color: codeinlinebg"><code> 100</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>The mask compares token positions against each sequence length.</p></li>
+<li><p>MSE is the mean squared residual over valid positions.</p></li>
+<li><p>Use population variance with <span style="background-color: codeinlinebg"><code> unbiased=False</code></span>.</p></li>
+<li><p>Train using only <span style="background-color: codeinlinebg"><code> predictions[mask]</code></span> and detached targets.</p></li>
+<li><p>Scaling targets and predictions together preserves relative prediction quality.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Include padding in the loss:</p>
+<pre class="code python"><code class="language-python">value_loss = (
+    predictions - returns
+).square().mean()</code></pre>
+<p>The critic now trains on positions that do not correspond to generated tokens. If padded returns are zeros, enough padding can make a zero predictor look deceptively good.</p>
+<p>Next, remove target detachment after constructing returns from a differentiable reward or advantage pipeline. The critic can then alter the target-producing network rather than simply fitting a fixed target.</p>
+<p>Finally, make all valid returns identical. Target variance becomes zero, so EV is undefined in principle. The epsilon prevents division by zero but does not make EV informative.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is value MSE difficult to compare across reward scales?</p></li>
+<li><p>What does negative explained variance mean?</p></li>
+<li><p>Can a high EV guarantee unbiased advantages?</p></li>
+<li><p>Which critic diagnostics should be logged together?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Mask:</p>
+<pre class="code python"><code class="language-python">mask = (
+    positions &lt; lengths[:, None]
+)</code></pre>
+<p>Metrics:</p>
+<pre class="code python"><code class="language-python">mse = residuals.square().mean()
+
+target_variance = valid_targets.var(
+    unbiased=False
+)
+
+residual_variance = residuals.var(
+    unbiased=False
+)
+
+explained_variance = (
+    1.0
+    - residual_variance
+    / (
+        target_variance + 1e-8
+    )
+)</code></pre>
+<p>Training:</p>
+<pre class="code python"><code class="language-python">for step in range(200):
+    predictions = critic(
+        features
+    ).squeeze(-1)
+
+    value_loss = (
+        predictions[mask]
+        - returns[mask].detach()
+    ).square().mean()
+
+    optimizer.zero_grad()
+    value_loss.backward()
+    optimizer.step()</code></pre>
+<p>Scaled quantities:</p>
+<pre class="code python"><code class="language-python">scaled_returns = (
+    100.0 * returns
+)
+
+scaled_predictions = (
+    100.0 * final_predictions
+)</code></pre>
+<p>The trained parameters should approach:</p>
+<p><span class="math display">\[w\approx2,\qquad b\approx-0.5\]</span></p>
+<p>with small deviations due to noise.</p>
+<p>A constant predictor equal to the target mean has residual variance approximately equal to target variance:</p>
+<p><span class="math display">\[\operatorname{EV}\approx0\]</span></p>
+<p>The reversed predictor is actively wrong, so its residual variance exceeds the target variance and EV becomes negative.</p>
+<p>When targets and predictions are both multiplied by <span style="background-color: codeinlinebg"><code> 100</code></span>:</p>
+<p><span class="math display">\[\mathrm{MSE}&#39;=100^2\mathrm{MSE}\]</span></p>
+<p>but:</p>
+<p><span class="math display">\[\operatorname{EV}&#39;=\operatorname{EV}\]</span></p>
+<p>because numerator and denominator variances scale by the same factor.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>MSE has squared reward units, so reward rescaling changes its magnitude even when relative prediction quality is unchanged.</p></li>
+<li><p>The critic’s errors vary more than the returns themselves; predicting the constant mean would be better.</p></li>
+<li><p>No. A critic may explain variation while remaining systematically biased, and incorrect bootstrapping can still corrupt advantages.</p></li>
+<li><p>Log masked MSE, explained variance, return variance, prediction mean and spread, target mean and spread, correlation, and errors by response position and prompt category.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The current policy has moved far from the rollout policy, often because of too many epochs, a high learning rate or stale rollouts; many samples may be clipped.</p></li>
+<li><p>PPO’s ratio must compare the current policy against the fixed policy that generated the actions. Allowing the denominator to move invalidates that comparison.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> critic loss measures absolute squared error; explained variance asks whether the critic captures meaningful return variation. Monitor both with the correct response mask, detached targets and raw return-scale diagnostics.</p>

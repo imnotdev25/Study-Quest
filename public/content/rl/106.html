@@ -1,0 +1,403 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why must targeted-audit estimates use inverse inclusion probabilities?</p></li>
+<li><p>Can importance weighting recover outcomes from a stratum with audit probability zero?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="combine-model-predictions-with-human-corrections">2. Combine model predictions with human corrections</h3>
+<p>Suppose a reward model predicts every episode, but humans audit only a selected subset.</p>
+<p>Two basic estimators can fail differently:</p>
+<ul>
+<li><p>outcome modeling predicts every label but is biased if the model is wrong;</p></li>
+<li><p>inverse-probability weighting is unbiased with correct audit propensities but can have high variance.</p></li>
+</ul>
+<p>The doubly robust estimator combines them:</p>
+<p><span class="math display">\[\hat\mu_{\text{DR}}
+=
+\frac1N\sum_{i=1}^N
+\left[
+m(X_i)
++
+\frac{S_i}{\pi_i}
+\bigl(Y_i-m(X_i)\bigr)
+\right]\]</span></p>
+<p>where:</p>
+<ul>
+<li><p><span class="math inline">\(m(X_i)\)</span> predicts the human outcome;</p></li>
+<li><p><span class="math inline">\(S_i\)</span> indicates whether episode <span class="math inline">\(i\)</span> was audited;</p></li>
+<li><p><span class="math inline">\(\pi_i=P(S_i=1\mid X_i)\)</span>;</p></li>
+<li><p><span class="math inline">\(Y_i-m(X_i)\)</span> is the audited residual.</p></li>
+</ul>
+<p>Think of <span class="math inline">\(m(X_i)\)</span> as a rough map of every house. Human audits measure selected houses and correct the map’s errors.</p>
+<p>The estimator is consistent if either:</p>
+<ol>
+<li><p>the outcome model <span class="math inline">\(m\)</span> is correct, or</p></li>
+<li><p>the propensity model <span class="math inline">\(\pi\)</span> is correct.</p></li>
+</ol>
+<p>If both are wrong, double robustness provides no protection.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>features, outcomes, audit masks and propensities: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>model predictions and residual corrections: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>final estimate: scalar</p></li>
+</ul>
+<p>In production, cross-fit the nuisance models: train <span class="math inline">\(m\)</span> or <span class="math inline">\(\pi\)</span> on other folds, then compute corrections on held-out rows. Freeze or <span style="background-color: codeinlinebg"><code> detach()</code></span> their predictions during evaluation.</p>
+<p>A reward model can supply <span class="math inline">\(m(X)\)</span> for an RLHF or DPO checkpoint. Doubly robust estimation can improve evaluation from targeted human labels; it does not make DPO an online RL algorithm or repair preferences that corrupted training.</p>
+<h3 class="unnumbered" id="pytorch-exercise-one-correct-component-is-enough">3. PyTorch exercise — one correct component is enough</h3>
+<p>High-risk episodes are rare but heavily audited. Their raw audit rate badly overstates deployment incidents.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 100_000
+
+high_risk_probability = 0.20
+
+low_risk_incident_probability = 0.02
+high_risk_incident_probability = 0.30
+
+low_risk_audit_probability = 0.02
+high_risk_audit_probability = 0.60
+
+
+# TODO 1: Generate the deployment population.
+high_risk = ...
+
+true_incident_probabilities = ...
+
+true_incidents = ...
+
+
+# TODO 2: Run the targeted audit.
+audit_probabilities = ...
+
+audited = ...
+
+# Zero is only a placeholder outside the audit mask.
+observed_incidents = ...
+
+
+# TODO 3: Construct correct and incorrect nuisance models.
+correct_outcome_predictions = ...
+
+wrong_outcome_predictions = ...
+
+correct_propensities = ...
+
+marginal_audit_rate = ...
+
+wrong_propensities = ...
+
+
+# TODO 4: Basic estimators.
+oracle_rate = ...
+
+naive_audit_rate = ...
+
+outcome_only_correct = ...
+outcome_only_wrong = ...
+
+ipw_correct = ...
+ipw_wrong = ...
+
+
+# TODO 5: Doubly robust estimator.
+def doubly_robust(
+    outcome_predictions,
+    propensities,
+):
+    residual_corrections = ...
+
+    estimate = ...
+
+    return estimate
+
+
+dr_both_correct = ...
+
+dr_correct_propensity = ...
+
+dr_correct_outcome = ...
+
+dr_both_wrong = ...
+
+
+# Weight diagnostics for the correct propensity model.
+ipw_weights = ...
+
+effective_sample_size = ...
+
+maximum_weight = ...
+
+
+names = [
+    &quot;Oracle&quot;,
+    &quot;Naive audit&quot;,
+    &quot;Outcome model: correct&quot;,
+    &quot;Outcome model: wrong&quot;,
+    &quot;IPW: correct propensity&quot;,
+    &quot;IPW: wrong propensity&quot;,
+    &quot;DR: both correct&quot;,
+    &quot;DR: correct propensity only&quot;,
+    &quot;DR: correct outcome only&quot;,
+    &quot;DR: both wrong&quot;,
+]
+
+estimates = torch.stack([
+    oracle_rate,
+    naive_audit_rate,
+    outcome_only_correct,
+    outcome_only_wrong,
+    ipw_correct,
+    ipw_wrong,
+    dr_both_correct,
+    dr_correct_propensity,
+    dr_correct_outcome,
+    dr_both_wrong,
+])
+
+for name, estimate in zip(names, estimates):
+    print(f&quot;{name:28s} {estimate.item():.4f}&quot;)
+
+print(&quot;\nAudited episodes:&quot;, audited.sum().item())
+print(&quot;Marginal audit rate:&quot;, marginal_audit_rate.item())
+print(&quot;Effective sample size:&quot;, effective_sample_size.item())
+print(&quot;Maximum IPW weight:&quot;, maximum_weight.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the exact population incident rate?</p></li>
+<li><p>Will the naive audited rate be nearer <span style="background-color: codeinlinebg"><code> 0.076</code></span> or <span style="background-color: codeinlinebg"><code> 0.267</code></span>?</p></li>
+<li><p>What happens when the propensity is correct but the outcome prediction is always <span style="background-color: codeinlinebg"><code> 0.15</code></span>?</p></li>
+<li><p>What happens when the outcome model is correct but propensity differences are ignored?</p></li>
+<li><p>What should happen when both models are wrong?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Population value:</p></li>
+</ul>
+<p><span class="math display">\[0.8(0.02)+0.2(0.30)\]</span></p>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where(high_risk, high_value, low_value)</code></span>.</p></li>
+<li><p>The wrong propensity model assigns every episode the observed marginal audit rate.</p></li>
+<li><p>IPW uses:</p></li>
+</ul>
+<p><span class="math display">\[\frac1N\sum_i\frac{S_iY_i}{\pi_i}\]</span></p>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where(audited, residual / propensity, 0)</code></span>; <span style="background-color: codeinlinebg"><code> NaN * 0</code></span> still produces <span style="background-color: codeinlinebg"><code> NaN</code></span>.</p></li>
+<li><p>For “correct propensity only,” combine the wrong outcome model with correct propensities.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Remove the residual correction and call model imputation doubly robust.</p></li>
+<li><p>Reverse <span class="math inline">\(Y-m(X)\)</span> to <span class="math inline">\(m(X)-Y\)</span>.</p></li>
+<li><p>Use judge confidence as if it were the audit inclusion probability.</p></li>
+<li><p>Fit and evaluate a flexible outcome model on the same tiny audit set without cross-fitting.</p></li>
+<li><p>Backpropagate the evaluation estimate into the reward model.</p></li>
+<li><p>Clip large weights without reporting the resulting bias–variance tradeoff.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can a wrong outcome model be corrected by accurate propensities?</p></li>
+<li><p>Why can a correct outcome model tolerate inaccurate propensities?</p></li>
+<li><p>Does “doubly robust” mean unbiased when both models are slightly wrong?</p></li>
+<li><p>Why should nuisance predictions be cross-fitted and detached?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Population and audit:</p>
+<pre class="code python"><code class="language-python">high_risk = (
+    torch.rand(num_episodes)
+    &lt; high_risk_probability
+)
+
+true_incident_probabilities = torch.where(
+    high_risk,
+    torch.tensor(
+        high_risk_incident_probability
+    ),
+    torch.tensor(
+        low_risk_incident_probability
+    ),
+)
+
+true_incidents = (
+    torch.rand(num_episodes)
+    &lt; true_incident_probabilities
+).to(torch.float64)</code></pre>
+<pre class="code python"><code class="language-python">audit_probabilities = torch.where(
+    high_risk,
+    torch.tensor(
+        high_risk_audit_probability
+    ),
+    torch.tensor(
+        low_risk_audit_probability
+    ),
+)
+
+audited = (
+    torch.rand(num_episodes)
+    &lt; audit_probabilities
+)
+
+observed_incidents = torch.where(
+    audited,
+    true_incidents,
+    torch.zeros_like(true_incidents),
+)</code></pre>
+<p>Nuisance models:</p>
+<pre class="code python"><code class="language-python"># Oracle-quality model, used only to demonstrate
+# the doubly robust identity.
+correct_outcome_predictions = (
+    true_incident_probabilities.detach()
+)
+
+wrong_outcome_predictions = torch.full(
+    (num_episodes,),
+    0.15,
+)
+
+correct_propensities = (
+    audit_probabilities.detach()
+)
+
+marginal_audit_rate = (
+    audited
+    .to(torch.float64)
+    .mean()
+    .detach()
+)
+
+wrong_propensities = torch.full_like(
+    audit_probabilities,
+    marginal_audit_rate,
+)</code></pre>
+<p>Basic estimators:</p>
+<pre class="code python"><code class="language-python">oracle_rate = true_incidents.mean()
+
+naive_audit_rate = (
+    observed_incidents[audited].mean()
+)
+
+outcome_only_correct = (
+    correct_outcome_predictions.mean()
+)
+
+outcome_only_wrong = (
+    wrong_outcome_predictions.mean()
+)
+
+ipw_correct = (
+    audited.to(torch.float64)
+    * observed_incidents
+    / correct_propensities
+).mean()
+
+ipw_wrong = (
+    audited.to(torch.float64)
+    * observed_incidents
+    / wrong_propensities
+).mean()</code></pre>
+<p>Doubly robust estimator:</p>
+<pre class="code python"><code class="language-python">def doubly_robust(
+    outcome_predictions,
+    propensities,
+):
+    residual_corrections = torch.where(
+        audited,
+        (
+            observed_incidents
+            - outcome_predictions
+        ) / propensities,
+        torch.zeros_like(
+            outcome_predictions
+        ),
+    )
+
+    estimate = (
+        outcome_predictions
+        + residual_corrections
+    ).mean()
+
+    return estimate
+
+
+dr_both_correct = doubly_robust(
+    correct_outcome_predictions,
+    correct_propensities,
+)
+
+dr_correct_propensity = doubly_robust(
+    wrong_outcome_predictions,
+    correct_propensities,
+)
+
+dr_correct_outcome = doubly_robust(
+    correct_outcome_predictions,
+    wrong_propensities,
+)
+
+dr_both_wrong = doubly_robust(
+    wrong_outcome_predictions,
+    wrong_propensities,
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">ipw_weights = torch.where(
+    audited,
+    1.0 / correct_propensities,
+    torch.zeros_like(
+        correct_propensities
+    ),
+)
+
+effective_sample_size = (
+    ipw_weights.sum().square()
+    / ipw_weights.square().sum()
+)
+
+maximum_weight = ipw_weights.max()</code></pre>
+<p>The deployment incident rate is:</p>
+<p><span class="math display">\[\mu
+=
+0.8(0.02)+0.2(0.30)
+=
+0.076\]</span></p>
+<p>The expected audit rate is:</p>
+<p><span class="math display">\[0.8(0.02)+0.2(0.60)
+=
+0.136\]</span></p>
+<p>The expected incident rate among audited episodes is:</p>
+<p><span class="math display">\[\frac{
+0.8(0.02)(0.02)
++
+0.2(0.60)(0.30)
+}{
+0.136
+}
+\approx0.267\]</span></p>
+<p>Expected behavior:</p>
+<ul>
+<li><p>correct outcome model: near <span style="background-color: codeinlinebg"><code> 0.076</code></span>;</p></li>
+<li><p>correct-propensity IPW: near <span style="background-color: codeinlinebg"><code> 0.076</code></span>;</p></li>
+<li><p>wrong outcome plus correct propensity DR: near <span style="background-color: codeinlinebg"><code> 0.076</code></span>;</p></li>
+<li><p>correct outcome plus wrong propensity DR: near <span style="background-color: codeinlinebg"><code> 0.076</code></span>;</p></li>
+<li><p>both wrong: near the biased audit rate, approximately <span style="background-color: codeinlinebg"><code> 0.267</code></span>.</p></li>
+</ul>
+<p>Low-risk audited episodes receive weight:</p>
+<p><span class="math display">\[1/0.02=50\]</span></p>
+<p>so the effective sample size will be far below the raw audit count.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Correct propensities expand each audited residual back to its deployment frequency, making the average correction unbiased.</p></li>
+<li><p>If <span class="math inline">\(m(X)=E[Y\mid X]\)</span>, its residual has conditional mean zero; incorrect propensity scaling still averages zero in expectation.</p></li>
+<li><p>No. The guarantee requires at least one nuisance model to be correctly specified. Two small, correlated errors can still create meaningful bias.</p></li>
+<li><p>Cross-fitting reduces overfitting bias. Detaching prevents an evaluation calculation from silently training the models whose validity it is meant to assess.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Targeted samples have a different mixture from deployment. Weighting each audited row by <span class="math inline">\(1/\pi_i\)</span> restores its population representation.</p></li>
+<li><p>No. Zero inclusion probability creates missing support; weighting cannot manufacture unseen human outcomes.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> predict every episode, then use properly weighted human residuals to correct the predictions. Doubly robust does not mean assumption-free—it means one of two carefully validated nuisance models may fail, but not both.</p>

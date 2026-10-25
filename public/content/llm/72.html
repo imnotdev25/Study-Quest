@@ -1,0 +1,247 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Group-relative advantage:</strong> sample <span class="math inline">\(G\)</span> responses to the same prompt and judge each one against its siblings, <span class="math inline">\(A=\frac{R-\mu_{\text{group}}}{\sigma_{\text{group}}+\epsilon}\)</span>. No critic is needed: the group itself is the baseline. <strong>Degenerate group:</strong> all <span class="math inline">\(G\)</span> rewards equal, so there’s nothing to compare.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why is a pairwise reward model invariant to a common score shift?</p></li>
+<li><p>Why should PPO advantages be detached before entering the policy loss?</p></li>
+</ol>
+<p>Suppose each of <span class="math inline">\(B\)</span> prompts produces <span class="math inline">\(G\)</span> sampled responses:</p>
+<p><span class="math display">\[R\in\mathbb{R}^{B\times G}\]</span></p>
+<p>A critic-free baseline can compare each response with the other responses for the same prompt:</p>
+<p><span class="math display">\[\mu_b=\frac1G\sum_{g=1}^G R_{bg}\]</span></p>
+<p><span class="math display">\[\sigma_b=
+\sqrt{
+\frac1G\sum_{g=1}^G(R_{bg}-\mu_b)^2
+}\]</span></p>
+<p><span class="math display">\[A_{bg}=
+\frac{R_{bg}-\mu_b}{\sigma_b+\epsilon}
+\in\mathbb{R}^{B\times G}\]</span></p>
+<p>For response-token log-probabilities:</p>
+<p><span class="math display">\[\ell_{\text{new}},\ell_{\text{old}},M
+\in\mathbb{R}^{B\times G\times T}\]</span></p>
+<p>the sequence advantage is broadcast across its valid tokens:</p>
+<p><span class="math display">\[A^{\text{token}}_{bgt}=A_{bg}\]</span></p>
+<p>This removes the learned value model, but introduces important behavior:</p>
+<ul>
+<li><p>Advantages express within-prompt rank, not absolute quality across prompts.</p></li>
+<li><p><span class="math inline">\(G=1\)</span> or equal rewards gives zero centered advantages and no policy signal.</p></li>
+<li><p>Tiny reward variance can turn insignificant reward-model noise into order-one normalized advantages.</p></li>
+<li><p>A positive affine reward transform <span class="math inline">\(R&#39;=aR+c,\ a&gt;0\)</span> leaves normalized advantages essentially unchanged.</p></li>
+<li><p>With a token-mean loss, longer responses receive more total gradient because their advantage is repeated over more tokens.</p></li>
+</ul>
+<p>A minimum-variance safeguard can skip unreliable groups, but its threshold must reflect reward precision and should be monitored.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: properties of group-relative advantages</div>
+<p><strong>Step 1.</strong> Within a group, <span class="math inline">\(\sum_g(R_g-\mu)=0\)</span>, so advantages sum to 0: some responses are pushed up exactly as much as others are pushed down.</p>
+<p><strong>Step 2.</strong> Degenerate group: <span class="math inline">\(R_g=\mu\)</span> for all <span class="math inline">\(g\)</span>, so <span class="math inline">\(\sigma=0\)</span> and <span class="math inline">\(A=\frac{0}{0+\epsilon}=0\)</span>. With <span class="math inline">\(\epsilon=0\)</span> it’s <span class="math inline">\(0/0=\mathrm{NaN}\)</span>, which poisons the whole batch.</p>
+<p><strong>Step 3.</strong> Binary rewards with solve rate <span class="math inline">\(p\)</span>: the probability a group is non-degenerate is <span class="math inline">\(1-p^G-(1-p)^G\)</span>. Easy and impossible prompts mostly waste compute.</p>
+<p><strong>Step 4.</strong> Dividing by <span class="math inline">\(\sigma\)</span> gives every non-degenerate group the same total “push”, regardless of how different its rewards really were (a scale invariance). Small real differences and large ones look alike.</p>
+<p><strong>Step 5.</strong> Each token of response <span class="math inline">\(g\)</span> shares <span class="math inline">\(A_g\)</span>. The policy loss uses the PPO clip per token (Session 30), reduced over valid tokens.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: group-relative advantages</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> rewards <span class="math inline">\(R\in\mathbb R^{B\times G}\)</span>, <span class="math inline">\(\epsilon\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\mu_b\gets\frac1G\sum_gR_{bg}\)</span>; <span class="math inline">\(\sigma_b\gets\sqrt{\frac1G\sum_g(R_{bg}-\mu_b)^2}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(A_{bg}\gets(R_{bg}-\mu_b)/(\sigma_b+\epsilon)\)</span></div>
+<div class="algo-line" style="--d:0">log the fraction of groups with <span class="math inline">\(\sigma_b=0\)</span>; drop or resample them</div>
+<div class="algo-line" style="--d:0">broadcast <span class="math inline">\(A_{bg}\)</span> to every valid token of response <span class="math inline">\((b,g)\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement group-relative advantages, suppress nearly degenerate groups, and inspect the policy gradients.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(291)
+
+B, G, T = 3, 4, 5
+minimum_std = 0.02
+
+rewards = torch.tensor([
+    [1.00, 2.00, 4.00, 3.00],   # informative spread
+    [5.00, 5.00, 5.00, 5.00],   # exactly degenerate
+    [0.99, 1.00, 1.01, 1.00],   # possibly reward noise
+])                                # [B,G]
+
+response_mask = torch.tensor([
+    [
+        [1, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 0],
+    ],
+    [
+        [1, 1, 1, 0, 0],
+        [1, 1, 0, 0, 0],
+        [1, 1, 1, 1, 0],
+        [1, 1, 1, 0, 0],
+    ],
+    [
+        [1, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0],
+        [1, 1, 1, 1, 0],
+        [1, 1, 1, 1, 1],
+    ],
+], dtype=torch.bool)              # [B,G,T]
+
+
+group_mean = ...                   # TODO 1: [B,1]
+centered_rewards = ...             # TODO 2: [B,G]
+
+group_variance = ...               # TODO 3: [B,1], population variance
+group_std = ...                    # TODO 4: [B,1]
+
+unsafe_advantages = ...            # TODO 5: [B,G]
+
+active_groups = ...                # TODO 6: [B]
+safe_advantages = ...              # TODO 7: zero inactive groups
+
+print(&quot;group means:\n&quot;, group_mean)
+print(&quot;group standard deviations:\n&quot;, group_std)
+print(&quot;active groups:&quot;, active_groups)
+
+print(&quot;\nunsafe normalized advantages:\n&quot;, unsafe_advantages)
+print(&quot;\nsafe normalized advantages:\n&quot;, safe_advantages)
+
+assert safe_advantages.shape == (B, G)
+assert torch.allclose(
+    safe_advantages[~active_groups],
+    torch.zeros_like(safe_advantages[~active_groups]),
+)
+
+
+# Simplified on-policy surrogate: all initial ratios equal one.
+old_logp = torch.zeros(B, G, T)
+
+new_logp = torch.zeros(
+    B, G, T,
+    requires_grad=True,
+)
+
+ratio = ...                         # TODO 8: [B,G,T]
+token_advantages = ...              # TODO 9: broadcast to [B,G,T]
+
+policy_loss = ...                   # TODO 10: valid-token mean
+policy_loss.backward()
+
+print(&quot;\npolicy loss:&quot;, policy_loss.item())
+
+for b in range(B):
+    valid_gradient = new_logp.grad[b][response_mask[b]]
+
+    print(
+        f&quot;group {b} gradient norm:&quot;,
+        valid_gradient.norm().item(),
+    )
+
+assert new_logp.grad[0][response_mask[0]].norm() &gt; 0
+
+assert torch.allclose(
+    new_logp.grad[1][response_mask[1]],
+    torch.zeros_like(new_logp.grad[1][response_mask[1]]),
+)
+
+assert torch.allclose(
+    new_logp.grad[2][response_mask[2]],
+    torch.zeros_like(new_logp.grad[2][response_mask[2]]),
+)
+
+assert torch.allclose(
+    new_logp.grad[~response_mask],
+    torch.zeros_like(new_logp.grad[~response_mask]),
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>What advantages will the equal-reward group receive?</p></li>
+<li><p>Will the raw <span class="math inline">\(0.02\)</span> reward range in group 2 remain numerically small after normalization?</p></li>
+<li><p>Within active group 0, which response receives the largest probability-increasing gradient?</p></li>
+</ul>
+<p>Hints:</p>
+<ul>
+<li><p>Reduce over <code>dim=1</code> and retain the dimension.</p></li>
+<li><p>Use population variance, not the <span class="math inline">\(G-1\)</span> sample correction.</p></li>
+<li><p><code>active_groups</code> compares <code>group_std.squeeze(1)</code> with the threshold.</p></li>
+<li><p>Use <code>torch.where(active_groups</code><span><code>[</code></span><code>:, None</code><span><code>]</code></span><code>, ...)</code>.</p></li>
+<li><p>Broadcast advantages with <code>.unsqueeze(-1)</code>.</p></li>
+<li><p>Minimize the negative masked mean of <code>ratio * advantage</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why can two equally rewarded responses produce no policy gradient even if both rewards are high?</p></li>
+<li><p>Prediction: what happens to normalized advantages under <span class="math inline">\(R&#39;=10R+100\)</span>?</p></li>
+<li><p>Debugging: training suddenly becomes noisy when most reward differences are near <span class="math inline">\(10^{-4}\)</span>. What statistic and safeguard would you inspect?</p></li>
+<li><p>Why does group-relative normalization discard absolute reward differences between prompts?</p></li>
+<li><p>With a valid-token mean, why can a five-token response have more total influence than a two-token response with the same advantage?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">group_mean = rewards.mean(
+    dim=1,
+    keepdim=True,
+)
+
+centered_rewards = rewards - group_mean
+
+group_variance = centered_rewards.square().mean(
+    dim=1,
+    keepdim=True,
+)
+
+group_std = group_variance.sqrt()
+
+unsafe_advantages = (
+    centered_rewards
+    / (group_std + 1e-8)
+)
+
+active_groups = (
+    group_std.squeeze(1) &gt;= minimum_std
+)
+
+safe_advantages = torch.where(
+    active_groups[:, None],
+    unsafe_advantages,
+    torch.zeros_like(unsafe_advantages),
+)</code></pre>
+<p>Policy objective:</p>
+<pre class="code python"><code class="language-python">ratio = torch.exp(
+    new_logp - old_logp
+)
+
+token_advantages = safe_advantages.detach().unsqueeze(-1)
+
+policy_loss = -(
+    ratio * token_advantages
+)[response_mask].mean()
+
+policy_loss.backward()</code></pre>
+<p>The equal-reward group has:</p>
+<p><span class="math display">\[R_{bg}-\mu_b=0\]</span></p>
+<p>so every advantage and policy gradient is zero.</p>
+<p>For group 2, the standard deviation is approximately <span class="math inline">\(0.0071\)</span>. Without the safeguard, rewards differing by only <span class="math inline">\(0.01\)</span> become advantages near:</p>
+<p><span class="math display">\[[-1.414,\ 0,\ 1.414,\ 0]\]</span></p>
+<p>Normalization deliberately removes scale, so tiny reward-model noise can become a full-sized update.</p>
+<p>In group 0, reward <span class="math inline">\(4\)</span> has the largest positive advantage. Gradient descent therefore increases its selected-token log-probabilities most strongly.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Group-relative learning uses deviations from the group mean. Equal rewards provide no evidence that one response should become more likely than another.</p></li>
+<li><p>They remain unchanged, apart from floating-point effects: <span class="math display">\[\frac{10(R-\mu)}{10\sigma}=A\]</span></p></li>
+<li><p>Inspect per-group reward standard deviation and the fraction of degenerate groups. Consider skipping or down-weighting low-variance groups, increasing <span class="math inline">\(G\)</span>, or validating reward precision.</p></li>
+<li><p>Each prompt is centered and scaled independently, so cross-prompt offsets and scales are removed.</p></li>
+<li><p>The sequence advantage is repeated at every valid token. Under a token-mean objective, total sequence contribution is therefore approximately proportional to response length.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Pairwise reward loss depends only on <span class="math inline">\(r^+-r^-\)</span>, so a common score offset cancels.</p></li>
+<li><p>Advantages are fixed reward estimates. Detaching them prevents unintended gradients through reward or baseline construction.</p></li>
+</ul>

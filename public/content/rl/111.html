@@ -1,0 +1,316 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can length normalization reverse a policy-gradient direction?</p></li>
+<li><p>Which positions should a response-token mask exclude?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-stopped-recording-is-not-necessarily-a-finished-task">2. A stopped recording is not necessarily a finished task</h3>
+<p>A <strong>termination</strong> means the task itself ended: success, failure, EOS or an absorbing state.</p>
+<p>A <strong>truncation</strong> means data collection stopped: timeout, rollout limit, <span style="background-color: codeinlinebg"><code> max_new_tokens</code></span> or infrastructure interruption. Future reward may still exist.</p>
+<p>For a TD target:</p>
+<p><span class="math display">\[y_t
+=
+r_t+\gamma
+\left(1-\mathbb{1}[\text{terminated}_t]\right)
+V_{\bar\phi}(s_{t+1})\]</span></p>
+<p>A common bug uses:</p>
+<p><span class="math display">\[1-\mathbb{1}[
+\text{terminated}_t
+\lor
+\text{truncated}_t
+]\]</span></p>
+<p>This treats every timeout as if the environment’s future value became zero.</p>
+<p>Keep two masks separate:</p>
+<ul>
+<li><p><strong>valid mask:</strong> does this padded tensor position contain a real transition?</p></li>
+<li><p><strong>continuation mask:</strong> should the target bootstrap from the next state?</p></li>
+</ul>
+<p>For <span style="background-color: codeinlinebg"><code> [B, T]</code></span> trajectories:</p>
+<p><span class="math display">\[L_V
+=
+\frac{
+\sum_{b,t}m_{b,t}
+\left(
+V_\phi(s_{b,t})-\operatorname{stopgrad}(y_{b,t})
+\right)^2
+}{
+\sum_{b,t}m_{b,t}
+}\]</span></p>
+<p>Here, <span style="background-color: codeinlinebg"><code> stopgrad</code></span> is <span style="background-color: codeinlinebg"><code> .detach()</code></span>. Standard TD takes a semi-gradient: it updates the current prediction without differentiating through its moving target.</p>
+<p>A fixed horizon can genuinely define termination—for example, a game that lasts exactly ten moves. Then remaining time should usually be part of the state. The distinction is whether the horizon belongs to the task or merely to the collector.</p>
+<p>For LLMs, record EOS, maximum-token cutoff, timeout and tool-budget exhaustion separately. DPO has no Bellman bootstrap, but a cutoff completion is still censored data, not automatically an ordinary complete rejected response. DPO remains fixed-data preference optimization rather than online RL.</p>
+<h3 class="unnumbered" id="pytorch-exercise-a-timeout-bug-learns-3.57-instead-of-10">3. PyTorch exercise — a timeout bug learns <span style="background-color: codeinlinebg"><code> 3.57</code></span> instead of <span style="background-color: codeinlinebg"><code> 10</code></span></h3>
+<p>Consider a continuing one-state process that always gives reward <span style="background-color: codeinlinebg"><code> 1</code></span>:</p>
+<p><span class="math display">\[V^\star=1+\gamma V^\star
+=\frac1{1-\gamma}\]</span></p>
+<p>The collector truncates 20% of transitions, but the process itself never terminates.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.90
+truncation_probability = 0.20
+
+batch_size = 2_048
+num_updates = 300
+learning_rate = 0.10
+
+# Index 0: correct truncation handling
+# Index 1: incorrectly treats truncation as terminal
+
+# TODO 1: Create the two scalar value parameters
+# and one SGD optimizer.
+value_estimates = ...
+optimizer = ...
+
+checkpoints = {0, 9, 49, 99, 299}
+history = []
+
+for update in range(num_updates):
+    # TODO 2: Generate transition flags.
+    truncated = ...
+
+    # This continuing process has no natural terminal state.
+    terminated = ...
+
+    done = ...
+
+    correct_continuation = ...
+    wrong_continuation = ...
+
+    continuation_masks = ...
+
+    rewards = ...
+
+    # TODO 3: Construct detached TD targets.
+    bootstrap_values = ...
+
+    td_targets = ...
+
+    predictions = ...
+
+    # TODO 4: Apply one semi-gradient TD update.
+    losses = ...
+
+    total_loss = ...
+
+    ...
+
+    if update in checkpoints:
+        history.append(
+            torch.cat([
+                torch.tensor([
+                    update + 1.0
+                ]),
+                value_estimates
+                .detach()
+                .clone(),
+            ])
+        )
+
+history = torch.stack(history)
+
+# TODO 5: Analytical fixed points and diagnostics.
+analytical_correct_value = ...
+
+analytical_wrong_value = ...
+
+analytical_values = ...
+
+final_biases = ...
+
+correct_target_on_truncation = ...
+wrong_target_on_truncation = ...
+
+print(
+    &quot;Columns: update, correct value, wrong value&quot;
+)
+print(history)
+
+print(
+    &quot;\nAnalytical values: correct, wrong&quot;
+)
+print(analytical_values)
+
+print(
+    &quot;Final learned values:&quot;,
+    value_estimates.detach(),
+)
+print(&quot;Final biases:&quot;, final_biases)
+
+print(
+    &quot;Targets on a truncated transition:&quot;,
+    correct_target_on_truncation.item(),
+    wrong_target_on_truncation.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should the correct estimate approach <span style="background-color: codeinlinebg"><code> 10</code></span>?</p></li>
+<li><p>Should the incorrect estimate approach <span style="background-color: codeinlinebg"><code> 3.57</code></span>?</p></li>
+<li><p>What target does each learner use on a truncated transition?</p></li>
+<li><p>As truncation becomes more frequent, what happens to the incorrect value?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> terminated</code></span> is an all-false Boolean tensor.</p></li>
+<li><p>The correct continuation mask is <span style="background-color: codeinlinebg"><code> ~terminated</code></span>.</p></li>
+<li><p>The incorrect mask is <span style="background-color: codeinlinebg"><code> ~done</code></span>.</p></li>
+<li><p>Stack both masks into shape <span style="background-color: codeinlinebg"><code> [2, B]</code></span>.</p></li>
+<li><p>Bootstrap from <span style="background-color: codeinlinebg"><code> value_estimates.detach()[:, None]</code></span>.</p></li>
+<li><p>The incorrect fixed point satisfies:</p></li>
+</ul>
+<p><span class="math display">\[V_{\text{wrong}}
+=
+1+\gamma(1-q)V_{\text{wrong}}\]</span></p>
+<p>where <span class="math inline">\(q\)</span> is the truncation probability.</p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Replace <span style="background-color: codeinlinebg"><code> ~terminated</code></span> with <span style="background-color: codeinlinebg"><code> ~done</code></span>.</p></li>
+<li><p>Remove <span style="background-color: codeinlinebg"><code> .detach()</code></span> from the bootstrap values.</p></li>
+<li><p>Increase truncation probability to <span style="background-color: codeinlinebg"><code> 0.80</code></span>.</p></li>
+<li><p>Bootstrap from an auto-reset observation rather than the final pre-reset observation.</p></li>
+<li><p>Use a padding mask as the continuation mask.</p></li>
+<li><p>Rescale rewards without adjusting expected value scale or clipping diagnostics.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why should a collector timeout usually retain the bootstrap term?</p></li>
+<li><p>When is a time limit genuinely terminal?</p></li>
+<li><p>Why are validity and continuation masks different?</p></li>
+<li><p>What should be logged for an LLM response stopped at <span style="background-color: codeinlinebg"><code> max_new_tokens</code></span>?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Initialization:</p>
+<pre class="code python"><code class="language-python">value_estimates = torch.nn.Parameter(
+    torch.zeros(2)
+)
+
+optimizer = torch.optim.SGD(
+    [value_estimates],
+    lr=learning_rate,
+)</code></pre>
+<p>Transition flags and masks:</p>
+<pre class="code python"><code class="language-python">truncated = (
+    torch.rand(batch_size)
+    &lt; truncation_probability
+)
+
+terminated = torch.zeros(
+    batch_size,
+    dtype=torch.bool,
+)
+
+done = terminated | truncated
+
+correct_continuation = (
+    ~terminated
+).to(torch.float64)
+
+wrong_continuation = (
+    ~done
+).to(torch.float64)
+
+continuation_masks = torch.stack([
+    correct_continuation,
+    wrong_continuation,
+])
+
+rewards = torch.ones(batch_size)</code></pre>
+<p>Detached targets:</p>
+<pre class="code python"><code class="language-python">bootstrap_values = (
+    value_estimates
+    .detach()[:, None]
+)
+
+td_targets = (
+    rewards[None, :]
+    + gamma
+    * continuation_masks
+    * bootstrap_values
+)
+
+predictions = (
+    value_estimates[:, None]
+    .expand_as(td_targets)
+)</code></pre>
+<p>TD update:</p>
+<pre class="code python"><code class="language-python">losses = (
+    predictions - td_targets
+).square().mean(dim=1)
+
+total_loss = losses.sum()
+
+optimizer.zero_grad()
+total_loss.backward()
+optimizer.step()</code></pre>
+<p>Fixed points and diagnostics:</p>
+<pre class="code python"><code class="language-python">analytical_correct_value = (
+    1.0 / (1.0 - gamma)
+)
+
+analytical_wrong_value = (
+    1.0
+    / (
+        1.0
+        - gamma
+        * (
+            1.0
+            - truncation_probability
+        )
+    )
+)
+
+analytical_values = torch.tensor([
+    analytical_correct_value,
+    analytical_wrong_value,
+])
+
+final_biases = (
+    value_estimates.detach()
+    - analytical_values
+)
+
+correct_target_on_truncation = (
+    1.0
+    + gamma
+    * value_estimates[0].detach()
+)
+
+wrong_target_on_truncation = torch.tensor(
+    1.0
+)</code></pre>
+<p>The correct learner solves:</p>
+<p><span class="math display">\[V=1+0.9V
+\quad\Rightarrow\quad
+V=10\]</span></p>
+<p>The buggy learner bootstraps only on the expected 80% of non-truncated transitions:</p>
+<p><span class="math display">\[V
+=
+1+0.9(0.8)V\]</span></p>
+<p><span class="math display">\[V
+=
+\frac1{1-0.72}
+\approx3.571\]</span></p>
+<p>Near convergence, a truncated transition therefore receives:</p>
+<ul>
+<li><p>correct target: <span class="math inline">\(1+0.9(10)=10\)</span>;</p></li>
+<li><p>incorrect target: <span class="math inline">\(1\)</span>.</p></li>
+</ul>
+<p>Removing <span style="background-color: codeinlinebg"><code> .detach()</code></span> does not change this toy problem’s optimum, but it changes the gradient into a residual-gradient update and makes learning much slower. With neural critics and shared computation, it can also create unintended gradient paths.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>A collector timeout does not imply that the environment’s remaining return is zero.</p></li>
+<li><p>It is terminal when the horizon is part of the task definition and no reward exists beyond it.</p></li>
+<li><p>Validity controls whether a transition contributes to the loss; continuation controls whether its next-state value enters the target.</p></li>
+<li><p>Log the finish reason, cutoff length, unfinished status and final pre-reset context. Do not silently record it as EOS or success.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Length normalization changes the relative values assigned to policy-controlled sequences, potentially reversing <span class="math inline">\(J_{\text{verbose}}-J_{\text{concise}}\)</span> and thus the gradient sign.</p></li>
+<li><p>Exclude prompt tokens, padding positions and all positions after EOS; retain only generated response tokens that actually occurred.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> zero future value belongs to genuine terminal states. For arbitrary rollout cutoffs, preserve the final observation and bootstrap—otherwise the critic learns the collector’s patience instead of the task’s return.</p>

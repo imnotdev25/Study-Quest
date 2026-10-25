@@ -1,0 +1,293 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: two routes with the same number of turns</div>
+<p>Two routes home both take 3 turns, but one takes 10 minutes and the other 40. Counting <em>decisions</em> says they’re equal. Counting <em>time</em> says they’re not. Tool calls work like that: a calculator answers in milliseconds, a web crawl in a minute. If slow is costly, discount by elapsed time, not by number of steps.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Which mask controls TD bootstrapping at a truncated boundary?</p></li>
+<li><p>Why does GAE need a separate continuation mask?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="tool-actions-do-not-have-equal-duration">2. Tool actions do not have equal duration</h3>
+<p>Ordinary MDP notation treats every transition as one equally sized step:</p>
+<p><span class="math display">\[G_t=r_t+\gamma G_{t+1}\]</span></p>
+<p>For a tool agent, actions may take very different amounts of time:</p>
+<ul>
+<li><p>local calculation: <span class="math inline">\(0.1\)</span> seconds;</p></li>
+<li><p>web search: <span class="math inline">\(2\)</span> seconds;</p></li>
+<li><p>database job: <span class="math inline">\(20\)</span> seconds;</p></li>
+<li><p>human approval: several minutes.</p></li>
+</ul>
+<p>A semi-Markov decision process associates action <span class="math inline">\(a_t\)</span> with duration <span class="math inline">\(\tau_t\)</span>. If <span class="math inline">\(\gamma\)</span> is the discount per unit of time:</p>
+<p><span class="math display">\[G_t
+=
+r_t+
+\gamma^{\tau_t}G_{t+1}\]</span></p>
+<p>The TD target becomes:</p>
+<p><span class="math display">\[y_t
+=
+r_t+
+\gamma^{\tau_t}
+(1-\text{terminated}_t)
+V(s_{t+1})\]</span></p>
+<p>When <span class="math inline">\(\tau_t=1\)</span>, this reduces to the ordinary TD target.</p>
+<p>An equivalent continuous-time form is:</p>
+<p><span class="math display">\[\gamma^{\tau_t}
+=
+e^{-\beta\tau_t}\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[\beta=-\log\gamma\]</span></p>
+<p>Per-decision discounting charges a quick calculation and a slow external call equally. Duration-aware discounting prefers earlier outcomes when latency is part of the objective.</p>
+<p>This is a modeling choice:</p>
+<ul>
+<li><p>If latency matters to users, duration-aware discounting or an explicit latency cost is appropriate.</p></li>
+<li><p>If latency does not affect task value, adding time discounting changes the objective unnecessarily.</p></li>
+<li><p>Monetary cost, failure risk and latency may need separate reward components rather than being hidden inside one discount factor.</p></li>
+</ul>
+<p>Specify the duration unit. Using seconds instead of minutes with the same <span class="math inline">\(\gamma\)</span> produces a completely different effective discount.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>rewards, durations and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>;</p></li>
+<li><p>duration discounts: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>;</p></li>
+<li><p>returns and TD targets: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>.</p></li>
+</ul>
+<p>DPO can learn a latency preference when preferred traces are consistently faster, but it does not directly model durations, environment transitions or online tool latency.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: semi-Markov discounting</div>
+<p>If action <span class="math inline">\(a\)</span> takes duration <span class="math inline">\(\tau\)</span> with reward rate (or reward) <span class="math inline">\(r\)</span>, the SMDP Q-learning target is <span class="math display">\[Q(s,a)\leftarrow Q(s,a)+\alpha\Big[r+\gamma^{\tau}\max_{a&#39;}Q(s&#39;,a&#39;)-Q(s,a)\Big],\]</span> where <span class="math inline">\(\gamma\)</span> is now a <em>per-time-unit</em> discount. Rewards earned during the action can be discounted within it too: <span class="math inline">\(\sum_{k&lt;\tau}\gamma^kr_k\)</span>. <strong>Units:</strong> the duration must be in the same unit at rollout, training and evaluation.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Decision count and elapsed time are different quantities.</p></li>
+<li><p>Model duration explicitly when slow outcomes are worth less.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: fast vs slow tool</div>
+<p><span class="math inline">\(\gamma=0.95\)</span> per second, both tools lead to a state worth <span class="math inline">\(V=10\)</span>, no immediate reward. Fast (1 s): <span class="math inline">\(0.95\cdot10=9.5\)</span>. Slow (5 s): <span class="math inline">\(0.95^5\cdot10=7.74\)</span>. Per-decision discounting would score both at 9.5.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Logging durations in ms in one place and s in another.</p></li>
+<li><p>Using wall-clock durations that include queueing noise as if they were policy-caused.</p></li>
+<li><p>Forgetting the duration exponent in GAE (<span class="math inline">\(\gamma^{\tau_t}\)</span> per step).</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: SMDP Q-learning</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> per-time-unit discount <span class="math inline">\(\gamma\)</span>, step size <span class="math inline">\(\alpha\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each decision <strong>do</strong></div>
+<div class="algo-line" style="--d:1">choose <span class="math inline">\(a\)</span> (e.g. <span class="math inline">\(\epsilon\)</span>-greedy) in state <span class="math inline">\(s\)</span>; run it until it finishes</div>
+<div class="algo-line" style="--d:1">observe accumulated discounted reward <span class="math inline">\(R=\sum_{k&lt;\tau}\gamma^kr_k\)</span>, duration <span class="math inline">\(\tau\)</span>, next state <span class="math inline">\(s&#39;\)</span>, done <span class="math inline">\(d\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(Q(s,a)\gets Q(s,a)+\alpha\big[R+\gamma^{\tau}(1-d)\max_{a&#39;}Q(s&#39;,a&#39;)-Q(s,a)\big]\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(s\gets s&#39;\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-equal-decisions-unequal-elapsed-time">3. PyTorch exercise — equal decisions, unequal elapsed time</h3>
+<p>Two agents take the same number of actions and receive the same terminal reward. The second agent’s tools are much slower.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.9
+
+# Final column is deliberately extreme padding.
+rewards = torch.tensor([
+    [0.0, 0.0, 1.0, 99.0],
+    [0.0, 0.0, 1.0, 99.0],
+])
+
+# Trajectory 0: two quick actions.
+# Trajectory 1: two slow actions.
+durations = torch.tensor([
+    [1.0, 1.0, 0.0, 100.0],
+    [5.0, 5.0, 0.0, 100.0],
+])
+
+valid = torch.tensor([
+    [True, True, True, False],
+    [True, True, True, False],
+])
+
+terminated = torch.tensor([
+    [False, False, True, False],
+    [False, False, True, False],
+])
+
+# TODO 1: Ordinary per-decision discounts.
+per_decision_discounts = ...
+
+# TODO 2: Duration-aware discounts.
+# Use exp(log(gamma) * duration).
+duration_discounts = ...
+
+def calculate_returns(discounts):
+    returns = torch.zeros_like(rewards)
+    running_return = torch.zeros(
+        rewards.shape[0]
+    )
+
+    # TODO 3: Reverse masked recursion.
+    for time in reversed(
+        range(rewards.shape[1])
+    ):
+        ...
+
+    return returns
+
+# TODO 4: Compute both kinds of return.
+per_decision_returns = ...
+duration_aware_returns = ...
+
+next_values = torch.tensor([
+    [2.0, 2.0, 0.0, 99.0],
+    [2.0, 2.0, 0.0, 99.0],
+])
+
+# TODO 5: Duration-aware one-step TD targets.
+td_targets = ...
+
+td_targets = td_targets * valid
+
+print(
+    &quot;Per-decision returns:\n&quot;,
+    per_decision_returns,
+)
+
+print(
+    &quot;Duration-aware returns:\n&quot;,
+    duration_aware_returns,
+)
+
+print(
+    &quot;Initial returns:&quot;,
+    {
+        &quot;quick_per_decision&quot;:
+            per_decision_returns[0, 0].item(),
+        &quot;slow_per_decision&quot;:
+            per_decision_returns[1, 0].item(),
+        &quot;quick_duration_aware&quot;:
+            duration_aware_returns[0, 0].item(),
+        &quot;slow_duration_aware&quot;:
+            duration_aware_returns[1, 0].item(),
+    },
+)
+
+print(
+    &quot;Duration-aware TD targets:\n&quot;,
+    td_targets,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will per-decision returns distinguish the quick and slow trajectories?</p></li>
+<li><p>What is the quick trajectory’s initial duration-aware return?</p></li>
+<li><p>Is the slow trajectory’s initial return closer to <span class="math inline">\(0.81\)</span> or <span class="math inline">\(0.35\)</span>?</p></li>
+<li><p>Should the padded reward of <span style="background-color: codeinlinebg"><code> 99</code></span> affect either valid trajectory?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Ordinary discount is <span style="background-color: codeinlinebg"><code> gamma</code></span> at every tensor position.</p></li>
+<li><p>Duration discount is <span style="background-color: codeinlinebg"><code> torch.exp(math.log(gamma) * durations)</code></span>.</p></li>
+<li><p>Recurse with <span style="background-color: codeinlinebg"><code> reward + discount * running_return</code></span>.</p></li>
+<li><p>Multiply the running return by the current validity mask.</p></li>
+<li><p>TD bootstrap mask is <span style="background-color: codeinlinebg"><code> ~terminated</code></span>.</p></li>
+<li><p>Detach <span style="background-color: codeinlinebg"><code> next_values</code></span> when constructing a critic target.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Remove the validity mask from the return recursion. The padded reward propagates backward and overwhelms both trajectories.</p>
+<p>Set durations to milliseconds while keeping the same per-second <span class="math inline">\(\gamma\)</span>. Discounts underflow toward zero because the units no longer match.</p>
+<p>Use <span style="background-color: codeinlinebg"><code> gamma ** durations</code></span> with extremely large durations in low precision. Compare it with the logarithmic form and inspect underflow.</p>
+<p>Finally, add both a strong duration discount and a large explicit latency penalty. The agent may be charged twice for the same preference.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is an MDP with variable-duration actions often treated as an SMDP?</p></li>
+<li><p>What does <span class="math inline">\(\gamma^{\tau_t}\)</span> mean?</p></li>
+<li><p>When is an explicit latency cost clearer than duration discounting?</p></li>
+<li><p>Which duration-related diagnostics should a tool-agent run report?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Per-decision discounts:</p>
+<pre class="code python"><code class="language-python">per_decision_discounts = torch.full_like(
+    durations,
+    gamma,
+)</code></pre>
+<p>Duration-aware discounts:</p>
+<pre class="code python"><code class="language-python">duration_discounts = torch.exp(
+    math.log(gamma) * durations
+)</code></pre>
+<p>Return recursion:</p>
+<pre class="code python"><code class="language-python">def calculate_returns(discounts):
+    returns = torch.zeros_like(rewards)
+
+    running_return = torch.zeros(
+        rewards.shape[0]
+    )
+
+    for time in reversed(
+        range(rewards.shape[1])
+    ):
+        running_return = (
+            rewards[:, time]
+            + discounts[:, time]
+            * running_return
+        )
+
+        running_return = (
+            running_return
+            * valid[:, time]
+        )
+
+        returns[:, time] = running_return
+
+    return returns</code></pre>
+<p>Both returns:</p>
+<pre class="code python"><code class="language-python">per_decision_returns = calculate_returns(
+    per_decision_discounts
+)
+
+duration_aware_returns = calculate_returns(
+    duration_discounts
+)</code></pre>
+<p>TD targets:</p>
+<pre class="code python"><code class="language-python">td_targets = (
+    rewards
+    + duration_discounts
+    * (~terminated).to(rewards.dtype)
+    * next_values.detach()
+)</code></pre>
+<p>With ordinary per-decision discounting, both trajectories receive:</p>
+<p><span class="math display">\[G_0
+=
+\gamma^2
+=
+0.9^2
+=
+0.81\]</span></p>
+<p>For the quick trajectory:</p>
+<p><span class="math display">\[G_0
+=
+\gamma^{1+1}
+=
+0.81\]</span></p>
+<p>For the slow trajectory:</p>
+<p><span class="math display">\[G_0
+=
+\gamma^{5+5}
+=
+0.9^{10}
+\approx0.349\]</span></p>
+<p>The trajectories contain the same number of decisions, but the second takes five times as long at each nonterminal step.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>An SMDP allows the environment to transition after actions with unequal durations.</p></li>
+<li><p>It is the remaining-value multiplier after <span class="math inline">\(\tau_t\)</span> units of elapsed time.</p></li>
+<li><p>A cost is clearer when latency should trade off linearly against success, or when stakeholders need a directly interpretable price per second.</p></li>
+<li><p>Log duration distribution by tool, end-to-end latency, timeouts, reward versus latency, cost versus latency and performance across duration buckets.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Use <span class="math inline">\(1-\text{terminated}\)</span>; artificial truncation may still bootstrap from the boundary-state value.</p></li>
+<li><p>GAE must stop its sampled recursion at termination, truncation and padding boundaries even when a truncated TD target bootstraps.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> decision count and elapsed time are different quantities. Model duration explicitly when slow outcomes are less valuable, and keep time units consistent across rollout, training and evaluation.</p>

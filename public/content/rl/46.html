@@ -1,0 +1,279 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: the movie ended vs the battery died</div>
+<p>If a movie ends, there’s no more story. If your laptop battery dies mid-movie, the story still goes on; you just didn’t see it. Termination means the episode truly ended, so future value is 0. Truncation means you stopped watching (a time limit or a token limit), so you still need to <em>estimate</em> the rest with <span class="math inline">\(V(s)\)</span>.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/701b43ca408f.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can per-response length normalization change the policy objective?</p></li>
+<li><p>Why must actions after EOS be excluded from policy and KL losses?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="two-ways-a-rollout-can-stop">2. Two ways a rollout can stop</h3>
+<p>An episode is <strong>terminated</strong> when the environment reaches a genuine terminal state:</p>
+<ul>
+<li><p>the model emits EOS;</p></li>
+<li><p>an agent submits its final answer;</p></li>
+<li><p>the task succeeds or fails irreversibly.</p></li>
+</ul>
+<p>An episode is <strong>truncated</strong> when data collection stops for an external reason:</p>
+<ul>
+<li><p>maximum token limit;</p></li>
+<li><p>maximum tool-call budget;</p></li>
+<li><p>worker timeout;</p></li>
+<li><p>rollout buffer boundary.</p></li>
+</ul>
+<p>This matters when constructing critic targets:</p>
+<p><span class="math display">\[y_t
+=
+r_t
++
+\gamma
+(1-d_t)
+V(s_{t+1})\]</span></p>
+<p>Here <span class="math inline">\(d_t\)</span> should represent genuine termination.</p>
+<p>At a terminal state:</p>
+<p><span class="math display">\[y_t=r_t\]</span></p>
+<p>because no future state value exists.</p>
+<p>At a truncated state:</p>
+<p><span class="math display">\[y_t=r_t+\gamma V(s_{t+1})\]</span></p>
+<p>because the underlying process could have continued. Setting the bootstrap value to zero incorrectly claims that truncation has no future value.</p>
+<p>For GAE:</p>
+<p><span class="math display">\[\delta_t
+=
+r_t
++
+\gamma(1-d_t)V(s_{t+1})
+-
+V(s_t)\]</span></p>
+<p><span class="math display">\[\hat A_t
+=
+\delta_t
++
+\gamma\lambda(1-d_t)\hat A_{t+1}\]</span></p>
+<p>At the final recorded truncated step, there is no later sampled TD error, but its own TD error should still contain the bootstrap value.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>rewards, values and next values: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>terminated and truncated flags: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>TD targets, deltas and advantages: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+</ul>
+<p>For an LLM, reaching <span style="background-color: codeinlinebg"><code> max_new_tokens</code></span> is not automatically semantically equivalent to emitting EOS. It may indicate an incomplete answer whose continuation still has value.</p>
+<p>DPO trains from fixed response pairs and does not bootstrap environment returns. It still needs correct EOS and padding masks when calculating response log-probabilities.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: keeping the two flags separate</div>
+<p>TD target: <span class="math inline">\(y_t=r_{t+1}+\gamma\,(1-\text{terminated}_{t+1})\,V(s_{t+1})\)</span>. On truncation, keep the bootstrap <span class="math inline">\(V(s_T)\)</span>. GAE: stop the backward recursion at <em>either</em> boundary, but at a truncation put <span class="math inline">\(\gamma V(s_T)\)</span> into the last <span class="math inline">\(\delta\)</span>.</p>
+<p><strong>The bias if you get it wrong:</strong> treating a truncation as terminal sets the target too low by <span class="math inline">\(\gamma V(s_T)\)</span>. The agent learns “reaching the time limit is bad,” which is false.</p>
+<p><strong>LLM case:</strong> EOS is terminal. Hitting <code>max_new_tokens</code> is truncation, unless the task explicitly treats unfinished answers as failures, in which case say so and give a reward for it.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>“The rollout stopped” is not the same as “the environment ended.”</p></li>
+<li><p>Store <code>terminated</code> and <code>truncated</code> as separate fields all the way through.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: truncation bias</div>
+<p><span class="math inline">\(\gamma=0.99\)</span>, <span class="math inline">\(V(s_T)=50\)</span>, last reward <span class="math inline">\(r=0\)</span>. Correct target at a timeout: <span class="math inline">\(0+0.99\cdot50=49.5\)</span>. Treated as terminal: <span class="math inline">\(0\)</span>. Bias <span class="math inline">\(=49.5\)</span> on that step, and it propagates backward.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Using the auto-reset observation as <span class="math inline">\(s_T\)</span>.</p></li>
+<li><p>One <code>done</code> field for both events.</p></li>
+<li><p>Treating <code>max_new_tokens</code> as EOS by default.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: GAE with separate termination and truncation flags</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(r_{1:T}\)</span>, <span class="math inline">\(V(s_0),\dots,V(s_T)\)</span>, flags <span class="math inline">\(\text{term}_{1:T}\)</span>, <span class="math inline">\(\text{trunc}_{1:T}\)</span>, <span class="math inline">\(\gamma\)</span>, <span class="math inline">\(\lambda\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(A\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t=T-1\)</span> <strong>down to</strong> <span class="math inline">\(0\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(v_{\text{next}}\gets(1-\text{term}_{t+1})\,V(s_{t+1})\)</span> <em>▷ at a truncation, <span class="math inline">\(V\)</span> of the real final state</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\delta_t\gets r_{t+1}+\gamma v_{\text{next}}-V(s_t)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\text{cont}\gets1-\max(\text{term}_{t+1},\text{trunc}_{t+1})\)</span> <em>▷ stop the recursion at either boundary</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(A\gets\delta_t+\gamma\lambda\,\text{cont}\cdot A\)</span>; <span class="math inline">\(\hat A_t\gets A\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\hat A_t\)</span>, <span class="math inline">\(\hat R_t=\hat A_t+V(s_t)\)</span></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-find-the-time-limit-bias">3. PyTorch exercise — find the time-limit bias</h3>
+<p>Both trajectories receive the same rewards. The first genuinely terminates; the second is cut off by a rollout limit.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.9
+gae_lambda = 0.95
+
+# [batch=2, time=3]
+rewards = torch.tensor([
+    [0.0, 0.0, 1.0],  # genuine terminal
+    [0.0, 0.0, 1.0],  # time-limit truncation
+])
+
+values = torch.tensor([
+    [0.4, 0.5, 0.6],
+    [0.4, 0.5, 0.6],
+])
+
+# Estimated value immediately after each transition.
+# Terminal next value is arbitrary because it will be masked.
+next_values = torch.tensor([
+    [0.5, 0.6, 0.0],
+    [0.5, 0.6, 0.8],
+])
+
+terminated = torch.tensor([
+    [False, False, True ],
+    [False, False, False],
+])
+
+truncated = torch.tensor([
+    [False, False, False],
+    [False, False, True ],
+])
+
+# TODO 1: Bootstrap mask based only on true termination.
+bootstrap_mask = ...
+
+# TODO 2: Correct TD targets and TD residuals.
+td_targets = ...
+deltas = ...
+
+# TODO 3: Compute GAE backward through each recorded trajectory.
+advantages = torch.zeros_like(rewards)
+running_advantage = torch.zeros(rewards.shape[0])
+
+for time in reversed(range(rewards.shape[1])):
+    running_advantage = ...
+    advantages[:, time] = running_advantage
+
+returns = advantages + values
+
+# Common bug: collapse termination and truncation into one &quot;done&quot;.
+done = terminated | truncated
+
+# TODO 4: Construct the buggy TD targets.
+buggy_targets = ...
+
+# TODO 5: Measure lost bootstrap value.
+target_error = td_targets - buggy_targets
+
+print(&quot;Correct TD targets:\n&quot;, td_targets)
+print(&quot;Buggy TD targets:\n&quot;, buggy_targets)
+print(&quot;Target error:\n&quot;, target_error)
+
+print(&quot;TD residuals:\n&quot;, deltas)
+print(&quot;GAE advantages:\n&quot;, advantages)
+print(&quot;Lambda returns:\n&quot;, returns)
+
+print(
+    &quot;Final terminal target:&quot;,
+    td_targets[0, -1].item(),
+)
+
+print(
+    &quot;Final truncated target:&quot;,
+    td_targets[1, -1].item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the final target for the truly terminal trajectory?</p></li>
+<li><p>What is the final target for the truncated trajectory?</p></li>
+<li><p>Which trajectory is underestimated by the buggy implementation?</p></li>
+<li><p>Will the final-step target error also affect earlier GAE advantages?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Convert <span style="background-color: codeinlinebg"><code> ~terminated</code></span> to the values’ dtype.</p></li>
+<li><p>The TD target is reward plus discounted masked next value.</p></li>
+<li><p>The TD residual is target minus current value.</p></li>
+<li><p>During the reverse loop, multiply the recursive term by the bootstrap mask.</p></li>
+<li><p>The buggy mask uses <span style="background-color: codeinlinebg"><code> ~done</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Treat every maximum-length response as terminal:</p>
+<pre class="code python"><code class="language-python">done = terminated | truncated</code></pre>
+<p>The critic learns that hitting the token limit destroys all future value. This can create artificial pressure toward short responses.</p>
+<p>Next, incorrectly bootstrap genuine EOS states:</p>
+<pre class="code python"><code class="language-python">bootstrap_mask = torch.ones_like(
+    rewards
+)</code></pre>
+<p>Now arbitrary critic predictions after EOS leak into targets.</p>
+<p>Finally, set the truncated bootstrap value to an extreme number:</p>
+<pre class="code python"><code class="language-python">next_values[1, -1] = 10.0</code></pre>
+<p>The target becomes very large. Bootstrapping avoids time-limit bias, but it relies on critic accuracy; log bootstrap-value distributions and clip gradients when necessary.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why should a time limit usually preserve bootstrapping?</p></li>
+<li><p>Why must GAE recursion stop between unrelated trajectories?</p></li>
+<li><p>When might a token-limit cutoff legitimately be treated as failure termination?</p></li>
+<li><p>Which rollout fields should be stored to avoid ambiguity?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Bootstrap mask:</p>
+<pre class="code python"><code class="language-python">bootstrap_mask = (
+    ~terminated
+).to(values.dtype)</code></pre>
+<p>TD targets and residuals:</p>
+<pre class="code python"><code class="language-python">td_targets = (
+    rewards
+    + gamma
+    * bootstrap_mask
+    * next_values
+)
+
+deltas = td_targets - values</code></pre>
+<p>GAE:</p>
+<pre class="code python"><code class="language-python">for time in reversed(range(rewards.shape[1])):
+    running_advantage = (
+        deltas[:, time]
+        + gamma
+        * gae_lambda
+        * bootstrap_mask[:, time]
+        * running_advantage
+    )
+
+    advantages[:, time] = (
+        running_advantage
+    )</code></pre>
+<p>Buggy targets:</p>
+<pre class="code python"><code class="language-python">buggy_bootstrap_mask = (
+    ~done
+).to(values.dtype)
+
+buggy_targets = (
+    rewards
+    + gamma
+    * buggy_bootstrap_mask
+    * next_values
+)</code></pre>
+<p>Lost bootstrap value:</p>
+<pre class="code python"><code class="language-python">target_error = (
+    td_targets - buggy_targets
+)</code></pre>
+<p>The final genuine terminal target is:</p>
+<p><span class="math display">\[y_{\text{terminal}}=1\]</span></p>
+<p>The final truncated target is:</p>
+<p><span class="math display">\[y_{\text{truncated}}
+=
+1+0.9(0.8)
+=
+1.72\]</span></p>
+<p>The buggy implementation gives both final steps target <span style="background-color: codeinlinebg"><code> 1.0</code></span>, underestimating the truncated trajectory by:</p>
+<p><span class="math display">\[1.72-1.0=0.72\]</span></p>
+<p>GAE propagates some of this difference backward, so confusing truncation with termination can bias several preceding token or tool decisions—not only the final one.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The environment could have continued, so <span class="math inline">\(V(s_{t+1})\)</span> estimates the missing future return.</p></li>
+<li><p>Otherwise, rewards and values from the next prompt or episode leak backward into the previous trajectory.</p></li>
+<li><p>If the task explicitly defines exceeding the token budget as an irreversible failure with no continuation value.</p></li>
+<li><p>Store separate <span style="background-color: codeinlinebg"><code> terminated</code></span>, <span style="background-color: codeinlinebg"><code> truncated</code></span>, validity-mask, EOS, length and bootstrap-value fields rather than one overloaded <span style="background-color: codeinlinebg"><code> done</code></span>.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Dividing each sequence gradient by its realized length changes the relative influence of short and long responses; length is partly policy-controlled.</p></li>
+<li><p>Those actions were never executed, so including them creates fictitious reward, KL and gradient contributions.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> “the rollout stopped” does not always mean “the environment ended.” Bootstrap through external truncations, zero bootstrap at genuine terminal states, and keep termination and truncation as separate fields throughout the LLM-RL pipeline.</p>

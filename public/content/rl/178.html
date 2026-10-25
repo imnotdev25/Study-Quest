@@ -1,0 +1,88 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a talent show judge who prefers the first act</div>
+<p>Some judges tend to prefer whoever performs first. If you always put contestant A first, A wins too often. The fix is simple: run each pair twice in both orders and average. AI judges for RLAIF have the same kind of position bias, plus length and self-preference biases.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why does an optimizer find a judge’s errors? (Topic 33)</p></li>
+<li><p>What did Topic 104 say about A/B order?</p></li>
+</ol>
+<h3 class="unnumbered" id="the-idea">2. The idea</h3>
+<p><strong>RLAIF</strong> replaces human preference labels with an AI judge (Lee et al., 2023). <strong>Constitutional AI</strong> (Bai et al., 2022) adds written principles: the model critiques and revises its own outputs against them, and an AI judge applies the principles to label preference pairs for RL. It’s cheap and scalable, but the judge’s biases become the reward:</p>
+<ul>
+<li><p><strong>Position:</strong> prefers the first (or second) answer shown.</p></li>
+<li><p><strong>Length and style:</strong> prefers longer or more confident-sounding answers.</p></li>
+<li><p><strong>Self-preference:</strong> prefers outputs that look like its own.</p></li>
+</ul>
+<p><strong>Swap-averaging:</strong> judge both orders, and use <span class="math inline">\(\tfrac12\big(P(A\succ B\mid A\text{ first})+1-P(B\succ A\mid B\text{ first})\big)\)</span>. An additive position bias cancels exactly. You can also estimate the bias from the two orders.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>An AI judge’s biases become the policy’s objective.</p></li>
+<li><p>Swap order, audit with humans, and check length correlation before optimizing.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: bias cancellation</div>
+<p>Judge: <span class="math inline">\(P(\text{first wins})=\sigma(2\Delta+1)\)</span>, with <span class="math inline">\(\Delta\)</span> the true quality gap. For <span class="math inline">\(\Delta=-0.3\)</span> (B is better): with A first, <span class="math inline">\(\sigma(0.4)=0.60\)</span>, so the judge picks A (wrong). With B first, <span class="math inline">\(\sigma(1.6)=0.83\)</span>, so <span class="math inline">\(P(A\text{ wins})=0.17\)</span>. Average <span class="math inline">\(=0.38&lt;0.5\)</span>: B, which is correct.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Judging each pair in one fixed order.</p></li>
+<li><p>Using the same model as policy and judge (self-preference).</p></li>
+<li><p>Never validating the judge against human labels on a sample.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-measure-and-cancel-position-bias">3. PyTorch exercise — measure and cancel position bias</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(0)
+n = 5000
+r_a, r_b = torch.randn(n), torch.randn(n)
+true_a_better = r_a &gt; r_b
+
+
+def judge_prob_first_wins(r_first, r_second):
+    return torch.sigmoid(2.0 * (r_first - r_second) + 1.0)
+
+
+# TODO 1: label accuracy using only the A-first order
+# TODO 2: label accuracy after averaging both orders
+# TODO 3: estimate the first-position advantage from the two orders</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does swap-averaging cancel an additive bias exactly in this toy?</p></li>
+<li><p>Name a judge bias that swapping doesn’t fix.</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(0)
+n = 5000
+r_a, r_b = torch.randn(n), torch.randn(n)
+true_a_better = r_a &gt; r_b
+position_bias = 1.0                      # judge favors whichever answer is shown first
+
+
+def judge_prob_first_wins(r_first, r_second):
+    return torch.sigmoid(2.0 * (r_first - r_second) + position_bias)
+
+
+p_ab = judge_prob_first_wins(r_a, r_b)           # A shown first
+p_ba = judge_prob_first_wins(r_b, r_a)           # B shown first
+single = p_ab &gt; 0.5
+swapped = (p_ab + (1 - p_ba)) / 2 &gt; 0.5          # average P(A wins) over both orders
+bias_estimate = ((p_ab + p_ba) / 2 - 0.5).mean()
+print(f&quot;label accuracy, one order : {(single == true_a_better).float().mean():.3f}&quot;)
+print(f&quot;label accuracy, both orders: {(swapped == true_a_better).float().mean():.3f}&quot;)
+print(f&quot;estimated first-position advantage: {bias_estimate:.3f}&quot;)</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">label accuracy, one order : 0.867
+label accuracy, both orders: 1.000
+estimated first-position advantage: 0.119</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>The bias is antisymmetric under swapping (it favors whichever answer is first), so averaging the two orders removes it and leaves the quality term. Real judges are messier, so expect improvement, not perfection.</p></li>
+<li><p>Length or style bias, and self-preference: those follow the content, not the position.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) It selects outputs where the judge is wrong in its favor. (2) Randomize the order and estimate the bias.</p>
+<p><strong>Takeaway:</strong> an AI judge is a cheap reward model with its own biases. Debias what you can measure, audit the rest with people.</p>

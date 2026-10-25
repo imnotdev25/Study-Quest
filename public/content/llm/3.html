@@ -1,0 +1,76 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A vector-valued map <span class="math inline">\(f:\mathbb R^n\to\mathbb R^m\)</span> takes <span class="math inline">\(n\)</span> numbers to <span class="math inline">\(m\)</span> numbers. A layer of a network is one: <span class="math inline">\(x\mapsto\phi(Wx+b)\)</span>. Close to a point <span class="math inline">\(x_0\)</span>, every smooth map looks linear: <span class="math inline">\(f(x_0+\delta)\approx f(x_0)+J\delta\)</span>, where the <em>Jacobian</em> <span class="math inline">\(J_{ij}=\partial f_i/\partial x_j\)</span> is an <span class="math inline">\(m\times n\)</span> matrix. Row <span class="math inline">\(i\)</span> is the gradient of output <span class="math inline">\(i\)</span>; column <span class="math inline">\(j\)</span> says how all outputs move when input <span class="math inline">\(j\)</span> moves. <strong>Real-life version:</strong> zoom far enough into a curved road map and the streets look straight. The Jacobian is that zoomed-in straight-line map.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: First- and second-order Taylor approximation</div>
+<p><strong>Step 1.</strong> One variable: <span class="math inline">\(g(t)=f(x_0+t\delta)\)</span> for a fixed direction <span class="math inline">\(\delta\)</span>. Ordinary Taylor: <span class="math inline">\(g(1)=g(0)+g&#39;(0)+\tfrac12g&#39;&#39;(0)+O(\lVert\delta\rVert^3)\)</span>.</p>
+<p><strong>Step 2.</strong> Chain rule: <span class="math inline">\(g&#39;(0)=\sum_j\frac{\partial f}{\partial x_j}\delta_j=\nabla f^\top\delta\)</span>, and <span class="math inline">\(g&#39;&#39;(0)=\sum_{j,k}\frac{\partial^2f}{\partial x_j\partial x_k}\delta_j\delta_k=\delta^\top H\delta\)</span>, with <span class="math inline">\(H\)</span> the <em>Hessian</em>.</p>
+<p><strong>Step 3.</strong> So for scalar <span class="math inline">\(f\)</span>: <span class="math inline">\(\boxed{f(x_0+\delta)=f(x_0)+\nabla f^\top\delta+\tfrac12\delta^\top H\delta+O(\lVert\delta\rVert^3)}\)</span>. For vector <span class="math inline">\(f\)</span>, apply step 2 to each output: the first-order term is <span class="math inline">\(J\delta\)</span>, and the error is <span class="math inline">\(O(\lVert\delta\rVert^2)\)</span>.</p>
+<p><strong>Step 4.</strong> Test it: shrinking <span class="math inline">\(\delta\)</span> by 10 should shrink the first-order error by 100 and the second-order error by 1000. The output below shows exactly that.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/e35e2dcae924.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The tangent line is good near the point; adding the curvature term keeps it good for longer.</em></p>
+</div>
+<h2 class="unnumbered" id="two-jacobians-worth-knowing">Two Jacobians worth knowing</h2>
+<ul>
+<li><p><strong>Polar coordinates</strong> <span class="math inline">\((r,\theta)\mapsto(r\cos\theta,r\sin\theta)\)</span>: <span class="math inline">\(J=\left(\begin{smallmatrix}\cos\theta&amp;-r\sin\theta\\\sin\theta&amp;r\cos\theta\end{smallmatrix}\right)\)</span>, <span class="math inline">\(\det J=r\)</span>. The determinant is how much the map stretches area, which is what change of variables in integrals uses.</p></li>
+<li><p><strong>Softmax</strong>: <span class="math inline">\(\partial p_i/\partial z_j=p_i(\delta_{ij}-p_j)\)</span>, i.e. <span class="math inline">\(J=\operatorname{diag}(p)-pp^\top\)</span>. It is also the Hessian of log-sum-exp. It is positive semi-definite with <span class="math inline">\(J\mathbf 1=0\)</span>: moving all logits together changes nothing, so LSE is convex but flat in that one direction.</p></li>
+</ul>
+<p><strong>Chain rule for maps.</strong> <span class="math inline">\(J_{g\circ f}(x)=J_g(f(x))\,J_f(x)\)</span>: Jacobians multiply. Backprop computes <span class="math inline">\(v^\top J_L\cdots J_1\)</span> from the left, one vector–Jacobian product at a time, so no Jacobian is ever formed.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Math I: vector-valued maps, Jacobians and local (Taylor) approximation.&quot;&quot;&quot;
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+
+def jac_num(f, x, h=1e-6):
+    &quot;&quot;&quot;Central-difference Jacobian: column j is (f(x + h e_j) - f(x - h e_j)) / 2h.&quot;&quot;&quot;
+    return np.stack([(f(x + h * e) - f(x - h * e)) / (2 * h) for e in np.eye(len(x))], axis=1)
+
+
+# 1. Polar -&gt; Cartesian, R^2 -&gt; R^2. The Jacobian determinant r is the area-scaling factor.
+polar = lambda u: np.array([u[0] * np.cos(u[1]), u[0] * np.sin(u[1])])
+u = np.array([2.0, 0.7])
+J = np.array([[np.cos(u[1]), -u[0] * np.sin(u[1])], [np.sin(u[1]), u[0] * np.cos(u[1])]])
+print(f&quot;[jac] polar map at r=2, theta=0.7: analytic == numeric {np.allclose(J, jac_num(polar, u))}, &quot;
+      f&quot;det J = {np.linalg.det(J):.4f} (= r)&quot;)
+
+# 2. A map R^2 -&gt; R^3 and its linear approximation f(x0 + d) ~ f(x0) + J d. Error shrinks like |d|^2.
+f = lambda x: np.array([np.sin(x[0]) * x[1], np.exp(x[0] - x[1]), x[0] ** 2 + x[1] ** 3])
+x0 = np.array([0.3, -0.5])
+J0 = jac_num(f, x0)
+d = rng.normal(size=2); d /= np.linalg.norm(d)
+print(f&quot;[jac] f: R^2 -&gt; R^3, Jacobian shape {J0.shape}&quot;)
+for s in (1e-1, 1e-2, 1e-3):
+    err = np.linalg.norm(f(x0 + s * d) - f(x0) - J0 @ (s * d))
+    print(f&quot;[taylor-1] |d| = {s:.0e}   error {err:.2e}   error / |d|^2 = {err / s**2:.3f}&quot;)
+
+# 3. Second order for a scalar function: log-sum-exp. Gradient = softmax, Hessian = diag(p) - p p^T.
+lse = lambda z: z.max() + np.log(np.exp(z - z.max()).sum())
+softmax = lambda z: np.exp(z - lse(z))
+z0 = rng.normal(size=4)
+p = softmax(z0)
+H = np.diag(p) - np.outer(p, p)
+print(f&quot;[hessian] LSE Hessian == diag(p) - pp^T: {np.allclose(H, jac_num(softmax, z0), atol=1e-8)}, &quot;
+      f&quot;eigenvalues {np.round(np.linalg.eigvalsh(H), 4)}&quot;)
+print(f&quot;[hessian] H @ ones = {np.round(H @ np.ones(4), 12)}  (adding a constant to all logits changes nothing)&quot;)
+d = rng.normal(size=4); d /= np.linalg.norm(d)
+for s in (1e-1, 1e-2):
+    e1 = abs(lse(z0 + s * d) - lse(z0) - p @ (s * d))
+    e2 = abs(lse(z0 + s * d) - lse(z0) - p @ (s * d) - 0.5 * (s * d) @ H @ (s * d))
+    print(f&quot;[taylor-2] |d| = {s:.0e}   1st-order error {e1:.2e}   2nd-order error {e2:.2e}&quot;)
+
+# 4. Chain rule for maps: J_{g o f}(x) = J_g(f(x)) J_f(x)   (2x3) @ (3x2) -&gt; (2x2)
+g = lambda y: np.array([y[0] * y[1], y[2] - y[0]])
+print(f&quot;[chain] J(g o f) == J_g J_f: {np.allclose(jac_num(lambda x: g(f(x)), x0), jac_num(g, f(x0)) @ J0, atol=1e-6)}&quot;)</code></pre>
+<pre class="code output"><code class="output">[jac] polar map at r=2, theta=0.7: analytic == numeric True, det J = 2.0000 (= r)
+[jac] f: R^2 -&gt; R^3, Jacobian shape (3, 2)
+[taylor-1] |d| = 1e-01   error 2.40e-02   error / |d|^2 = 2.398
+[taylor-1] |d| = 1e-02   error 2.30e-04   error / |d|^2 = 2.300
+[taylor-1] |d| = 1e-03   error 2.29e-06   error / |d|^2 = 2.290
+[hessian] LSE Hessian == diag(p) - pp^T: True, eigenvalues [0.     0.1356 0.2453 0.333 ]
+[hessian] H @ ones = [0. 0. 0. 0.]  (adding a constant to all logits changes nothing)
+[taylor-2] |d| = 1e-01   1st-order error 1.36e-03   2nd-order error 1.05e-05
+[taylor-2] |d| = 1e-02   1st-order error 1.37e-05   2nd-order error 1.00e-08
+[chain] J(g o f) == J_g J_f: True</code></pre>

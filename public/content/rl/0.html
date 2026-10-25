@@ -1,0 +1,196 @@
+
+<p><strong>20 minutes: intuition 5 · PyTorch 10 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: doomscrolling is reward maxing</div>
+<p>Your brain is an RL agent. Opening a short-video app gives an instant reward (a little hit of dopamine). Going to the gym gives an immediate <em>negative</em> reward (effort, sweat), but a big positive return weeks later.</p>
+<p>Doomscrolling is what happens when an agent optimizes the <strong>reward</strong> instead of the <strong>return</strong>. RL is the study of agents that learn to care about the whole trip, not just the next step.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/d754e04ddbd4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The loop every RL problem shares: act, observe, get rewarded, repeat.</em></p>
+</div>
+<h3 class="unnumbered" id="the-idea-a-good-first-move-can-look-unrewarding">1. The idea: a good first move can look unrewarding</h3>
+<p>Imagine choosing a route home. One road gets you moving immediately but leads into traffic. Another starts with a slow detour but gets you home sooner.</p>
+<p>Reinforcement learning asks: <strong>Which way of choosing actions produces the best total outcome—not just the best immediate result?</strong></p>
+<p>Here’s a tiny environment. Rewards are invented points, not minutes:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>RL term</strong></th>
+<th style="text-align: left;"><strong>Meaning</strong></th>
+<th style="text-align: left;"><strong>Route example</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>RL term</strong></td>
+<td style="text-align: left;"><strong>Meaning</strong></td>
+<td style="text-align: left;"><strong>Route example</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Agent</td>
+<td style="text-align: left;">The decision-maker</td>
+<td style="text-align: left;">You</td>
+</tr>
+<tr>
+<td style="text-align: left;">Environment</td>
+<td style="text-align: left;">What responds to actions</td>
+<td style="text-align: left;">Roads and traffic</td>
+</tr>
+<tr>
+<td style="text-align: left;">State <span class="math inline">\(s\)</span></td>
+<td style="text-align: left;">Information describing the current situation</td>
+<td style="text-align: left;">At the starting junction</td>
+</tr>
+<tr>
+<td style="text-align: left;">Action <span class="math inline">\(a\)</span></td>
+<td style="text-align: left;">A choice available now</td>
+<td style="text-align: left;">Main road or detour</td>
+</tr>
+<tr>
+<td style="text-align: left;">Policy <span class="math inline">\(\pi(a\mid s)\)</span></td>
+<td style="text-align: left;">Rule assigning probabilities to actions</td>
+<td style="text-align: left;">Choose detour with probability 0.7</td>
+</tr>
+<tr>
+<td style="text-align: left;">Reward <span class="math inline">\(r_{t+1}\)</span></td>
+<td style="text-align: left;">Feedback after an action</td>
+<td style="text-align: left;">Points received on that step</td>
+</tr>
+<tr>
+<td style="text-align: left;">Return <span class="math inline">\(G_t\)</span></td>
+<td style="text-align: left;">Accumulated future reward</td>
+<td style="text-align: left;">Total points across the trip</td>
+</tr>
+</tbody>
+</table>
+<p>Suppose the two routes produce these reward sequences:</p>
+<ul>
+<li><p><strong>Main road:</strong> <span class="math inline">\(+2,-4\)</span></p></li>
+<li><p><strong>Detour:</strong> <span class="math inline">\(0,+3\)</span></p></li>
+</ul>
+<p>The main road wins immediately. The detour wins over the whole trip.</p>
+<p>For today, use an <strong>undiscounted return</strong>—just add the rewards:</p>
+<p><span class="math display">\[G_t=\sum_{k=t}^{T-1}r_{k+1}\]</span></p>
+<p>A policy’s objective is its <strong>expected return</strong>:</p>
+<p><span class="math display">\[J(\pi)=\mathbb{E}_{\pi}[G_0]\]</span></p>
+<p>“Expected” means a probability-weighted average, like calculating an average exam score when different outcomes have different chances.</p>
+<p>If <span class="math inline">\(p\)</span> is the probability of choosing the detour:</p>
+<p><span class="math display">\[J(p)=(1-p)G_{\text{main}}+pG_{\text{detour}}\]</span></p>
+<p>This is a straight line in <span class="math inline">\(p\)</span>. Its slope tells you how expected return changes when you increase the probability of the detour. <strong>That slope is not an optimizer:</strong> a learning algorithm must still decide how to change the policy.</p>
+<p>Our example has only one meaningful decision, followed by a fixed outcome. General RL includes repeated decisions that change future states.</p>
+<p><strong>LLM connection:</strong> A token can look locally plausible yet lead to a poor final answer. A sequence-level reward evaluates the completed outcome; deciding which earlier choices deserve credit is a later topic.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: why the best policy here is deterministic</div>
+<p>With detour probability <span class="math inline">\(p\)</span>, <span class="math inline">\(J(p)=(1-p)(-2)+p(3)=-2+5p\)</span>.</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/b7fce55f7cc3.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<ul>
+<li><p>The slope <span class="math inline">\(dJ/dp = G_{\text{detour}}-G_{\text{main}} = 5\)</span>. A linear objective is maximized at an endpoint, so with known returns the optimal policy is deterministic. Randomness only becomes useful when you still need to <em>learn</em> the returns (next topic).</p></li>
+<li><p>Shifting probability toward the better outcome, in proportion to how much better it is, is exactly what policy gradients do later.</p></li>
+<li><p>Sampling error: route returns are <span class="math inline">\(\{-2,3\}\)</span>. At <span class="math inline">\(p=0.8\)</span> the variance is <span class="math inline">\(p(1-p)\cdot 5^2=4\)</span>, so the standard error of a mean of <span class="math inline">\(n\)</span> episodes is <span class="math inline">\(2/\sqrt{n}\)</span>: about <span class="math inline">\(0.45\)</span> at <span class="math inline">\(n=20\)</span>, and <span class="math inline">\(0.045\)</span> at <span class="math inline">\(n=2000\)</span>. That’s why 20 episodes look noisy.</p></li>
+</ul>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Reward = one step. Return <span class="math inline">\(G_t\)</span> = everything after. Objective <span class="math inline">\(J(\pi)=\mathbb{E}_\pi[G_0]\)</span>.</p></li>
+<li><p>Sample means converge at rate <span class="math inline">\(1/\sqrt{n}\)</span>: 100<span class="math inline">\(\times\)</span> more episodes buys 10<span class="math inline">\(\times\)</span> less noise.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: five sampled episodes</div>
+<p>Policy: detour with <span class="math inline">\(p=0.7\)</span>. Exact <span class="math inline">\(J=0.3(-2)+0.7(3)=1.5\)</span>. Five sampled routes: detour, main, detour, detour, detour <span class="math inline">\(\Rightarrow\)</span> returns <span class="math inline">\(3,-2,3,3,3\)</span>, mean <span class="math inline">\(=2.0\)</span>. The sample mean misses by <span class="math inline">\(0.5\)</span>. With standard error <span class="math inline">\(\approx2.29/\sqrt5\approx1.0\)</span>, that miss is normal, not a bug.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Averaging the <em>first</em> reward instead of the full return.</p></li>
+<li><p>Summing over the wrong tensor dimension (routes instead of steps).</p></li>
+<li><p>Calling a policy “better” from one or two episodes.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Monte Carlo estimate of a policy’s expected return</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy <span class="math inline">\(\pi\)</span>, number of episodes <span class="math inline">\(N\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i=1,\dots,N\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">run one episode with <span class="math inline">\(\pi\)</span> and record its rewards <span class="math inline">\(r_1,\dots,r_T\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(G^{(i)}\gets\sum_{t=1}^{T}r_t\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\hat J(\pi)=\frac1N\sum_iG^{(i)}\)</span> <em>▷ standard error <span class="math inline">\(\approx\operatorname{sd}(G)/\sqrt N\)</span></em></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-evaluate-two-policies">2. PyTorch exercise — evaluate two policies</h3>
+<p><strong>Goal:</strong> distinguish immediate reward, complete return, and average return across sampled episodes.</p>
+<p>Complete the three TODOs, then run the script.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+
+# Rows: routes. Columns: rewards at successive steps.
+# Route 0 = main road; route 1 = detour.
+rewards = torch.tensor([
+    [2.0, -4.0],
+    [0.0,  3.0],
+])  # [routes=2, steps=2]
+
+policies = torch.tensor([
+    [0.8, 0.2],  # Usually chooses main road
+    [0.2, 0.8],  # Usually chooses detour
+])  # [policies=2, routes=2]
+
+# TODO 1: Sum over steps, preserving one return per route.
+route_returns = ...
+
+# TODO 2: Probability-weighted return for each policy.
+expected_returns = ...
+
+print(&quot;Route returns:&quot;, route_returns)
+print(&quot;Expected policy returns:&quot;, expected_returns)
+
+for i, probs in enumerate(policies):
+    actions = torch.multinomial(
+        probs, num_samples=2000, replacement=True
+    )  # [episodes=2000]
+
+    # TODO 3: Look up the return for each sampled route and average.
+    estimated_return = ...
+
+    print(f&quot;Policy {i}: sampled mean = {estimated_return.item():.3f}&quot;)</code></pre>
+<p>Then make two small experiments:</p>
+<ol>
+<li><p>Reduce the number of episodes from <span style="background-color: codeinlinebg"><code> 2000</code></span> to <span style="background-color: codeinlinebg"><code> 20</code></span>. Compare the estimates with the exact expectations.</p></li>
+<li><p>Change the main road’s final reward from <span style="background-color: codeinlinebg"><code> -4.0</code></span> to <span style="background-color: codeinlinebg"><code> 4.0</code></span>. Predict the preferred policy <strong>before</strong> rerunning.</p></li>
+</ol>
+<p><strong>Hints</strong></p>
+<ul>
+<li><p>Summing <span style="background-color: codeinlinebg"><code> dim=1</code></span> removes the step dimension.</p></li>
+<li><p>Matrix–vector multiplication maps <span style="background-color: codeinlinebg"><code> [2, 2] @ [2]</code></span> to <span style="background-color: codeinlinebg"><code> [2]</code></span>.</p></li>
+<li><p>An integer tensor can index another tensor.</p></li>
+<li><p>No gradients are needed: this exercise evaluates fixed policies, not training them.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">3. Checks for understanding</h3>
+<ol>
+<li><p>Why is choosing the largest first reward wrong in the original environment?</p></li>
+<li><p>Does a policy choosing detour with probability 0.8 guarantee exactly 16 detours in 20 episodes?</p></li>
+<li><p>A colleague uses <span style="background-color: codeinlinebg"><code> rewards.mean(dim=0)</code></span> to calculate route returns. What does that actually average?</p></li>
+<li><p>If sampled mean return differs from expected return, does that alone indicate a bug?</p></li>
+<li><p>In this example, what is the slope <span class="math inline">\(dJ/dp\)</span>, and what does its sign tell you?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions-read-after-attempting">Solutions — read after attempting</h3>
+<pre class="code python"><code class="language-python">route_returns = rewards.sum(dim=1)
+expected_returns = policies @ route_returns
+
+# Inside the loop:
+estimated_return = route_returns[actions].mean()</code></pre>
+<p>Exact results:</p>
+<pre class="code text"><code class="language-plaintext">Route returns:          tensor([-2.,  3.])
+Expected policy returns: tensor([-1.,  2.])</code></pre>
+<p>With only 20 episodes, sampling estimates will generally fluctuate more. A fixed seed makes a run reproducible; it does not eliminate sampling error.</p>
+<p>Changing the main road’s final reward to <span style="background-color: codeinlinebg"><code> 4.0</code></span> gives route returns <span style="background-color: codeinlinebg"><code> [6, 3]</code></span> and policy expectations <span style="background-color: codeinlinebg"><code> [5.4, 3.6]</code></span>. The main-road-heavy policy becomes better.</p>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>It ignores the later penalty: total outcomes are <span class="math inline">\(-2\)</span> versus <span class="math inline">\(3\)</span>.</p></li>
+<li><p>No. Sixteen is the expected count, not a guaranteed count.</p></li>
+<li><p>Across routes at each step—not across steps for each route. The result even has the expected shape here, making this a subtle bug.</p></li>
+<li><p>No. Random sampling produces estimation error.</p></li>
+<li><p><span class="math inline">\(J(p)=-2+5p\)</span>, so the slope is <span class="math inline">\(5\)</span>. Increasing detour probability increases expected return.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> Reward scores one step. Return scores what follows. A policy controls which outcomes you tend to experience.</p>
+<p><em>Next: bandits—how do you choose when you don’t yet know which action pays better?</em></p>

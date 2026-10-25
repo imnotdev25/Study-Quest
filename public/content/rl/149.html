@@ -1,0 +1,457 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can empirical Bernstein bounds be narrower than Hoeffding bounds?</p></li>
+<li><p>Why does empirical Bernstein retain a range-dependent correction?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-positive-average-utility-can-hide-an-unacceptable-regression">2. A positive average utility can hide an unacceptable regression</h3>
+<p>Let candidate-minus-control differences be:</p>
+<p><span class="math display">\[\Delta_R
+=
+\underbrace{E[R_1-R_0]}_{\text{reward improvement; larger is better}}\]</span></p>
+<p><span class="math display">\[\Delta_H
+=
+\underbrace{E[H_1-H_0]}_{\text{harm increase; smaller is better}}\]</span></p>
+<p>Suppose deployment requires:</p>
+<p><span class="math display">\[\underbrace{\Delta_R&gt;0}_{\text{reward superiority}}
+\qquad\text{and}\qquad
+\underbrace{\Delta_H&lt;m}_{\text{harm non-inferiority}}\]</span></p>
+<p>where <span class="math inline">\(m\)</span> is the largest acceptable safety regression.</p>
+<p>Use opposite one-sided bounds:</p>
+<p><span class="math display">\[LCB_R
+=
+\underbrace{
+\hat\Delta_R
+-z_{1-\alpha}\widehat{SE}_R
+}_{\text{conservative reward improvement}}\]</span></p>
+<p><span class="math display">\[UCB_H
+=
+\underbrace{
+\hat\Delta_H
++z_{1-\alpha}\widehat{SE}_H
+}_{\text{conservative harm increase}}\]</span></p>
+<p>Promote only when:</p>
+<p><span class="math display">\[\underbrace{LCB_R&gt;0}_{\text{reward gate passes}}
+\quad\land\quad
+\underbrace{UCB_H&lt;m}_{\text{safety gate passes}}\]</span></p>
+<p>This is an <strong>intersection-union test</strong>. For one fixed candidate, no Bonferroni split is needed merely because both requirements must pass. Under the global null, at least one requirement is false; falsely promoting requires rejecting that true component at level <span class="math inline">\(\alpha\)</span>.</p>
+<p>This differs from searching 20 candidates and promoting any winner—that does require candidate-selection multiplicity control.</p>
+<p>A scalar objective can conceal the constraint:</p>
+<p><span class="math display">\[\Delta_U
+=
+\underbrace{\Delta_R-\lambda\Delta_H}_{\text{combined utility}}\]</span></p>
+<p>For example:</p>
+<p><span class="math display">\[\Delta_R=0.10,\qquad
+\Delta_H=0.03,\qquad
+m=0.01\]</span></p>
+<p>With <span class="math inline">\(\lambda=1\)</span>:</p>
+<p><span class="math display">\[\Delta_U
+=
+\underbrace{0.10-0.03}_{0.07&gt;0}\]</span></p>
+<p>The scalar utility improves even though harm worsens three times more than allowed.</p>
+<p>DPO similarly optimizes a scalar preference objective. Improved DPO loss or preference accuracy does not guarantee that a separately defined safety constraint passes. Online RL can use constrained objectives, but deployment still needs explicit guardrail evaluation.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>reward and harm differences: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>estimates, standard errors and decisions: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+<li><p>scenario summaries: <span style="background-color: codeinlinebg"><code> [S, 4]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-scalar-utility-promotes-an-unsafe-candidate">3. PyTorch exercise — scalar utility promotes an unsafe candidate</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 5_000
+episodes_per_repetition = 400
+
+true_reward_improvement = 0.10
+
+safe_harm_increase = 0.005
+boundary_harm_increase = 0.010
+unsafe_harm_increase = 0.030
+
+harm_margin = 0.010
+
+reward_noise_sd = 0.80
+harm_noise_sd = 0.04
+reward_harm_correlation = 0.40
+
+utility_harm_penalty = 1.0
+one_sided_z = 1.645
+
+
+def evaluate_scenario(
+    true_harm_increase,
+):
+    # TODO 1: Generate correlated episode-level
+    # reward and harm differences.
+    shared_noise = ...
+
+    independent_noise = ...
+
+    reward_differences = ...
+
+    harm_differences = ...
+
+
+    # TODO 2: Estimate both effects and SEs.
+    reward_estimates = ...
+    harm_estimates = ...
+
+    reward_standard_errors = ...
+    harm_standard_errors = ...
+
+
+    # TODO 3: Apply the explicit joint gate.
+    reward_lower_bounds = ...
+
+    harm_upper_bounds = ...
+
+    reward_passes = ...
+    safety_passes = ...
+
+    joint_passes = ...
+
+
+    # TODO 4: Build a scalarized utility gate.
+    utility_differences = ...
+
+    utility_estimates = ...
+
+    utility_standard_errors = ...
+
+    utility_lower_bounds = ...
+
+    utility_passes = ...
+
+
+    # TODO 5: Return promotion rates and diagnostics.
+    promotion_rates = torch.stack([
+        ...,
+        ...,
+        ...,
+        ...,
+    ])
+
+    diagnostics = torch.stack([
+        ...,
+        ...,
+        ...,
+        ...,
+    ])
+
+    return promotion_rates, diagnostics
+
+
+safe_rates, safe_diagnostics = ...
+boundary_rates, boundary_diagnostics = ...
+unsafe_rates, unsafe_diagnostics = ...
+
+all_rates = torch.stack([
+    safe_rates,
+    boundary_rates,
+    unsafe_rates,
+])
+
+all_diagnostics = torch.stack([
+    safe_diagnostics,
+    boundary_diagnostics,
+    unsafe_diagnostics,
+])
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Rows: safe, boundary, unsafe\n&quot;
+    &quot;Columns: reward pass, safety pass, &quot;
+    &quot;joint pass, scalar-utility pass&quot;
+)
+print(all_rates)
+
+print(
+    &quot;Rows: safe, boundary, unsafe\n&quot;
+    &quot;Columns: mean reward estimate, &quot;
+    &quot;mean harm estimate, reward SE, harm SE&quot;
+)
+print(all_diagnostics)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which scenarios should satisfy the population safety requirement?</p></li>
+<li><p>At the exact boundary <span class="math inline">\(\Delta_H=m\)</span>, how often should the one-sided safety test pass?</p></li>
+<li><p>Will the reward-only gate distinguish safe from unsafe candidates?</p></li>
+<li><p>Can the scalar-utility gate promote the unsafe candidate?</p></li>
+<li><p>Why does the harm test use an upper rather than lower confidence bound?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>Create correlated standard-normal noise with:</p>
+<pre class="code python"><code class="language-python">rho * shared_noise + (
+    math.sqrt(1.0 - rho**2)
+    * independent_noise
+)</code></pre>
+<p>The scalarized episode difference must preserve pairing:</p>
+<pre class="code python"><code class="language-python">utility_differences = (
+    reward_differences
+    - utility_harm_penalty
+    * harm_differences
+)</code></pre>
+<p>Do not calculate utility variance by independently adding variances and discarding reward–harm covariance.</p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use a harm lower bound and accidentally reward uncertain regressions.</p></li>
+<li><p>Choose the non-inferiority margin after inspecting results.</p></li>
+<li><p>Report scalar utility while hiding a failed safety constraint.</p></li>
+<li><p>Treat tokens from one response as independent safety observations.</p></li>
+<li><p>Select the best of many candidates using these same unadjusted gates.</p></li>
+<li><p>Change judge prompts or harm definitions during evaluation.</p></li>
+<li><p>Backpropagate through detached deployment-evaluation scores.</p></li>
+<li><p>Interpret a DPO preference improvement as proof of online safety.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Correlated differences:</p>
+<pre class="code python"><code class="language-python">def evaluate_scenario(
+    true_harm_increase,
+):
+    shared_noise = torch.randn(
+        num_repetitions,
+        episodes_per_repetition,
+    )
+
+    independent_noise = torch.randn(
+        num_repetitions,
+        episodes_per_repetition,
+    )
+
+    reward_differences = (
+        true_reward_improvement
+        + reward_noise_sd
+        * shared_noise
+    )
+
+    harm_differences = (
+        true_harm_increase
+        + harm_noise_sd
+        * (
+            reward_harm_correlation
+            * shared_noise
+            + math.sqrt(
+                1.0
+                - reward_harm_correlation**2
+            )
+            * independent_noise
+        )
+    )</code></pre>
+<p>Estimates and standard errors:</p>
+<pre class="code python"><code class="language-python">    reward_estimates = (
+        reward_differences.mean(dim=1)
+    )
+
+    harm_estimates = (
+        harm_differences.mean(dim=1)
+    )
+
+    reward_standard_errors = (
+        reward_differences.std(
+            dim=1,
+            correction=1,
+        )
+        / math.sqrt(episodes_per_repetition)
+    )
+
+    harm_standard_errors = (
+        harm_differences.std(
+            dim=1,
+            correction=1,
+        )
+        / math.sqrt(episodes_per_repetition)
+    )</code></pre>
+<p>Explicit gates:</p>
+<pre class="code python"><code class="language-python">    reward_lower_bounds = (
+        reward_estimates
+        - one_sided_z
+        * reward_standard_errors
+    )
+
+    harm_upper_bounds = (
+        harm_estimates
+        + one_sided_z
+        * harm_standard_errors
+    )
+
+    reward_passes = (
+        reward_lower_bounds &gt; 0.0
+    )
+
+    safety_passes = (
+        harm_upper_bounds &lt; harm_margin
+    )
+
+    joint_passes = (
+        reward_passes
+        &amp; safety_passes
+    )</code></pre>
+<p>Scalarized utility:</p>
+<pre class="code python"><code class="language-python">    utility_differences = (
+        reward_differences
+        - utility_harm_penalty
+        * harm_differences
+    )
+
+    utility_estimates = (
+        utility_differences.mean(dim=1)
+    )
+
+    utility_standard_errors = (
+        utility_differences.std(
+            dim=1,
+            correction=1,
+        )
+        / math.sqrt(episodes_per_repetition)
+    )
+
+    utility_lower_bounds = (
+        utility_estimates
+        - one_sided_z
+        * utility_standard_errors
+    )
+
+    utility_passes = (
+        utility_lower_bounds &gt; 0.0
+    )</code></pre>
+<p>Return values:</p>
+<pre class="code python"><code class="language-python">    promotion_rates = torch.stack([
+        reward_passes.to(
+            torch.float64
+        ).mean(),
+
+        safety_passes.to(
+            torch.float64
+        ).mean(),
+
+        joint_passes.to(
+            torch.float64
+        ).mean(),
+
+        utility_passes.to(
+            torch.float64
+        ).mean(),
+    ])
+
+    diagnostics = torch.stack([
+        reward_estimates.mean(),
+        harm_estimates.mean(),
+        reward_standard_errors.mean(),
+        harm_standard_errors.mean(),
+    ])
+
+    return promotion_rates, diagnostics</code></pre>
+<p>Run the scenarios:</p>
+<pre class="code python"><code class="language-python">safe_rates, safe_diagnostics = (
+    evaluate_scenario(
+        safe_harm_increase
+    )
+)
+
+boundary_rates, boundary_diagnostics = (
+    evaluate_scenario(
+        boundary_harm_increase
+    )
+)
+
+unsafe_rates, unsafe_diagnostics = (
+    evaluate_scenario(
+        unsafe_harm_increase
+    )
+)</code></pre>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Scenario</strong></th>
+<th style="text-align: left;"><strong>Reward pass</strong></th>
+<th style="text-align: left;"><strong>Safety pass</strong></th>
+<th style="text-align: left;"><strong>Joint pass</strong></th>
+<th style="text-align: left;"><strong>Scalar pass</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Scenario</strong></td>
+<td style="text-align: left;"><strong>Reward pass</strong></td>
+<td style="text-align: left;"><strong>Safety pass</strong></td>
+<td style="text-align: left;"><strong>Joint pass</strong></td>
+<td style="text-align: left;"><strong>Scalar pass</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Safe: <span class="math inline">\(\Delta_H=0.005\)</span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.80</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.81</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.62</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.78</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Boundary: <span class="math inline">\(\Delta_H=0.010\)</span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.80</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.05</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.03</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.75</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Unsafe: <span class="math inline">\(\Delta_H=0.030\)</span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.80</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.55</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The expected standard errors are approximately:</p>
+<p><span class="math display">\[SE_R
+=
+\underbrace{\frac{0.80}{\sqrt{400}}}_{\text{reward uncertainty}}
+=
+0.040\]</span></p>
+<p><span class="math display">\[SE_H
+=
+\underbrace{\frac{0.04}{\sqrt{400}}}_{\text{harm uncertainty}}
+=
+0.002\]</span></p>
+<p>For the unsafe scenario:</p>
+<p><span class="math display">\[UCB_H
+\approx
+\underbrace{0.030}_{\text{estimated harm increase}}
++
+\underbrace{1.645(0.002)}_{\text{uncertainty margin}}
+=
+0.0333
+&gt;
+\underbrace{0.010}_{\text{allowed margin}}\]</span></p>
+<p>so the safety gate correctly fails.</p>
+<p>Yet its scalarized population utility remains:</p>
+<p><span class="math display">\[\Delta_U
+=
+\underbrace{0.10-1(0.03)}_{\text{reward minus harm penalty}}
+=
+0.07&gt;0\]</span></p>
+<p>which explains why scalarization can still promote it.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Only the safe scenario satisfies <span class="math inline">\(\Delta_H&lt;m\)</span>. The boundary is not strictly non-inferior.</p></li>
+<li><p>Approximately <span style="background-color: codeinlinebg"><code> 5%</code></span>, because the null is exactly at the one-sided boundary.</p></li>
+<li><p>No. All three scenarios have the same reward improvement.</p></li>
+<li><p>Yes. Reward gains can outweigh the penalty even while the explicit safety margin is violated.</p></li>
+<li><p>Safety requires ruling out excessive harm. Therefore, the worst plausible harm increase—the upper bound—must remain below <span class="math inline">\(m\)</span>.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Empirical Bernstein uses the observed variance, which can be much smaller than the worst-case variance implied by the score range.</p></li>
+<li><p>Early low variance may only reflect that rare extreme outcomes have not appeared; the range correction protects against overconfidence.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> deployment is often a constrained decision, not scalar reward maximization. Require evidence of reward improvement and evidence that every critical safety regression remains below its pre-specified margin.</p>

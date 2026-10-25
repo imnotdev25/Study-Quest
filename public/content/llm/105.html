@@ -1,0 +1,59 @@
+
+<ul>
+<li><p><strong>Structured output</strong>: compile a JSON schema or grammar into a token mask applied to the logits each step (XGrammar, Outlines, llguidance). Masks must be fast enough to overlap with the GPU step.</p></li>
+<li><p><strong>Multi-LoRA</strong>: one base matmul for the batch plus a gathered low-rank update per request (Punica’s SGMV kernel, S-LoRA’s unified paging of adapters).</p></li>
+<li><p><strong>Vision-language</strong>: an image encoder adds a compute-heavy prefill; cache image embeddings by hash so repeated images aren’t re-encoded.</p></li>
+<li><p><strong>Agents and reasoning models</strong>: long, growing contexts with heavy prefix reuse and very long outputs. Prefix caching, prefix-aware routing and model-free speculation (SuffixDecoding) matter most. Test-time compute (<em>Scaling LLM Test-Time Compute Optimally</em>) makes output length the cost driver.</p></li>
+<li><p><strong>Batch inference</strong>: no latency SLO; maximise throughput, sort by length, use the largest batch that fits.</p></li>
+<li><p><strong>RL rollouts</strong>: generation is most of the wall clock in GRPO-style training. Long-tail lengths leave GPUs idle, so systems use asynchronous rollouts, partial rollouts, and weight syncing to the engine each step. The trainer and the engine must compute the same log-probs; <em>Defeating Nondeterminism in LLM Inference</em> shows that batch-dependent reduction orders change results, and that batch-invariant kernels fix it.</p></li>
+<li><p><strong>Diffusion models</strong>: each request is a fixed number of denoising steps over the whole output, so batching is by step, and step-distillation or caching features across steps (fewer, cheaper steps) is the main lever.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference ch. &#x27;Specialized Workloads&#x27;: constrained decoding, multi-LoRA batching, batch-invariant numerics.&quot;&quot;&quot;
+import torch
+
+from tiny_gpt import Cfg, TinyGPT
+
+# 1. Structured output: mask every token the grammar does not allow, then pick from the rest.
+words = [&#x27;{&quot;label&quot;: &quot;spam&quot;}&#x27;, &#x27;{&quot;label&quot;: &quot;ham&quot;}&#x27;, &#x27;{&quot;label&quot;: &quot;unsure&quot;}&#x27;]
+vocab = sorted(set(&quot;&quot;.join(words)))
+model = TinyGPT(Cfg(vocab=len(vocab)))
+
+
+def allowed(prefix):
+    return {w[len(prefix)] for w in words if w.startswith(prefix) and len(w) &gt; len(prefix)}
+
+
+out = &quot;&quot;
+while allowed(out):
+    logits = model.full([vocab.index(ch) for ch in out] or [0])[-1]
+    mask = torch.full_like(logits, float(&quot;-inf&quot;))
+    mask[[vocab.index(ch) for ch in allowed(out)]] = 0
+    out += vocab[int((logits + mask).argmax())]
+free = &quot;&quot;.join(vocab[int(t)] for t in model.full([0] * 8).argmax(-1)[:12])
+print(f&quot;[grammar] unconstrained: {free!r}&quot;)
+print(f&quot;[grammar] constrained:   {out!r}  valid: {out in words}&quot;)
+
+# 2. Multi-LoRA: one base matmul for the whole batch + a per-row low-rank delta (Punica / S-LoRA style).
+torch.manual_seed(0)
+d, r, n_ad = 64, 8, 4
+W = torch.randn(d, d, dtype=torch.float64)
+A = torch.randn(n_ad, r, d, dtype=torch.float64) * 0.1
+Bm = torch.randn(n_ad, d, r, dtype=torch.float64) * 0.1
+x = torch.randn(16, d, dtype=torch.float64)
+ad = torch.randint(0, n_ad, (16,))                       # which adapter each request uses
+batched = x @ W.T + torch.einsum(&quot;bdr,br-&gt;bd&quot;, Bm[ad], torch.einsum(&quot;brd,bd-&gt;br&quot;, A[ad], x))
+merged = torch.stack([x[i] @ (W + Bm[ad[i]] @ A[ad[i]]).T for i in range(16)])
+print(f&quot;[multi-lora] {n_ad} adapters in one batch == per-request merged weights: {torch.allclose(batched, merged)}&quot;)
+
+# 3. Batch invariance: the same row reduced in a different order gives different bits.
+torch.manual_seed(0)
+row = torch.randn(4096, dtype=torch.float32) * 100
+sums = {chunks: torch.stack([c.sum() for c in row.chunk(chunks)]).sum().item() for chunks in (1, 4, 16, 64)}
+print(f&quot;[determinism] float32 sum of one row by split count: &quot; + &quot;, &quot;.join(f&quot;{k}: {v:.6f}&quot; for k, v in sums.items()))
+print(f&quot;[determinism] distinct results: {len(set(sums.values()))}  -&gt; a kernel whose split depends on batch size &quot;
+      f&quot;gives batch-dependent outputs; fixing the split makes it batch-invariant&quot;)</code></pre>
+<pre class="code output"><code class="output">[grammar] unconstrained: &#x27;rrrrrrrr&#x27;
+[grammar] constrained:   &#x27;{&quot;label&quot;: &quot;spam&quot;}&#x27;  valid: True
+[multi-lora] 4 adapters in one batch == per-request merged weights: True
+[determinism] float32 sum of one row by split count: 1: -3944.633057, 4: -3944.634033, 16: -3944.633301, 64: -3944.634277
+[determinism] distinct results: 4  -&gt; a kernel whose split depends on batch size gives batch-dependent outputs; fixing the split makes it batch-invariant</code></pre>

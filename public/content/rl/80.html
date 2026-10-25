@@ -1,0 +1,381 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a GPS ETA corrected by what actually happened</div>
+<p>Your GPS predicts arrival at 6:00. On a few logged trips you know the real arrival. Average the GPS’s <em>errors</em> on those trips and correct its prediction. If the GPS is good, the corrections are small and stable. If it’s biased, the corrections fix the bias. That’s doubly robust evaluation for routers (Topic 39 introduced it). Here the focus is when it beats each parent method.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What support condition is required for importance-sampling evaluation?</p></li>
+<li><p>What does low importance-weight effective sample size indicate?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="combine-two-imperfect-estimators">2. Combine two imperfect estimators</h3>
+<p>A direct-model estimator learns expected reward:</p>
+<p><span class="math display">\[\hat q(s,a)\approx\mathbb E[R\mid s,a]\]</span></p>
+<p>It evaluates the target policy using:</p>
+<p><span class="math display">\[\hat J_{\mathrm{DM}}
+=
+\frac1N\sum_i
+\sum_a
+\pi(a\mid s_i)\hat q(s_i,a)\]</span></p>
+<p>This has low variance but is biased when <span class="math inline">\(\hat q\)</span> is wrong.</p>
+<p>Importance sampling instead uses real logged rewards:</p>
+<p><span class="math display">\[\hat J_{\mathrm{IS}}
+=
+\frac1N\sum_i
+\rho_i r_i,
+\qquad
+\rho_i=
+\frac{\pi(a_i\mid s_i)}
+{\mu(a_i\mid s_i)}\]</span></p>
+<p>It avoids reward-model bias when propensities are correct, but can have high variance.</p>
+<p>The doubly robust estimator combines them:</p>
+<p><span class="math display">\[\hat J_{\mathrm{DR}}
+=
+\frac1N\sum_i
+\left[
+\underbrace{
+\sum_a\pi(a\mid s_i)\hat q(s_i,a)
+}_{\text{model prediction}}
++
+\underbrace{
+\rho_i
+\left(
+r_i-\hat q(s_i,a_i)
+\right)
+}_{\text{logged correction}}
+\right]\]</span></p>
+<p>Think of <span class="math inline">\(\hat q\)</span> as an initial invoice estimate. The observed outcome supplies a correction, reweighted to represent the target policy.</p>
+<p>“Doubly robust” means the estimate is consistent if either:</p>
+<ul>
+<li><p>the behavior propensities are correct, or</p></li>
+<li><p>the reward model is correct.</p></li>
+</ul>
+<p>It does not mean both components may be wrong. Support is still required.</p>
+<p>Tensor shapes in the exercise:</p>
+<ul>
+<li><p>contexts, actions and rewards: <span style="background-color: codeinlinebg"><code> [R, N]</code></span>;</p></li>
+<li><p>per-context target probabilities and <span class="math inline">\(Q\)</span> values: <span style="background-color: codeinlinebg"><code> [R, N, A]</code></span>;</p></li>
+<li><p>importance weights: <span style="background-color: codeinlinebg"><code> [R, N]</code></span>;</p></li>
+<li><p>repeated value estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span>.</p></li>
+</ul>
+<p>Freeze or detach the outcome model during evaluation. If it was trained on these same rewards, use held-out data or cross-fitting to avoid evaluating memorization.</p>
+<p>DPO optimizes preference log-ratios. A DPO preference score is not automatically an environmental reward model suitable for doubly robust evaluation.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: why DR has lower variance</div>
+<p><span class="math inline">\(\hat V_{\text{DR}}=\frac1n\sum_i\Big[\hat q(x_i,\pi)+\rho_i\big(r_i-\hat q(x_i,a_i)\big)\Big]\)</span> with <span class="math inline">\(\hat q(x,\pi)=\sum_a\pi(a|x)\hat q(x,a)\)</span>. Roughly, <span class="math inline">\(\operatorname{Var}[\text{IPS term}]\propto\mathbb E[\rho^2r^2]\)</span> while <span class="math inline">\(\operatorname{Var}[\text{DR correction}]\propto\mathbb E[\rho^2(r-\hat q)^2]\)</span>. If <span class="math inline">\(\hat q\)</span> explains most of <span class="math inline">\(r\)</span>, the residual is small, so the variance is small. <strong>DR can’t fix:</strong> missing support (<span class="math inline">\(\rho\)</span> is undefined) or both <span class="math inline">\(\hat q\)</span> and <span class="math inline">\(p\)</span> being wrong.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Use the outcome model as a baseline and let weighted residuals correct it.</p></li>
+<li><p>DR reduces variance, but it can’t rescue missing support.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: DM vs IPS vs DR</div>
+<p>True value 0.70. A good model (residual sd 0.1) and a logger with <span class="math inline">\(\rho\in\{0,2.5\}\)</span>: DM <span class="math inline">\(\approx0.68\)</span> (bias <span class="math inline">\(-0.02\)</span>, tiny variance). IPS: unbiased, sd <span class="math inline">\(\approx2.5\times0.46/\sqrt n\)</span>. DR: unbiased, sd <span class="math inline">\(\approx2.5\times0.1/\sqrt n\)</span>, about 4.6<span class="math inline">\(\times\)</span> smaller than IPS.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Fitting <span class="math inline">\(\hat q\)</span> on the evaluation logs (Topic 86).</p></li>
+<li><p>Reporting DR with no ESS or weight diagnostics.</p></li>
+<li><p>Assuming DR is unbiased when the propensities are wrong <em>and</em> the model is wrong.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-compare-dm-is-and-dr-variance">3. PyTorch exercise — compare DM, IS and DR variance</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 500
+batch_size = 256
+
+# Shape: [repetitions, samples]
+contexts = torch.randint(
+    low=0,
+    high=2,
+    size=(
+        num_repetitions,
+        batch_size,
+    ),
+)
+
+behavior_tool_probability = torch.where(
+    contexts == 0,
+    torch.tensor(0.20),
+    torch.tensor(0.80),
+)
+
+target_tool_probability = torch.where(
+    contexts == 0,
+    torch.tensor(0.80),
+    torch.tensor(0.20),
+)
+
+actions = (
+    torch.rand_like(
+        behavior_tool_probability
+    )
+    &lt; behavior_tool_probability
+).long()
+
+# True mean rewards: [context, action].
+true_q = torch.tensor([
+    [0.40, 0.90],
+    [0.70, 0.50],
+])
+
+reward_probabilities = true_q[
+    contexts,
+    actions,
+]
+
+rewards = (
+    torch.rand_like(
+        reward_probabilities
+    )
+    &lt; reward_probabilities
+).to(torch.float64)
+
+# Deliberately inaccurate outcome model.
+estimated_q = torch.tensor([
+    [0.50, 0.80],
+    [0.60, 0.60],
+])
+
+# TODO 1: Selected-action probabilities and weights.
+behavior_action_probabilities = ...
+target_action_probabilities = ...
+
+log_weights = ...
+weights = ...
+
+# TODO 2: Direct-model value for every context.
+target_probabilities_all_actions = ...
+
+estimated_q_for_contexts = ...
+
+direct_terms = ...
+direct_estimates = ...
+
+# TODO 3: Ordinary importance-sampling estimates.
+is_estimates = ...
+
+# TODO 4: Doubly robust estimates.
+estimated_q_for_logged_actions = ...
+
+residuals = ...
+
+dr_terms = ...
+dr_estimates = ...
+
+# TODO 5: Exact value and estimator diagnostics.
+context_distribution = torch.tensor([
+    0.5, 0.5
+])
+
+target_policy_table = torch.tensor([
+    [0.20, 0.80],
+    [0.80, 0.20],
+])
+
+exact_target_value = ...
+
+all_estimates = torch.stack([
+    direct_estimates,
+    is_estimates,
+    dr_estimates,
+], dim=1)
+
+biases = ...
+standard_deviations = ...
+rmses = ...
+
+names = [
+    &quot;Direct model&quot;,
+    &quot;Importance sampling&quot;,
+    &quot;Doubly robust&quot;,
+]
+
+print(
+    &quot;Exact target value:&quot;,
+    exact_target_value.item(),
+)
+
+for index, name in enumerate(names):
+    print(
+        name,
+        {
+            &quot;mean&quot;:
+                all_estimates[
+                    :, index
+                ].mean().item(),
+            &quot;bias&quot;:
+                biases[index].item(),
+            &quot;std&quot;:
+                standard_deviations[
+                    index
+                ].item(),
+            &quot;rmse&quot;:
+                rmses[index].item(),
+        },
+    )</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the direct-model estimate center near <span style="background-color: codeinlinebg"><code> 0.67</code></span> or <span style="background-color: codeinlinebg"><code> 0.73</code></span>?</p></li>
+<li><p>Which estimator should have the largest standard deviation?</p></li>
+<li><p>Should DR center near the exact target despite the inaccurate outcome model?</p></li>
+<li><p>What guarantee remains if both the propensities and outcome model are wrong?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Selected-action probability uses <span style="background-color: codeinlinebg"><code> p</code></span> for action <span style="background-color: codeinlinebg"><code> 1</code></span> and <span style="background-color: codeinlinebg"><code> 1-p</code></span> for action <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+<li><p>Stack target probabilities for actions <span style="background-color: codeinlinebg"><code> 0</code></span> and <span style="background-color: codeinlinebg"><code> 1</code></span> along the final dimension.</p></li>
+<li><p>Indexing <span style="background-color: codeinlinebg"><code> estimated_q[contexts]</code></span> produces shape <span style="background-color: codeinlinebg"><code> [R, N, A]</code></span>.</p></li>
+<li><p>Logged <span class="math inline">\(Q\)</span> values use <span style="background-color: codeinlinebg"><code> estimated_q[contexts, actions]</code></span>.</p></li>
+<li><p>The correction residual is <span style="background-color: codeinlinebg"><code> reward - logged_q</code></span>, not the reverse.</p></li>
+<li><p>Compute bias and RMSE across repetitions.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Reverse the residual to <span style="background-color: codeinlinebg"><code> q - reward</code></span>. The correction pushes model error in the wrong direction.</p></li>
+<li><p>Index the outcome model using the target policy’s greedy action rather than the logged action.</p></li>
+<li><p>Remove importance weights from the residual. The correction then follows the behavior policy.</p></li>
+<li><p>Train <span style="background-color: codeinlinebg"><code> estimated_q</code></span> on these exact rewards and report the same-batch DR result. Use held-out folds or cross-fitting instead.</p></li>
+<li><p>Set a behavior probability to zero for a target-supported action. DR cannot repair missing action support.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can the direct-model estimator remain biased with unlimited evaluation logs?</p></li>
+<li><p>What are the two routes to consistency for DR?</p></li>
+<li><p>Why can DR still have high variance?</p></li>
+<li><p>What should be frozen and logged during evaluation?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Selected-action probabilities and ratios:</p>
+<pre class="code python"><code class="language-python">behavior_action_probabilities = torch.where(
+    actions == 1,
+    behavior_tool_probability,
+    1.0 - behavior_tool_probability,
+)
+
+target_action_probabilities = torch.where(
+    actions == 1,
+    target_tool_probability,
+    1.0 - target_tool_probability,
+)
+
+log_weights = (
+    target_action_probabilities.log()
+    - behavior_action_probabilities.log()
+)
+
+weights = log_weights.exp()</code></pre>
+<p>Direct-model estimate:</p>
+<pre class="code python"><code class="language-python">target_probabilities_all_actions = (
+    torch.stack(
+        [
+            1.0 - target_tool_probability,
+            target_tool_probability,
+        ],
+        dim=-1,
+    )
+)
+
+estimated_q_for_contexts = (
+    estimated_q[contexts]
+)
+
+direct_terms = (
+    target_probabilities_all_actions
+    * estimated_q_for_contexts
+).sum(dim=-1)
+
+direct_estimates = direct_terms.mean(
+    dim=1
+)</code></pre>
+<p>Importance sampling:</p>
+<pre class="code python"><code class="language-python">is_estimates = (
+    weights * rewards
+).mean(dim=1)</code></pre>
+<p>Doubly robust correction:</p>
+<pre class="code python"><code class="language-python">estimated_q_for_logged_actions = (
+    estimated_q[
+        contexts,
+        actions,
+    ]
+)
+
+residuals = (
+    rewards
+    - estimated_q_for_logged_actions
+)
+
+dr_terms = (
+    direct_terms
+    + weights * residuals
+)
+
+dr_estimates = dr_terms.mean(
+    dim=1
+)</code></pre>
+<p>Exact value and diagnostics:</p>
+<pre class="code python"><code class="language-python">exact_target_value = (
+    context_distribution[:, None]
+    * target_policy_table
+    * true_q
+).sum()
+
+biases = (
+    all_estimates.mean(dim=0)
+    - exact_target_value
+)
+
+standard_deviations = (
+    all_estimates.std(
+        dim=0,
+        correction=1,
+    )
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)</code></pre>
+<p>The true target value is:</p>
+<p><span class="math display">\[J(\pi)=0.73\]</span></p>
+<p>The inaccurate outcome model predicts:</p>
+<p><span class="math display">\[\hat J_{\mathrm{DM}}
+=
+\frac12[
+0.2(0.5)+0.8(0.8)
++
+0.8(0.6)+0.2(0.6)
+]
+=
+0.67\]</span></p>
+<p>Therefore, direct modeling has low variance but approximately <span style="background-color: codeinlinebg"><code> -0.06</code></span> bias.</p>
+<p>Because the logged propensities are correct, the weighted residual corrects that model error:</p>
+<p><span class="math display">\[\mathbb E[
+\rho(R-\hat q)
+]
+=
+J(\pi)-J_{\mathrm{DM}}\]</span></p>
+<p>IS and DR should both center near <span style="background-color: codeinlinebg"><code> 0.73</code></span>, but DR should have substantially lower variance because its residuals are smaller than raw rewards.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>More evaluation logs reduce sampling variance but cannot remove systematic error in a fixed <span class="math inline">\(\hat q\)</span>.</p></li>
+<li><p>Correct behavior propensities or a correct conditional outcome model.</p></li>
+<li><p>Large importance weights can amplify even small outcome-model residuals.</p></li>
+<li><p>Freeze the target policy and outcome model; store behavior log-probabilities, masks, conditioning history, rewards, policy versions and episode boundaries.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Every action supported by the target policy must also have positive probability under the behavior policy.</p></li>
+<li><p>Low ESS means a small fraction of logged decisions dominates the estimate, producing high variance and weak coverage.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> use the outcome model as a baseline and let importance-weighted observations correct it. DR reduces variance, but it cannot rescue missing support or two simultaneously wrong models.</p>

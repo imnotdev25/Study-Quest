@@ -1,0 +1,483 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: judging a diet by weight change</div>
+<p>To judge a diet, you look at each person’s weight <em>change</em>, not their final weight. Their starting weight explains most of the variation and has nothing to do with the diet. CUPED does the same: subtract the part of each prompt’s outcome that its difficulty already predicted.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can raw candidate/control means be biased when assignment probability varies by prompt context?</p></li>
+<li><p>Which propensity must be used for inverse-propensity weighting?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="an-experimental-baseline-works-like-a-policy-gradient-baseline">2. An experimental baseline works like a policy-gradient baseline</h3>
+<p>Some prompts are intrinsically easier than others. Randomization prevents systematic bias, but a small canary may accidentally send more easy prompts to one arm, increasing variance.</p>
+<p>Let <span class="math inline">\(X_i\)</span> be a pre-treatment difficulty signal correlated with outcome <span class="math inline">\(Y_i\)</span>. CUPED constructs:</p>
+<p><span class="math display">\[Y_i^{\text{adj}}
+=
+Y_i-\theta(X_i-\bar X)\]</span></p>
+<p>The variance-minimizing coefficient is:</p>
+<p><span class="math display">\[\theta^*
+=
+\frac{\operatorname{Cov}(Y,X)}
+{\operatorname{Var}(X)}\]</span></p>
+<p>Then estimate the policy effect using adjusted outcomes:</p>
+<p><span class="math display">\[\hat\Delta_{\text{CUPED}}
+=
+\bar Y_{\text{candidate}}^{\text{adj}}
+-
+\bar Y_{\text{control}}^{\text{adj}}\]</span></p>
+<p>This resembles subtracting a baseline in REINFORCE:</p>
+<ul>
+<li><p>the baseline explains predictable variation;</p></li>
+<li><p>it should not change the expected policy effect;</p></li>
+<li><p>removing predictable variation lowers estimator variance.</p></li>
+</ul>
+<p>With optimal <span class="math inline">\(\theta\)</span>, the approximate variance reduction is:</p>
+<p><span class="math display">\[\frac{
+\operatorname{Var}(Y^{\text{adj}})
+}{
+\operatorname{Var}(Y)
+}
+=
+1-\rho_{Y,X}^2\]</span></p>
+<p>A correlation of <span class="math inline">\(0.8\)</span> removes roughly 64% of outcome variance.</p>
+<p>The covariate must be measured before policy assignment. Valid examples include:</p>
+<ul>
+<li><p>historical user success;</p></li>
+<li><p>a frozen prompt-difficulty score;</p></li>
+<li><p>prompt family or domain;</p></li>
+<li><p>control-policy predicted success before generating a response.</p></li>
+</ul>
+<p>Post-treatment quantities—response length, tool count, latency, judge score—may be changed by the candidate. Adjusting for them can remove part of the treatment effect or introduce bias.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>repeated experiments: outcomes and covariates <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>assignment mask: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>raw and adjusted effects: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+<li><p>estimator diagnostics: <span style="background-color: codeinlinebg"><code> [2]</code></span></p></li>
+</ul>
+<p>Estimate <span class="math inline">\(\theta\)</span> from independent pilot data, or use cross-fitted predictions. If a neural baseline is used, persist detached predictions; evaluation must not train the baseline on its own held-out outcomes.</p>
+<p>For context-dependent adaptive routing, CUPED alone does not correct assignment imbalance. Combine outcome modeling with the logged propensities—an augmented inverse-propensity estimator.</p>
+<p>DPO may create the candidate policy, but DPO loss is not a valid pre-treatment covariate. A prompt-only reward prediction can be; a score computed from the candidate response cannot.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: control variates</div>
+<p>With a pre-treatment covariate <span class="math inline">\(X\)</span> (e.g. the baseline model’s score on that prompt): <span class="math inline">\(Y^{\text{adj}}=Y-\theta(X-\bar X)\)</span>, with <span class="math inline">\(\theta=\operatorname{Cov}(X,Y)/\operatorname{Var}(X)\)</span> estimated on pooled data. <span class="math inline">\(\operatorname{Var}[Y^{\text{adj}}]=(1-\rho^2)\operatorname{Var}[Y]\)</span>, where <span class="math inline">\(\rho=\operatorname{corr}(X,Y)\)</span>. The treatment effect estimate stays unbiased because <span class="math inline">\(X\)</span> is fixed before assignment. This is the same trick as a policy-gradient baseline: subtract something predictable and uncorrelated with the decision.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Prompt difficulty is predictable noise, so subtract it.</p></li>
+<li><p>Freeze the covariate before the experiment.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: how much sample size it buys</div>
+<p><span class="math inline">\(\rho=0.8\)</span>: variance factor <span class="math inline">\(1-0.64=0.36\)</span>. The same precision now needs only 36% of the samples, about a 2.8<span class="math inline">\(\times\)</span> speed-up.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>A covariate measured after treatment (e.g. the candidate’s own score).</p></li>
+<li><p>Estimating <span class="math inline">\(\theta\)</span> separately in each arm.</p></li>
+<li><p>“Adjusting away” behaviour the candidate itself caused.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-measure-the-variance-reduction">3. PyTorch exercise — measure the variance reduction</h3>
+<p>Prompt difficulty strongly predicts outcome. The candidate adds a constant <span style="background-color: codeinlinebg"><code> 0.10</code></span> improvement.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 1_000
+episodes_per_experiment = 500
+
+true_effect = 0.10
+difficulty_coefficient = 1.50
+noise_standard_deviation = 1.00
+
+# Independent pilot data for estimating theta.
+pilot_size = 10_000
+
+pilot_difficulty = torch.randn(
+    pilot_size
+)
+
+pilot_outcomes = (
+    difficulty_coefficient
+    * pilot_difficulty
+    + noise_standard_deviation
+    * torch.randn(pilot_size)
+)
+
+# TODO 1: Estimate CUPED coefficient and correlation
+# from the independent pilot data.
+centered_pilot_difficulty = ...
+centered_pilot_outcomes = ...
+
+theta_hat = ...
+
+pilot_correlation = ...
+
+expected_variance_ratio = ...
+
+# New randomized experiments.
+difficulty = torch.randn(
+    num_repetitions,
+    episodes_per_experiment,
+)
+
+candidate_assigned = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_experiment,
+    )
+    &lt; 0.50
+)
+
+assignment = candidate_assigned.to(
+    torch.float64
+)
+
+outcomes = (
+    difficulty_coefficient * difficulty
+    + true_effect * assignment
+    + noise_standard_deviation
+    * torch.randn_like(difficulty)
+)
+
+control_assignment = 1.0 - assignment
+
+
+def masked_mean(values, mask):
+    return (
+        values * mask
+    ).sum(dim=1) / mask.sum(dim=1)
+
+
+def masked_variance(values, mask):
+    counts = mask.sum(dim=1)
+
+    means = masked_mean(
+        values,
+        mask,
+    )
+
+    squared_errors = (
+        (
+            values - means[:, None]
+        ).square()
+        * mask
+    ).sum(dim=1)
+
+    return squared_errors / (counts - 1.0)
+
+
+# TODO 2: Raw difference in means.
+raw_candidate_means = ...
+raw_control_means = ...
+
+raw_effects = ...
+
+# TODO 3: Adjust outcomes using the frozen coefficient.
+centered_difficulty = ...
+
+adjusted_outcomes = ...
+
+adjusted_candidate_means = ...
+adjusted_control_means = ...
+
+cuped_effects = ...
+
+# TODO 4: Compare bias, standard deviation and RMSE.
+all_effects = torch.stack([
+    raw_effects,
+    cuped_effects,
+], dim=1)
+
+mean_effects = ...
+biases = ...
+standard_deviations = ...
+rmses = ...
+
+empirical_variance_ratio = ...
+
+# TODO 5: Compare estimated standard errors.
+candidate_counts = ...
+control_counts = ...
+
+raw_standard_errors = ...
+
+cuped_standard_errors = ...
+
+mean_raw_standard_error = ...
+mean_cuped_standard_error = ...
+
+names = [
+    &quot;Raw difference&quot;,
+    &quot;CUPED difference&quot;,
+]
+
+print(&quot;Estimated theta:&quot;, theta_hat.item())
+print(
+    &quot;Pilot correlation:&quot;,
+    pilot_correlation.item(),
+)
+print(
+    &quot;Predicted variance ratio:&quot;,
+    expected_variance_ratio.item(),
+)
+print(
+    &quot;Empirical variance ratio:&quot;,
+    empirical_variance_ratio.item(),
+)
+
+for index, name in enumerate(names):
+    print(
+        name,
+        {
+            &quot;mean&quot;:
+                mean_effects[index].item(),
+            &quot;bias&quot;:
+                biases[index].item(),
+            &quot;std&quot;:
+                standard_deviations[
+                    index
+                ].item(),
+            &quot;rmse&quot;:
+                rmses[index].item(),
+        },
+    )
+
+print(
+    &quot;Mean raw SE:&quot;,
+    mean_raw_standard_error.item(),
+)
+
+print(
+    &quot;Mean CUPED SE:&quot;,
+    mean_cuped_standard_error.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should both estimators center near <span style="background-color: codeinlinebg"><code> 0.10</code></span>?</p></li>
+<li><p>Will the raw estimator’s standard deviation be closer to <span style="background-color: codeinlinebg"><code> 0.16</code></span> or <span style="background-color: codeinlinebg"><code> 0.09</code></span>?</p></li>
+<li><p>Will CUPED’s variance be roughly 30% or 90% of the raw variance?</p></li>
+<li><p>What happens if response length is used as the covariate and the candidate changes response length?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Center pilot tensors by subtracting their means.</p></li>
+<li><p>The covariance and variance denominators cancel in the ratio for <span class="math inline">\(\theta\)</span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.corrcoef</code></span> for the pilot correlation.</p></li>
+<li><p>Center difficulty independently within every simulated experiment.</p></li>
+<li><p>Apply the same frozen <span class="math inline">\(\theta\)</span> to both arms.</p></li>
+<li><p>Standard error combines arm-specific sample variances divided by their counts.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Estimate separate <span class="math inline">\(\theta\)</span> values for candidate and control using the same evaluation outcomes.</p></li>
+<li><p>Use a difficulty model trained on every evaluation outcome without cross-fitting.</p></li>
+<li><p>Adjust for tool calls or latency produced after assignment.</p></li>
+<li><p>Forget to freeze or detach neural baseline predictions.</p></li>
+<li><p>Apply ordinary CUPED to context-dependent routing without propensity correction.</p></li>
+<li><p>Standardize reward values but retain an old, differently scaled <span class="math inline">\(\theta\)</span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does subtracting a pre-treatment baseline preserve the expected treatment effect?</p></li>
+<li><p>How is CUPED related to a policy-gradient baseline?</p></li>
+<li><p>Why are post-treatment covariates dangerous?</p></li>
+<li><p>When should CUPED be replaced by or combined with propensity weighting?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Pilot coefficient:</p>
+<pre class="code python"><code class="language-python">centered_pilot_difficulty = (
+    pilot_difficulty
+    - pilot_difficulty.mean()
+)
+
+centered_pilot_outcomes = (
+    pilot_outcomes
+    - pilot_outcomes.mean()
+)
+
+theta_hat = (
+    (
+        centered_pilot_difficulty
+        * centered_pilot_outcomes
+    ).sum()
+    / centered_pilot_difficulty
+    .square()
+    .sum()
+)
+
+pilot_correlation = torch.corrcoef(
+    torch.stack([
+        pilot_difficulty,
+        pilot_outcomes,
+    ])
+)[0, 1]
+
+expected_variance_ratio = (
+    1.0 - pilot_correlation.square()
+)</code></pre>
+<p>Raw estimates:</p>
+<pre class="code python"><code class="language-python">raw_candidate_means = masked_mean(
+    outcomes,
+    assignment,
+)
+
+raw_control_means = masked_mean(
+    outcomes,
+    control_assignment,
+)
+
+raw_effects = (
+    raw_candidate_means
+    - raw_control_means
+)</code></pre>
+<p>CUPED estimates:</p>
+<pre class="code python"><code class="language-python">centered_difficulty = (
+    difficulty
+    - difficulty.mean(
+        dim=1,
+        keepdim=True,
+    )
+)
+
+adjusted_outcomes = (
+    outcomes
+    - theta_hat
+    * centered_difficulty
+)
+
+adjusted_candidate_means = masked_mean(
+    adjusted_outcomes,
+    assignment,
+)
+
+adjusted_control_means = masked_mean(
+    adjusted_outcomes,
+    control_assignment,
+)
+
+cuped_effects = (
+    adjusted_candidate_means
+    - adjusted_control_means
+)</code></pre>
+<p>Estimator diagnostics:</p>
+<pre class="code python"><code class="language-python">mean_effects = all_effects.mean(
+    dim=0
+)
+
+biases = (
+    mean_effects - true_effect
+)
+
+standard_deviations = (
+    all_effects.std(
+        dim=0,
+        correction=1,
+    )
+)
+
+rmses = (
+    (
+        all_effects - true_effect
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)
+
+empirical_variance_ratio = (
+    cuped_effects.var(
+        correction=1
+    )
+    / raw_effects.var(
+        correction=1
+    )
+)</code></pre>
+<p>Standard errors:</p>
+<pre class="code python"><code class="language-python">candidate_counts = assignment.sum(
+    dim=1
+)
+
+control_counts = (
+    control_assignment.sum(dim=1)
+)
+
+raw_standard_errors = torch.sqrt(
+    masked_variance(
+        outcomes,
+        assignment,
+    ) / candidate_counts
+    +
+    masked_variance(
+        outcomes,
+        control_assignment,
+    ) / control_counts
+)
+
+cuped_standard_errors = torch.sqrt(
+    masked_variance(
+        adjusted_outcomes,
+        assignment,
+    ) / candidate_counts
+    +
+    masked_variance(
+        adjusted_outcomes,
+        control_assignment,
+    ) / control_counts
+)
+
+mean_raw_standard_error = (
+    raw_standard_errors.mean()
+)
+
+mean_cuped_standard_error = (
+    cuped_standard_errors.mean()
+)</code></pre>
+<p>Ignoring the small treatment contribution, the outcome variance is:</p>
+<p><span class="math display">\[\operatorname{Var}(Y)
+=
+1.5^2\operatorname{Var}(X)+1^2
+=
+3.25\]</span></p>
+<p>The population correlation is:</p>
+<p><span class="math display">\[\rho
+=
+\frac{1.5}{\sqrt{3.25}}
+\approx0.832\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[1-\rho^2
+=
+1-\frac{2.25}{3.25}
+\approx0.308\]</span></p>
+<p>CUPED should retain only about 31% of the raw estimator’s variance.</p>
+<p>With roughly 250 episodes per arm, the raw standard deviation is approximately:</p>
+<p><span class="math display">\[\sqrt{
+\frac{3.25}{250}
++
+\frac{3.25}{250}
+}
+\approx0.161\]</span></p>
+<p>After removing prompt difficulty, residual variance is near one:</p>
+<p><span class="math display">\[\sqrt{
+\frac1{250}
++
+\frac1{250}
+}
+\approx0.089\]</span></p>
+<p>Both estimators remain centered near the true effect <span style="background-color: codeinlinebg"><code> 0.10</code></span>; CUPED reaches substantially lower variance and RMSE.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Randomization balances any pre-treatment quantity in expectation, so the expected candidate/control difference in the subtracted baseline is zero.</p></li>
+<li><p>Both subtract predictable variation that is unrelated to the parameter’s expectation, reducing noise without intentionally changing the signal.</p></li>
+<li><p>A post-treatment variable may mediate the policy’s real effect. Conditioning on it can remove that effect or introduce collider bias.</p></li>
+<li><p>If routing probabilities vary with context or history, use logged propensities. Combine a cross-fitted outcome baseline with propensity correction when both imbalance and outcome noise matter.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Context-dependent assignment gives candidate and control different prompt populations, so their raw means target different context mixtures.</p></li>
+<li><p>Use the exact conditional probability that the deployed router assigned that episode to its observed arm—not a later reconstruction or average traffic fraction.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> prompt difficulty is experimental noise you can often predict before generation. Subtract it like a policy-gradient baseline—but freeze it before evaluation and never “control away” behavior caused by the candidate itself.</p>

@@ -1,0 +1,136 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>MLOps is version control for everything that changes: code (Git), data (DVC), experiments (MLflow), the environment (Docker), deployment (Kubernetes) and behaviour in production (Prometheus and Grafana). The rule: any result must be reproducible from a commit hash.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/14b77e924693.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h2 class="unnumbered" id="the-service">The service</h2>
+<p>A FastAPI app with input validation, a health check and Prometheus metrics, tested in-process. Note that it has <strong>no authentication</strong>: before exposing it beyond a cluster, put it behind an API gateway or add token auth, plus rate limiting.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Toolkit ch. 8: serve a model with FastAPI, expose Prometheus metrics, test it in-process.&quot;&quot;&quot;
+import time
+
+import torch
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from pydantic import BaseModel, Field
+from starlette.responses import Response
+
+torch.manual_seed(0)
+model = torch.nn.Sequential(torch.nn.Linear(4, 16), torch.nn.ReLU(), torch.nn.Linear(16, 2)).eval()
+MODEL_VERSION = &quot;v1&quot;
+
+REQUESTS = Counter(&quot;predict_requests_total&quot;, &quot;Prediction requests&quot;, [&quot;status&quot;])
+LATENCY = Histogram(&quot;predict_latency_seconds&quot;, &quot;Prediction latency&quot;)
+
+app = FastAPI()
+
+
+class Features(BaseModel):
+    x: list[float] = Field(min_length=4, max_length=4)   # input validation at the boundary
+
+
+@app.get(&quot;/health&quot;)
+def health():
+    return {&quot;status&quot;: &quot;ok&quot;, &quot;model&quot;: MODEL_VERSION}
+
+
+@app.post(&quot;/predict&quot;)
+def predict(f: Features):
+    t0 = time.perf_counter()
+    try:
+        with torch.no_grad():
+            p = model(torch.tensor([f.x])).softmax(-1)[0]
+    except Exception:
+        REQUESTS.labels(&quot;error&quot;).inc()
+        raise HTTPException(500, &quot;inference failed&quot;)
+    LATENCY.observe(time.perf_counter() - t0)
+    REQUESTS.labels(&quot;ok&quot;).inc()
+    return {&quot;label&quot;: int(p.argmax()), &quot;probs&quot;: [round(v, 4) for v in p.tolist()], &quot;model&quot;: MODEL_VERSION}
+
+
+@app.get(&quot;/metrics&quot;)
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+if __name__ == &quot;__main__&quot;:
+    c = TestClient(app)
+    print(&quot;[serve] GET /health -&gt;&quot;, c.get(&quot;/health&quot;).json())
+    r = c.post(&quot;/predict&quot;, json={&quot;x&quot;: [0.1, -1.2, 0.3, 2.0]})
+    print(&quot;[serve] POST /predict -&gt;&quot;, r.status_code, r.json())
+    print(&quot;[serve] bad input -&gt;&quot;, c.post(&quot;/predict&quot;, json={&quot;x&quot;: [1, 2]}).status_code)
+    for _ in range(20):
+        c.post(&quot;/predict&quot;, json={&quot;x&quot;: [0.0, 0.0, 0.0, 1.0]})
+    lines = [l for l in c.get(&quot;/metrics&quot;).text.splitlines()
+             if l.startswith((&quot;predict_requests_total{&quot;, &quot;predict_latency_seconds_count&quot;))]
+    print(&quot;[serve] /metrics:&quot;, *lines, sep=&quot;\n  &quot;)</code></pre>
+<pre class="code output"><code class="output">[serve] GET /health -&gt; {&#x27;status&#x27;: &#x27;ok&#x27;, &#x27;model&#x27;: &#x27;v1&#x27;}
+[serve] POST /predict -&gt; 200 {&#x27;label&#x27;: 0, &#x27;probs&#x27;: [0.5231, 0.4769], &#x27;model&#x27;: &#x27;v1&#x27;}
+[serve] bad input -&gt; 422
+[serve] /metrics:
+  predict_requests_total{status=&quot;ok&quot;} 21.0
+  predict_latency_seconds_count 21.0</code></pre>
+<h2 class="unnumbered" id="the-pipeline-files">The pipeline files</h2>
+<p>These configuration files were not run in this environment; they show the standard shape.</p>
+<p><strong>DVC pipeline</strong> (<code>dvc.yaml</code>): each stage declares inputs and outputs, so <code>dvc repro</code> reruns only what changed, and data lives in S3 under a hash.</p>
+<pre class="code output"><code class="output">stages:
+  ingest:   {cmd: python src/ingest.py, deps: [src/ingest.py], outs: [data/raw]}
+  features: {cmd: python src/features.py, deps: [data/raw, src/features.py], outs: [data/features]}
+  train:
+    cmd: python src/train.py
+    deps: [data/features, src/train.py]
+    params: [train.lr, train.epochs]
+    outs: [models/model.pt]
+    metrics: [{reports/metrics.json: {cache: false}}]</code></pre>
+<p><strong>Docker image</strong>: slim base, pinned dependencies, non-root user.</p>
+<pre class="code output"><code class="output">FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY serve_app.py model.pt ./
+RUN useradd -m app
+USER app
+EXPOSE 8000
+CMD [&quot;uvicorn&quot;, &quot;serve_app:app&quot;, &quot;--host&quot;, &quot;0.0.0.0&quot;, &quot;--port&quot;, &quot;8000&quot;]</code></pre>
+<p><strong>CI</strong> (<code>.github/workflows/ci.yml</code>): test on every push, build and push the image on main.</p>
+<pre class="code output"><code class="output">on: {push: {branches: [main]}, pull_request: {}}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: &quot;3.11&quot;}
+      - run: pip install -r requirements.txt pytest &amp;&amp; pytest -q
+  image:
+    needs: test
+    if: github.ref == &#x27;refs/heads/main&#x27;
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t $REGISTRY/model-api:${{ github.sha }} .
+      # then log in to the registry (ECR on AWS) and docker push</code></pre>
+<p><strong>Kubernetes</strong>: a Deployment with probes on <code>/health</code>, resource limits, and annotations so Prometheus scrapes <code>/metrics</code>.</p>
+<pre class="code output"><code class="output">apiVersion: apps/v1
+kind: Deployment
+metadata: {name: model-api}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: model-api}}
+  template:
+    metadata:
+      labels: {app: model-api}
+      annotations: {prometheus.io/scrape: &quot;true&quot;, prometheus.io/port: &quot;8000&quot;}
+    spec:
+      containers:
+        - name: api
+          image: REGISTRY/model-api:COMMIT_SHA
+          ports: [{containerPort: 8000}]
+          readinessProbe: {httpGet: {path: /health, port: 8000}}
+          livenessProbe:  {httpGet: {path: /health, port: 8000}, periodSeconds: 15}
+          resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: &quot;1&quot;, memory: 1Gi}}</code></pre>
+<p>In Grafana, the two queries worth a dashboard first, error rate and p95 latency:</p>
+<pre class="code output"><code class="output">rate(predict_requests_total{status=&quot;error&quot;}[5m])
+histogram_quantile(0.95, rate(predict_latency_seconds_bucket[5m]))</code></pre>

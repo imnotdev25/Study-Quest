@@ -1,0 +1,212 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How arrays and hash tables really work, and the five patterns that solve most array problems: frequency counting, prefix sums, two pointers, sliding windows, and Kadane’s algorithm. Each comes with pseudocode, an invariant, and the signals that tell you to use it.</p>
+</div>
+<h1 id="arrays-and-dynamic-arrays">Arrays and Dynamic Arrays</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>An array is a contiguous block of memory: element <span class="math inline">\(i\)</span> lives at <span class="math inline">\(\text{base} + i\times\text{size}\)</span>, so indexing is <span class="math inline">\(O(1)\)</span> and scans are cache-friendly. Inserting or deleting in the middle shifts elements, <span class="math inline">\(O(n)\)</span>. A dynamic array (Python list, C++ <code>vector</code>, Java <code>ArrayList</code>) grows by a constant factor, giving amortized <span class="math inline">\(O(1)\)</span> append (Chapter 2).</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Operation</th>
+<th style="text-align: center;">Array / dynamic array</th>
+<th style="text-align: center;">Hash table (expected)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Access by index / key</td>
+<td style="text-align: center;"><span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: center;"><span class="math inline">\(O(1)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Search by value</td>
+<td style="text-align: center;"><span class="math inline">\(O(n)\)</span> (<span class="math inline">\(O(\log n)\)</span> if sorted)</td>
+<td style="text-align: center;"><span class="math inline">\(O(1)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Insert / delete at end</td>
+<td style="text-align: center;"><span class="math inline">\(O(1)\)</span> amortized</td>
+<td style="text-align: center;"><span class="math inline">\(O(1)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Insert / delete in middle</td>
+<td style="text-align: center;"><span class="math inline">\(O(n)\)</span></td>
+<td style="text-align: center;">n/a</td>
+</tr>
+<tr>
+<td style="text-align: left;">Ordered iteration</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">no (insertion order in some languages)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<p>A tensor is a multi-dimensional array described by a shape and <em>strides</em>: how many elements to skip to move one step along each dimension. A transpose or slice usually just changes strides (no copy), which is why some operations need a “contiguous” copy first. Understanding strides explains <code>view</code> vs <code>reshape</code>, why channels-last layouts can be faster for convolutions, and why memory layout matters for GPU kernels.</p>
+</div>
+<h1 id="hash-tables">Hash Tables</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A hash table is a coat check. You hand in your coat (the value) and get a numbered ticket computed from your name (the hash of the key). To get the coat back, compute the same number and go straight to that hook. No searching.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A hash function maps a key to an integer; modulo the table size gives a bucket. Two keys can land in the same bucket (a <strong>collision</strong>):</p>
+<ul>
+<li><p><strong>Chaining</strong>: each bucket holds a small list (Java <code>HashMap</code>, which switches long chains to balanced trees).</p></li>
+<li><p><strong>Open addressing</strong>: on collision, probe other slots (linear probing, quadratic probing, Robin Hood hashing). Python’s <code>dict</code> uses open addressing with a perturbed probe sequence.</p></li>
+</ul>
+<p>The <strong>load factor</strong> <span class="math inline">\(\alpha = n/m\)</span> (items per slot) controls performance. When it passes a threshold (often 0.66–0.75), the table doubles and rehashes all keys, amortized <span class="math inline">\(O(1)\)</span> per insert.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<ul>
+<li><p>With linear probing, expected probes for an unsuccessful search are about <span class="math inline">\(\tfrac12\left(1 + 1/(1-\alpha)^2\right)\)</span>: 2.5 at <span class="math inline">\(\alpha=0.5\)</span>, 50 at <span class="math inline">\(\alpha=0.9\)</span>. That is why load factors stay well below 1.</p></li>
+<li><p><strong>Hash flooding</strong>: an attacker who knows the hash function can send keys that all collide, turning <span class="math inline">\(O(1)\)</span> into <span class="math inline">\(O(n)\)</span> and a server into a denial-of-service target. Languages use randomized seeds (SipHash) for strings.</p></li>
+<li><p>Keys must be immutable (or their hash must not change), and equal keys must have equal hashes.</p></li>
+<li><p>Floating-point keys are dangerous: <code>0.1+0.2 != 0.3</code>.</p></li>
+</ul>
+</div>
+<h1 id="pattern-frequency-counting-and-complement-lookup">Pattern: Frequency Counting and Complement Lookup</h1>
+<p><em>Two Sum with a hash map</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> array <span class="math inline">\(A\)</span>, target <span class="math inline">\(t\)</span></div>
+<div class="algo-line" style="--d:0"><strong>Output:</strong> indices <span class="math inline">\((i, j)\)</span> with <span class="math inline">\(A[i] + A[j] = t\)</span>, or none</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(seen \gets\)</span> empty map from value to index</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(j \gets 0\)</span> <strong>to</strong> <span class="math inline">\(n-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(t - A[j] \in seen\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> <span class="math inline">\((seen[t - A[j]], j)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(seen[A[j]] \gets j\)</span> <em>▷ insert after checking, so <span class="math inline">\(i \ne j\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> none</div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Invariant:</strong> before processing <span class="math inline">\(j\)</span>, <code>seen</code> contains every value in <span class="math inline">\(A[0..j-1]\)</span>. If a valid pair <span class="math inline">\((i, j)\)</span> exists with <span class="math inline">\(i&lt;j\)</span>, then when the loop reaches <span class="math inline">\(j\)</span>, <span class="math inline">\(A[i]\)</span> is already in <code>seen</code>, so the pair is found. <strong>Time:</strong> <span class="math inline">\(O(n)\)</span> <strong>Space:</strong> <span class="math inline">\(O(n)\)</span>. Sorting plus two pointers gives <span class="math inline">\(O(n\log n)\)</span> time and <span class="math inline">\(O(1)\)</span> extra space but loses original indices unless you sort index pairs.</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“Find a pair/complement,” “count occurrences,” “group anagrams” (key = sorted letters or a 26-count vector), “first unique,” “have we seen this before,” “longest consecutive sequence” (a set plus only starting from sequence starts gives <span class="math inline">\(O(n)\)</span>).</p>
+</div>
+<h1 id="pattern-prefix-sums">Pattern: Prefix Sums</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>To answer “how much did I spend from day 3 to day 9?” you do not re-add every day. Keep a running total; the answer is <span class="math inline">\(\text{total}(9) - \text{total}(2)\)</span>.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Define <span class="math inline">\(P[0] = 0\)</span> and <span class="math inline">\(P[i+1] = P[i] + A[i]\)</span>. Then <span class="math inline">\(\text{sum}(A[l..r]) = P[r+1] - P[l]\)</span> in <span class="math inline">\(O(1)\)</span> after <span class="math inline">\(O(n)\)</span> preprocessing. In 2D, <span class="math inline">\(P[i][j]\)</span> is the sum of the rectangle above-left; a rectangle sum uses inclusion-exclusion of four corners.</p>
+</div>
+<p><em>Count subarrays with sum <span class="math inline">\(k\)</span> (values may be negative)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> array <span class="math inline">\(A\)</span>, integer <span class="math inline">\(k\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(count \gets 0\)</span>; <span class="math inline">\(prefix \gets 0\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(freq \gets\)</span> map with <span class="math inline">\(freq[0] = 1\)</span> <em>▷ the empty prefix</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each <span class="math inline">\(x\)</span> in <span class="math inline">\(A\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(prefix \gets prefix + x\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(count \gets count + freq[prefix - k]\)</span> <em>▷ earlier prefixes <span class="math inline">\(p\)</span> with <span class="math inline">\(prefix - p = k\)</span></em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(freq[prefix] \gets freq[prefix] + 1\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(count\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>A subarray <span class="math inline">\(A[i..j]\)</span> sums to <span class="math inline">\(k\)</span> exactly when <span class="math inline">\(P[j+1] - P[i] = k\)</span>, i.e. when an earlier prefix equals <span class="math inline">\(P[j+1] - k\)</span>. The map counts how many earlier prefixes have each value, so each position adds the number of valid starting points. <strong>Time:</strong> <span class="math inline">\(O(n)\)</span> <strong>Space:</strong> <span class="math inline">\(O(n)\)</span>.</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“Sum (or XOR, or count) over a range,” many range queries on a static array, “subarray sum equals <span class="math inline">\(k\)</span>” with negatives, “divisible by <span class="math inline">\(k\)</span>” (store prefix mod <span class="math inline">\(k\)</span>), “equal number of 0s and 1s” (map 0 to <span class="math inline">\(-1\)</span>, find prefix sum 0). For range queries with updates, use a Fenwick or segment tree (Chapter 7).</p>
+</div>
+<h1 id="pattern-two-pointers">Pattern: Two Pointers</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Two indices move through the data so that each step discards possibilities that cannot be the answer. Three common shapes:</p>
+<ul>
+<li><p><strong>Opposite ends</strong> on sorted data: pair sum, three-sum (fix one, two-pointer the rest, <span class="math inline">\(O(n^2)\)</span>), container with most water, trapping rain water.</p></li>
+<li><p><strong>Same direction (fast/slow)</strong>: remove duplicates in place, move zeros, partition, merge two sorted arrays from the back.</p></li>
+<li><p><strong>Two sequences</strong>: merging, intersection, is-subsequence.</p></li>
+</ul>
+</div>
+<p><em>Container with most water</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> heights <span class="math inline">\(H[0..n-1]\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(l \gets 0\)</span>; <span class="math inline">\(r \gets n-1\)</span>; <span class="math inline">\(best \gets 0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(l &lt; r\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(best \gets \max(best, (r-l)\cdot\min(H[l], H[r]))\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(H[l] &lt; H[r]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(l \gets l+1\)</span> <em>▷ the shorter wall limits every narrower pair</em></div>
+<div class="algo-line" style="--d:1"><strong>else</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(r \gets r-1\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(best\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Suppose <span class="math inline">\(H[l] &lt; H[r]\)</span>. Any container using wall <span class="math inline">\(l\)</span> and a wall <span class="math inline">\(r&#39; &lt; r\)</span> is narrower and its height is still at most <span class="math inline">\(H[l]\)</span>, so it cannot beat the current one. Wall <span class="math inline">\(l\)</span> can therefore be discarded safely. Each step discards one wall, so the loop runs <span class="math inline">\(n-1\)</span> times: <strong>Time:</strong> <span class="math inline">\(O(n)\)</span> <strong>Space:</strong> <span class="math inline">\(O(1)\)</span>. This “discard what cannot win” argument is the proof template for every opposite-ends two-pointer algorithm.</p>
+</div>
+<h1 id="pattern-sliding-window">Pattern: Sliding Window</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Look at a long street through a window frame that you slide along. You can stretch the frame to see more or shrink it to see less, but you never jump backward. Every house enters the frame once and leaves once.</p>
+</div>
+<p><em>Variable-size sliding window template (longest valid window)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(l \gets 0\)</span>; <span class="math inline">\(best \gets 0\)</span>; <span class="math inline">\(state \gets\)</span> empty</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(r \gets 0\)</span> <strong>to</strong> <span class="math inline">\(n-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">add <span class="math inline">\(A[r]\)</span> to <span class="math inline">\(state\)</span> <em>▷ expand</em></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(state\)</span> is invalid <strong>do</strong></div>
+<div class="algo-line" style="--d:2">remove <span class="math inline">\(A[l]\)</span> from <span class="math inline">\(state\)</span>; <span class="math inline">\(l \gets l+1\)</span> <em>▷ shrink until valid</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(best \gets \max(best, r - l + 1)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(best\)</span></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Longest substring without repeating characters:</strong> state is a count map; invalid when any count <span class="math inline">\(&gt; 1\)</span>. <strong>Minimum window containing all of <span class="math inline">\(T\)</span>:</strong> expand until valid, then shrink while still valid, recording the minimum; track a counter of how many required characters are satisfied so validity is <span class="math inline">\(O(1)\)</span>. <strong>At most <span class="math inline">\(K\)</span> distinct:</strong> invalid when the map has more than <span class="math inline">\(K\)</span> keys. <strong>Exactly <span class="math inline">\(K\)</span>:</strong> <span class="math inline">\(\text{atMost}(K) - \text{atMost}(K-1)\)</span>.</p>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Requires <strong>monotonicity</strong>: if a window is invalid, every larger window containing it is also invalid (and if valid, every smaller window inside is valid). Then for each right end, the best left end only moves right. Each element is added and removed at most once, so total work is <span class="math inline">\(O(n)\)</span> even with the inner <code>while</code>. With negative numbers, “sum <span class="math inline">\(\le k\)</span>” is <em>not</em> monotonic, which is why those problems need prefix sums instead.</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“Longest/shortest contiguous subarray or substring such that…,” “at most <span class="math inline">\(K\)</span>,” fixed window of size <span class="math inline">\(k\)</span> (moving average, max sum of <span class="math inline">\(k\)</span> consecutive), “all anagrams of <span class="math inline">\(p\)</span> in <span class="math inline">\(s\)</span>” (fixed window of frequency counts).</p>
+</div>
+<h1 id="pattern-kadanes-algorithm-maximum-subarray">Pattern: Kadane’s Algorithm (Maximum Subarray)</h1>
+<p><em>Maximum subarray sum (Kadane)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(cur \gets A[0]\)</span>; <span class="math inline">\(best \gets A[0]\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i \gets 1\)</span> <strong>to</strong> <span class="math inline">\(n-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(cur \gets \max(A[i], cur + A[i])\)</span> <em>▷ best sum of a subarray ending at <span class="math inline">\(i\)</span></em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(best \gets \max(best, cur)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(best\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>This is a DP: <span class="math inline">\(\text{end}[i] = \max(A[i], \text{end}[i-1] + A[i])\)</span>. A subarray ending at <span class="math inline">\(i\)</span> either starts fresh at <span class="math inline">\(i\)</span> or extends the best subarray ending at <span class="math inline">\(i-1\)</span>; extending anything worse cannot help. Only the previous value is needed, so space is <span class="math inline">\(O(1)\)</span>. <strong>Variants:</strong> maximum product (track both max and min, since a negative times the min can become the max); circular array (answer is <span class="math inline">\(\max(\text{kadane}, \text{total} - \text{min subarray})\)</span>, unless all negative).</p>
+</div>
+<h1 id="in-place-tricks">In-Place Tricks</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Dutch national flag</strong> (sort 0s, 1s, 2s in one pass): three pointers <code>low</code>, <code>mid</code>, <code>high</code>; invariant: <span class="math inline">\([0,low)\)</span> are 0, <span class="math inline">\([low,mid)\)</span> are 1, <span class="math inline">\((high, n-1]\)</span> are 2.</p></li>
+<li><p><strong>Cyclic sort / index as hash</strong>: when values are in <span class="math inline">\([1, n]\)</span>, place value <span class="math inline">\(v\)</span> at index <span class="math inline">\(v-1\)</span>; finds missing and duplicate numbers in <span class="math inline">\(O(n)\)</span> time, <span class="math inline">\(O(1)\)</span> space. First missing positive uses the same idea.</p></li>
+<li><p><strong>Rotate by <span class="math inline">\(k\)</span></strong>: reverse all, reverse first <span class="math inline">\(k\)</span>, reverse rest.</p></li>
+<li><p><strong>Boyer–Moore majority vote</strong>: keep a candidate and a counter; increment on match, decrement otherwise, replace at zero. Finds an element appearing <span class="math inline">\(&gt; n/2\)</span> times in <span class="math inline">\(O(n)\)</span>, <span class="math inline">\(O(1)\)</span> (verify with a second pass).</p></li>
+</ul>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<ul>
+<li><p><strong>Feature hashing</strong> (the “hashing trick”) maps millions of sparse categorical values into a fixed-size vector with a hash function, accepting collisions instead of storing a vocabulary.</p></li>
+<li><p><strong>Sliding windows</strong> compute streaming features: clicks in the last 5 minutes, rolling means, and rate limits on API tokens.</p></li>
+<li><p><strong>Prefix sums</strong> implement cumulative distributions for weighted sampling (binary search on the CDF), cumulative probabilities in top-p sampling, and integral images in computer vision.</p></li>
+<li><p><strong>Deduplication</strong> of training data starts with exact hashing of normalized text before near-duplicate methods (Chapter 15).</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Longest substring with at most <span class="math inline">\(K\)</span> distinct characters</div>
+<p>Clarify: lowercase only? <span class="math inline">\(K = 0\)</span>? Empty string? Brute force checks every substring, <span class="math inline">\(O(n^2)\)</span> with incremental counts. Observation: if a window has more than <span class="math inline">\(K\)</span> distinct characters, extending it keeps it invalid (monotonic), so a sliding window applies. State: a map from character to count in the window. Expand right, add its count; while the map has more than <span class="math inline">\(K\)</span> keys, decrement the left character and delete it at zero, move left. Record the window length. Complexity <span class="math inline">\(O(n)\)</span> time, <span class="math inline">\(O(K)\)</span> space. Trace <code>"eceba"</code>, <span class="math inline">\(K=2\)</span>: windows <code>e</code>, <code>ec</code>, <code>ece</code> (len 3), then <code>eceb</code> invalid <span class="math inline">\(\to\)</span> shrink to <code>eb</code>... answer 3. Follow-up: streaming input where you cannot store the string: the same algorithm works with a deque of the window.</p>
+</div>
+<div class="box box-followups" data-kind="followups"><div class="box-title">➕ Follow-ups</div>
+<ul>
+<li><p>What if values can be negative? (Window no longer works; use prefix sums.)</p></li>
+<li><p>What is the worst case of your hash map, and how would you defend against it?</p></li>
+<li><p>Can you do it with <span class="math inline">\(O(1)\)</span> extra space? (Often by sorting or using the array itself.)</p></li>
+<li><p>What if the array does not fit in memory? (External sort, streaming, sketches.)</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Arrays are fast because they are contiguous; hash tables trade order for <span class="math inline">\(O(1)\)</span> lookup.</p></li>
+<li><p>Prefix sums for range queries and “sum equals <span class="math inline">\(k\)</span>” with negatives.</p></li>
+<li><p>Two pointers when sorted or when one side can be discarded each step.</p></li>
+<li><p>Sliding windows need monotonic validity; each element enters and leaves once.</p></li>
+</ul>
+</div>

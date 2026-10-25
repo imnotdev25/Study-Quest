@@ -1,0 +1,154 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A GPU runs thousands of threads in groups of 32 (<em>warps</em>) that execute the same instruction. Memory is a hierarchy: registers and shared memory (on-chip, tiny, very fast) above HBM (80 GB, about 3 TB/s). A kernel is fast when neighbouring threads read neighbouring addresses (<em>coalescing</em>) and when data loaded from HBM is reused many times on chip (<em>tiling</em>).</p>
+</div>
+<h2 class="unnumbered" id="triton">Triton</h2>
+<p>Triton lets you write a kernel per <em>block</em> of data instead of per thread: <code>tl.program_id</code> picks the block, <code>tl.arange</code> makes a vector of offsets, <code>tl.load</code>/<code>tl.store</code> with a mask handle the ragged edge, and the compiler handles warps, coalescing and shared memory. The listing has the three kernels from the course (vector add, row softmax, RoPE) and a Modal entry point. It was <em>not run</em>: Triton needs an NVIDIA GPU.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference ch. &#x27;Triton and Kernel Engineering&#x27;. NOT run here: Triton needs an NVIDIA GPU.
+Run on Modal with:  modal run triton_kernels.py   (pins triton 3.3.1 / torch 2.7.1 inside the image).&quot;&quot;&quot;
+import modal
+
+app = modal.App(&quot;triton-kernels&quot;)
+image = modal.Image.debian_slim().uv_pip_install(&quot;torch==2.7.1&quot;, &quot;triton==3.3.1&quot;)
+
+
+@app.function(gpu=&quot;H100&quot;, image=image)
+def bench():
+    import torch
+    import triton
+    import triton.language as tl
+
+    @triton.jit
+    def add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)                       # one program per BLOCK elements
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs &lt; n                              # guard the ragged last block
+        tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=mask) + tl.load(y_ptr + offs, mask=mask), mask=mask)
+
+    @triton.jit
+    def softmax_kernel(x_ptr, out_ptr, stride, n_cols, BLOCK: tl.constexpr):
+        row = tl.program_id(0)                       # one program per row: the row lives in registers
+        cols = tl.arange(0, BLOCK)
+        x = tl.load(x_ptr + row * stride + cols, mask=cols &lt; n_cols, other=-float(&quot;inf&quot;))
+        x = x - tl.max(x, axis=0)
+        e = tl.exp(x)
+        tl.store(out_ptr + row * stride + cols, e / tl.sum(e, axis=0), mask=cols &lt; n_cols)
+
+    @triton.jit
+    def rope_kernel(x_ptr, cos_ptr, sin_ptr, out_ptr, HALF: tl.constexpr):
+        row = tl.program_id(0)                       # one (token, head) row of length 2*HALF
+        i = tl.arange(0, HALF)
+        x1 = tl.load(x_ptr + row * 2 * HALF + 2 * i)
+        x2 = tl.load(x_ptr + row * 2 * HALF + 2 * i + 1)
+        c = tl.load(cos_ptr + row * HALF + i)
+        s = tl.load(sin_ptr + row * HALF + i)
+        tl.store(out_ptr + row * 2 * HALF + 2 * i, x1 * c - x2 * s)
+        tl.store(out_ptr + row * 2 * HALF + 2 * i + 1, x1 * s + x2 * c)
+
+    n = 1 &lt;&lt; 24
+    x, y = torch.randn(n, device=&quot;cuda&quot;), torch.randn(n, device=&quot;cuda&quot;)
+    out = torch.empty_like(x)
+    add_kernel[(triton.cdiv(n, 1024),)](x, y, out, n, BLOCK=1024)
+    assert torch.allclose(out, x + y)
+    ms = triton.testing.do_bench(lambda: add_kernel[(triton.cdiv(n, 1024),)](x, y, out, n, BLOCK=1024))
+    print(f&quot;vector add: {3 * n * 4 / ms / 1e6:.0f} GB/s&quot;)   # 2 reads + 1 write
+
+    X = torch.randn(4096, 1000, device=&quot;cuda&quot;)
+    Y = torch.empty_like(X)
+    softmax_kernel[(4096,)](X, Y, X.stride(0), 1000, BLOCK=1024)
+    assert torch.allclose(Y, X.softmax(-1), atol=1e-6)
+    print(&quot;softmax ok,&quot;, f&quot;{triton.testing.do_bench(lambda: softmax_kernel[(4096,)](X, Y, X.stride(0), 1000, BLOCK=1024)):.3f} ms&quot;)</code></pre>
+<h2 class="unnumbered" id="flashattention">FlashAttention</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: The online softmax that lets attention run tile by tile</div>
+<p><strong>Step 1.</strong> For one query row, <span class="math inline">\(o=\sum_je^{s_j}v_j\big/\sum_je^{s_j}\)</span>. Process key tiles one at a time, keeping a running max <span class="math inline">\(m\)</span>, denominator <span class="math inline">\(\ell\)</span> and numerator <span class="math inline">\(a\)</span>.</p>
+<p><strong>Step 2.</strong> A new tile with scores <span class="math inline">\(s^{(t)}\)</span>: <span class="math inline">\(m&#39;=\max(m,\max s^{(t)})\)</span>.</p>
+<p><strong>Step 3.</strong> Rescale what you have and add the tile: <span class="math inline">\(\ell&#39;=e^{m-m&#39;}\ell+\sum_je^{s^{(t)}_j-m&#39;}\)</span>, <span class="math inline">\(a&#39;=e^{m-m&#39;}a+\sum_je^{s^{(t)}_j-m&#39;}v_j\)</span>.</p>
+<p><strong>Step 4.</strong> After the last tile, <span class="math inline">\(o=a/\ell\)</span>, exactly. The <span class="math inline">\(T\times T\)</span> score matrix never exists in HBM; only Q, K, V and O are read or written. FlashAttention-2 moves the loop order so each thread block owns a query tile (more parallelism, fewer non-matmul FLOPs); causal masks let it skip tiles above the diagonal.</p>
+</div>
+<h2 class="unnumbered" id="decode-attention-is-a-different-kernel">Decode attention is a different kernel</h2>
+<p>Decode has one query per sequence and a long KV cache: little parallelism inside a sequence and pure bandwidth. <strong>Flash-decoding</strong> splits the KV into chunks processed by different thread blocks and merges them with the same log-sum-exp rule. <strong>Paged attention</strong> reads the KV through the block table. Attention’s <em>arithmetic intensity</em> in decode is set by how many query heads share each KV head: MHA 1 FLOP/byte, GQA 4, MQA 32, MLA about 228. That is the argument of <em>Hardware-Efficient Attention for Fast Decoding</em>: designs that raise FLOPs per KV byte (MLA, and its grouped variants) turn decode attention from bandwidth-bound toward compute-bound.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference ch. &#x27;Attention Optimization&#x27;: tiled online-softmax attention (FlashAttention), split-KV decode
+(flash-decoding), paged gather, HBM traffic, and decode arithmetic intensity of MHA/GQA/MLA.&quot;&quot;&quot;
+import torch
+
+torch.manual_seed(0)
+
+
+def naive(q, k, v):
+    s = q @ k.T / q.shape[-1] ** 0.5
+    s = s.masked_fill(torch.ones_like(s, dtype=torch.bool).triu(1 + k.shape[0] - q.shape[0]), float(&quot;-inf&quot;))
+    return s.softmax(-1) @ v
+
+
+def flash(q, k, v, Br=64, Bc=64):
+    &quot;&quot;&quot;FlashAttention forward: never materialise the T x T score matrix. Causal.&quot;&quot;&quot;
+    T, d = q.shape
+    out = torch.empty_like(q)
+    for i in range(0, T, Br):
+        qi = q[i:i + Br]
+        m = torch.full((len(qi), 1), float(&quot;-inf&quot;), dtype=q.dtype)   # running max
+        l = torch.zeros(len(qi), 1, dtype=q.dtype)                    # running denominator
+        acc = torch.zeros_like(qi)                                    # running numerator
+        for j in range(0, i + Br, Bc):                                # skip tiles above the diagonal
+            s = qi @ k[j:j + Bc].T / d**0.5
+            rows, cols = torch.arange(i, i + len(qi))[:, None], torch.arange(j, j + s.shape[1])[None]
+            s = s.masked_fill(cols &gt; rows, float(&quot;-inf&quot;))
+            m_new = torch.maximum(m, s.amax(1, keepdim=True))
+            p = (s - m_new).exp()
+            corr = (m - m_new).exp()                                  # rescale what we had
+            l = l * corr + p.sum(1, keepdim=True)
+            acc = acc * corr + p @ v[j:j + Bc]
+            m = m_new
+        out[i:i + Br] = acc / l
+    return out
+
+
+T, d = 512, 64
+q, k, v = (torch.randn(T, d, dtype=torch.float64) for _ in range(3))
+print(f&quot;[flash] tiled == naive: {torch.allclose(flash(q, k, v), naive(q, k, v))}  (max err &quot;
+      f&quot;{(flash(q, k, v) - naive(q, k, v)).abs().max():.1e})&quot;)
+
+# HBM traffic per head, bf16: naive writes and reads the T x T matrix; flash streams K, V per query tile.
+for T_ in (4096, 32768):
+    naive_b = (4 * T_ * d + 2 * T_ * T_ * 2) * 2       # Q,K,V,O + S written &amp; read, then P written &amp; read
+    flash_b = (2 * T_ * d + (T_ / 128) * 2 * T_ * d) * 2
+    print(f&quot;[hbm] T={T_:6d}: naive {naive_b / 2**20:8.1f} MiB  flash {flash_b / 2**20:7.1f} MiB  &quot;
+          f&quot;({naive_b / flash_b:.0f}x less)&quot;)
+
+# Flash-decoding: one query, KV split into chunks processed in parallel, merged with log-sum-exp.
+qd = torch.randn(1, d, dtype=torch.float64)
+parts = []
+for j in range(0, T, 128):
+    s = qd @ k[j:j + 128].T / d**0.5
+    parts.append((s.amax(), (s - s.amax()).exp().sum(), (s - s.amax()).exp() @ v[j:j + 128]))
+M = max(p[0] for p in parts)
+num = sum(p[2] * (p[0] - M).exp() for p in parts)
+den = sum(p[1] * (p[0] - M).exp() for p in parts)
+print(f&quot;[split-kv] {len(parts)} chunks merged == full decode attention: {torch.allclose(num / den, naive(qd, k, v))}&quot;)
+
+# Paged attention: the same K/V scattered over a block pool, read through a block table.
+BS = 16
+pool = torch.zeros(64, BS, d, dtype=torch.float64)
+table = torch.randperm(64)[:T // BS]
+pool[table] = k.view(-1, BS, d)
+print(f&quot;[paged] gather through block table == contiguous K: {torch.equal(pool[table].flatten(0, 1), k)}&quot;)
+
+# Decode arithmetic intensity of attention (FLOPs per byte of KV read), bf16.
+print(&quot;[intensity] layout                 FLOP per KV byte&quot;)
+for name, qh, kvh, kvdim in ((&quot;MHA 32q/32kv&quot;, 32, 32, 128), (&quot;GQA 32q/8kv&quot;, 32, 8, 128),
+                             (&quot;MQA 32q/1kv&quot;, 32, 1, 128), (&quot;MLA 128q, 576 latent&quot;, 128, 1, 576)):
+    flops = 4 * qh * 128 if &quot;MLA&quot; not in name else 4 * qh * 512   # per cached token
+    byts = (2 * kvh * kvdim if &quot;MLA&quot; not in name else kvdim) * 2
+    print(f&quot;[intensity] {name:22s} {flops / byts:6.1f}&quot;)</code></pre>
+<pre class="code output"><code class="output">[flash] tiled == naive: True  (max err 1.0e-15)
+[hbm] T=  4096: naive    130.0 MiB  flash    33.0 MiB  (4x less)
+[hbm] T= 32768: naive   8208.0 MiB  flash  2056.0 MiB  (4x less)
+[split-kv] 4 chunks merged == full decode attention: True
+[paged] gather through block table == contiguous K: True
+[intensity] layout                 FLOP per KV byte
+[intensity] MHA 32q/32kv              1.0
+[intensity] GQA 32q/8kv               4.0
+[intensity] MQA 32q/1kv              32.0
+[intensity] MLA 128q, 576 latent    227.6</code></pre>
+<h2 class="unnumbered" id="compilation-and-cuda-graphs">Compilation and CUDA graphs</h2>
+<p>Eager PyTorch launches one kernel per operation, and each launch costs a few microseconds of CPU time. A decode step of a small model at small batch can be mostly launch overhead. <code>torch.compile</code> traces the model into a graph, fuses elementwise ops into fewer kernels, and generates Triton code. A <em>graph break</em> (data-dependent Python control flow, <code>.item()</code>, unsupported ops) splits it into pieces; <code>torch._dynamo.explain(fn)(x)</code> lists them. A <strong>CUDA graph</strong> records a sequence of kernel launches once and replays it with a single launch. It requires static shapes and static memory addresses, so engines capture one graph per batch size bucket (1, 2, 4, 8, …) and pad to the next bucket. The cost is memory held by each captured graph and slower startup, which is why warm-up belongs in the health check.</p>

@@ -1,0 +1,458 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: asking several experts about an unfamiliar case</div>
+<p>Ask five doctors about a common illness and they’ll agree. Ask about something none of them has seen and their guesses scatter. That scatter is useful: it says “we don’t know.” Train several FQE critics differently, and their disagreement flags values the logs never pinned down.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can FQE have low Bellman loss but an inaccurate policy-value estimate?</p></li>
+<li><p>What policy is evaluated if an FQE target uses <span class="math inline">\(\max_{a&#39;}Q(s&#39;,a&#39;)\)</span>?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="bellman-regression-cannot-determine-an-unseen-actions-value">2. Bellman regression cannot determine an unseen action’s value</h3>
+<p>Suppose logs contain no transition for <span class="math inline">\((s,a)\)</span>. FQE receives no direct regression gradient for:</p>
+<p><span class="math display">\[Q(s,a)\]</span></p>
+<p>Its value is determined by initialization, regularization and neural-network generalization—not observed evidence.</p>
+<p>An ensemble fits <span class="math inline">\(M\)</span> critics with different initialization or bootstrap data:</p>
+<p><span class="math display">\[\hat Q_1,\ldots,\hat Q_M\]</span></p>
+<p>Each produces a target-policy value:</p>
+<p><span class="math display">\[\hat V_m(s)
+=
+\sum_a\pi(a\mid s)\hat Q_m(s,a)\]</span></p>
+<p>Measure disagreement:</p>
+<p><span class="math display">\[\bar V(s)
+=
+\frac1M\sum_m\hat V_m(s)\]</span></p>
+<p><span class="math display">\[\sigma_V(s)
+=
+\sqrt{
+\frac1M\sum_m
+\left(
+\hat V_m(s)-\bar V(s)
+\right)^2
+}\]</span></p>
+<p>If an unsupported action receives substantial target-policy probability, its disagreement propagates backward through Bellman targets.</p>
+<p>A heuristic pessimistic score is:</p>
+<p><span class="math display">\[V_{\text{pess}}
+=
+\bar V-\beta\sigma_V\]</span></p>
+<p>This is not automatically a statistically valid confidence bound. Ensembles can agree because they share the same architecture, data, regularization or modeling error.</p>
+<p>Also report unsupported target mass:</p>
+<p><span class="math display">\[u(s)
+=
+\sum_a
+\pi(a\mid s)
+\mathbf1[N(s,a)=0]\]</span></p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>ensemble <span class="math inline">\(Q\)</span>-tables: <span style="background-color: codeinlinebg"><code> [M, S, A]</code></span></p></li>
+<li><p>transition targets: <span style="background-color: codeinlinebg"><code> [M, N]</code></span></p></li>
+<li><p>policy values: <span style="background-color: codeinlinebg"><code> [M]</code></span></p></li>
+<li><p>coverage counts: <span style="background-color: codeinlinebg"><code> [S, A]</code></span></p></li>
+</ul>
+<p>For LLM agents, exact actions rarely repeat. Coverage must therefore be examined through meaningful abstractions such as tool type, argument schema, prompt family, turn depth and policy likelihood—not raw token identity alone.</p>
+<p>A DPO policy may remain close to its reference in KL while still increasing probability on poorly covered tool trajectories. Preference proximity does not prove environmental support.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: pessimistic ensemble value</div>
+<p>Train <span class="math inline">\(M\)</span> FQE critics with different seeds and bootstrap resamples of the logs. Report <span class="math inline">\(\bar V\)</span> and <span class="math inline">\(\mathrm{sd}_m(V_m)\)</span>, and decide on <span class="math inline">\(\bar V-k\cdot\mathrm{sd}\)</span>. Disagreement <em>propagates</em>: an unsupported <span class="math inline">\(Q(s&#39;,a&#39;)\)</span> enters the target of every earlier state that leads to <span class="math inline">\(s&#39;\)</span>, so uncertainty flows backward through the Bellman backups. <strong>Not calibrated:</strong> the spread is a warning signal, not a confidence interval.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Let plausible critics disagree where the logs say nothing.</p></li>
+<li><p>Treat disagreement as a warning, not a guarantee.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: five critics at an unsupported action</div>
+<p><span class="math inline">\(Q_m(s&#39;,R)=(4.0,-1.0,2.5,0.5,3.0)\)</span>, mean 1.8, sd 2.0. At the supported action <span class="math inline">\(L\)</span>: <span class="math inline">\((1.0,1.1,0.9,1.0,1.0)\)</span>, sd 0.07. Pessimistic value with <span class="math inline">\(k=1\)</span>: <span class="math inline">\(1.8-2.0=-0.2\)</span> for <span class="math inline">\(R\)</span>. The ensemble is effectively saying “don’t rely on this action.”</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Same seed and same data for all members.</p></li>
+<li><p>Averaging away the disagreement and reporting only <span class="math inline">\(\bar V\)</span>.</p></li>
+<li><p>Treating <span class="math inline">\(\pm2\)</span>sd as a 95% interval.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-uncertainty-propagates-backward">3. PyTorch exercise — uncertainty propagates backward</h3>
+<p>Use the same MDP:</p>
+<p><span class="math display">\[Q^\pi(1,1)=3,\qquad
+Q^\pi(0,1)=0.9[0.1Q(1,0)+0.9Q(1,1)]\]</span></p>
+<p>One dataset has complete coverage. The other omits <span style="background-color: codeinlinebg"><code> (state=1, action=1)</code></span>.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_models = 20
+num_states = 3
+num_actions = 2
+gamma = 0.9
+terminal_state = 2
+
+# One deterministic example of every relevant pair.
+states = torch.tensor([
+    0, 0, 1, 1
+])
+
+actions = torch.tensor([
+    0, 1, 0, 1
+])
+
+rewards = torch.tensor([
+    1.0, 0.0, 0.0, 3.0
+])
+
+next_states = torch.tensor([
+    terminal_state, 1,
+    terminal_state, terminal_state,
+])
+
+dones = torch.tensor([
+    True, False, True, True
+])
+
+target_policy = torch.tensor([
+    [0.20, 0.80],
+    [0.10, 0.90],
+    [0.50, 0.50],
+])
+
+initial_tables = (
+    2.0
+    * torch.randn(
+        num_models,
+        num_states,
+        num_actions,
+    )
+)
+
+
+def fit_fqe_ensemble(
+    fit_states,
+    fit_actions,
+    fit_rewards,
+    fit_next_states,
+    fit_dones,
+):
+    q_tables = torch.nn.Parameter(
+        initial_tables.clone()
+    )
+
+    target_tables = (
+        q_tables.detach().clone()
+    )
+
+    optimizer = torch.optim.Adam(
+        [q_tables],
+        lr=0.08,
+    )
+
+    for step in range(500):
+        # TODO 1: Target-policy next values
+        # for every ensemble member.
+        with torch.no_grad():
+            next_action_values = ...
+
+            next_values = ...
+
+            bellman_targets = ...
+
+        # TODO 2: Logged predictions and loss.
+        predictions = ...
+
+        loss = ...
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # TODO 3: Update target tables.
+        if (step + 1) % 20 == 0:
+            ...
+
+    return q_tables.detach(), loss.detach()
+
+
+# TODO 4: Fit complete and support-gap ensembles.
+full_q, full_loss = ...
+
+support_gap_mask = ~(
+    (states == 1)
+    &amp; (actions == 1)
+)
+
+gap_q, gap_loss = ...
+
+full_values = ...
+gap_values = ...
+
+beta = 2.0
+
+full_mean = ...
+full_std = ...
+full_pessimistic = ...
+
+gap_mean = ...
+gap_std = ...
+gap_pessimistic = ...
+
+# TODO 5: Coverage and unsupported target mass.
+def coverage_table(
+    table_states,
+    table_actions,
+):
+    pair_ids = ...
+
+    return ...
+
+
+full_coverage = ...
+
+gap_coverage = ...
+
+full_unsupported_mass = ...
+
+gap_unsupported_mass = ...
+
+exact_value = torch.tensor(2.144)
+
+print(&quot;Exact value:&quot;, exact_value.item())
+
+print(
+    &quot;Full ensemble:&quot;,
+    {
+        &quot;mean&quot;: full_mean.item(),
+        &quot;std&quot;: full_std.item(),
+        &quot;pessimistic&quot;:
+            full_pessimistic.item(),
+        &quot;loss&quot;: full_loss.item(),
+    },
+)
+
+print(
+    &quot;Gap ensemble:&quot;,
+    {
+        &quot;mean&quot;: gap_mean.item(),
+        &quot;std&quot;: gap_std.item(),
+        &quot;pessimistic&quot;:
+            gap_pessimistic.item(),
+        &quot;loss&quot;: gap_loss.item(),
+    },
+)
+
+print(
+    &quot;Full unsupported target mass:&quot;,
+    full_unsupported_mass,
+)
+
+print(
+    &quot;Gap unsupported target mass:&quot;,
+    gap_unsupported_mass,
+)
+
+print(
+    &quot;Gap [Q(1,1), Q(0,1)] by model:\n&quot;,
+    torch.stack([
+        gap_q[:, 1, 1],
+        gap_q[:, 0, 1],
+    ], dim=1),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should complete-coverage critics converge to nearly identical initial values?</p></li>
+<li><p>Which missing <span class="math inline">\(Q\)</span>-entry retains initialization-dependent values?</p></li>
+<li><p>Why does uncertainty in <span class="math inline">\(Q(1,1)\)</span> spread to <span class="math inline">\(Q(0,1)\)</span>?</p></li>
+<li><p>Is <span style="background-color: codeinlinebg"><code> mean - 2 * std</code></span> automatically a 95% confidence bound?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> target_tables[:, fit_next_states, :]</code></span> has shape <span style="background-color: codeinlinebg"><code> [M, N, A]</code></span>.</p></li>
+<li><p>Broadcast target-policy probabilities with a leading model dimension.</p></li>
+<li><p>Predictions use <span style="background-color: codeinlinebg"><code> q_tables[:, fit_states, fit_actions]</code></span>.</p></li>
+<li><p>Evaluate each model with <span style="background-color: codeinlinebg"><code> target_policy[0]</code></span>.</p></li>
+<li><p>Ensemble standard deviation is across dimension <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+<li><p>An unseen pair has coverage count zero.</p></li>
+<li><p>Multiply the zero-coverage indicator by the target-policy table.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Give every critic identical initialization. Missing-action disagreement can falsely become zero.</p></li>
+<li><p>Apply strong weight decay. All unsupported values may collapse toward the same number without gaining evidence.</p></li>
+<li><p>Compute variance across actions instead of across models. That measures action-value differences, not epistemic uncertainty.</p></li>
+<li><p>Forget the terminal mask. Random terminal values create artificial ensemble disagreement.</p></li>
+<li><p>Multiply rewards by <span style="background-color: codeinlinebg"><code> 100</code></span> without rescaling <span class="math inline">\(\beta\)</span>. Pessimism changes purely because reward units changed.</p></li>
+<li><p>Interpret high disagreement as proof that an action is bad. It means evidence is weak, not that the true value is low.</p></li>
+<li><p>Interpret agreement as proof of correctness. Shared misspecification can make every critic wrong in the same direction.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does FQE initialization matter only for unsupported or weakly constrained values?</p></li>
+<li><p>What does unsupported target mass measure?</p></li>
+<li><p>Why is ensemble disagreement not a calibrated confidence interval?</p></li>
+<li><p>What should be logged for neural FQE on tool-agent trajectories?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Target-policy Bellman targets:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    next_action_values = (
+        target_tables[
+            :,
+            fit_next_states,
+            :,
+        ]
+    )
+
+    next_values = (
+        next_action_values
+        * target_policy[
+            fit_next_states
+        ][None, :, :]
+    ).sum(dim=-1)
+
+    bellman_targets = (
+        fit_rewards[None, :]
+        + gamma
+        * (
+            ~fit_dones
+        ).to(torch.float64)[None, :]
+        * next_values
+    )</code></pre>
+<p>Predictions and loss:</p>
+<pre class="code python"><code class="language-python">predictions = q_tables[
+    :,
+    fit_states,
+    fit_actions,
+]
+
+loss = F.mse_loss(
+    predictions,
+    bellman_targets,
+)</code></pre>
+<p>Target updates:</p>
+<pre class="code python"><code class="language-python">if (step + 1) % 20 == 0:
+    with torch.no_grad():
+        target_tables.copy_(
+            q_tables.detach()
+        )</code></pre>
+<p>Fitting and ensemble values:</p>
+<pre class="code python"><code class="language-python">full_q, full_loss = fit_fqe_ensemble(
+    states,
+    actions,
+    rewards,
+    next_states,
+    dones,
+)
+
+gap_q, gap_loss = fit_fqe_ensemble(
+    states[support_gap_mask],
+    actions[support_gap_mask],
+    rewards[support_gap_mask],
+    next_states[support_gap_mask],
+    dones[support_gap_mask],
+)
+
+full_values = (
+    full_q[:, 0, :]
+    * target_policy[0][None, :]
+).sum(dim=-1)
+
+gap_values = (
+    gap_q[:, 0, :]
+    * target_policy[0][None, :]
+).sum(dim=-1)
+
+full_mean = full_values.mean()
+
+full_std = full_values.std(
+    correction=1
+)
+
+full_pessimistic = (
+    full_mean - beta * full_std
+)
+
+gap_mean = gap_values.mean()
+
+gap_std = gap_values.std(
+    correction=1
+)
+
+gap_pessimistic = (
+    gap_mean - beta * gap_std
+)</code></pre>
+<p>Coverage diagnostics:</p>
+<pre class="code python"><code class="language-python">def coverage_table(
+    table_states,
+    table_actions,
+):
+    pair_ids = (
+        table_states * num_actions
+        + table_actions
+    )
+
+    return torch.bincount(
+        pair_ids,
+        minlength=(
+            num_states * num_actions
+        ),
+    ).reshape(
+        num_states,
+        num_actions,
+    )
+
+
+full_coverage = coverage_table(
+    states,
+    actions,
+)
+
+gap_coverage = coverage_table(
+    states[support_gap_mask],
+    actions[support_gap_mask],
+)
+
+full_unsupported_mass = (
+    target_policy
+    * (
+        full_coverage == 0
+    ).to(torch.float64)
+).sum(dim=-1)[:2]
+
+gap_unsupported_mass = (
+    target_policy
+    * (
+        gap_coverage == 0
+    ).to(torch.float64)
+).sum(dim=-1)[:2]</code></pre>
+<p>With complete coverage, every relevant critic should approach:</p>
+<p><span class="math display">\[Q^\pi
+=
+\begin{bmatrix}
+1&amp;2.43\\
+0&amp;3\\
+*&amp;*
+\end{bmatrix}\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[V^\pi(0)=2.144\]</span></p>
+<p>and ensemble disagreement should be nearly zero.</p>
+<p>With <span style="background-color: codeinlinebg"><code> (state=1, action=1)</code></span> absent, its target-policy unsupported mass is:</p>
+<p><span class="math display">\[u(1)=\pi(1\mid1)=0.9\]</span></p>
+<p>That missing value affects its predecessor:</p>
+<p><span class="math display">\[Q(0,1)
+=
+0.9[
+0.1Q(1,0)+0.9Q(1,1)
+]\]</span></p>
+<p>Therefore, initialization-dependent uncertainty propagates into the reported initial value even though the observed Bellman loss can be almost zero.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Observed state-action pairs receive repeated regression gradients; sufficiently optimized tabular values lose their initialization dependence.</p></li>
+<li><p>It is the probability that the target policy assigns to actions with no logged coverage in a state.</p></li>
+<li><p>Members are correlated and may share data, architectures and errors. Their empirical spread has no automatic frequentist coverage guarantee.</p></li>
+<li><p>Report ensemble spread by state or turn, target mass on rare actions, visitation counts, initialization and bootstrap diversity, Bellman residuals, reward scale, terminal masking and sensitivity to architecture and regularization.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Bellman loss only tests logged state-action pairs; unsupported counterfactual values can still dominate the target-policy expectation.</p></li>
+<li><p>Using <span style="background-color: codeinlinebg"><code> max</code></span> applies the Bellman optimality operator and evaluates an implied greedy policy rather than the fixed target policy.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> when logs do not constrain an action, different plausible critics should be allowed to disagree. Treat that disagreement as a warning signal, not a calibrated guarantee—and never let a small training loss hide missing support.</p>

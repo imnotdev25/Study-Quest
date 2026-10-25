@@ -1,0 +1,131 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How to think recursively about trees (“what do I need from my children?”), the four traversals and their iterative forms, BST operations and validation, balanced trees (AVL, red-black, B-trees), lowest common ancestor, and serialization. Trees are also the backbone of decision trees, KD-trees, and hierarchical clustering in ML.</p>
+</div>
+<h1 id="thinking-recursively-about-trees">Thinking Recursively About Trees</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Ask a manager for the size of their department. They ask each team lead, add the answers, and add one for themselves. Nobody needs to see the whole company; each person only talks to their direct reports. Almost every tree algorithm is this conversation.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>There are two ways information moves in a tree DFS:</p>
+<ul>
+<li><p><strong>Bottom-up (return values):</strong> each node computes its answer from its children’s answers. Height, size, “is balanced,” diameter, maximum path sum, subtree sums.</p></li>
+<li><p><strong>Top-down (parameters):</strong> each node receives information from its ancestors. Depth, the path so far, valid value range for BST validation, “root-to-leaf path sum equals target.”</p></li>
+</ul>
+<p>Many hard problems use both: pass constraints down, return summaries up. The key design question is always: <em>what must a child tell its parent?</em></p>
+</div>
+<p><em>Diameter of a binary tree (bottom-up with a global answer)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(best \gets 0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Depth(<span class="math inline">\(node\)</span>) <em>▷ returns height in edges+1; updates <span class="math inline">\(best\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(node =\)</span> null <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> 0</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(L \gets\)</span> ; <span class="math inline">\(R \gets\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(best \gets \max(best, L + R)\)</span> <em>▷ longest path bending at this node</em></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(1 + \max(L, R)\)</span> <em>▷ a parent can extend only one side</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">; <strong>return</strong> <span class="math inline">\(best\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Every path in a tree has a unique highest node where it “bends.” At that node the longest such path is the deepest chain on the left plus the deepest chain on the right. Visiting every node once and checking this covers every path. The returned value and the recorded answer differ: a parent can only continue <em>one</em> branch upward. The same shape solves <strong>maximum path sum</strong> (return <span class="math inline">\(\max(0, \text{best child chain}) + \text{value}\)</span>, record <span class="math inline">\(\text{value} + \max(0,L) + \max(0,R)\)</span>). <strong>Time:</strong> <span class="math inline">\(O(n)\)</span> <strong>Space:</strong> <span class="math inline">\(O(h)\)</span> where <span class="math inline">\(h\)</span> is tree height.</p>
+</div>
+<h1 id="traversals">Traversals</h1>
+<figure class="tikz"><img src="figs/dsa/775e56015f93.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A BST and its four traversals.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Pre-order</strong> (node, left, right): copying or serializing a tree. <strong>In-order</strong> (left, node, right): sorted order for BSTs. <strong>Post-order</strong> (left, right, node): when a node needs its children’s results (deletion, evaluating expression trees, computing sizes). <strong>Level-order</strong> (BFS with a queue): anything about levels or “closest to the root”: right side view, zigzag order, minimum depth, connect next pointers.</p>
+</div>
+<p><em>Iterative in-order traversal</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(S \gets\)</span> empty stack; <span class="math inline">\(cur \gets root\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(cur \ne\)</span> null <strong>or</strong> <span class="math inline">\(S\)</span> not empty <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(cur \ne\)</span> null <strong>do</strong></div>
+<div class="algo-line" style="--d:2">push <span class="math inline">\(cur\)</span>; <span class="math inline">\(cur \gets cur.left\)</span> <em>▷ go as far left as possible</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(cur \gets\)</span> pop<span class="math inline">\((S)\)</span>; visit <span class="math inline">\(cur\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(cur \gets cur.right\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Morris traversal</strong> does in-order in <span class="math inline">\(O(1)\)</span> extra space by temporarily threading each node’s in-order predecessor’s right pointer back to the node, then removing the thread on the second visit. Every edge is traversed at most a constant number of times, so time stays <span class="math inline">\(O(n)\)</span>. It modifies the tree during the walk, so it is not safe with concurrent readers.</p>
+</div>
+<h1 id="binary-search-trees">Binary Search Trees</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A BST keeps every key in the left subtree smaller than the node and every key in the right subtree larger. Search, insert, and delete follow one root-to-leaf path: <span class="math inline">\(O(h)\)</span>, which is <span class="math inline">\(O(\log n)\)</span> only if the tree is balanced and <span class="math inline">\(O(n)\)</span> if it degenerates into a chain (inserting sorted keys).</p>
+<p><strong>Delete</strong> has three cases: a leaf (remove it), one child (splice the child up), two children (replace the key with its in-order successor, the leftmost node of the right subtree, then delete the successor, which has at most one child).</p>
+</div>
+<p><em>Validate a BST by passing bounds down</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Valid(<span class="math inline">\(node, lo, hi\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(node =\)</span> null <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> true</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(node.key \le lo\)</span> <strong>or</strong> <span class="math inline">\(node.key \ge hi\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> false</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <strong>and</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong></div>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<p>The classic bug is checking only <code>node.left.key &lt; node.key &lt; node.right.key</code>. A tree with root 5, left child 3, and 3’s right child 7 passes that local check but is invalid: 7 is in 5’s left subtree. Every node must respect <em>all</em> ancestors, which is why bounds are passed down (or why an in-order traversal must be strictly increasing).</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“Sorted” plus “dynamic inserts” <span class="math inline">\(\to\)</span> balanced BST / ordered set. “<span class="math inline">\(k\)</span>-th smallest” <span class="math inline">\(\to\)</span> in-order with a counter (or store subtree sizes for <span class="math inline">\(O(h)\)</span> order statistics). “Closest value,” “floor/ceiling,” “range count” <span class="math inline">\(\to\)</span> BST walk. “Convert sorted array to balanced BST” <span class="math inline">\(\to\)</span> pick the middle as root recursively.</p>
+</div>
+<h1 id="balanced-trees">Balanced Trees</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>AVL tree</strong>: heights of a node’s two subtrees differ by at most 1. After an insert or delete, rotations restore balance. Height <span class="math inline">\(\le 1.44\log_2 n\)</span>. Strictly balanced, so lookups are fast.</p></li>
+<li><p><strong>Red-black tree</strong>: nodes are red or black; no red node has a red child; every root-to-leaf path has the same number of black nodes. Height <span class="math inline">\(\le 2\log_2(n+1)\)</span>. Fewer rotations on updates. Used by C++ <code>std::map</code>, Java <code>TreeMap</code>, and the Linux scheduler.</p></li>
+<li><p><strong>B-tree / B+tree</strong>: each node holds hundreds of keys sized to a disk page, so the tree is only 3–4 levels deep even for billions of keys. B+trees keep all values in linked leaves for fast range scans. Used by almost every relational database index and file system.</p></li>
+<li><p><strong>Treap / skip list</strong>: randomized balance with simpler code; skip lists back Redis sorted sets.</p></li>
+</ul>
+</div>
+<figure class="tikz"><img src="figs/dsa/a867098c4800.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A rotation changes shape but preserves in-order (sorted) order: <span class="math inline">\(a &lt; x &lt; b &lt; y &lt; c\)</span>.</em></p>
+<h1 id="lowest-common-ancestor">Lowest Common Ancestor</h1>
+<p><em>LCA in a binary tree</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> LCA(<span class="math inline">\(node, p, q\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(node =\)</span> null <strong>or</strong> <span class="math inline">\(node = p\)</span> <strong>or</strong> <span class="math inline">\(node = q\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> <span class="math inline">\(node\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(L \gets\)</span> ; <span class="math inline">\(R \gets\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(L \ne\)</span> null <strong>and</strong> <span class="math inline">\(R \ne\)</span> null <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> <span class="math inline">\(node\)</span> <em>▷ split point</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(L\)</span> if <span class="math inline">\(L \ne\)</span> null else <span class="math inline">\(R\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>The function returns “the LCA if both are in this subtree, otherwise whichever of <span class="math inline">\(p\)</span>, <span class="math inline">\(q\)</span> is in it, otherwise null.” At the first node where <span class="math inline">\(p\)</span> and <span class="math inline">\(q\)</span> come from different sides, that node is the deepest common ancestor. If one is an ancestor of the other, it is returned as soon as it is reached. In a BST it is simpler: walk from the root; if both keys are smaller go left, if both larger go right, else stop.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>For many LCA queries on a static tree, <strong>binary lifting</strong> precomputes <span class="math inline">\(up[v][j]\)</span> = the <span class="math inline">\(2^j\)</span>-th ancestor of <span class="math inline">\(v\)</span> in <span class="math inline">\(O(n\log n)\)</span>; each query lifts the deeper node to the same depth and then both nodes jump by decreasing powers of two, <span class="math inline">\(O(\log n)\)</span>. An Euler tour plus a sparse table (Chapter 7) gives <span class="math inline">\(O(1)\)</span> queries. Binary lifting also answers “<span class="math inline">\(k\)</span>-th ancestor” and path aggregates.</p>
+</div>
+<h1 id="serialization-and-construction">Serialization and Construction</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Serialize</strong> with pre-order, writing a marker for null children (<code>1,2,#,#,3,4,#,#,5,#,#</code>); deserialize by reading tokens in the same pre-order with a recursive function that consumes one token per call. <strong>Construct from pre-order and in-order</strong>: the first pre-order element is the root; its position in in-order splits left and right subtrees; recurse. Use a hash map from value to in-order index for <span class="math inline">\(O(n)\)</span> total. In-order alone cannot determine the tree; pre-order plus in-order (with distinct values) can.</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<ul>
+<li><p><strong>Decision trees</strong> (Chapter 17) are binary trees whose internal nodes test a feature threshold; prediction is a root-to-leaf walk, training is recursive splitting, and gradient-boosted ensembles are forests of them.</p></li>
+<li><p><strong>KD-trees and ball trees</strong> split space by coordinates to speed up nearest-neighbor search in low dimensions; they degrade in high dimensions, which is why embeddings use HNSW instead (Chapter 18).</p></li>
+<li><p><strong>Hierarchical softmax</strong> arranges a vocabulary in a binary (Huffman) tree so computing a word’s probability costs <span class="math inline">\(O(\log V)\)</span> instead of <span class="math inline">\(O(V)\)</span>.</p></li>
+<li><p><strong>Parse trees and ASTs</strong> represent code for code models; tree traversals produce tokens for training and evaluation.</p></li>
+<li><p><strong>Beam search trees</strong> and <strong>Monte Carlo tree search</strong> (reasoning and game-playing systems) are search over trees of partial solutions.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Binary tree maximum path sum</div>
+<p>Clarify: node values can be negative; a path can start and end anywhere but cannot fork. Brute force tries every pair of nodes, <span class="math inline">\(O(n^2)\)</span>. Key insight: every path has a highest node. Define <code>gain(node)</code> = the best sum of a downward chain starting at the node; a negative child chain is better ignored, so <code>gain = val + max(0, gain(left), gain(right))</code>. At each node, the best path bending there is <code>val + max(0, gain(left)) + max(0, gain(right))</code>; keep a global maximum. One post-order pass: <span class="math inline">\(O(n)\)</span> time, <span class="math inline">\(O(h)\)</span> stack. Edge case: all negative values, so the global answer must start at <span class="math inline">\(-\infty\)</span>, not 0. Follow-up: return the path itself (track which children were used).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Decide what each child returns and what each parent passes down.</p></li>
+<li><p>In-order on a BST is sorted; validation needs ancestor bounds, not local checks.</p></li>
+<li><p>Balanced trees guarantee <span class="math inline">\(O(\log n)\)</span>; B-trees power databases.</p></li>
+<li><p>LCA, diameter, and path sums all use the “bend at the highest node” idea.</p></li>
+</ul>
+</div>

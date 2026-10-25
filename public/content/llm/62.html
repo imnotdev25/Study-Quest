@@ -1,0 +1,275 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>KL divergence</strong> <span class="math inline">\(D_{\mathrm{KL}}(p\|q)=\sum_ap(a)\log\frac{p(a)}{q(a)}\)</span> measures how much <span class="math inline">\(p\)</span> differs from <span class="math inline">\(q\)</span>. It’s <span class="math inline">\(\ge0\)</span> and equals 0 only if <span class="math inline">\(p=q\)</span>. In LLM training it’s computed per token between the policy’s next-token distribution and the reference model’s, then averaged over valid tokens.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>In DPO, why is the reference model frozen?</p></li>
+<li><p>Why can an individual sampled log-ratio be negative even if KL divergence is nonnegative?</p></li>
+</ol>
+<p>For policy and reference distributions over vocabulary tokens:</p>
+<p><span class="math display">\[\pi_\theta(\cdot\mid s),\quad
+\pi_{\text{ref}}(\cdot\mid s)
+\in\mathbb{R}^{V}\]</span></p>
+<p>the forward KL divergence is:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(\pi_\theta\|\pi_{\text{ref}})
+=
+\sum_{a=1}^{V}
+\pi_\theta(a\mid s)
+\left[
+\log\pi_\theta(a\mid s)
+-
+\log\pi_{\text{ref}}(a\mid s)
+\right]\]</span></p>
+<p>For LM logits:</p>
+<p><span class="math display">\[Z_\theta,Z_{\text{ref}}
+\in\mathbb{R}^{B\times T\times V}\]</span></p>
+<p>the exact token-level KL has shape:</p>
+<p><span class="math display">\[K\in\mathbb{R}^{B\times T}\]</span></p>
+<p>A masked mean is:</p>
+<p><span class="math display">\[L_{\mathrm{KL}}
+=
+\frac{\sum_{b,t}M_{bt}K_{bt}}
+{\sum_{b,t}M_{bt}}\]</span></p>
+<p>If actions are sampled from the policy:</p>
+<p><span class="math display">\[a\sim\pi_\theta\]</span></p>
+<p>then:</p>
+<p><span class="math display">\[\mathbb E_{a\sim\pi_\theta}
+\left[
+\log\pi_\theta(a)-\log\pi_{\text{ref}}(a)
+\right]
+=
+D_{\mathrm{KL}}(\pi_\theta\|\pi_{\text{ref}})\]</span></p>
+<p>One sampled log-ratio may be negative. Only its expectation is guaranteed to equal the nonnegative KL.</p>
+<p>In RL-style post-training, a simplified objective is:</p>
+<p><span class="math display">\[L=-\mathbb E[r]+\beta D_{\mathrm{KL}}\]</span></p>
+<p>The KL term controls policy drift. Too little regularization can destabilize behavior; too much can prevent useful learning.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: KL is nonnegative, and its gradient with respect to the policy’s logits</div>
+<p><strong>Step 1.</strong> <strong>Nonnegativity:</strong> <span class="math inline">\(\log\)</span> is concave, so by Jensen <span class="math inline">\(-D_{\mathrm{KL}}=\sum_pp\log\frac qp\le\log\sum_pp\frac qp=\log\sum q=0\)</span>.</p>
+<p><strong>Step 2.</strong> Let <span class="math inline">\(p=\operatorname{softmax}(z)\)</span> be the policy, <span class="math inline">\(q\)</span> the fixed reference, and <span class="math inline">\(\ell_a=\log p_a-\log q_a\)</span>. Then <span class="math inline">\(D=\sum_ap_a\ell_a\)</span>.</p>
+<p><strong>Step 3.</strong> Pieces: <span class="math inline">\(\frac{\partial p_a}{\partial z_c}=p_a(\delta_{ac}-p_c)\)</span> and <span class="math inline">\(\frac{\partial\log p_a}{\partial z_c}=\delta_{ac}-p_c\)</span>.</p>
+<p><strong>Step 4.</strong> Product rule: <span class="math inline">\(\frac{\partial D}{\partial z_c}=\sum_ap_a(\delta_{ac}-p_c)\ell_a+\sum_ap_a(\delta_{ac}-p_c)=p_c\ell_c-p_cD+(p_c-p_c)\)</span>.</p>
+<p><strong>Step 5.</strong> So <span class="math inline">\(\boxed{\frac{\partial D}{\partial z_c}=p_c\big(\ell_c-D\big)}\)</span>: tokens where the policy is more confident than the reference (relative to the average log-ratio) are pushed down.</p>
+<p><strong>Step 6.</strong> Masked mean over tokens: <span class="math inline">\(L_{\mathrm{KL}}=\frac{\sum_{b,t}M_{bt}D_{bt}}{\sum M}\)</span>. Padding positions must not enter the numerator or the denominator.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: exact token-level KL from logits</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy logits <span class="math inline">\(Z_\theta\)</span>, reference logits <span class="math inline">\(Z_{\text{ref}}\)</span> (no gradient), mask <span class="math inline">\(M\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\log p\gets\operatorname{log\_softmax}(Z_\theta)\)</span>; <span class="math inline">\(\log q\gets\operatorname{log\_softmax}(Z_{\text{ref}})\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(D_{bt}\gets\sum_ae^{\log p_{bta}}(\log p_{bta}-\log q_{bta})\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L_{\mathrm{KL}}\gets\sum M\,D/\sum M\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Compute exact forward KL, approximate it by sampling, and inspect its gradients.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(201)
+
+B, T, V = 2, 3, 5
+
+policy_logits = torch.randn(
+    B, T, V,
+    requires_grad=True,
+)
+
+reference_logits = torch.randn(B, T, V)
+
+valid_mask = torch.tensor([
+    [1, 1, 0],
+    [1, 1, 1],
+], dtype=torch.bool)
+
+
+# Exact forward KL
+policy_logp = ...                               # TODO 1: [B,T,V]
+reference_logp = ...                            # TODO 2: [B,T,V]
+policy_probs = ...                              # TODO 3: [B,T,V]
+
+token_kl = ...                                  # TODO 4: [B,T]
+exact_kl = ...                                  # TODO 5: scalar masked mean
+
+print(&quot;token KL:\n&quot;, token_kl.detach())
+print(&quot;exact mean KL:&quot;, exact_kl.item())
+
+assert token_kl.shape == (B, T)
+assert torch.all(token_kl &gt;= -1e-6)
+
+
+# Monte Carlo estimate using policy samples
+num_samples = 20_000
+
+with torch.no_grad():
+    distribution = torch.distributions.Categorical(
+        logits=policy_logits
+    )
+
+    actions = ...                               # TODO 6: [N,B,T]
+
+    expanded_policy_logp = policy_logp.unsqueeze(0).expand(
+        num_samples, -1, -1, -1
+    )
+    expanded_reference_logp = reference_logp.unsqueeze(0).expand(
+        num_samples, -1, -1, -1
+    )
+
+    sampled_policy_logp = ...                   # TODO 7: [N,B,T]
+    sampled_reference_logp = ...                # TODO 8: [N,B,T]
+
+    sampled_log_ratio = ...                     # TODO 9: [N,B,T]
+    monte_carlo_kl = ...                        # TODO 10: scalar
+
+print(&quot;Monte Carlo KL:&quot;, monte_carlo_kl.item())
+print(
+    &quot;absolute estimation error:&quot;,
+    abs(monte_carlo_kl.item() - exact_kl.item()),
+)
+print(
+    &quot;fraction of negative sampled log-ratios:&quot;,
+    (sampled_log_ratio[:, valid_mask] &lt; 0)
+    .float()
+    .mean()
+    .item(),
+)
+
+
+# Gradient inspection
+exact_kl.backward()
+
+print(
+    &quot;gradient row sums:\n&quot;,
+    policy_logits.grad.sum(dim=-1),
+)
+
+print(
+    &quot;masked-position gradient norm:&quot;,
+    policy_logits.grad[~valid_mask].norm().item(),
+)
+
+assert torch.allclose(
+    policy_logits.grad[~valid_mask],
+    torch.zeros_like(policy_logits.grad[~valid_mask]),
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Whether every sampled log-ratio will be positive.</p></li>
+<li><p>Why the gradient at the masked position should be exactly zero.</p></li>
+</ul>
+<p>Now compute the reverse KL:</p>
+<pre class="code python"><code class="language-python">reference_probs = reference_logp.exp()
+
+reverse_token_kl = (
+    reference_probs
+    * (reference_logp - policy_logp.detach())
+).sum(dim=-1)
+
+reverse_kl = reverse_token_kl[valid_mask].mean()
+
+print(&quot;\nforward KL:&quot;, exact_kl.item())
+print(&quot;reverse KL:&quot;, reverse_kl.item())</code></pre>
+<p>Why should these generally differ?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>F.log_softmax(..., dim=-1)</code>.</p></li>
+<li><p>Recover policy probabilities with <code>.exp()</code>.</p></li>
+<li><p>Exact KL sums across the vocabulary dimension.</p></li>
+<li><p><code>distribution.sample((num_samples,))</code> adds a leading sample dimension.</p></li>
+<li><p>Gather with <code>actions.unsqueeze(-1)</code>.</p></li>
+<li><p>Apply the valid mask after computing token-level values.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Which distribution supplies the weighting probabilities in <span class="math inline">\(D_{\mathrm{KL}}(\pi_\theta\|\pi_{\text{ref}})\)</span>?</p></li>
+<li><p>Why do the policy-logit gradient rows sum approximately to zero?</p></li>
+<li><p>Prediction: if policy and reference logits differ only by a constant added to every vocabulary logit, what is their KL?</p></li>
+<li><p>Debugging: a sampled KL estimate is persistently negative over a large run. From which distribution might actions have been sampled incorrectly?</p></li>
+<li><p>Why can increasing the KL coefficient improve stability while reducing task reward?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">policy_logp = F.log_softmax(
+    policy_logits,
+    dim=-1,
+)
+
+reference_logp = F.log_softmax(
+    reference_logits,
+    dim=-1,
+)
+
+policy_probs = policy_logp.exp()
+
+token_kl = (
+    policy_probs
+    * (policy_logp - reference_logp)
+).sum(dim=-1)
+
+exact_kl = token_kl[valid_mask].mean()</code></pre>
+<p>Monte Carlo estimate:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    distribution = torch.distributions.Categorical(
+        logits=policy_logits
+    )
+
+    actions = distribution.sample((num_samples,))
+
+    expanded_policy_logp = policy_logp.unsqueeze(0).expand(
+        num_samples, -1, -1, -1
+    )
+
+    expanded_reference_logp = reference_logp.unsqueeze(0).expand(
+        num_samples, -1, -1, -1
+    )
+
+    sampled_policy_logp = expanded_policy_logp.gather(
+        dim=-1,
+        index=actions.unsqueeze(-1),
+    ).squeeze(-1)
+
+    sampled_reference_logp = expanded_reference_logp.gather(
+        dim=-1,
+        index=actions.unsqueeze(-1),
+    ).squeeze(-1)
+
+    sampled_log_ratio = (
+        sampled_policy_logp - sampled_reference_logp
+    )
+
+    monte_carlo_kl = sampled_log_ratio[
+        :, valid_mask
+    ].mean()</code></pre>
+<p>Individual log-ratios need not be positive. If the reference assigns more probability than the policy to a sampled action:</p>
+<p><span class="math display">\[\log\pi_\theta(a)-\log\pi_{\text{ref}}(a)&lt;0\]</span></p>
+<p>The expectation under policy samples is nevertheless the nonnegative forward KL.</p>
+<p>Masked positions do not contribute to <code>exact_kl</code>, so no computation-graph path connects their logits to the scalar objective. Their gradients are zero.</p>
+<p>Forward and reverse KL differ because KL is asymmetric:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(p\|q)\neq D_{\mathrm{KL}}(q\|p)\]</span></p>
+<p>Forward KL weights outcomes according to the policy; reverse KL weights them according to the reference. They therefore penalize distributional differences differently.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>The policy: <span class="math display">\[\sum_a\pi_\theta(a)
+  [\log\pi_\theta(a)-\log\pi_{\text{ref}}(a)]\]</span></p></li>
+<li><p>Softmax is invariant to adding the same constant to every logit. The gradient has no component in that all-ones direction.</p></li>
+<li><p>Zero. Softmax removes a uniform logit shift, so the distributions are identical.</p></li>
+<li><p>Actions may have been sampled from the reference. Then: <span class="math display">\[\mathbb E_{a\sim\pi_{\text{ref}}}
+  [\log\pi_\theta(a)-\log\pi_{\text{ref}}(a)]
+  =
+  -D_{\mathrm{KL}}(\pi_{\text{ref}}\|\pi_\theta)\]</span></p></li>
+<li><p>A larger coefficient restricts movement away from the reference, reducing destructive policy updates but also opposing reward-driven changes.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>The reference is a fixed behavioral anchor; gradients should update only the policy.</p></li>
+<li><p>KL is an expectation. Individual Monte Carlo terms can be negative even though their correctly sampled expectation is nonnegative.</p></li>
+</ul>

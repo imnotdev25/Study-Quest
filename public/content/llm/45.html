@@ -1,0 +1,312 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>A rotation</strong> by angle <span class="math inline">\(\theta\)</span> in the plane is <span class="math inline">\(R(\theta)=\begin{bmatrix}\cos\theta&amp;-\sin\theta\\\sin\theta&amp;\cos\theta\end{bmatrix}\)</span>. Rotations keep lengths, satisfy <span class="math inline">\(R(\theta)^\top=R(-\theta)\)</span>, and compose by adding angles: <span class="math inline">\(R(a)R(b)=R(a+b)\)</span>. <strong>RoPE</strong> rotates each pair of query and key features by an angle proportional to the token’s position.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>At decoding step <span class="math inline">\(t\)</span>, what are the shapes of the query and KV cache?</p></li>
+<li><p>Why can cached decoding diverge from full decoding even when the cached keys and values are concatenated correctly?</p></li>
+</ol>
+<p>Self-attention alone is permutation-equivariant: without positional information, it cannot distinguish different token orders.</p>
+<p>Rotary Position Embeddings (RoPE) rotate pairs of query and key features according to their positions. For one feature pair:</p>
+<p><span class="math display">\[R(\theta_m)
+\begin{bmatrix}
+x_0\\x_1
+\end{bmatrix}
+=
+\begin{bmatrix}
+\cos\theta_m&amp;-\sin\theta_m\\
+\sin\theta_m&amp;\cos\theta_m
+\end{bmatrix}
+\begin{bmatrix}
+x_0\\x_1
+\end{bmatrix}\]</span></p>
+<p>For head dimension <span class="math inline">\(d_h\)</span>, RoPE uses <span class="math inline">\(d_h/2\)</span> frequencies:</p>
+<p><span class="math display">\[\omega_i=10000^{-2i/d_h}\]</span></p>
+<p><span class="math display">\[\theta_{m,i}=m\omega_i\]</span></p>
+<p>Given:</p>
+<p><span class="math display">\[Q,K\in\mathbb{R}^{B\times H\times T\times d_h}\]</span></p>
+<p>RoPE preserves the same tensor shape and vector norms. Its useful property is:</p>
+<p><span class="math display">\[(R_mq)^\top(R_nk)
+=
+q^\top R_{n-m}k\]</span></p>
+<p>Thus attention scores encode relative displacement <span class="math inline">\(n-m\)</span>, despite applying absolute-position rotations.</p>
+<p>During cached decoding:</p>
+<ul>
+<li><p>Cached keys retain the rotations for their original positions.</p></li>
+<li><p>The new query and key must use the current absolute position.</p></li>
+<li><p>After a prefill of length <span class="math inline">\(P\)</span>, the first generated token uses position <span class="math inline">\(P\)</span>, not zero.</p></li>
+</ul>
+<p>A wrong cache position offset often produces plausible but incorrect outputs—more dangerous than an immediate shape error.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: RoPE scores depend only on relative position</div>
+<p><strong>Step 1.</strong> For one feature pair at frequency <span class="math inline">\(\omega\)</span>, position <span class="math inline">\(m\)</span> uses <span class="math inline">\(R_m=R(m\omega)\)</span>.</p>
+<p><strong>Step 2.</strong> Score between query at <span class="math inline">\(m\)</span> and key at <span class="math inline">\(n\)</span>: <span class="math inline">\((R_mq)^\top(R_nk)=q^\top R_m^\top R_nk\)</span>.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(R_m^\top R_n=R(-m\omega)R(n\omega)=R((n-m)\omega)=R_{n-m}\)</span>.</p>
+<p><strong>Step 4.</strong> So the score is <span class="math inline">\(q^\top R_{n-m}k\)</span>: absolute positions entered, but only the offset <span class="math inline">\(n-m\)</span> survives. The full head applies <span class="math inline">\(d_h/2\)</span> such pairs with <span class="math inline">\(\omega_i=10000^{-2i/d_h}\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Norm preservation:</strong> <span class="math inline">\(\|R_mq\|=\|q\|\)</span>, so RoPE doesn’t change the scale of scores (Session 7’s <span class="math inline">\(\sqrt d\)</span> argument still holds).</p>
+<p><strong>Step 6.</strong> <strong>Cache offset:</strong> after a prefill of length <span class="math inline">\(P\)</span>, the first new token must use <span class="math inline">\(m=P\)</span>. Using <span class="math inline">\(m=0\)</span> makes it look like the start of the sequence relative to every cached key, giving plausible but wrong outputs.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: apply RoPE with a cache offset</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(Q,K\in\mathbb R^{B\times H\times T\times d_h}\)</span>, starting position <span class="math inline">\(p_0\)</span> (<span class="math inline">\(=\)</span> cache length)</div>
+<div class="algo-line" style="--d:0">positions <span class="math inline">\(m\gets p_0,\dots,p_0+T-1\)</span>; <span class="math inline">\(\omega_i\gets10000^{-2i/d_h}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\theta_{m,i}\gets m\omega_i\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each pair <span class="math inline">\((x_{2i},x_{2i+1})\)</span> of <span class="math inline">\(Q\)</span> and <span class="math inline">\(K\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\((x_{2i},x_{2i+1})\gets(x_{2i}\cos\theta-x_{2i+1}\sin\theta,\ x_{2i}\sin\theta+x_{2i+1}\cos\theta)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">cache the <em>rotated</em> <span class="math inline">\(K\)</span>; never re-rotate cached keys</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement RoPE and verify that cached attention matches full causal attention.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(171)
+
+B, H, T, d_h = 1, 2, 6, 8
+assert d_h % 2 == 0
+
+Q = torch.randn(B, H, T, d_h)
+K = torch.randn(B, H, T, d_h)
+V = torch.randn(B, H, T, d_h)
+
+inv_freq = 1.0 / (
+    10000 ** (torch.arange(0, d_h, 2).float() / d_h)
+)                                               # [d_h/2]
+
+
+def apply_rope(x, positions):
+    &quot;&quot;&quot;
+    x:         [B, H, L, d_h]
+    positions: [L]
+    &quot;&quot;&quot;
+    L = x.shape[-2]
+
+    angles = ...                                # TODO 1: [L, d_h/2]
+    cos = ...                                   # TODO 2: [1, 1, L, d_h/2]
+    sin = ...                                   # TODO 3: [1, 1, L, d_h/2]
+
+    pairs = ...                                 # TODO 4: [B,H,L,d_h/2,2]
+    even = pairs[..., 0]
+    odd = pairs[..., 1]
+
+    rotated_even = ...                          # TODO 5
+    rotated_odd = ...                           # TODO 6
+
+    rotated_pairs = torch.stack(
+        [rotated_even, rotated_odd],
+        dim=-1,
+    )
+
+    return ...                                  # TODO 7: [B,H,L,d_h]
+
+
+def full_attention():
+    positions = torch.arange(T)
+
+    q = ...                                     # TODO 8
+    k = ...                                     # TODO 9
+
+    scores = (
+        q @ k.transpose(-2, -1)
+    ) / math.sqrt(d_h)                           # [B,H,T,T]
+
+    mask = torch.tril(
+        torch.ones(T, T, dtype=torch.bool)
+    )
+
+    scores = scores.masked_fill(~mask, float(&quot;-inf&quot;))
+    weights = torch.softmax(scores, dim=-1)
+
+    return weights @ V                          # [B,H,T,d_h]
+
+
+def cached_attention(use_correct_positions=True):
+    K_cache = None
+    V_cache = None
+    outputs = []
+
+    for t in range(T):
+        q_t = Q[:, :, t:t + 1]
+        k_t = K[:, :, t:t + 1]
+        v_t = V[:, :, t:t + 1]
+
+        position = (
+            torch.tensor([t])
+            if use_correct_positions
+            else torch.tensor([0])
+        )
+
+        q_t = ...                               # TODO 10
+        k_t = ...                               # TODO 11
+
+        if K_cache is None:
+            K_cache = k_t
+            V_cache = v_t
+        else:
+            K_cache = torch.cat([K_cache, k_t], dim=2)
+            V_cache = torch.cat([V_cache, v_t], dim=2)
+
+        scores_t = (
+            q_t @ K_cache.transpose(-2, -1)
+        ) / math.sqrt(d_h)
+
+        weights_t = torch.softmax(scores_t, dim=-1)
+        outputs.append(weights_t @ V_cache)
+
+    return torch.cat(outputs, dim=2)
+
+
+full = full_attention()
+cached = cached_attention()
+
+print(&quot;output shape:&quot;, full.shape)
+print(&quot;maximum difference:&quot;,
+      (full - cached).abs().max().item())
+
+assert full.shape == (B, H, T, d_h)
+assert torch.allclose(full, cached, atol=1e-6)
+
+# Rotation should preserve norms
+positions = torch.arange(T)
+rotated_Q = apply_rope(Q, positions)
+
+print(
+    &quot;norm preservation error:&quot;,
+    (Q.norm(dim=-1) - rotated_Q.norm(dim=-1))
+    .abs()
+    .max()
+    .item()
+)</code></pre>
+<p>Before running, predict whether applying RoPE can change the norm of a query vector.</p>
+<p>Now trigger the position-offset bug:</p>
+<pre class="code python"><code class="language-python">buggy = cached_attention(use_correct_positions=False)
+
+error_by_position = (
+    full - buggy
+).abs().amax(dim=(0, 1, 3))
+
+print(&quot;error by position:&quot;, error_by_position)</code></pre>
+<p>Predict why position zero matches but later positions diverge.</p>
+<p>Hints:</p>
+<ul>
+<li><p><code>angles = positions</code><span><code>[</code></span><code>:, None</code><span><code>]</code></span><code> * inv_freq</code><span><code>[</code></span><code>None, :</code><span><code>]</code></span></p></li>
+<li><p>Add two leading singleton dimensions to <code>cos</code> and <code>sin</code>.</p></li>
+<li><p>Pair adjacent features with <code>.view(B, H, L, d_h // 2, 2)</code>.</p></li>
+<li><p>A 2D rotation maps <span class="math inline">\((a,b)\)</span> to: <span class="math display">\[(a\cos\theta-b\sin\theta,\;a\sin\theta+b\cos\theta)\]</span></p></li>
+<li><p>Restore the feature dimension with <code>.flatten(-2)</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why must <span class="math inline">\(d_h\)</span> be even in this implementation?</p></li>
+<li><p>What quantity causes two RoPE-transformed queries and keys to encode relative position?</p></li>
+<li><p>Prediction: if the same positional rotation is applied to both <span class="math inline">\(q\)</span> and <span class="math inline">\(k\)</span>, does their dot product change?</p></li>
+<li><p>Debugging: full and cached outputs match during prefill but diverge from the first generated token. What offset is probably wrong?</p></li>
+<li><p>Why should cached keys not be rotated again every time a new token is generated?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def apply_rope(x, positions):
+    L = x.shape[-2]
+
+    angles = positions[:, None] * inv_freq[None, :]
+
+    cos = angles.cos()[None, None, :, :]
+    sin = angles.sin()[None, None, :, :]
+
+    pairs = x.view(B, H, L, d_h // 2, 2)
+    even = pairs[..., 0]
+    odd = pairs[..., 1]
+
+    rotated_even = even * cos - odd * sin
+    rotated_odd = even * sin + odd * cos
+
+    rotated_pairs = torch.stack(
+        [rotated_even, rotated_odd],
+        dim=-1,
+    )
+
+    return rotated_pairs.flatten(-2)
+
+
+def full_attention():
+    positions = torch.arange(T)
+
+    q = apply_rope(Q, positions)
+    k = apply_rope(K, positions)
+
+    scores = (
+        q @ k.transpose(-2, -1)
+    ) / math.sqrt(d_h)
+
+    mask = torch.tril(
+        torch.ones(T, T, dtype=torch.bool)
+    )
+
+    scores = scores.masked_fill(~mask, float(&quot;-inf&quot;))
+    weights = torch.softmax(scores, dim=-1)
+
+    return weights @ V
+
+
+def cached_attention(use_correct_positions=True):
+    K_cache = None
+    V_cache = None
+    outputs = []
+
+    for t in range(T):
+        q_t = Q[:, :, t:t + 1]
+        k_t = K[:, :, t:t + 1]
+        v_t = V[:, :, t:t + 1]
+
+        position = (
+            torch.tensor([t])
+            if use_correct_positions
+            else torch.tensor([0])
+        )
+
+        q_t = apply_rope(q_t, position)
+        k_t = apply_rope(k_t, position)
+
+        if K_cache is None:
+            K_cache = k_t
+            V_cache = v_t
+        else:
+            K_cache = torch.cat([K_cache, k_t], dim=2)
+            V_cache = torch.cat([V_cache, v_t], dim=2)
+
+        scores_t = (
+            q_t @ K_cache.transpose(-2, -1)
+        ) / math.sqrt(d_h)
+
+        weights_t = torch.softmax(scores_t, dim=-1)
+        outputs.append(weights_t @ V_cache)
+
+    return torch.cat(outputs, dim=2)</code></pre>
+<p>A rotation is orthogonal, so it preserves vector norms:</p>
+<p><span class="math display">\[\lVert R_mx\rVert_2=\lVert x\rVert_2\]</span></p>
+<p>The buggy implementation assigns position zero to every token. Position zero still matches because its correct angle is zero. Later tokens lose their relative-position rotations, changing attention scores and outputs.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>RoPE divides features into two-dimensional pairs, so an unpaired feature is not supported here.</p></li>
+<li><p>The query-key dot product contains the relative rotation: <span class="math display">\[R_m^\top R_n=R_{n-m}\]</span></p></li>
+<li><p>No. If both use the identical rotation: <span class="math display">\[(R_mq)^\top(R_mk)=q^\top k\]</span></p></li>
+<li><p>The generation position probably restarted at zero rather than continuing from the prefill length.</p></li>
+<li><p>Cached keys already encode their original positions. Rotating them again changes those positions and performs unnecessary work.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>At step <span class="math inline">\(t\)</span>, the query is <span><code>[</code></span><code>B,H,1,d_h</code><span><code>]</code></span>; each cache is <span><code>[</code></span><code>B,H,t+1,d_h</code><span><code>]</code></span>.</p></li>
+<li><p>Correct cache contents are insufficient if the new query/key use the wrong positional index.</p></li>
+</ul>

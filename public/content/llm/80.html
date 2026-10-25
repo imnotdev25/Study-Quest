@@ -1,0 +1,270 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Micro accuracy</strong> pools all instances: <span class="math inline">\(\frac{\text{total correct}}{\text{total evaluated}}\)</span>. <strong>Macro accuracy</strong> averages per-group accuracies, giving each group equal weight. They answer different questions (“how often is a random instance right?” vs “how good is the model on a typical group?”), and they can disagree in direction.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>If five prompt variants share one entity, what unit should a cluster bootstrap resample?</p></li>
+<li><p>With unequal variants per entity, why must you define the estimand before averaging?</p></li>
+</ol>
+<p>Suppose evaluation results are divided into <span class="math inline">\(G\)</span> groups, such as entity types, contexts, or domains. For model <span class="math inline">\(m\)</span>:</p>
+<p><span class="math display">\[C_{mg},N_{mg}\in\mathbb{R}^{M\times G}\]</span></p>
+<p>are correct and evaluated counts, with group accuracy:</p>
+<p><span class="math display">\[a_{mg}=\frac{C_{mg}}{N_{mg}}\]</span></p>
+<p>Micro accuracy weights every evaluated instance equally:</p>
+<p><span class="math display">\[a_m^{\text{micro}}
+=
+\frac{\sum_g C_{mg}}{\sum_g N_{mg}}
+=
+\sum_g
+\frac{N_{mg}}{\sum_jN_{mj}}a_{mg}\]</span></p>
+<p>Macro accuracy weights every group equally:</p>
+<p><span class="math display">\[a_m^{\text{macro}}
+=
+\frac1G\sum_ga_{mg}\]</span></p>
+<p>Neither is universally correct:</p>
+<ul>
+<li><p>Micro answers: “How accurate was the model over this observed instance mixture?”</p></li>
+<li><p>Macro answers: “How accurate was the model for an equally likely group?”</p></li>
+<li><p>Target-weighted evaluation uses explicit deployment weights <span class="math inline">\(w_g\)</span>:</p></li>
+</ul>
+<p><span class="math display">\[a_m^{\text{target}}
+=
+\sum_gw_ga_{mg},
+\qquad
+\sum_gw_g=1\]</span></p>
+<p>If models are evaluated on different group mixtures—perhaps because of API failures, filtering, or missing predictions—their raw micro scores are not directly comparable. Simpson’s paradox can occur: one model improves in every group yet has worse aggregate accuracy because it was evaluated mainly on harder groups.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: micro is a weighted macro, and Simpson’s paradox</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(a^{\text{micro}}=\frac{\sum_gC_g}{\sum_gN_g}=\sum_g\frac{N_g}{\sum_jN_j}a_g\)</span>: a weighted average of group accuracies, with weights equal to each group’s <em>share of instances</em>.</p>
+<p><strong>Step 2.</strong> If two models are evaluated on different group mixes, their micro accuracies use different weights, so they can disagree with every per-group comparison.</p>
+<p><strong>Step 3.</strong> <strong>Example:</strong> Model A: easy 80/100, hard 10/50, micro <span class="math inline">\(90/150=0.60\)</span>. Model B: easy 45/50, hard 25/100, micro <span class="math inline">\(70/150=0.47\)</span>.</p>
+<p><strong>Step 4.</strong> B is better in <em>both</em> groups (0.90 vs 0.80 and 0.25 vs 0.20), yet worse in micro, because B was given more hard items.</p>
+<p><strong>Step 5.</strong> Macro: A <span class="math inline">\(=0.50\)</span>, B <span class="math inline">\(=0.575\)</span>. Macro, or micro with a common fixed mix, removes the mix effect.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: report micro, macro and per-group accuracy</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> counts <span class="math inline">\(C_{mg},N_{mg}\)</span> for models <span class="math inline">\(m\)</span> and groups <span class="math inline">\(g\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(a_{mg}\gets C_{mg}/N_{mg}\)</span></div>
+<div class="algo-line" style="--d:0">micro <span class="math inline">\(\gets\sum_gC_{mg}/\sum_gN_{mg}\)</span>; macro <span class="math inline">\(\gets\frac1G\sum_ga_{mg}\)</span></div>
+<div class="algo-line" style="--d:0">standardized <span class="math inline">\(\gets\sum_gw_ga_{mg}\)</span> with one fixed mix <span class="math inline">\(w\)</span> shared by all models</div>
+<div class="algo-line" style="--d:0">flag any group where models’ order disagrees with the aggregate</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Construct a comparison where the new model improves in every group but loses under naive micro averaging.</p>
+<pre class="code python"><code class="language-python">import torch
+
+group_names = [&quot;easy&quot;, &quot;medium&quot;, &quot;hard&quot;]
+
+baseline_rates = torch.tensor([
+    0.95,
+    0.75,
+    0.45,
+])                                              # [G]
+
+new_rates = torch.tensor([
+    0.97,
+    0.78,
+    0.50,
+])                                              # [G]
+
+# Different evaluation mixtures, perhaps caused by missing outputs.
+baseline_counts = torch.tensor([
+    800.0,
+    150.0,
+     50.0,
+])                                              # [G]
+
+new_counts = torch.tensor([
+     50.0,
+    150.0,
+    800.0,
+])                                              # [G]
+
+
+def micro_accuracy(rates, counts):
+    correct = ...                               # TODO 1: [G]
+    return ...                                  # TODO 2: scalar
+
+
+baseline_micro = ...                            # TODO 3
+new_micro = ...                                 # TODO 4
+
+within_group_delta = ...                        # TODO 5: [G]
+
+print(&quot;within-group improvements:&quot;,
+      within_group_delta)
+
+print(&quot;baseline naive micro:&quot;,
+      baseline_micro.item())
+
+print(&quot;new naive micro:&quot;,
+      new_micro.item())
+
+assert torch.all(within_group_delta &gt; 0)
+assert new_micro &lt; baseline_micro</code></pre>
+<p>Now compare the models under common weighting:</p>
+<pre class="code python"><code class="language-python">rates = torch.stack([
+    baseline_rates,
+    new_rates,
+])                                              # [M,G]
+
+macro_scores = ...                              # TODO 6: [M]
+
+target_weights = torch.tensor([
+    0.40,   # easy
+    0.35,   # medium
+    0.25,   # hard
+])                                              # [G]
+
+target_scores = ...                             # TODO 7: [M]
+
+print(&quot;\nmacro scores:&quot;, macro_scores)
+print(&quot;target-weighted scores:&quot;, target_scores)
+
+print(
+    &quot;macro improvement:&quot;,
+    (macro_scores[1] - macro_scores[0]).item(),
+)
+
+print(
+    &quot;target-weighted improvement:&quot;,
+    (target_scores[1] - target_scores[0]).item(),
+)
+
+assert macro_scores[1] &gt; macro_scores[0]
+assert target_scores[1] &gt; target_scores[0]</code></pre>
+<p>Diagnose where the reversal comes from:</p>
+<pre class="code python"><code class="language-python">baseline_mix = ...                              # TODO 8: [G]
+new_mix = ...                                   # TODO 9: [G]
+
+baseline_contributions = ...                    # TODO 10: [G]
+new_contributions = ...                         # TODO 11: [G]
+
+print(&quot;\nbaseline mixture:&quot;, baseline_mix)
+print(&quot;new mixture:&quot;, new_mix)
+
+for i, name in enumerate(group_names):
+    print(
+        f&quot;{name:&gt;6}: &quot;
+        f&quot;baseline contribution=&quot;
+        f&quot;{baseline_contributions[i]:.3f}, &quot;
+        f&quot;new contribution=&quot;
+        f&quot;{new_contributions[i]:.3f}&quot;
+    )
+
+assert torch.allclose(
+    baseline_contributions.sum(),
+    baseline_micro,
+)
+
+assert torch.allclose(
+    new_contributions.sum(),
+    new_micro,
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Why will the new model’s naive micro accuracy be lower?</p></li>
+<li><p>Which aggregation methods will correctly show its within-group improvement?</p></li>
+<li><p>Would macro averaging be appropriate if deployment traffic is 99% easy cases?</p></li>
+</ul>
+<p>Hints:</p>
+<ul>
+<li><p>Estimated correct count is <code>rates * counts</code>.</p></li>
+<li><p>Micro accuracy is total correct divided by total evaluated.</p></li>
+<li><p>Macro averaging reduces across the group dimension.</p></li>
+<li><p>Target weighting is a matrix–vector product.</p></li>
+<li><p>A model’s observed mixture is <code>counts / counts.sum()</code>.</p></li>
+<li><p>Each group’s micro contribution is <code>mixture * rate</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>What question does micro accuracy answer that macro accuracy does not?</p></li>
+<li><p>Prediction: if all groups have equal sample counts, when are micro and macro accuracy identical?</p></li>
+<li><p>How can one model be better in every group but worse in the aggregate?</p></li>
+<li><p>Debugging: a model’s score improves after many hard examples time out. Which denominator and coverage statistics should you inspect?</p></li>
+<li><p>For FinHallu-style entity types and prompting contexts, why should you report the aggregation weights alongside the headline score?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def micro_accuracy(rates, counts):
+    correct = rates * counts
+    return correct.sum() / counts.sum()
+
+
+baseline_micro = micro_accuracy(
+    baseline_rates,
+    baseline_counts,
+)
+
+new_micro = micro_accuracy(
+    new_rates,
+    new_counts,
+)
+
+within_group_delta = (
+    new_rates - baseline_rates
+)</code></pre>
+<p>Common weighting:</p>
+<pre class="code python"><code class="language-python">rates = torch.stack([
+    baseline_rates,
+    new_rates,
+])
+
+macro_scores = rates.mean(dim=1)
+
+target_scores = rates @ target_weights</code></pre>
+<p>Observed mixtures and contributions:</p>
+<pre class="code python"><code class="language-python">baseline_mix = (
+    baseline_counts / baseline_counts.sum()
+)
+
+new_mix = (
+    new_counts / new_counts.sum()
+)
+
+baseline_contributions = (
+    baseline_mix * baseline_rates
+)
+
+new_contributions = (
+    new_mix * new_rates
+)</code></pre>
+<p>The new model improves within every group:</p>
+<p><span class="math display">\[[0.97-0.95,\ 0.78-0.75,\ 0.50-0.45]
+=
+[0.02,\ 0.03,\ 0.05]\]</span></p>
+<p>But the baseline is evaluated primarily on easy examples, while the new model is evaluated primarily on hard examples. The naive micro comparison therefore confounds model quality with evaluation composition.</p>
+<p>Macro and target-weighted scores use common weights, so they reveal the improvement. Macro weighting is not automatically correct, however: it defines a hypothetical population in which every group is equally likely. If deployment is 99% easy traffic, deployment-weighted performance may be the more useful primary estimand.</p>
+<p>For failed or missing evaluations, report at least:</p>
+<ul>
+<li><p>expected count by model and group;</p></li>
+<li><p>completed count;</p></li>
+<li><p>timeout/error rate;</p></li>
+<li><p>score on a common matched subset;</p></li>
+<li><p>a predefined policy for treating missing predictions.</p></li>
+</ul>
+<p>Silently dropping failures lets model reliability alter both the score and its denominator.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Micro accuracy describes performance over the observed instance distribution; macro accuracy describes the average of group-level performances.</p></li>
+<li><p>They are identical when all groups have equal counts, assuming the same groups and ordinary unweighted macro averaging.</p></li>
+<li><p>The models can be evaluated under different group weights, allowing composition effects to dominate every positive within-group difference.</p></li>
+<li><p>Inspect per-group attempted and completed counts. Hard failures may have been removed from both the numerator and denominator.</p></li>
+<li><p>The headline result changes depending on whether entity types, contexts, entities, or individual prompts receive equal weight. The weights define the scientific claim.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Resample the entity ID and retain its complete collection of variants.</p></li>
+<li><p>Unequal variant counts cause instance-level averaging to give entities with more variants greater influence; entity-balanced and instance-weighted averages therefore estimate different quantities.</p></li>
+</ul>

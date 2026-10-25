@@ -1,0 +1,185 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Attention</strong> lets each token build its output as a weighted average of other tokens’ <em>values</em>. The weights come from comparing its <em>query</em> with their <em>keys</em>: a big dot product <span class="math inline">\(q^\top k\)</span> means “relevant.” Softmax turns the scores into weights that are positive and sum to 1. <strong>A causal mask</strong> forbids looking at future tokens by setting their scores to <span class="math inline">\(-\infty\)</span>, since <span class="math inline">\(e^{-\infty}=0\)</span>.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>In a pre-norm residual block <span class="math inline">\(Y=X+F(\operatorname{LN}(X))\)</span>, what are the two gradient paths into <span class="math inline">\(X\)</span>?</p></li>
+<li><p>For Transformer activations <span><code>[</code></span><code>B, T, D</code><span><code>]</code></span>, which dimension does LayerNorm normalize?</p></li>
+</ol>
+<p>Given token representations:</p>
+<p><span class="math display">\[X\in\mathbb{R}^{B\times T\times D}\]</span></p>
+<p>attention creates queries, keys, and values:</p>
+<p><span class="math display">\[Q=XW_Q\in\mathbb{R}^{B\times T\times d_k}\]</span></p>
+<p><span class="math display">\[K=XW_K\in\mathbb{R}^{B\times T\times d_k},
+\qquad
+V=XW_V\in\mathbb{R}^{B\times T\times d_v}\]</span></p>
+<p>The attention scores are:</p>
+<p><span class="math display">\[S=\frac{QK^\top}{\sqrt{d_k}}
+\in\mathbb{R}^{B\times T\times T}\]</span></p>
+<p>Each row answers: “For this query token, how much should I read from every key token?”</p>
+<p><span class="math display">\[A=\operatorname{softmax}(S,\text{dim}=-1)\]</span></p>
+<p><span class="math display">\[O=AV\in\mathbb{R}^{B\times T\times d_v}\]</span></p>
+<p>The factor <span class="math inline">\(1/\sqrt{d_k}\)</span> keeps score magnitudes controlled. Without it, dot-product variance grows with <span class="math inline">\(d_k\)</span>, pushing softmax toward saturation and producing poor gradients.</p>
+<p>For causal attention:</p>
+<p><span class="math display">\[S_{ij}=-\infty\quad\text{when }j&gt;i\]</span></p>
+<p>so token <span class="math inline">\(i\)</span> cannot access future tokens. Materializing <span class="math inline">\(S\)</span> or <span class="math inline">\(A\)</span> requires <span class="math inline">\(O(BT^2)\)</span> memory per head—one motivation for fused attention kernels.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why divide by <span class="math inline">\(\sqrt{d_k}\)</span>, and why the mask works</div>
+<p><strong>Step 1.</strong> Assume query and key entries are independent with mean 0 and variance 1. A score <span class="math inline">\(s=q^\top k=\sum_{i=1}^{d_k}q_ik_i\)</span>.</p>
+<p><strong>Step 2.</strong> Each term has mean 0 and variance <span class="math inline">\(\mathbb E[q_i^2]\mathbb E[k_i^2]=1\)</span>. Independent terms add variances: <span class="math inline">\(\operatorname{Var}(s)=d_k\)</span>. For <span class="math inline">\(d_k=64\)</span>, scores have std 8.</p>
+<p><strong>Step 3.</strong> Softmax of scores with std 8 is nearly one-hot: one weight <span class="math inline">\(\approx1\)</span>, others <span class="math inline">\(\approx0\)</span>. In that regime the softmax Jacobian <span class="math inline">\(\operatorname{diag}(a)-aa^\top\approx0\)</span>, so gradients vanish.</p>
+<p><strong>Step 4.</strong> Divide by <span class="math inline">\(\sqrt{d_k}\)</span>: <span class="math inline">\(\operatorname{Var}(s/\sqrt{d_k})=1\)</span>, whatever the head size.</p>
+<p><strong>Step 5.</strong> <strong>Shift invariance:</strong> <span class="math inline">\(\operatorname{softmax}(s+c)=\operatorname{softmax}(s)\)</span> for any constant <span class="math inline">\(c\)</span>, because <span class="math inline">\(e^c\)</span> cancels. So only score <em>differences</em> matter, and subtracting the row max is safe.</p>
+<p><strong>Step 6.</strong> <strong>Mask:</strong> with <span class="math inline">\(S_{ij}=-\infty\)</span> for <span class="math inline">\(j&gt;i\)</span>, <span class="math inline">\(A_{ij}=e^{-\infty}/Z=0\)</span>, so future values contribute nothing to <span class="math inline">\(O_i=\sum_jA_{ij}V_j\)</span>. In practice use a large negative finite number, so a fully masked row doesn’t produce <span class="math inline">\(0/0\)</span>.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: causal scaled dot-product attention</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(X\in\mathbb R^{B\times T\times D}\)</span>, <span class="math inline">\(W_Q,W_K,W_V\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Q\gets XW_Q\)</span>; <span class="math inline">\(K\gets XW_K\)</span>; <span class="math inline">\(V\gets XW_V\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(S\gets QK^\top/\sqrt{d_k}\)</span> <em>▷ <span class="math inline">\(B\times T\times T\)</span></em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(S_{ij}\gets-\infty\)</span> for <span class="math inline">\(j&gt;i\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(A\gets\operatorname{softmax}(S-\max_jS,\ \text{dim}=-1)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(O\gets AV\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement single-head causal self-attention and compare it with PyTorch’s fused implementation.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+import torch.nn.functional as F
+
+torch.manual_seed(41)
+
+B, T, D = 2, 4, 8
+d_k, d_v = 4, 5
+
+X = torch.randn(B, T, D)
+
+W_Q = torch.randn(D, d_k) / math.sqrt(D)
+W_K = torch.randn(D, d_k) / math.sqrt(D)
+W_V = torch.randn(D, d_v) / math.sqrt(D)
+
+
+def causal_attention(X, mask_value=float(&quot;-inf&quot;)):
+    Q = ...                                    # TODO 1: [B, T, d_k]
+    K = ...                                    # TODO 2: [B, T, d_k]
+    V = ...                                    # TODO 3: [B, T, d_v]
+
+    scores = ...                               # TODO 4: [B, T, T]
+
+    causal_mask = torch.tril(
+        torch.ones(T, T, dtype=torch.bool)
+    )                                          # [T, T]
+
+    scores = ...                               # TODO 5: mask future keys
+    weights = ...                              # TODO 6: [B, T, T]
+    output = ...                               # TODO 7: [B, T, d_v]
+
+    return output, weights, Q, K, V
+
+
+output, weights, Q, K, V = causal_attention(X)
+
+print(&quot;output shape:&quot;, output.shape)
+print(&quot;row sums:&quot;, weights.sum(dim=-1))
+print(&quot;attention for sequence 0:\n&quot;, weights[0])
+
+assert output.shape == (B, T, d_v)
+assert torch.allclose(
+    weights.sum(dim=-1),
+    torch.ones(B, T),
+    atol=1e-6,
+)
+
+reference = F.scaled_dot_product_attention(
+    Q[:, None, :, :],                         # [B, heads=1, T, d_k]
+    K[:, None, :, :],
+    V[:, None, :, :],                         # [B, 1, T, d_v]
+    is_causal=True,
+).squeeze(1)
+
+print(&quot;matches PyTorch:&quot;, torch.allclose(output, reference, atol=1e-6))</code></pre>
+<p>Before running, predict the first row of each attention matrix. How many entries can be nonzero?</p>
+<p>Now test for future-token leakage:</p>
+<pre class="code python"><code class="language-python">X_changed = X.clone()
+X_changed[:, -1, :] += 100.0
+
+output_changed, *_ = causal_attention(X_changed)
+
+difference = (output - output_changed).abs().amax(dim=-1)
+print(&quot;maximum change per token:\n&quot;, difference)</code></pre>
+<p>With correct causal masking, which token positions should remain unchanged?</p>
+<p>Finally, introduce a masking bug:</p>
+<pre class="code python"><code class="language-python">buggy_output, *_ = causal_attention(X, mask_value=0.0)
+buggy_changed, *_ = causal_attention(X_changed, mask_value=0.0)
+
+print(
+    &quot;buggy token-0 change:&quot;,
+    (buggy_output[:, 0] - buggy_changed[:, 0]).abs().max().item()
+)</code></pre>
+<p>Explain why replacing forbidden logits with <code>0.0</code> does not mask them.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Projections use <code>X @ W</code>.</p></li>
+<li><p>Transpose only the last two dimensions of <span class="math inline">\(K\)</span>.</p></li>
+<li><p>Scale scores by <code>math.sqrt(d_k)</code>.</p></li>
+<li><p>Use <code>scores.masked_fill(~causal_mask, mask_value)</code>.</p></li>
+<li><p>Softmax runs across the key dimension.</p></li>
+<li><p>Output is <code>weights @ V</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does the score tensor have shape <span><code>[</code></span><code>B, T, T</code><span><code>]</code></span>?</p></li>
+<li><p>If <span class="math inline">\(d_k\)</span> increases from 64 to 256, how does the scaling denominator change?</p></li>
+<li><p>Prediction: what happens to softmax probabilities and gradients when unscaled attention logits become extremely large?</p></li>
+<li><p>Debugging: training loss is suspiciously low, but validation generation fails. How could an incorrect causal mask cause this?</p></li>
+<li><p>If sequence length doubles, by what factor does the explicit attention-score matrix grow?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def causal_attention(X, mask_value=float(&quot;-inf&quot;)):
+    Q = X @ W_Q
+    K = X @ W_K
+    V = X @ W_V
+
+    scores = Q @ K.transpose(-2, -1)
+    scores = scores / math.sqrt(d_k)
+
+    causal_mask = torch.tril(
+        torch.ones(T, T, dtype=torch.bool)
+    )
+
+    scores = scores.masked_fill(~causal_mask, mask_value)
+    weights = torch.softmax(scores, dim=-1)
+    output = weights @ V
+
+    return output, weights, Q, K, V</code></pre>
+<p>The first query may attend only to the first key, so its attention row is:</p>
+<p><span class="math display">\[[1,0,0,0]\]</span></p>
+<p>Changing the final input token must not affect output positions 0, 1, or 2. Position 3 may change because it is allowed to attend to itself.</p>
+<p>Replacing forbidden scores with zero is not sufficient because:</p>
+<p><span class="math display">\[e^0=1\]</span></p>
+<p>Those positions still receive nonzero softmax probability. Using <span class="math inline">\(-\infty\)</span> makes their exponentiated contribution zero.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Every one of the <span class="math inline">\(T\)</span> queries is compared with every one of the <span class="math inline">\(T\)</span> keys.</p></li>
+<li><p>The denominator changes from <span class="math inline">\(\sqrt{64}=8\)</span> to <span class="math inline">\(\sqrt{256}=16\)</span>.</p></li>
+<li><p>Softmax becomes nearly one-hot. Most probabilities and corresponding gradients approach zero.</p></li>
+<li><p>During training, tokens could read the correct future targets, creating information leakage and unrealistically low loss.</p></li>
+<li><p>The matrix grows by <span class="math inline">\(2^2=4\)</span>, because explicit attention memory is quadratic in sequence length.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>The input receives the direct identity-path gradient plus the gradient through LayerNorm and the learned branch.</p></li>
+<li><p>LayerNorm normalizes across the final feature dimension <span class="math inline">\(D\)</span>, independently for each token.</p></li>
+</ul>

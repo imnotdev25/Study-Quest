@@ -1,0 +1,174 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Eight famous failures and what they teach: AWS us-east-1 (2025), Cloudflare (2025), CrowdStrike (2024), Facebook (2021), Roblox (2021), OpenAI (2024), GitLab (2017), and Knight Capital (2012). Postmortems are the most honest system design documents there are: they show where real architectures break.</p>
+</div>
+<h4 id="the-common-thread.">The common thread.</h4>
+<p>Very few big outages start with hardware. Most start with a <em>change</em> (config, deploy, automation) that propagated too fast, and become large because of a <em>hidden dependency</em> (DNS, a control plane, a monitoring system) and a <em>recovery path</em> that was never tested at full scale. Read each case asking three questions: what changed, what amplified it, and what slowed recovery.</p>
+<h1 id="case-aws-us-east-1-a-dns-race-condition-in-dynamodb-october-2025">Case: AWS us-east-1: A DNS Race Condition in DynamoDB (October 2025)</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Cloud provider<br />
+<strong>Scale:</strong> About 14.5 hours of impact across many AWS services and thousands of customers<br />
+<strong>Concepts:</strong> Race conditions in automation, DNS, control-plane dependencies, congestive collapse, recovery at scale<br />
+<strong>Source:</strong> AWS, “Summary of the Amazon DynamoDB Service Disruption in the Northern Virginia (US-EAST-1) Region” (October 2025)</p>
+</div>
+<h4 id="what-changed.">What changed.</h4>
+<p>DynamoDB manages its DNS records with automation in two parts: a <strong>Planner</strong> that produces DNS plans (which load balancers, with what weights) and an <strong>Enactor</strong>, running independently in three Availability Zones, that applies plans to Route 53. Each Enactor checked that its plan was newer than the one in place only <em>once, at the start</em>.</p>
+<h4 id="the-race.">The race.</h4>
+<p>One Enactor was hit by unusually long delays. Meanwhile the Planner kept producing new plans and a second Enactor applied a newer one, then ran cleanup to delete old plans. At that moment the delayed Enactor finished writing its <em>stale</em> plan to the regional endpoint. The cleanup then deleted that plan, which was now the active one. The result was an <strong>empty DNS record</strong> for <code>dynamodb.us-east-1.amazonaws.com</code>, and the system was left in a state that blocked further automatic updates.</p>
+<figure class="tikz"><img src="figs/sd/808222be7ece.svg" alt="diagram" loading="lazy"></figure>
+<p><em>How one empty DNS record cascaded.</em></p>
+<h4 id="what-amplified-it.">What amplified it.</h4>
+<p>DynamoDB’s API was down from about 11:48 PM to 2:40 AM PDT. But other systems depended on it. EC2’s DropletWorkflow Manager (DWFM), which maintains leases on physical hosts, uses DynamoDB; leases timed out. When DynamoDB came back, the backlog of re-lease work was so large it kept timing out: <strong>congestive collapse</strong>, where the system is busy retrying work that never completes. Engineers had to throttle incoming work and restart hosts. New instances then launched without network connectivity because network state propagation was backlogged, and Network Load Balancer health checks against these instances flapped, triggering automatic AZ failover that removed healthy capacity. Engineers disabled the automatic failover until things stabilized. Full EC2 recovery took until about 1:50 PM.</p>
+<h4 id="fixes-announced.">Fixes announced.</h4>
+<p>The DNS automation was disabled worldwide until the race was fixed; NLB got a velocity control limiting how much capacity health checks can remove; EC2 added at-scale tests of the DWFM recovery workflow and queue-based rate limiting in data propagation.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Check-then-act with a long gap is a race; re-validate at the point of action or use versioned conditional writes.</p></li>
+<li><p>Automation that can delete must refuse to delete the active state.</p></li>
+<li><p>Recovery has its own capacity limits: design for backlog after an outage (throttling, admission control).</p></li>
+<li><p>Automated failover needs a velocity limit, or it can make a partial failure total.</p></li>
+</ul>
+</div>
+<h1 id="case-cloudflare-an-oversized-feature-file-november-2025">Case: Cloudflare: An Oversized Feature File (November 2025)</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> CDN and security edge<br />
+<strong>Scale:</strong> About six hours of widespread HTTP 5xx errors for sites behind Cloudflare<br />
+<strong>Concepts:</strong> Config propagation, input validation, hard limits, panics in critical paths, kill switches<br />
+<strong>Source:</strong> Cloudflare blog, “Cloudflare outage on November 18, 2025”</p>
+</div>
+<h4 id="what-changed.-1">What changed.</h4>
+<p>A permissions change in a ClickHouse database cluster made previously implicit access to underlying tables explicit. A query used to generate the <strong>Bot Management feature file</strong> read column metadata without filtering by database name, so it began returning duplicate rows. The generated file roughly doubled in size.</p>
+<h4 id="what-broke.">What broke.</h4>
+<p>The file is regenerated every five minutes and pushed to every server on the network. The bot-scoring module in the new proxy (FL2, written in Rust) preallocates memory for a fixed maximum of 200 features (normal use was about 60). The oversized file exceeded the limit, the code returned an error, and an <code>unwrap()</code> on that error caused a <strong>panic</strong>, and the proxy returned 5xx errors. On the older proxy (FL) there were no errors, but every request got a bot score of zero, which broke customers’ bot rules.</p>
+<h4 id="why-it-was-confusing.">Why it was confusing.</h4>
+<p>The database cluster was being updated gradually, so each five-minute run produced either a good or bad file. The network kept failing and recovering, which looked like a DDoS attack at first.</p>
+<h4 id="fixes.">Fixes.</h4>
+<p>Stop generating the bad file, push a known-good file, restart proxies. Follow-ups: treat internally generated configuration with the same validation as user input, add global kill switches for features, and stop core dumps and error reporting from consuming resources during failures.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Config is code: generated files need validation, staged rollout, and size checks before global push.</p></li>
+<li><p>When a hard limit is exceeded, fail safe (keep the last good config), do not crash the request path.</p></li>
+<li><p>Flapping symptoms often mean a periodic job is alternating between good and bad output.</p></li>
+</ul>
+</div>
+<h1 id="case-crowdstrike-a-content-update-crashes-8.5-million-windows-machines-july-2024">Case: CrowdStrike: A Content Update Crashes 8.5 Million Windows Machines (July 2024)</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Endpoint security<br />
+<strong>Scale:</strong> About 8.5 million Windows devices crashed; airlines, hospitals, banks affected<br />
+<strong>Concepts:</strong> Kernel-mode code, staged rollout, input validation, manual recovery<br />
+<strong>Source:</strong> CrowdStrike Preliminary Post Incident Review and Root Cause Analysis (July–August 2024)</p>
+</div>
+<h4 id="what-changed.-2">What changed.</h4>
+<p>CrowdStrike’s Falcon sensor runs a driver in the Windows kernel. Besides code updates (rolled out in stages), it receives frequent <em>content</em> updates: configuration that tells the sensor what behavior to detect. On July 19, 2024 a content update (“Channel File 291”) was pushed to all online Windows hosts at once.</p>
+<h4 id="what-broke.-1">What broke.</h4>
+<p>The new template defined 21 input fields, but the sensor code supplied only 20 values. Reading the 21st value was an <strong>out-of-bounds memory read</strong> in kernel mode, which crashes the whole operating system (the “blue screen”). Machines crashed again on every reboot because the bad file loaded at startup. The content validator had a bug that let the file pass, and content updates were not deployed in stages the way code was.</p>
+<h4 id="why-recovery-was-slow.">Why recovery was slow.</h4>
+<p>The fix was simple (delete the file), but it had to be done on each machine, often by hand in safe mode, and BitLocker disk encryption meant many machines needed recovery keys first. Remote recovery was impossible for machines that could not boot.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Treat configuration and content updates with the same staged rollout as code.</p></li>
+<li><p>Code in the most privileged place (kernel, boot path) must validate all inputs and fail safe.</p></li>
+<li><p>Plan for recovery when the broken component prevents remote access.</p></li>
+</ul>
+</div>
+<h1 id="case-facebook-the-bgp-withdrawal-october-2021">Case: Facebook: The BGP Withdrawal (October 2021)</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Social network<br />
+<strong>Scale:</strong> About six hours of complete outage of Facebook, Instagram, WhatsApp<br />
+<strong>Concepts:</strong> BGP, DNS, backbone, out-of-band access, safety checks<br />
+<strong>Source:</strong> Meta engineering, “More details about the October 4 outage” (2021)</p>
+</div>
+<h4 id="what-changed.-3">What changed.</h4>
+<p>During routine maintenance, a command intended to assess the capacity of Facebook’s global backbone accidentally disconnected all backbone connections between its data centers. An audit tool meant to block such commands had a bug and did not stop it.</p>
+<h4 id="what-amplified-it.-1">What amplified it.</h4>
+<p>Facebook’s DNS servers are designed to withdraw their BGP route announcements if they cannot reach the data centers (a sensible health check: do not answer if you are cut off). With the backbone down, all of them did. The internet lost the routes to Facebook’s DNS servers, so <code>facebook.com</code> could not be resolved anywhere.</p>
+<h4 id="why-recovery-was-slow.-1">Why recovery was slow.</h4>
+<p>The same network outage took down internal tools, remote access, and even badge systems used to enter buildings. Engineers had to physically go to data centers, and getting through the heightened physical security took time. When the backbone came back, traffic had to be restored gradually to avoid power surges and cache stampedes.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Health checks that make a node withdraw itself can make every node withdraw at once.</p></li>
+<li><p>Keep out-of-band access (separate network, separate auth) for when production is unreachable.</p></li>
+<li><p>Bring a huge system back slowly; a sudden full load after an outage is its own incident.</p></li>
+</ul>
+</div>
+<h1 id="case-roblox-a-73-hour-outage-inside-consul-october-2021">Case: Roblox: A 73-Hour Outage Inside Consul (October 2021)</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Gaming platform<br />
+<strong>Scale:</strong> About 73 hours offline for tens of millions of daily users<br />
+<strong>Concepts:</strong> Service discovery as a single point of failure, streaming features, BoltDB internals, circular dependencies<br />
+<strong>Source:</strong> Roblox engineering, “Roblox Return to Service 10/28-10/31 2021” (with HashiCorp)</p>
+</div>
+<h4 id="what-happened.">What happened.</h4>
+<p>Roblox ran its own infrastructure, with HashiCorp Consul as the backbone for service discovery, health checks, and key-value config, used by Nomad and Vault as well. Consul became extremely slow and the whole platform went down.</p>
+<h4 id="the-root-causes">The root causes</h4>
+<p>(found after days of investigation):</p>
+<ul>
+<li><p>A recently enabled Consul <strong>streaming</strong> feature, under very high read and write load, caused contention on a small number of Go channels.</p></li>
+<li><p>Consul’s storage engine <strong>BoltDB</strong> has a known pathology: its freelist of unused pages grew huge, and every write had to scan it, making writes progressively slower.</p></li>
+</ul>
+<p>Disabling streaming and fixing the BoltDB freelist issue restored performance.</p>
+<h4 id="why-it-took-so-long.">Why it took so long.</h4>
+<p>The monitoring and observability systems themselves depended on Consul, so the team was partly blind. Restarting services caused large, synchronized load on Consul (cold caches everywhere), and the cluster had to be brought back in stages.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A single shared control-plane system (service discovery, config) is a single point of failure; partition it into cells.</p></li>
+<li><p>Your monitoring must not depend on the system it monitors.</p></li>
+<li><p>Understand the storage engine under your critical infrastructure.</p></li>
+</ul>
+</div>
+<h1 id="case-openai-a-telemetry-service-overloads-kubernetes-december-2024">Case: OpenAI: A Telemetry Service Overloads Kubernetes (December 2024)</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> AI services<br />
+<strong>Scale:</strong> Several hours of outage for ChatGPT, the API, and Sora<br />
+<strong>Concepts:</strong> Kubernetes control plane, DNS caching, hidden dependencies, deploy safety<br />
+<strong>Source:</strong> OpenAI status page incident report, December 11, 2024</p>
+</div>
+<h4 id="what-changed.-4">What changed.</h4>
+<p>OpenAI deployed a new telemetry service across its Kubernetes clusters. Its configuration caused every node to perform expensive Kubernetes API operations, and the cost grew with cluster size. In the largest clusters the <strong>API servers were overwhelmed</strong>.</p>
+<h4 id="the-hidden-dependency.">The hidden dependency.</h4>
+<p>The data plane (running pods) can mostly work without the control plane, but in-cluster <strong>DNS-based service discovery</strong> needs the API server to know about endpoints. DNS caching hid the problem at first, so the change looked safe in staged rollout; when caches expired over the following minutes, services could not find each other.</p>
+<h4 id="why-recovery-was-slow.-2">Why recovery was slow.</h4>
+<p>Fixing it required the Kubernetes API, which was the thing that was overloaded. Engineers reduced cluster size, blocked network access to the API servers from the offending components, and scaled up API servers to get control back.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Caches can hide a failure during rollout; watch metrics past the longest cache TTL before proceeding.</p></li>
+<li><p>Protect the control plane: rate limits and priority for system traffic (API Priority and Fairness).</p></li>
+<li><p>Keep a break-glass path to the control plane that does not depend on the data plane being healthy.</p></li>
+</ul>
+</div>
+<h1 id="case-gitlab-deleting-the-production-database-january-2017">Case: GitLab: Deleting the Production Database (January 2017)</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Developer platform<br />
+<strong>Scale:</strong> About 6 hours of database data lost (issues, merge requests, comments); about 18 hours outage<br />
+<strong>Concepts:</strong> Backups, restore testing, replication, human error, operator safety<br />
+<strong>Source:</strong> GitLab, “Postmortem of database outage of January 31” (2017)</p>
+</div>
+<h4 id="what-happened.-1">What happened.</h4>
+<p>Under load from spam and with replication lagging, an engineer working late tried to restart replication by wiping the data directory on the <em>secondary</em> database. The command was run in a terminal connected to the <em>primary</em>. About 300 GB of production data was deleted before it was stopped.</p>
+<h4 id="why-it-was-worse-than-it-should-have-been.">Why it was worse than it should have been.</h4>
+<p>GitLab had five backup or replication mechanisms. When they went to restore, they found that most were not working: regular backups had been failing silently (a version mismatch) and the failure notification emails were being rejected; disk snapshots were not enabled for the database servers. They restored from a staging copy taken about six hours earlier, live-streaming the recovery publicly.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A backup you have not restored is not a backup; test restores regularly and automatically.</p></li>
+<li><p>Alerts on backup failure must be monitored, and their delivery must be monitored too.</p></li>
+<li><p>Make the production shell look different (colored prompt) and prefer tools over manual destructive commands.</p></li>
+</ul>
+</div>
+<h1 id="case-knight-capital-440-million-in-45-minutes-august-2012">Case: Knight Capital: $440 Million in 45 Minutes (August 2012)</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Algorithmic trading<br />
+<strong>Scale:</strong> About $440M loss in 45 minutes; the firm had to be rescued<br />
+<strong>Concepts:</strong> Deployment consistency, dead code, feature flags, kill switches<br />
+<strong>Source:</strong> U.S. SEC administrative proceeding against Knight Capital Americas (2013)</p>
+</div>
+<h4 id="what-happened.-2">What happened.</h4>
+<p>Knight deployed new trading code to support a new NYSE program. The deployment was done manually to eight servers, and the technician missed one. The new code reused an old feature flag that, on the eighth server, activated <strong>“Power Peg”</strong>, test code that had been unused for years. Power Peg sent child orders continuously without tracking whether the parent order was filled. In 45 minutes it executed millions of trades in about 150 stocks.</p>
+<h4 id="why-it-was-not-stopped.">Why it was not stopped.</h4>
+<p>There was no automated check that all servers ran the same version, no kill switch for the trading system, and automated emails about errors went unread before market open. During the incident, staff rolled back the new code on the seven good servers, which made them also run the old flag behavior and made things worse.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Automate deployments and verify every node runs the same version.</p></li>
+<li><p>Delete dead code; never repurpose an old feature flag.</p></li>
+<li><p>Have a kill switch, and know what a rollback will actually do.</p></li>
+</ul>
+</div>

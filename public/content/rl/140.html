@@ -1,0 +1,369 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 4 · PyTorch 10 · checks 4</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why must every cross-fitted outcome be scored by nuisance models trained without its fold?</p></li>
+<li><p>For agent trajectories, what should determine fold membership?</p></li>
+</ol>
+<p>Answers are after the exercise.</p>
+<h3 class="unnumbered" id="the-independent-sample-is-usually-the-episode">2. The independent sample is usually the episode</h3>
+<p>Rewards within one trajectory share states, history and task difficulty. Model this as:</p>
+<p><span class="math display">\[Y_{it}
+=
+\underbrace{\theta}_{\text{population mean}}
++
+\underbrace{U_i}_{\text{episode-wide effect}}
++
+\underbrace{\epsilon_{it}}_{\text{step-specific noise}}\]</span></p>
+<p>Here <span class="math inline">\(i\)</span> indexes episodes and <span class="math inline">\(t\)</span> indexes steps. Define:</p>
+<p><span class="math display">\[Z_i
+=
+\underbrace{\frac1T\sum_{t=1}^{T}Y_{it}}_{\text{one episode&#39;s score}},
+\qquad
+\hat\theta
+=
+\underbrace{\frac1N\sum_{i=1}^{N}Z_i}_{\text{average across independent episodes}}\]</span></p>
+<p>Its variance is:</p>
+<p><span class="math display">\[\operatorname{Var}(\hat\theta)
+=
+\underbrace{\frac{\sigma_U^2}{N}}_{\text{episode uncertainty; extra steps do not remove it}}
++
+\underbrace{\frac{\sigma_\epsilon^2}{NT}}_{\text{step noise; more steps help}}\]</span></p>
+<p>Flattening all <span class="math inline">\(NT\)</span> steps and pretending they are independent effectively discards the first term. The resulting confidence interval is too narrow.</p>
+<p>The cluster bootstrap instead samples complete episodes:</p>
+<p><span class="math display">\[I_{b1},\ldots,I_{bN}
+\overset{\mathrm{iid}}{\sim}
+\operatorname{Uniform}\{1,\ldots,N\}\]</span></p>
+<p><span class="math display">\[\hat\theta_b^*
+=
+\underbrace{
+\frac1N\sum_{j=1}^{N}Z_{I_{bj}}
+}_{\text{bootstrap estimate from resampled episodes}}\]</span></p>
+<p>A percentile interval uses:</p>
+<p><span class="math display">\[CI_{95\%}
+=
+\underbrace{
+\left[
+Q_{0.025}(\hat\theta^*),
+Q_{0.975}(\hat\theta^*)
+\right]
+}_{\text{central 95\% of bootstrap estimates}}\]</span></p>
+<p>For OPE, <span class="math inline">\(Z_i\)</span> can be an episode-level IPS, DR or cross-fitted influence score rather than a raw reward mean.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>rewards: <span style="background-color: codeinlinebg"><code> [R, N, T]</code></span></p></li>
+<li><p>episode scores: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>estimates and standard errors: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+<li><p>cluster-bootstrap indices: <span style="background-color: codeinlinebg"><code> [B, N]</code></span></p></li>
+</ul>
+<p>For LLM agents, resample complete task trajectories. If several trajectories belong to one user or prompt family, resample that higher-level cluster. For DPO evaluation, resample prompts or users—not chosen/rejected tokens. DPO itself remains offline preference optimization, not online RL.</p>
+<h3 class="unnumbered" id="pytorch-exercise-token-intervals-miss-half-the-time">3. PyTorch exercise — token intervals miss half the time</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_studies = 3_000
+num_episodes = 100
+steps_per_episode = 10
+num_bootstrap_samples = 2_000
+
+true_value = torch.tensor(0.40)
+
+episode_effect_sd = torch.tensor(1.00)
+step_noise_sd = torch.tensor(0.50)
+
+z_value = 1.96
+
+
+# TODO 1: Generate correlated step rewards.
+episode_effects = ...
+
+step_noise = ...
+
+rewards = ...
+
+
+# TODO 2: Estimate the mean and two standard errors.
+episode_scores = ...
+
+estimates = ...
+
+naive_step_standard_errors = ...
+
+cluster_standard_errors = ...
+
+true_standard_error = ...
+
+
+# TODO 3: Measure repeated-study coverage.
+naive_lower_bounds = ...
+naive_upper_bounds = ...
+
+cluster_lower_bounds = ...
+cluster_upper_bounds = ...
+
+naive_coverage = ...
+
+cluster_coverage = ...
+
+empirical_standard_error = ...
+
+
+# TODO 4: Bootstrap one observed study.
+observed_episode_scores = ...
+observed_steps = ...
+
+cluster_indices = ...
+
+cluster_bootstrap_estimates = ...
+
+token_indices = ...
+
+token_bootstrap_estimates = ...
+
+cluster_bootstrap_se = ...
+token_bootstrap_se = ...
+
+quantiles = torch.tensor([0.025, 0.975])
+
+cluster_bootstrap_interval = ...
+
+token_bootstrap_interval = ...
+
+
+print(&quot;True SE:&quot;, true_standard_error.item())
+print(&quot;Empirical SE:&quot;, empirical_standard_error.item())
+
+print(
+    &quot;Mean estimated SEs: token, episode&quot;,
+    naive_step_standard_errors.mean().item(),
+    cluster_standard_errors.mean().item(),
+)
+
+print(
+    &quot;95% coverage: token, episode&quot;,
+    naive_coverage.item(),
+    cluster_coverage.item(),
+)
+
+print(
+    &quot;Bootstrap SEs: token, cluster&quot;,
+    token_bootstrap_se.item(),
+    cluster_bootstrap_se.item(),
+)
+
+print(&quot;Token-bootstrap interval:&quot;, token_bootstrap_interval)
+print(&quot;Cluster-bootstrap interval:&quot;, cluster_bootstrap_interval)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will increasing <span style="background-color: codeinlinebg"><code> steps_per_episode</code></span> eliminate uncertainty from <span style="background-color: codeinlinebg"><code> episode_effects</code></span>?</p></li>
+<li><p>Which interval should approach 95% coverage?</p></li>
+<li><p>Will the token bootstrap report a smaller standard error?</p></li>
+<li><p>Can cluster bootstrapping repair an unsupported target action?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Broadcast episode effects from <span style="background-color: codeinlinebg"><code> [R, N, 1]</code></span> across time.</p></li>
+<li><p>An episode score is its mean across dimension <span style="background-color: codeinlinebg"><code> 2</code></span>.</p></li>
+<li><p>The naive calculation flattens dimensions <span style="background-color: codeinlinebg"><code> N</code></span> and <span style="background-color: codeinlinebg"><code> T</code></span>.</p></li>
+<li><p>The cluster calculation takes the standard deviation across episode scores.</p></li>
+<li><p>Bootstrap indices must select episodes together with all their dependent steps.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Shuffle and resample individual tokens from trajectories.</p></li>
+<li><p>Put episodes from one user into several supposedly independent clusters.</p></li>
+<li><p>Bootstrap cross-fitted rows while separating rows that shared nuisance-model training.</p></li>
+<li><p>Add one enormous importance-weight episode and inspect how often it appears.</p></li>
+<li><p>Interpret a narrow bootstrap interval as evidence that the estimator is unbiased.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Generate the data:</p>
+<pre class="code python"><code class="language-python">episode_effects = (
+    episode_effect_sd
+    * torch.randn(
+        num_studies,
+        num_episodes,
+        1,
+    )
+)
+
+step_noise = (
+    step_noise_sd
+    * torch.randn(
+        num_studies,
+        num_episodes,
+        steps_per_episode,
+    )
+)
+
+rewards = (
+    true_value
+    + episode_effects
+    + step_noise
+)</code></pre>
+<p>Standard errors:</p>
+<pre class="code python"><code class="language-python">episode_scores = rewards.mean(dim=2)
+
+estimates = episode_scores.mean(dim=1)
+
+naive_step_standard_errors = (
+    rewards
+    .flatten(start_dim=1)
+    .std(dim=1, correction=1)
+    / math.sqrt(
+        num_episodes * steps_per_episode
+    )
+)
+
+cluster_standard_errors = (
+    episode_scores.std(
+        dim=1,
+        correction=1,
+    )
+    / math.sqrt(num_episodes)
+)
+
+true_standard_error = torch.sqrt(
+    episode_effect_sd.square()
+    / num_episodes
+    +
+    step_noise_sd.square()
+    / (
+        num_episodes
+        * steps_per_episode
+    )
+)</code></pre>
+<p>Coverage:</p>
+<pre class="code python"><code class="language-python">naive_lower_bounds = (
+    estimates
+    - z_value * naive_step_standard_errors
+)
+
+naive_upper_bounds = (
+    estimates
+    + z_value * naive_step_standard_errors
+)
+
+cluster_lower_bounds = (
+    estimates
+    - z_value * cluster_standard_errors
+)
+
+cluster_upper_bounds = (
+    estimates
+    + z_value * cluster_standard_errors
+)
+
+naive_coverage = (
+    (
+        (naive_lower_bounds &lt;= true_value)
+        &amp; (true_value &lt;= naive_upper_bounds)
+    )
+    .to(torch.float64)
+    .mean()
+)
+
+cluster_coverage = (
+    (
+        (cluster_lower_bounds &lt;= true_value)
+        &amp; (true_value &lt;= cluster_upper_bounds)
+    )
+    .to(torch.float64)
+    .mean()
+)
+
+empirical_standard_error = estimates.std(
+    correction=1
+)</code></pre>
+<p>Bootstrap one study:</p>
+<pre class="code python"><code class="language-python">observed_episode_scores = episode_scores[0]
+observed_steps = rewards[0].flatten()
+
+cluster_indices = torch.randint(
+    low=0,
+    high=num_episodes,
+    size=(
+        num_bootstrap_samples,
+        num_episodes,
+    ),
+)
+
+cluster_bootstrap_estimates = (
+    observed_episode_scores[
+        cluster_indices
+    ].mean(dim=1)
+)
+
+token_indices = torch.randint(
+    low=0,
+    high=observed_steps.numel(),
+    size=(
+        num_bootstrap_samples,
+        observed_steps.numel(),
+    ),
+)
+
+token_bootstrap_estimates = (
+    observed_steps[token_indices]
+    .mean(dim=1)
+)
+
+cluster_bootstrap_se = (
+    cluster_bootstrap_estimates.std(
+        correction=1
+    )
+)
+
+token_bootstrap_se = (
+    token_bootstrap_estimates.std(
+        correction=1
+    )
+)
+
+cluster_bootstrap_interval = (
+    cluster_bootstrap_estimates.quantile(
+        quantiles
+    )
+)
+
+token_bootstrap_interval = (
+    token_bootstrap_estimates.quantile(
+        quantiles
+    )
+)</code></pre>
+<p>The theoretical standard error is:</p>
+<p><span class="math display">\[SE
+=
+\sqrt{
+\underbrace{\frac{1^2}{100}}_{\text{episode effect}}
++
+\underbrace{\frac{0.5^2}{100(10)}}_{\text{step noise}}
+}
+\approx 0.101\]</span></p>
+<p>Typical results are:</p>
+<ul>
+<li><p>empirical standard error: approximately <span style="background-color: codeinlinebg"><code> 0.10</code></span>;</p></li>
+<li><p>episode/cluster estimate: approximately <span style="background-color: codeinlinebg"><code> 0.10</code></span>;</p></li>
+<li><p>naive token estimate: approximately <span style="background-color: codeinlinebg"><code> 0.035</code></span>;</p></li>
+<li><p>episode-level coverage: about <span style="background-color: codeinlinebg"><code> 94–95%</code></span>;</p></li>
+<li><p>token-level coverage: only about <span style="background-color: codeinlinebg"><code> 50%</code></span>.</p></li>
+</ul>
+<p>More tokens reveal each sampled episode more precisely. They do not create more independent episodes.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>No. As <span class="math inline">\(T\)</span> grows, step noise vanishes, but the <span class="math inline">\(\sigma_U^2/N\)</span> term remains.</p></li>
+<li><p>The episode-level interval, because episodes are the independent units.</p></li>
+<li><p>It breaks within-episode dependence and invents an effective sample size near <span class="math inline">\(NT\)</span>.</p></li>
+<li><p>Resample the highest plausibly dependent unit: episode, user, conversation or prompt family.</p></li>
+<li><p>No. Bootstrap uncertainty cannot remove estimator bias, missing support or reward-model invalidity. With fitted nuisances, either bootstrap the entire fitting pipeline or resample valid out-of-fold influence scores.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Excluding each scored outcome prevents a nuisance model from memorizing and cancelling its own residual correction.</p></li>
+<li><p>Fold membership should follow the largest dependent unit—typically complete episodes, users, conversations or prompt families.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> count independent decisions, not tensor rows. Ten correlated steps from one agent episode provide more detail about that episode, but they are not ten independent deployment trials.</p>

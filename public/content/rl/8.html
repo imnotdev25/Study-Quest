@@ -1,0 +1,290 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: the winner’s curse</div>
+<p>At an auction, whoever bids highest usually <em>overestimated</em> the item’s value; that’s why they won. Q-learning has the same problem: <span class="math inline">\(\max_a Q(s&#39;,a)\)</span> picks the action whose estimate is most inflated by noise.</p>
+<p>Q-learning itself is like planning “tomorrow I’ll be perfectly disciplined” while still behaving randomly today. It learns the value of the best possible behaviour, not the behaviour you’re actually showing.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/87195e303d3b.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Q-learning’s backup: the target takes a <span class="math inline">\(\max\)</span> over next actions instead of sampling one.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What next-action value appears in SARSA’s target?</p></li>
+<li><p>Why is SARSA called on-policy?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-one-change-that-creates-q-learning">2. The one change that creates Q-learning</h3>
+<p>SARSA learns from the next action actually selected:</p>
+<p><span class="math display">\[Y_t^{\text{SARSA}}
+=
+R_{t+1}+\gamma(1-D_t)Q(S_{t+1},A_{t+1})\]</span></p>
+<p>Q-learning instead uses the best currently estimated next action:</p>
+<p><span class="math display">\[Y_t^{\text{Q-learning}}
+=
+R_{t+1}
++
+\gamma(1-D_t)\max_{a&#39;}Q(S_{t+1},a&#39;)\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\delta_t=Y_t-Q(S_t,A_t)\]</span></p>
+<p><span class="math display">\[Q(S_t,A_t)\leftarrow Q(S_t,A_t)+\alpha\delta_t\]</span></p>
+<p>This resembles correcting a line’s slope estimate using new data:</p>
+<p><span class="math display">\[\text{new estimate}
+=
+\text{old estimate}
++
+\text{step size}\times\text{error}\]</span></p>
+<p>Here, however, it is a direct tabular update—not gradient descent. With a neural Q-function, the same target becomes a regression target and SGD performs the update.</p>
+<h3 class="unnumbered" id="why-it-is-off-policy">Why it is off-policy</h3>
+<p>Imagine learning routes while occasionally taking random roads. Your experience comes from an exploratory driver, but your target assumes that from the next junction onward you take the best-known road.</p>
+<p>Thus Q-learning has two policies:</p>
+<ul>
+<li><p><strong>Behaviour policy:</strong> commonly <span class="math inline">\(\epsilon\)</span>-greedy; produces experience.</p></li>
+<li><p><strong>Target policy:</strong> greedy; represented by <span class="math inline">\(\max_{a&#39;}Q(s&#39;,a&#39;)\)</span>.</p></li>
+</ul>
+<p>Because they differ, Q-learning is <strong>off-policy</strong>.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Method</strong></th>
+<th style="text-align: left;"><strong>Next-state target</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Method</strong></td>
+<td style="text-align: left;"><strong>Next-state target</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">SARSA</td>
+<td style="text-align: left;">Value of the action actually selected</td>
+</tr>
+<tr>
+<td style="text-align: left;">Q-learning</td>
+<td style="text-align: left;">Maximum estimated action value</td>
+</tr>
+</tbody>
+</table>
+<p>The behaviour policy must still explore. Off-policy does not mean “collect no new experience.”</p>
+<h3 class="unnumbered" id="a-practical-warning-maximization-bias">A practical warning: maximization bias</h3>
+<p>Suppose every action estimate contains noise. Taking the maximum tends to select estimates whose errors are unusually positive:</p>
+<p><span class="math display">\[\mathbb E[\max_a\hat Q(a)]
+\;\text{can exceed}\;
+\max_a\mathbb E[\hat Q(a)]\]</span></p>
+<p>This can cause overestimation. Double Q-learning and Double DQN address this by separating action selection from evaluation.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>An LLM agent may explore several tool calls while training. An off-policy value method can learn a greedy tool-use target from those exploratory trajectories.</p>
+<p>For large language action spaces, directly maximizing over every possible continuation is impractical. Policy-based methods and sampled approximations become more useful later.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: maximization bias</div>
+<p>Q-learning target: <span class="math inline">\(r+\gamma\max_{a&#39;}Q(s&#39;,a&#39;)\)</span>, which estimates <span class="math inline">\(Q^*\)</span> regardless of the behaviour policy.</p>
+<p><strong>Bias:</strong> if <span class="math inline">\(\hat Q(a)=Q(a)+\varepsilon_a\)</span> with zero-mean noise, then by Jensen’s inequality <span class="math inline">\(\mathbb E[\max_a\hat Q(a)]\ge\max_a Q(a)\)</span>. With <span class="math inline">\(n\)</span> equally good actions and <span class="math inline">\(\mathcal N(0,1)\)</span> noise, the expected overestimate is <span class="math inline">\(\mathbb E[\max_i Z_i]\)</span>:</p>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: center;"><span class="math inline">\(n\)</span></th>
+<th style="text-align: center;">1</th>
+<th style="text-align: center;">2</th>
+<th style="text-align: center;">5</th>
+<th style="text-align: center;">10</th>
+<th style="text-align: center;">100</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;"><span class="math inline">\(\mathbb E[\max Z]\)</span></td>
+<td style="text-align: center;">0</td>
+<td style="text-align: center;">0.56</td>
+<td style="text-align: center;">1.16</td>
+<td style="text-align: center;">1.54</td>
+<td style="text-align: center;">2.51</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>Double Q-learning</strong> fixes this: one estimate picks the action and the other scores it, <span class="math inline">\(r+\gamma Q_B\big(s&#39;,\arg\max_{a&#39;}Q_A(s&#39;,a&#39;)\big)\)</span>. The selection noise and evaluation noise are independent, so the upward bias disappears.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Q-learning = off-policy: explore however you like, learn about the greedy policy.</p></li>
+<li><p><span class="math inline">\(\max\)</span> of noisy estimates is biased upward. Double estimators decouple “choose” from “score.”</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the max picks the noisiest action</div>
+<p>Three actions, all truly worth 0. Noisy estimates <span class="math inline">\(Q(s&#39;,\cdot)=(0.4,-0.3,0.1)\)</span>. Target with <span class="math inline">\(r=0,\gamma=1\)</span>: <span class="math inline">\(\max=0.4\)</span>, so every update pushes <span class="math inline">\(Q(s,a)\)</span> up by mistake. Double Q: estimate <span class="math inline">\(A\)</span> picks <span class="math inline">\(\arg\max=a_1\)</span>, and an independent estimate <span class="math inline">\(B\)</span> with values <span class="math inline">\((-0.2,0.3,0.0)\)</span> scores it at <span class="math inline">\(-0.2\)</span>. The noise averages out instead of compounding.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Using <span class="math inline">\(\max\)</span> at terminal states (it must be 0).</p></li>
+<li><p>Forgetting that estimate <span class="math inline">\(B\)</span> must be trained on different updates than <span class="math inline">\(A\)</span>.</p></li>
+<li><p>Decaying <span class="math inline">\(\epsilon\)</span> to 0 too early, so some actions are never revisited.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Q-learning (off-policy TD control)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> step size <span class="math inline">\(\alpha\)</span>, discount <span class="math inline">\(\gamma\)</span>, exploration <span class="math inline">\(\epsilon\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Q(s,a)\gets0\)</span> for every state-action pair</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each episode <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(s\gets\)</span> initial state</div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(s\)</span> is not terminal <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(a\gets\epsilon\text{-greedy}(Q,s)\)</span>; take <span class="math inline">\(a\)</span>; observe <span class="math inline">\(r,s&#39;,d\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(Q(s,a)\gets Q(s,a)+\alpha\big[r+\gamma(1-d)\max_{a&#39;}Q(s&#39;,a&#39;)-Q(s,a)\big]\)</span> <em>▷ greedy target</em></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(s\gets s&#39;\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-q-learning-in-a-line-world">3. PyTorch exercise — Q-learning in a line world</h3>
+<p>The agent starts at position <span style="background-color: codeinlinebg"><code> 0</code></span>:</p>
+<ul>
+<li><p>States: <span style="background-color: codeinlinebg"><code> 0</code></span>, <span style="background-color: codeinlinebg"><code> 1</code></span>, and terminal state <span style="background-color: codeinlinebg"><code> 2</code></span></p></li>
+<li><p>Action <span style="background-color: codeinlinebg"><code> 0</code></span>: left</p></li>
+<li><p>Action <span style="background-color: codeinlinebg"><code> 1</code></span>: right</p></li>
+<li><p>Reaching state <span style="background-color: codeinlinebg"><code> 2</code></span>: reward <span style="background-color: codeinlinebg"><code> +1</code></span></p></li>
+<li><p>Other transitions: reward <span style="background-color: codeinlinebg"><code> -0.01</code></span></p></li>
+</ul>
+<p>Complete the TODOs:</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+
+num_states = 3
+num_actions = 2
+
+alpha = 0.2
+gamma = 0.95
+epsilon = 0.2
+
+q = torch.zeros(num_states, num_actions)  # [states=3, actions=2]
+
+
+def choose_action(state):
+    # TODO 1: epsilon-greedy behaviour policy
+    if torch.rand(()) &lt; epsilon:
+        return ...
+    return ...
+
+
+episode_lengths = []
+mean_abs_td_errors = []
+
+for episode in range(500):
+    state = 0
+    episode_td_errors = []
+
+    for step in range(30):
+        action = choose_action(state)
+
+        next_state = (
+            max(0, state - 1)
+            if action == 0
+            else min(2, state + 1)
+        )
+
+        done = next_state == 2
+        reward = 1.0 if done else -0.01
+
+        if done:
+            target = torch.tensor(reward)
+        else:
+            # TODO 2: greedy next-state value
+            best_next_value = ...
+
+            # TODO 3: Q-learning target
+            target = ...
+
+        # TODO 4: TD error and tabular update
+        td_error = ...
+        q[state, action] += ...
+
+        episode_td_errors.append(td_error.abs().item())
+
+        if done:
+            episode_lengths.append(step + 1)
+            break
+
+        state = next_state
+
+    mean_abs_td_errors.append(
+        sum(episode_td_errors) / len(episode_td_errors)
+    )
+
+print(&quot;Learned Q:\n&quot;, q)
+print(&quot;Greedy actions:&quot;, q.argmax(dim=1))
+print(&quot;Mean final-50 length:&quot;, sum(episode_lengths[-50:]) / 50)
+print(
+    &quot;Mean final-50 |TD error|:&quot;,
+    sum(mean_abs_td_errors[-50:]) / 50,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action should become greedy in states <span style="background-color: codeinlinebg"><code> 0</code></span> and <span style="background-color: codeinlinebg"><code> 1</code></span>?</p></li>
+<li><p>What is the shortest successful episode length?</p></li>
+<li><p>Should the final TD-error diagnostic generally be smaller than its early value?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Random action: <span style="background-color: codeinlinebg"><code> torch.randint(num_actions, ()).item()</code></span></p></li>
+<li><p>Greedy behaviour action: <span style="background-color: codeinlinebg"><code> q[state].argmax().item()</code></span></p></li>
+<li><p>Best next value: <span style="background-color: codeinlinebg"><code> q[next_state].max()</code></span></p></li>
+<li><p>Error direction: target minus current estimate</p></li>
+<li><p>Update only <span style="background-color: codeinlinebg"><code> q[state, action]</code></span></p></li>
+<li><p>Do not bootstrap after true termination</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Replace:</p>
+<pre class="code python"><code class="language-python">best_next_value = q[next_state].max()</code></pre>
+<p>with:</p>
+<pre class="code python"><code class="language-python">next_action = choose_action(next_state)
+best_next_value = q[next_state, next_action]</code></pre>
+<p>You have changed the target from Q-learning to SARSA. The difference may be small in this safe environment, but it becomes important when exploratory actions are costly.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is Q-learning off-policy even when its behaviour is <span class="math inline">\(\epsilon\)</span>-greedy?</p></li>
+<li><p>Does <span style="background-color: codeinlinebg"><code> max()</code></span> select the action actually taken on the following step?</p></li>
+<li><p>Why must the terminal target be only the observed reward?</p></li>
+<li><p>What happens if exploration is removed before every useful action has been tried?</p></li>
+<li><p>Why can <span style="background-color: codeinlinebg"><code> max()</code></span> systematically overestimate values when estimates are noisy?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">def choose_action(state):
+    if torch.rand(()) &lt; epsilon:
+        return torch.randint(num_actions, ()).item()
+    return q[state].argmax().item()</code></pre>
+<p>Inside the loop:</p>
+<pre class="code python"><code class="language-python">if done:
+    target = torch.tensor(reward)
+else:
+    best_next_value = q[next_state].max()
+    target = reward + gamma * best_next_value
+
+td_error = target - q[state, action]
+q[state, action] += alpha * td_error</code></pre>
+<p>The learned greedy actions should normally be:</p>
+<pre class="code text"><code class="language-plaintext">state 0: right
+state 1: right</code></pre>
+<p>The shortest successful path is two actions:</p>
+<pre class="code text"><code class="language-plaintext">0 --right--&gt; 1 --right--&gt; 2</code></pre>
+<p>Approximate optimal values are:</p>
+<p><span class="math display">\[Q^*(1,\text{right})=1\]</span></p>
+<p><span class="math display">\[Q^*(0,\text{right})
+=
+-0.01+0.95(1)
+=
+0.94\]</span></p>
+<p>Exact learned numbers can vary because exploration changes the sampled update sequence. A fixed seed makes the experiment reproducible, but it does not remove sampling effects.</p>
+<p>The absolute TD error should generally shrink as estimates become consistent with their targets. Occasional exploration can still produce spikes, so inspect trends rather than requiring every update to decrease.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Experience comes from the exploratory behaviour policy, while the target evaluates a greedy policy using <span style="background-color: codeinlinebg"><code> max</code></span>.</p></li>
+<li><p>No. It selects the highest estimated action for the target, regardless of the next behaviour action.</p></li>
+<li><p>No future return exists after genuine termination.</p></li>
+<li><p>The agent can remain committed to a poor action because it never collects corrective evidence.</p></li>
+<li><p>Maximization preferentially selects actions with positive estimation errors.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>SARSA uses <span class="math inline">\(Q(S_{t+1},A_{t+1})\)</span>, where <span class="math inline">\(A_{t+1}\)</span> is actually sampled.</p></li>
+<li><p>Its behaviour policy and target policy are the same policy.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> SARSA learns the value of continuing to behave exploratorily. Q-learning explores to collect data but learns toward the greedy continuation.</p>

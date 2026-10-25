@@ -1,0 +1,296 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>A feedback controller</strong> measures an output, compares it with a target, and adjusts an input to close the gap, like a thermostat. Here the output is the measured KL, the target is <span class="math inline">\(k^*\)</span>, and the input is the penalty <span class="math inline">\(\beta\)</span>. <span class="math inline">\(\beta\)</span> is controller state, not a parameter trained by gradients.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why must KL-shaped rollout rewards be detached during policy optimization?</p></li>
+<li><p>Why can a sampled <span class="math inline">\(k_1=\log\pi_{\text{old}}-\log\pi_\theta\)</span> value be negative?</p></li>
+</ol>
+<p>A fixed KL coefficient:</p>
+<p><span class="math display">\[L
+=
+L_{\text{reward}}
++
+\beta D_{\mathrm{KL}}\]</span></p>
+<p>may be too weak early in training and too strong later. An adaptive controller treats <span class="math inline">\(\beta\)</span> as feedback state rather than a gradient-trained parameter.</p>
+<p>Let:</p>
+<p><span class="math display">\[\hat k_n\in\mathbb{R}\]</span></p>
+<p>be the globally aggregated observed KL at update <span class="math inline">\(n\)</span>, and let <span class="math inline">\(k^*\)</span> be the target. Define relative error:</p>
+<p><span class="math display">\[e_n=
+\operatorname{clip}
+\left(
+\frac{\hat k_n}{k^*}-1,
+-c,c
+\right)\]</span></p>
+<p>A multiplicative controller is:</p>
+<p><span class="math display">\[\beta_{n+1}
+=
+\beta_n\exp(\eta e_n)\]</span></p>
+<p>Therefore:</p>
+<ul>
+<li><p><span class="math inline">\(\hat k_n&gt;k^*\)</span>: increase <span class="math inline">\(\beta\)</span>;</p></li>
+<li><p><span class="math inline">\(\hat k_n&lt;k^*\)</span>: decrease <span class="math inline">\(\beta\)</span>;</p></li>
+<li><p>multiplicative updates guarantee <span class="math inline">\(\beta&gt;0\)</span>.</p></li>
+</ul>
+<p>Because minibatch KL is noisy, use a smoothed measurement:</p>
+<p><span class="math display">\[m_n
+=
+\rho m_{n-1}
++
+(1-\rho)\hat k_n\]</span></p>
+<p>and compute the controller error from <span class="math inline">\(m_n\)</span>.</p>
+<p>The controller should use a sufficiently aggregated exact KL or stable estimate. Feeding individual <span class="math inline">\(k_1\)</span> samples into it is dangerous because they may be negative. In distributed training, aggregate numerator and valid-token count globally before updating one shared controller state.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the multiplicative controller</div>
+<p><strong>Step 1.</strong> Error <span class="math inline">\(e_n=\operatorname{clip}(m_n/k^*-1,-c,c)\)</span>, where <span class="math inline">\(m_n\)</span> is a smoothed KL.</p>
+<p><strong>Step 2.</strong> Update <span class="math inline">\(\beta_{n+1}=\beta_n e^{\eta e_n}\)</span>, i.e. <span class="math inline">\(\log\beta_{n+1}=\log\beta_n+\eta e_n\)</span>: a step in log space, so <span class="math inline">\(\beta\)</span> stays positive and changes by percentages.</p>
+<p><strong>Step 3.</strong> Fixed point: <span class="math inline">\(\beta\)</span> stops changing iff <span class="math inline">\(e_n=0\iff m_n=k^*\)</span>.</p>
+<p><strong>Step 4.</strong> Direction: KL too high <span class="math inline">\(\Rightarrow e&gt;0\Rightarrow\beta\)</span> rises <span class="math inline">\(\Rightarrow\)</span> stronger penalty <span class="math inline">\(\Rightarrow\)</span> KL falls. Negative feedback.</p>
+<p><strong>Step 5.</strong> <strong>Smoothing:</strong> <span class="math inline">\(m_n=\rho m_{n-1}+(1-\rho)\hat k_n\)</span> averages over about <span class="math inline">\(1/(1-\rho)\)</span> updates and suppresses noise. The clip <span class="math inline">\(c\)</span> bounds the change per update to a factor of <span class="math inline">\(e^{\pm\eta c}\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Don’t feed raw <span class="math inline">\(k_1\)</span> samples:</strong> they can be negative and noisy. Use aggregated exact KL or <span class="math inline">\(k_3\)</span>.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: adaptive KL controller</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> target <span class="math inline">\(k^*\)</span>, gain <span class="math inline">\(\eta\)</span>, clip <span class="math inline">\(c\)</span>, smoothing <span class="math inline">\(\rho\)</span>, <span class="math inline">\(\beta_0\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\beta\gets\beta_0\)</span>; <span class="math inline">\(m\gets k^*\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each update <span class="math inline">\(n\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\hat k_n\gets\)</span> global masked mean KL (all-reduce numerator and token count)</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(m\gets\rho m+(1-\rho)\hat k_n\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(e\gets\operatorname{clip}(m/k^*-1,-c,c)\)</span>; <span class="math inline">\(\beta\gets\beta e^{\eta e}\)</span> <em>▷ outside autograd</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Simulate a policy-training system where stronger KL penalties reduce policy drift.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(301)
+
+steps = 40
+
+target_kl = torch.tensor(0.02)
+plant_scale = torch.tensor(0.04)
+
+initial_beta = torch.tensor(0.2)
+controller_gain = 0.2
+ema_decay = 0.8
+max_relative_error = 0.5
+
+noise = 0.002 * torch.randn(steps)
+
+
+def run_controller(update_sign):
+    &quot;&quot;&quot;
+    update_sign=+1: correct feedback
+    update_sign=-1: incorrect feedback sign
+    &quot;&quot;&quot;
+    beta = initial_beta.clone()
+    smoothed_kl = target_kl.clone()
+
+    history = []
+
+    for step in range(steps):
+        # Toy training system: stronger regularization reduces KL.
+        raw_observed_kl = (
+            plant_scale / beta
+            + noise[step]
+        )
+
+        measured_kl = ...                              # TODO 1: nonnegative
+
+        smoothed_kl = ...                              # TODO 2: EMA
+
+        relative_error = ...                           # TODO 3
+        clipped_error = ...                            # TODO 4
+
+        beta = ...                                     # TODO 5: positive update
+
+        history.append(torch.stack([
+            beta,
+            measured_kl,
+            smoothed_kl,
+            clipped_error,
+        ]))
+
+    return torch.stack(history)                        # [steps,4]
+
+
+correct_history = run_controller(update_sign=+1)
+wrong_history = run_controller(update_sign=-1)
+
+print(&quot;step | beta | measured KL | EMA KL | error&quot;)
+
+for step in range(0, steps, 5):
+    beta, measured, smoothed, error = correct_history[step]
+
+    print(
+        f&quot;{step:&gt;4} |&quot;
+        f&quot; {beta.item():&gt;6.3f} |&quot;
+        f&quot; {measured.item():&gt;11.4f} |&quot;
+        f&quot; {smoothed.item():&gt;6.4f} |&quot;
+        f&quot; {error.item():&gt;+6.3f}&quot;
+    )
+
+print(&quot;\ncorrect final beta:&quot;, correct_history[-1, 0].item())
+print(&quot;wrong-sign final beta:&quot;, wrong_history[-1, 0].item())
+
+print(
+    &quot;correct final smoothed KL:&quot;,
+    correct_history[-1, 2].item(),
+)
+
+print(
+    &quot;wrong-sign final smoothed KL:&quot;,
+    wrong_history[-1, 2].item(),
+)
+
+assert torch.all(correct_history[:, 0] &gt; 0)
+assert torch.all(wrong_history[:, 0] &gt; 0)
+
+assert correct_history[-1, 0] &gt; initial_beta
+assert wrong_history[-1, 0] &lt; initial_beta</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>The approximate equilibrium coefficient from: <span class="math display">\[k\approx\frac{0.04}{\beta}\]</span></p></li>
+<li><p>Whether the correct controller initially increases or decreases <span class="math inline">\(\beta\)</span>.</p></li>
+<li><p>What happens under the reversed feedback sign.</p></li>
+</ul>
+<p>Now compare the controller’s response with and without error clipping:</p>
+<pre class="code python"><code class="language-python">observed_spike = torch.tensor(2.0)
+
+unclipped_error = ...                                  # TODO 6
+safe_error = ...                                       # TODO 7
+
+unclipped_multiplier = ...                             # TODO 8
+safe_multiplier = ...                                  # TODO 9
+
+print(&quot;\nunclipped beta multiplier:&quot;,
+      unclipped_multiplier.item())
+
+print(&quot;clipped beta multiplier:&quot;,
+      safe_multiplier.item())</code></pre>
+<p>Why can one corrupted KL measurement destabilize an unclipped multiplicative controller?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>.clamp_min(0.0)</code> for the measurement.</p></li>
+<li><p>EMA: <code>decay * old + (1 - decay) * new</code>.</p></li>
+<li><p>Relative error is <code>smoothed / target - 1</code>.</p></li>
+<li><p>Clamp it symmetrically.</p></li>
+<li><p>Update with <code>beta * exp(sign * gain * error)</code>.</p></li>
+<li><p>The equilibrium is where observed KL approximately equals target KL.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why use a multiplicative rather than unrestricted additive update for <span class="math inline">\(\beta\)</span>?</p></li>
+<li><p>Prediction: if observed KL is exactly the target, what happens to <span class="math inline">\(\beta\)</span>?</p></li>
+<li><p>Why should the controller consume globally aggregated KL rather than separate worker-local measurements?</p></li>
+<li><p>Debugging: KL exceeds its target while <span class="math inline">\(\beta\)</span> steadily decreases. What controller bug is most likely?</p></li>
+<li><p>Why might a long EMA timescale improve stability but respond poorly to sudden policy drift?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def run_controller(update_sign):
+    beta = initial_beta.clone()
+    smoothed_kl = target_kl.clone()
+
+    history = []
+
+    for step in range(steps):
+        raw_observed_kl = (
+            plant_scale / beta
+            + noise[step]
+        )
+
+        measured_kl = raw_observed_kl.clamp_min(0.0)
+
+        smoothed_kl = (
+            ema_decay * smoothed_kl
+            + (1.0 - ema_decay) * measured_kl
+        )
+
+        relative_error = (
+            smoothed_kl / target_kl
+            - 1.0
+        )
+
+        clipped_error = torch.clamp(
+            relative_error,
+            -max_relative_error,
+            max_relative_error,
+        )
+
+        beta = beta * torch.exp(
+            update_sign
+            * controller_gain
+            * clipped_error
+        )
+
+        history.append(torch.stack([
+            beta,
+            measured_kl,
+            smoothed_kl,
+            clipped_error,
+        ]))
+
+    return torch.stack(history)</code></pre>
+<p>Spike handling:</p>
+<pre class="code python"><code class="language-python">unclipped_error = (
+    observed_spike / target_kl
+    - 1.0
+)
+
+safe_error = torch.clamp(
+    unclipped_error,
+    -max_relative_error,
+    max_relative_error,
+)
+
+unclipped_multiplier = torch.exp(
+    controller_gain * unclipped_error
+)
+
+safe_multiplier = torch.exp(
+    controller_gain * safe_error
+)</code></pre>
+<p>The toy equilibrium satisfies:</p>
+<p><span class="math display">\[0.02\approx\frac{0.04}{\beta}\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[\beta\approx2\]</span></p>
+<p>Initially, <span class="math inline">\(\beta=0.2\)</span>, giving KL near:</p>
+<p><span class="math display">\[\frac{0.04}{0.2}=0.2\]</span></p>
+<p>This is ten times the target, so the correct controller increases <span class="math inline">\(\beta\)</span>.</p>
+<p>With the wrong sign, excessive KL reduces <span class="math inline">\(\beta\)</span>. That weakens regularization, which raises KL further, producing positive feedback and runaway behavior.</p>
+<p>For the spike:</p>
+<p><span class="math display">\[e_{\text{raw}}
+=
+\frac{2}{0.02}-1
+=
+99\]</span></p>
+<p>Without clipping, the multiplier is:</p>
+<p><span class="math display">\[\exp(0.2\cdot99)\]</span></p>
+<p>which is enormous. Clipping at <span class="math inline">\(0.5\)</span> limits it to:</p>
+<p><span class="math display">\[\exp(0.2\cdot0.5)
+\approx1.105\]</span></p>
+<p>Check answers:</p>
+<ol>
+<li><p>Multiplicative updates preserve positivity and operate naturally on the coefficient’s relative scale.</p></li>
+<li><p>Relative error is zero, so the multiplier is one and <span class="math inline">\(\beta\)</span> remains unchanged.</p></li>
+<li><p>Worker-local batches may have different lengths, prompts, and sampling noise. Independent updates would create inconsistent controller states.</p></li>
+<li><p>The feedback sign is probably reversed, or old/new KL terms were subtracted in the wrong order.</p></li>
+<li><p>Smoothing rejects noise but adds control delay. A stale estimate may allow KL to overshoot before <span class="math inline">\(\beta\)</span> reacts.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>KL-shaped rewards and returns are fixed rollout targets; differentiating through them adds an unintended product-rule path.</p></li>
+<li><p>Individual sampled log-ratio terms may be negative even though their correctly sampled expectation is a nonnegative KL divergence.</p></li>
+</ul>

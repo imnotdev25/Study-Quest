@@ -1,0 +1,49 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Two different costs: <strong>memory traffic</strong> (reading the <span class="math inline">\(T\times T\)</span> attention matrix and the KV cache) and <strong>arithmetic</strong> (<span class="math inline">\(O(T^2)\)</span> dot products). A <strong>sliding window</strong> limits each query to the last <span class="math inline">\(W\)</span> keys, which cuts both. <strong>FlashAttention</strong> computes <em>exact</em> attention without ever storing the <span class="math inline">\(T\times T\)</span> matrix, which cuts memory traffic only.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/e2c12c0c7189.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Each row is a query. With a window, a token reads only its last <span class="math inline">\(W\)</span> neighbours directly; stacking layers extends the reach to <span class="math inline">\(L\cdot W\)</span>.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: sliding-window attention still sees far</div>
+<p><strong>Step 1.</strong> Mask: query <span class="math inline">\(i\)</span> attends to <span class="math inline">\(j\in[i-W+1,i]\)</span>. Cost per layer <span class="math inline">\(O(TW)\)</span>, and the cache holds only <span class="math inline">\(W\)</span> entries.</p>
+<p><strong>Step 2.</strong> Information moves at most <span class="math inline">\(W\)</span> positions per layer, so after <span class="math inline">\(L\)</span> layers a token can be influenced by tokens up to <span class="math inline">\(L\cdot W\)</span> back.</p>
+<p><strong>Step 3.</strong> <strong>Mistral 7B:</strong> <span class="math inline">\(W=4096\)</span>, 32 layers <span class="math inline">\(\Rightarrow\)</span> theoretical receptive field <span class="math inline">\(131{,}072\)</span> tokens.</p>
+<p><strong>Step 4.</strong> Pure windows lose precise long-range recall, so modern models mix them: Gemma 2 alternates local and global 1:1, Gemma 3 and Gemma 4 use 5 local : 1 global, gpt-oss alternates a 128-token window with full attention.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: online softmax: the identity behind FlashAttention</div>
+<p><strong>Step 1.</strong> Goal: <span class="math inline">\(o=\sum_j\frac{e^{s_j}}{\sum_ke^{s_k}}v_j\)</span> for one query, processing keys in blocks, never holding all <span class="math inline">\(s\)</span>.</p>
+<p><strong>Step 2.</strong> Keep three running values: max <span class="math inline">\(m\)</span>, normalizer <span class="math inline">\(\ell=\sum e^{s_j-m}\)</span>, and unnormalized output <span class="math inline">\(a=\sum e^{s_j-m}v_j\)</span>.</p>
+<p><strong>Step 3.</strong> A new block with scores <span class="math inline">\(s^{(b)}\)</span>: <span class="math inline">\(m&#39;=\max(m,\max s^{(b)})\)</span>. Every old term had <span class="math inline">\(e^{s-m}\)</span>, and it now needs <span class="math inline">\(e^{s-m&#39;}=e^{s-m}e^{m-m&#39;}\)</span>. So rescale by <span class="math inline">\(c=e^{m-m&#39;}\)</span>: <span class="math inline">\(\ell&#39;=c\,\ell+\sum_je^{s^{(b)}_j-m&#39;}\)</span>, <span class="math inline">\(\ a&#39;=c\,a+\sum_je^{s^{(b)}_j-m&#39;}v^{(b)}_j\)</span>.</p>
+<p><strong>Step 4.</strong> After the last block, <span class="math inline">\(o=a/\ell\)</span>, exactly the softmax result (checked numerically below to <span class="math inline">\(10^{-16}\)</span>).</p>
+<p><strong>Step 5.</strong> Blocks fit in fast on-chip SRAM, so the <span class="math inline">\(T^2\)</span> scores never touch slow HBM. Backward stores only <span class="math inline">\(m\)</span> and <span class="math inline">\(\ell\)</span> per row and recomputes scores, trading cheap FLOPs for expensive memory traffic.</p>
+</div>
+<pre class="code text"><code class="language-plaintext">import math
+import torch
+
+s, v = torch.randn(37, dtype=torch.float64), torch.randn(37, 4, dtype=torch.float64)
+m, l, acc = torch.tensor(-math.inf, dtype=torch.float64), 0.0, torch.zeros(4, dtype=torch.float64)
+for sb, vb in zip(s.split(8), v.split(8)):          # process keys 8 at a time
+    m_new = torch.maximum(m, sb.max())
+    c = torch.exp(m - m_new)                         # rescale old sums to the new max
+    l = l * c + torch.exp(sb - m_new).sum()
+    acc = acc * c + (torch.exp(sb - m_new)[:, None] * vb).sum(0)
+    m = m_new
+print((acc / l - torch.softmax(s, 0) @ v).abs().max())   # ~1e-16</code></pre>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/aecbcbffeed8.svg" alt="diagram" loading="lazy"></figure>
+<p><em>FlashAttention tiles the <span class="math inline">\(T\times T\)</span> score matrix. No tile is ever written to slow memory; the online-softmax update above stitches the tiles together exactly.</em></p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: FlashAttention forward (one query block)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> query block <span class="math inline">\(Q_i\)</span>, key/value blocks <span class="math inline">\(K_j,V_j\)</span> streamed from memory</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(m\gets-\infty\)</span>; <span class="math inline">\(\ell\gets0\)</span>; <span class="math inline">\(A\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each key block <span class="math inline">\(j\)</span> (skip blocks entirely in the masked future) <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(S\gets Q_iK_j^\top/\sqrt d\)</span> (+ mask); <span class="math inline">\(m&#39;\gets\max(m,\operatorname{rowmax}S)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(P\gets e^{S-m&#39;}\)</span>; <span class="math inline">\(c\gets e^{m-m&#39;}\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\ell\gets c\ell+\operatorname{rowsum}P\)</span>; <span class="math inline">\(A\gets cA+PV_j\)</span>; <span class="math inline">\(m\gets m&#39;\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(O_i\gets A/\ell\)</span>; save <span class="math inline">\(\LSE_i=m+\log\ell\)</span> for backward</div>
+</div>
+</div>

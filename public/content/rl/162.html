@@ -1,0 +1,415 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What replaces the learned value critic in GRPO?</p></li>
+<li><p>In GRPO, which policy defines the update ratio, and which policy acts as the long-term behavioural anchor?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="optimizing-a-proxy-is-not-the-same-as-optimizing-the-goal">2. Optimizing a proxy is not the same as optimizing the goal</h3>
+<p>Suppose the real objective is human utility <span class="math inline">\(U(x,y)\)</span>, but training can only observe a proxy reward <span class="math inline">\(R(x,y)\)</span>:</p>
+<p><span class="math display">\[\underbrace{
+\max_\theta
+E_{y\sim\pi_\theta}[R(x,y)]
+}_{\text{what training optimizes}}
+\qquad\neq\qquad
+\underbrace{
+\max_\theta
+E_{y\sim\pi_\theta}[U(x,y)]
+}_{\text{what we actually want}}\]</span></p>
+<p>Reward hacking occurs when the policy finds outputs with high proxy reward but poor real utility.</p>
+<p>Examples:</p>
+<ul>
+<li><p>code passes incomplete tests without solving the task;</p></li>
+<li><p>a judge rewards verbosity, citations or confident tone;</p></li>
+<li><p>a safety model learns a refusal template rather than safe reasoning;</p></li>
+<li><p>a financial assistant exploits evaluator keywords while giving bad advice;</p></li>
+<li><p>a tool agent reports success without verifying the tool result.</p></li>
+</ul>
+<p>Reference-KL regularization can slow exploitation:</p>
+<p><span class="math display">\[J(\pi)
+=
+\underbrace{E_\pi[R(a)]}_{\text{proxy reward}}
+-
+\underbrace{
+\beta D_{\mathrm{KL}}
+(\pi\Vert\pi_{\text{ref}})
+}_{\text{drift cost}}\]</span></p>
+<p>For an unconstrained categorical policy, the optimum has the form:</p>
+<p><span class="math display">\[\pi^*(a)
+=
+\underbrace{
+\frac{
+\pi_{\text{ref}}(a)
+\exp(R(a)/\beta)
+}{
+\sum_{a&#39;}
+\pi_{\text{ref}}(a&#39;)
+\exp(R(a&#39;)/\beta)
+}
+}_{\text{reference probability tilted exponentially by proxy reward}}\]</span></p>
+<p>Even an initially rare exploit can dominate when its proxy reward is sufficiently larger. KL does not determine whether the reward is correct.</p>
+<p>Training therefore needs independent diagnostics:</p>
+<ul>
+<li><p>training reward;</p></li>
+<li><p>held-out verifier or human audit score;</p></li>
+<li><p>policy entropy and KL;</p></li>
+<li><p>reward components separately;</p></li>
+<li><p>output lengths and strategy frequencies;</p></li>
+<li><p>adversarial tests for evaluator shortcuts.</p></li>
+</ul>
+<p>DPO is not immune. If preference labels reward sycophancy, verbosity or evaluator-specific artifacts, DPO learns those artifacts offline. It lacks online exploration, but it still optimizes a proxy dataset.</p>
+<p>Shapes for today’s toy model:</p>
+<ul>
+<li><p>strategy rewards and policy logits: <span style="background-color: codeinlinebg"><code> [A]</code></span></p></li>
+<li><p>recorded metrics: <span style="background-color: codeinlinebg"><code> [checkpoints, 5 + A]</code></span></p></li>
+<li><p>losses, expected rewards, KL and entropy: scalar <span style="background-color: codeinlinebg"><code> []</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-train-the-score-upward-and-utility-downward">3. PyTorch exercise — train the score upward and utility downward</h3>
+<p>We enumerate four response strategies exactly, avoiding sampling noise so the failure is obvious.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Strategy</strong></th>
+<th style="text-align: left;"><strong>Flawed reward</strong></th>
+<th style="text-align: left;"><strong>Audit utility</strong></th>
+<th style="text-align: left;"><strong>Hardened reward</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Strategy</strong></td>
+<td style="text-align: left;"><strong>Flawed reward</strong></td>
+<td style="text-align: left;"><strong>Audit utility</strong></td>
+<td style="text-align: left;"><strong>Hardened reward</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Honest solution</td>
+<td style="text-align: left;">0.8</td>
+<td style="text-align: left;">1.0</td>
+<td style="text-align: left;">0.9</td>
+</tr>
+<tr>
+<td style="text-align: left;">Verbose flattery</td>
+<td style="text-align: left;">1.0</td>
+<td style="text-align: left;">0.4</td>
+<td style="text-align: left;">0.4</td>
+</tr>
+<tr>
+<td style="text-align: left;">Test exploit</td>
+<td style="text-align: left;">1.4</td>
+<td style="text-align: left;">−0.5</td>
+<td style="text-align: left;">−0.8</td>
+</tr>
+<tr>
+<td style="text-align: left;">Safe refusal</td>
+<td style="text-align: left;">0.3</td>
+<td style="text-align: left;">0.2</td>
+<td style="text-align: left;">0.2</td>
+</tr>
+</tbody>
+</table>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+strategy_names = [
+    &quot;honest solution&quot;,
+    &quot;verbose flattery&quot;,
+    &quot;test exploit&quot;,
+    &quot;safe refusal&quot;,
+]
+
+reference_probabilities = torch.tensor([
+    0.60,
+    0.15,
+    0.05,
+    0.20,
+])
+
+flawed_rewards = torch.tensor([
+    0.80,
+    1.00,
+    1.40,
+    0.30,
+])
+
+audit_utilities = torch.tensor([
+    1.00,
+    0.40,
+    -0.50,
+    0.20,
+])
+
+hardened_rewards = torch.tensor([
+    0.90,
+    0.40,
+    -0.80,
+    0.20,
+])
+
+kl_coefficient = 0.20
+learning_rate = 0.08
+num_steps = 150
+
+checkpoint_steps = {
+    0, 10, 50, num_steps
+}
+
+reference_log_probabilities = (
+    reference_probabilities.log()
+)
+
+
+def train_policy(training_rewards):
+    policy_logits = torch.nn.Parameter(
+        reference_log_probabilities.clone()
+    )
+
+    optimizer = torch.optim.Adam(
+        [policy_logits],
+        lr=learning_rate,
+    )
+
+    history = []
+
+    for step in range(num_steps + 1):
+        # TODO 1: Stable policy probabilities.
+        log_probabilities = ...
+
+        probabilities = ...
+
+        # TODO 2: Training and audit metrics.
+        expected_training_reward = ...
+
+        expected_audit_utility = ...
+
+        reference_kl = ...
+
+        entropy = ...
+
+        if step in checkpoint_steps:
+            history.append(torch.cat([
+                torch.tensor([
+                    float(step),
+                    expected_training_reward.item(),
+                    expected_audit_utility.item(),
+                    reference_kl.item(),
+                    entropy.item(),
+                ]),
+                probabilities.detach(),
+            ]))
+
+        if step == num_steps:
+            break
+
+        # TODO 3: Maximize reward minus reference KL.
+        loss = ...
+
+        optimizer.zero_grad()
+        loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(
+            [policy_logits],
+            max_norm=1.0,
+        )
+
+        optimizer.step()
+
+    return (
+        probabilities.detach(),
+        torch.stack(history),
+    )
+
+
+# TODO 4: Train against the two reward specifications.
+flawed_final_probabilities, flawed_history = ...
+
+hardened_final_probabilities, hardened_history = ...
+
+# TODO 5: Reward-hacking diagnostics.
+flawed_training_change = ...
+
+flawed_audit_change = ...
+
+flawed_exploit_probability = ...
+
+hardened_exploit_probability = ...
+
+print(
+    &quot;History columns: step, training reward, &quot;
+    &quot;audit utility, reference KL, entropy, &quot;
+    &quot;four strategy probabilities&quot;
+)
+
+print(&quot;\nFlawed-verifier training:&quot;)
+print(flawed_history)
+
+print(&quot;\nHardened-verifier training:&quot;)
+print(hardened_history)
+
+print(&quot;\nFinal strategy probabilities&quot;)
+for index, name in enumerate(strategy_names):
+    print(
+        name,
+        &quot;flawed=&quot;,
+        flawed_final_probabilities[index].item(),
+        &quot;hardened=&quot;,
+        hardened_final_probabilities[index].item(),
+    )
+
+print(
+    &quot;\nFlawed training-reward change:&quot;,
+    flawed_training_change.item(),
+)
+print(
+    &quot;Flawed audit-utility change:&quot;,
+    flawed_audit_change.item(),
+)
+print(
+    &quot;Exploit probability: flawed, hardened&quot;,
+    flawed_exploit_probability.item(),
+    hardened_exploit_probability.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which strategy will the flawed reward favour?</p></li>
+<li><p>Can training reward rise while audit utility falls?</p></li>
+<li><p>Will a nonzero KL coefficient necessarily prevent exploitation?</p></li>
+<li><p>Which reward specification should concentrate probability on the honest strategy?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.log_softmax</code></span> and exponentiate it.</p></li>
+<li><p>Expected reward is <span style="background-color: codeinlinebg"><code> sum(probability * reward)</code></span>.</p></li>
+<li><p>Forward reference KL is <span style="background-color: codeinlinebg"><code> sum(p * (log_p - log_ref))</code></span>.</p></li>
+<li><p>Entropy is <span style="background-color: codeinlinebg"><code> -sum(p * log_p)</code></span>.</p></li>
+<li><p>PyTorch minimizes, so negate <span style="background-color: codeinlinebg"><code> reward - beta * KL</code></span>.</p></li>
+<li><p>History column <span style="background-color: codeinlinebg"><code> 2</code></span> is audit utility.</p></li>
+<li><p>Strategy index <span style="background-color: codeinlinebg"><code> 2</code></span> is the test exploit.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Monitor only training reward.</p></li>
+<li><p>Evaluate with the same incomplete tests used for training.</p></li>
+<li><p>Assume a small KL proves behaviour is safe.</p></li>
+<li><p>Combine reward components without logging each component.</p></li>
+<li><p>Repeatedly tune against the supposedly held-out audit.</p></li>
+<li><p>Ignore sudden entropy collapse or strategy-frequency changes.</p></li>
+<li><p>Treat a deterministic verifier as a complete task specification.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can a rare exploit dominate despite reference-KL regularization?</p></li>
+<li><p>What pattern in training and audit curves indicates reward hacking?</p></li>
+<li><p>Does replacing a learned reward model with unit tests eliminate reward hacking?</p></li>
+<li><p>Why must the audit be independent of the optimized reward?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Stable probabilities:</p>
+<pre class="code python"><code class="language-python">log_probabilities = torch.log_softmax(
+    policy_logits,
+    dim=0,
+)
+
+probabilities = torch.exp(
+    log_probabilities
+)</code></pre>
+<p>Metrics:</p>
+<pre class="code python"><code class="language-python">expected_training_reward = (
+    probabilities
+    * training_rewards
+).sum()
+
+expected_audit_utility = (
+    probabilities
+    * audit_utilities
+).sum()
+
+reference_kl = (
+    probabilities
+    * (
+        log_probabilities
+        - reference_log_probabilities
+    )
+).sum()
+
+entropy = -(
+    probabilities
+    * log_probabilities
+).sum()</code></pre>
+<p>Optimization loss:</p>
+<pre class="code python"><code class="language-python">loss = -(
+    expected_training_reward
+    - kl_coefficient
+    * reference_kl
+)</code></pre>
+<p>Training both policies:</p>
+<pre class="code python"><code class="language-python">(
+    flawed_final_probabilities,
+    flawed_history,
+) = train_policy(
+    flawed_rewards
+)
+
+(
+    hardened_final_probabilities,
+    hardened_history,
+) = train_policy(
+    hardened_rewards
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">flawed_training_change = (
+    flawed_history[-1, 1]
+    - flawed_history[0, 1]
+)
+
+flawed_audit_change = (
+    flawed_history[-1, 2]
+    - flawed_history[0, 2]
+)
+
+flawed_exploit_probability = (
+    flawed_final_probabilities[2]
+)
+
+hardened_exploit_probability = (
+    hardened_final_probabilities[2]
+)</code></pre>
+<p>Initially, the reference policy’s audit utility is:</p>
+<p><span class="math display">\[\begin{aligned}
+E_{\pi_{\text{ref}}}[U]
+&amp;=
+\underbrace{
+0.60(1.0)
++0.15(0.4)
++0.05(-0.5)
++0.20(0.2)
+}_{\text{reference-weighted true utility}}\\
+&amp;=0.675
+\end{aligned}\]</span></p>
+<p>Under the flawed verifier, the exploit receives the largest reward. Training therefore raises its probability, increasing the reported training reward while sharply reducing audit utility.</p>
+<p>The hardened verifier assigns the exploit negative reward. Its policy should instead concentrate heavily on the honest solution.</p>
+<p>Exact final values depend slightly on optimizer convergence, but the expected pattern is:</p>
+<ul>
+<li><p>flawed training reward: rises;</p></li>
+<li><p>flawed audit utility: falls;</p></li>
+<li><p>flawed exploit probability: becomes large;</p></li>
+<li><p>hardened exploit probability: approaches zero;</p></li>
+<li><p>hardened audit utility: rises.</p></li>
+</ul>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>KL charges for moving away from the reference, but proxy reward enters exponentially. A sufficiently large proxy advantage can outweigh a low reference probability.</p></li>
+<li><p>Optimized reward rises while an independent human, verifier or deployment metric stagnates or declines—often alongside growing disagreement and strategy concentration.</p></li>
+<li><p>No. Unit tests are still a specification. Missing cases, parser behaviour, timeouts and numerical tolerances can all become exploits.</p></li>
+<li><p>If training repeatedly adapts to the audit, it stops measuring generalization and becomes another component of the optimized proxy.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>GRPO replaces the critic with the sampled reward mean and variance of completions answering the same prompt.</p></li>
+<li><p><span class="math inline">\(\pi_{\text{old}}\)</span> defines the importance ratio; <span class="math inline">\(\pi_{\text{ref}}\)</span> limits accumulated drift from the reference/SFT policy.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> a rising reward proves only that the policy learned the scoring rule. Trust improvement only when independent audits, held-out verifiers and real task metrics rise with it.</p>

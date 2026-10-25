@@ -1,0 +1,13 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Synthetic data</strong> is training data written by an LLM. It has gone from a trick to the default: SmolTalk and Tulu 3’s SFT mixes are mostly synthetic, Nemotron-CC-v2 includes about 2.5T tokens of LLM-rephrased web text, and almost every open reasoning model is trained on traces sampled from a stronger one. It’s cheap, controllable and scalable. Its risks are <strong>low diversity</strong>, <strong>inherited errors</strong>, and <strong>model collapse</strong> when models train on their own outputs.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/f96a61399b88.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Every synthetic-data recipe in this part has these four stages. The filter is where quality comes from.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: model collapse in one line of math</div>
+<p><strong>Step 1.</strong> Fit a Gaussian to <span class="math inline">\(n\)</span> samples, sample <span class="math inline">\(n\)</span> new points from the fit, refit, repeat. Each refit’s variance estimate <span class="math inline">\(\hat\sigma^2_{t+1}\)</span> is <span class="math inline">\(\hat\sigma^2_t\cdot\chi^2_{n-1}/(n-1)\)</span>, a random factor with mean slightly below 1 for the usual MLE.</p>
+<p><strong>Step 2.</strong> Products of such factors drift toward 0: tails disappear first, then variance collapses (Shumailov et al., 2024). The LLM version: rare facts and styles vanish after a few generations of training on outputs.</p>
+<p><strong>Step 3.</strong> <strong>Mitigation:</strong> <em>accumulate</em> rather than replace. Keep the real data and add synthetic data each round; under this regime the error stays bounded (Gerstgrasser et al., 2024). In practice: mix synthetic with real data, filter hard, and generate from diverse seeds.</p>
+</div>

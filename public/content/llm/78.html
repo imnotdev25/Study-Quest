@@ -1,0 +1,301 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>An evaluation is an estimate.</strong> Scores on <span class="math inline">\(N\)</span> prompts are a sample, and a different sample would give a different number. The <strong>standard error</strong> is the typical size of that sample-to-sample variation. <strong>Pairing</strong> means scoring both models on the same prompts, so prompt difficulty, which affects both equally, cancels out of the difference.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why should best-of-<span class="math inline">\(N\)</span> evaluation use an independent quality signal?</p></li>
+<li><p>Why does reward-model error become positively biased after selecting the maximum-scoring response?</p></li>
+</ol>
+<p>Suppose baseline and updated models are evaluated on the same <span class="math inline">\(N\)</span> prompts:</p>
+<p><span class="math display">\[Y^{\text{base}},Y^{\text{new}}
+\in\{0,1\}^{N}\]</span></p>
+<p>Define the prompt-level difference:</p>
+<p><span class="math display">\[D_i=Y_i^{\text{new}}-Y_i^{\text{base}}\]</span></p>
+<p>The estimated improvement is:</p>
+<p><span class="math display">\[\hat\Delta
+=
+\frac1N\sum_{i=1}^{N}D_i\]</span></p>
+<p>Its paired standard error is:</p>
+<p><span class="math display">\[\operatorname{SE}_{\text{paired}}
+=
+\frac{s_D}{\sqrt N}\]</span></p>
+<p>Equivalently:</p>
+<p><span class="math display">\[\operatorname{Var}(\hat\Delta)
+=
+\frac{
+\operatorname{Var}(Y^{\text{new}})
++
+\operatorname{Var}(Y^{\text{base}})
+-
+2\operatorname{Cov}(Y^{\text{new}},Y^{\text{base}})
+}{N}\]</span></p>
+<p>When models tend to succeed and fail on the same prompts, covariance is positive and pairing reduces uncertainty.</p>
+<p>An unpaired calculation omits the covariance:</p>
+<p><span class="math display">\[\operatorname{SE}_{\text{unpaired}}
+=
+\sqrt{
+\frac{s_{\text{new}}^2}{N}
++
+\frac{s_{\text{base}}^2}{N}
+}\]</span></p>
+<p>For a paired bootstrap, resample prompt indices and keep both model outcomes together. Independently resampling the two arms destroys the pairing.</p>
+<p>Confidence intervals quantify sampling uncertainty. They do not detect judge bias, benchmark contamination, reward hacking, or a systematically unrepresentative prompt set.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why pairing shrinks the error</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\hat\Delta=\frac1N\sum_iD_i\)</span> with <span class="math inline">\(D_i=Y_i^{\text{new}}-Y_i^{\text{base}}\)</span>. For independent prompts, <span class="math inline">\(\operatorname{Var}(\hat\Delta)=\operatorname{Var}(D)/N\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\operatorname{Var}(D)=\operatorname{Var}(Y^{\text{new}})+\operatorname{Var}(Y^{\text{base}})-2\operatorname{Cov}(Y^{\text{new}},Y^{\text{base}})\)</span>.</p>
+<p><strong>Step 3.</strong> Hard prompts are hard for both models, so the covariance is large and positive. The <span class="math inline">\(-2\operatorname{Cov}\)</span> term removes that shared variation.</p>
+<p><strong>Step 4.</strong> Unpaired (independent samples) drops the covariance term: a larger variance for the same <span class="math inline">\(N\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>SE and interval:</strong> <span class="math inline">\(\operatorname{SE}=s_D/\sqrt N\)</span>; an approximate 95% interval is <span class="math inline">\(\hat\Delta\pm1.96\,\operatorname{SE}\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Bootstrap:</strong> resample prompt indices with replacement, recompute <span class="math inline">\(\hat\Delta\)</span>, and take the 2.5th and 97.5th percentiles. It makes no normality assumption, but it must resample <em>pairs</em> (both models’ scores on the same prompt together).</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: paired bootstrap confidence interval</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> per-prompt differences <span class="math inline">\(D_1..D_N\)</span>, resamples <span class="math inline">\(B\)</span> (e.g. 10<span>,</span>000)</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(b=1,\dots,B\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">draw <span class="math inline">\(N\)</span> indices with replacement; <span class="math inline">\(\hat\Delta_b\gets\)</span> mean of the drawn <span class="math inline">\(D\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\bar D\)</span> and the 2.5% and 97.5% percentiles of <span class="math inline">\(\{\hat\Delta_b\}\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Estimate a paired improvement and construct a bootstrap confidence interval.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(321)
+
+N = 800
+num_bootstraps = 4_000
+
+# Prompts vary substantially in difficulty.
+difficulty = torch.randn(N)
+
+baseline_probability = torch.sigmoid(
+    0.3 - difficulty
+)
+
+updated_probability = torch.clamp(
+    baseline_probability + 0.06,
+    max=0.99,
+)
+
+# Shared randomness creates correlated outcomes on each prompt.
+shared_uniform = torch.rand(N)
+
+baseline_correct = ...                                # TODO 1: [N]
+updated_correct = ...                                 # TODO 2: [N]
+
+paired_difference = ...                               # TODO 3: [N]
+estimated_improvement = ...                           # TODO 4: scalar
+
+paired_se = ...                                       # TODO 5
+unpaired_se = ...                                     # TODO 6
+
+print(&quot;baseline accuracy:&quot;,
+      baseline_correct.mean().item())
+
+print(&quot;updated accuracy:&quot;,
+      updated_correct.mean().item())
+
+print(&quot;estimated improvement:&quot;,
+      estimated_improvement.item())
+
+print(&quot;paired standard error:&quot;,
+      paired_se.item())
+
+print(&quot;unpaired standard error:&quot;,
+      unpaired_se.item())
+
+assert paired_difference.shape == (N,)
+assert paired_se &lt; unpaired_se</code></pre>
+<p>Construct a paired bootstrap interval:</p>
+<pre class="code python"><code class="language-python">bootstrap_indices = torch.randint(
+    low=0,
+    high=N,
+    size=(num_bootstraps, N),
+)                                                     # [K,N]
+
+bootstrap_differences = ...                           # TODO 7: [K,N]
+bootstrap_estimates = ...                             # TODO 8: [K]
+
+paired_interval = ...                                 # TODO 9: [2]
+
+print(
+    &quot;\npaired 95% interval:&quot;,
+    paired_interval.tolist(),
+)
+
+print(
+    &quot;bootstrap standard error:&quot;,
+    bootstrap_estimates.std(unbiased=True).item(),
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Will pairing make the confidence interval narrower or wider?</p></li>
+<li><p>Does a confidence interval containing zero prove the models are identical?</p></li>
+<li><p>Which tensor dimension represents bootstrap replications?</p></li>
+</ul>
+<p>Now reproduce an incorrect unpaired bootstrap:</p>
+<pre class="code python"><code class="language-python">baseline_indices = torch.randint(
+    0, N,
+    (num_bootstraps, N),
+)
+
+updated_indices = torch.randint(
+    0, N,
+    (num_bootstraps, N),
+)
+
+unpaired_bootstrap_estimates = (                     # TODO 10
+    ...
+)
+
+unpaired_interval = ...                              # TODO 11
+
+print(
+    &quot;\nunpaired 95% interval:&quot;,
+    unpaired_interval.tolist(),
+)
+
+print(
+    &quot;paired interval width:&quot;,
+    (paired_interval[1] - paired_interval[0]).item(),
+)
+
+print(
+    &quot;unpaired interval width:&quot;,
+    (unpaired_interval[1] - unpaired_interval[0]).item(),
+)</code></pre>
+<p>Finally, simulate a data-alignment bug:</p>
+<pre class="code python"><code class="language-python">permutation = torch.randperm(N)
+
+misaligned_difference = (
+    updated_correct[permutation]
+    - baseline_correct
+)
+
+print(
+    &quot;\nmean unchanged after shuffling:&quot;,
+    torch.allclose(
+        misaligned_difference.mean(),
+        paired_difference.mean(),
+    ),
+)
+
+print(
+    &quot;correct paired SE:&quot;,
+    paired_difference.std(unbiased=True).item()
+    / N**0.5,
+)
+
+print(
+    &quot;misaligned paired SE:&quot;,
+    misaligned_difference.std(unbiased=True).item()
+    / N**0.5,
+)</code></pre>
+<p>Why can shuffled predictions preserve both marginal accuracies and the mean difference while invalidating the paired uncertainty estimate?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Convert Boolean comparisons to <code>float()</code>.</p></li>
+<li><p>The paired standard error uses the standard deviation of <code>paired_difference</code>.</p></li>
+<li><p>Use population size <span class="math inline">\(N\)</span> in the denominator.</p></li>
+<li><p>Bootstrap by indexing <code>paired_difference</code><span><code>[</code></span><code>bootstrap_indices</code><span><code>]</code></span>.</p></li>
+<li><p>Use <code>torch.quantile(..., torch.tensor(</code><span><code>[</code></span><code>0.025, 0.975</code><span><code>]</code></span><code>))</code>.</p></li>
+<li><p>The incorrect bootstrap samples each model independently.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>What is the observational unit resampled by a paired bootstrap?</p></li>
+<li><p>Prediction: if both models always make identical predictions, what is the paired standard error of their difference?</p></li>
+<li><p>Why can an unpaired analysis waste statistical power?</p></li>
+<li><p>Debugging: point estimates are correct, but confidence intervals change dramatically after joining two result files. What alignment issue should you inspect?</p></li>
+<li><p>Why is a narrow bootstrap interval insufficient evidence that an LLM judge is valid?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">baseline_correct = (
+    shared_uniform &lt; baseline_probability
+).float()
+
+updated_correct = (
+    shared_uniform &lt; updated_probability
+).float()
+
+paired_difference = (
+    updated_correct - baseline_correct
+)
+
+estimated_improvement = paired_difference.mean()
+
+paired_se = (
+    paired_difference.std(unbiased=True)
+    / N**0.5
+)
+
+unpaired_se = torch.sqrt(
+    updated_correct.var(unbiased=True) / N
+    + baseline_correct.var(unbiased=True) / N
+)</code></pre>
+<p>Paired bootstrap:</p>
+<pre class="code python"><code class="language-python">bootstrap_differences = paired_difference[
+    bootstrap_indices
+]
+
+bootstrap_estimates = bootstrap_differences.mean(
+    dim=1
+)
+
+paired_interval = torch.quantile(
+    bootstrap_estimates,
+    torch.tensor([0.025, 0.975]),
+)</code></pre>
+<p>Incorrect unpaired bootstrap:</p>
+<pre class="code python"><code class="language-python">unpaired_bootstrap_estimates = (
+    updated_correct[updated_indices].mean(dim=1)
+    - baseline_correct[baseline_indices].mean(dim=1)
+)
+
+unpaired_interval = torch.quantile(
+    unpaired_bootstrap_estimates,
+    torch.tensor([0.025, 0.975]),
+)</code></pre>
+<p>The correct bootstrap resamples:</p>
+<p><span class="math display">\[(Y_i^{\text{base}},Y_i^{\text{new}})\]</span></p>
+<p>as one prompt-level pair. It retains the covariance caused by common prompt difficulty.</p>
+<p>Independent resampling estimates a different experiment in which the baseline and updated models were evaluated on unrelated prompts. It discards:</p>
+<p><span class="math display">\[-2\operatorname{Cov}
+\left(
+Y^{\text{new}},
+Y^{\text{base}}
+\right)\]</span></p>
+<p>and therefore generally produces a wider interval when the covariance is positive.</p>
+<p>Shuffling the updated predictions does not alter either marginal mean:</p>
+<p><span class="math display">\[\frac1N\sum_iY_i^{\text{new}}
+\quad\text{or}\quad
+\frac1N\sum_iY_i^{\text{base}}\]</span></p>
+<p>so their mean difference remains unchanged. But it breaks the prompt-level correspondence and changes the variance of:</p>
+<p><span class="math display">\[Y_i^{\text{new}}-Y_i^{\text{base}}\]</span></p>
+<p>This commonly occurs when result files are joined by row position rather than a stable example ID.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>One prompt together with all model outcomes associated with that prompt.</p></li>
+<li><p>Zero: every paired difference is exactly zero.</p></li>
+<li><p>It ignores positive within-prompt correlation, treating shared prompt difficulty as independent noise.</p></li>
+<li><p>Check for duplicated, missing, reordered, or incorrectly joined example IDs.</p></li>
+<li><p>The interval measures sampling variability conditional on the judge and dataset. A biased judge can produce an extremely precise but invalid estimate.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Best-of-<span class="math inline">\(N\)</span> should be checked with an evaluator whose errors are independent of the optimized reward model.</p></li>
+<li><p>Maximization preferentially selects candidates with favorable reward-model errors, making selected error positively biased.</p></li>
+</ul>

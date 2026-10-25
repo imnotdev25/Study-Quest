@@ -1,0 +1,487 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: grading homework you already memorized</div>
+<p>If a student memorized the answers to the exact worksheet, they’ll score 100% on it, which says nothing about whether they understand. A reward model evaluated on the same logs it was trained on is that student. Its residuals look like zero because it memorized, not because it’s accurate. Cross-fitting makes every prediction out of sample.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/7e76d24fa174.svg" alt="diagram" loading="lazy"></figure>
+<p><em>3-fold cross-fitting: each fold’s predictions come from a model that never saw it.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What residual does sequential doubly robust evaluation importance-weight?</p></li>
+<li><p>Why can DR have lower variance than PDIS?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-zero-residual-can-mean-memorization-not-accuracy">2. A zero residual can mean memorization, not accuracy</h3>
+<p>For a contextual decision, doubly robust evaluation uses:</p>
+<p><span class="math display">\[\hat J_{\text{DR}}
+=
+\frac1N\sum_i
+\left[
+\sum_a\pi(a\mid x_i)\hat q(x_i,a)
++
+\rho_i
+\left(
+r_i-\hat q(x_i,a_i)
+\right)
+\right]\]</span></p>
+<p>If a flexible outcome model trains on evaluation row <span class="math inline">\(i\)</span>, it may memorize:</p>
+<p><span class="math display">\[\hat q(x_i,a_i)=r_i\]</span></p>
+<p>The residual becomes zero, but this says nothing about the unobserved counterfactual actions. The DR correction is disabled exactly where it is needed.</p>
+<p>Cross-fitting prevents this:</p>
+<ol>
+<li><p>Split complete episodes into <span class="math inline">\(K\)</span> folds.</p></li>
+<li><p>Train the outcome model on <span class="math inline">\(K-1\)</span> folds.</p></li>
+<li><p>predict <span class="math inline">\(Q\)</span>-values only for the held-out fold.</p></li>
+<li><p>Repeat until every episode has held-out predictions.</p></li>
+<li><p>Compute one DR estimate from those predictions.</p></li>
+</ol>
+<p>For row <span class="math inline">\(i\)</span> in fold <span class="math inline">\(k(i)\)</span>:</p>
+<p><span class="math display">\[\hat v_i
+=
+\sum_a
+\pi(a\mid x_i)
+\hat q_{-k(i)}(x_i,a)\]</span></p>
+<p><span class="math display">\[\hat J_{\text{CF-DR}}
+=
+\frac1N\sum_i
+\left[
+\hat v_i
++
+\rho_i
+\left(
+r_i-\hat q_{-k(i)}(x_i,a_i)
+\right)
+\right]\]</span></p>
+<p>The subscript <span class="math inline">\(-k(i)\)</span> means the model never trained on episode <span class="math inline">\(i\)</span>.</p>
+<p>For agent data, split by independent unit—usually user, prompt or complete episode—not by token. Otherwise adjacent rows from the same conversation can leak across folds.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions and rewards: <span style="background-color: codeinlinebg"><code> [R, B]</code></span></p></li>
+<li><p>all-action <span class="math inline">\(Q\)</span>-predictions: <span style="background-color: codeinlinebg"><code> [R, B, A]</code></span></p></li>
+<li><p>selected <span class="math inline">\(Q\)</span>-predictions and weights: <span style="background-color: codeinlinebg"><code> [R, B]</code></span></p></li>
+<li><p>repeated value estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>DPO is still preference optimization, not OPE. If a DPO policy is evaluated using a reward model trained on the same responses, the reported reward can be contaminated by the same leakage. Use held-out prompts, cross-fitting and environmental metrics.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: cross-fitted DR</div>
+<p>Split the logs into <span class="math inline">\(K\)</span> folds, at the <strong>episode or user level</strong>, never inside a conversation. For fold <span class="math inline">\(k\)</span>, fit <span class="math inline">\(\hat q^{(-k)}\)</span> on the other folds and use it only on fold <span class="math inline">\(k\)</span>: <span class="math inline">\(\hat V=\frac1n\sum_i\big[\hat q^{(-k(i))}(x_i,\pi)+\rho_i\big(r_i-\hat q^{(-k(i))}(x_i,a_i)\big)\big]\)</span>. This removes the overfitting bias, so DR’s theory (and its confidence intervals) actually apply. Keep a final, untouched evaluation set for the last word.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Impressive same-data residuals can be evidence of leakage.</p></li>
+<li><p>Make every OPE prediction out of fold, with splits at the episode or user level.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: memorized vs honest</div>
+<p>A flexible <span class="math inline">\(\hat q\)</span> fit on all logs: mean in-sample <span class="math inline">\(|r-\hat q|=0.01\)</span>, so DR <span class="math inline">\(\approx\)</span> DM, and the correction does nothing. Cross-fitted: mean <span class="math inline">\(|r-\hat q|=0.18\)</span>. That’s the model’s real error, which DR now corrects.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Splitting turns of one user across folds.</p></li>
+<li><p>Tuning hyperparameters on the final evaluation set.</p></li>
+<li><p>Near-duplicate prompts in different folds.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-memorized-residuals-versus-honest-residuals">3. PyTorch exercise — memorized residuals versus honest residuals</h3>
+<p>This bandit has:</p>
+<ul>
+<li><p>behavior probability <span class="math inline">\(P_\mu(a=1)=0.2\)</span>;</p></li>
+<li><p>target probability <span class="math inline">\(P_\pi(a=1)=0.8\)</span>;</p></li>
+<li><p>mean rewards <span class="math inline">\(q(0)=0.2,\ q(1)=0.9\)</span>.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 500
+batch_size = 256
+num_actions = 2
+
+behavior_one_probability = 0.20
+target_one_probability = 0.80
+
+true_reward_means = torch.tensor([
+    0.20, 0.90
+])
+
+target_policy = torch.tensor([
+    0.20, 0.80
+])
+
+# Shape: [repetitions, batch]
+actions = (
+    torch.rand(
+        num_repetitions,
+        batch_size,
+    )
+    &lt; behavior_one_probability
+).long()
+
+reward_probabilities = (
+    true_reward_means[actions]
+)
+
+rewards = (
+    torch.rand_like(
+        reward_probabilities
+    )
+    &lt; reward_probabilities
+).to(torch.float64)
+
+# TODO 1: Selected probabilities, importance
+# weights and ordinary IS.
+behavior_action_probabilities = ...
+
+target_action_probabilities = ...
+
+weights = ...
+
+is_estimates = ...
+
+# TODO 2: Pathological same-data memorizer.
+# It copies the observed reward into the logged
+# action slot and predicts zero for the unseen action.
+leaky_q = torch.zeros(
+    num_repetitions,
+    batch_size,
+    num_actions,
+)
+
+leaky_q.scatter_(
+    dim=-1,
+    index=...,
+    src=...,
+)
+
+leaky_logged_q = ...
+
+leaky_direct_terms = ...
+
+leaky_dr_estimates = ...
+
+leaky_residuals = ...
+
+# TODO 3: Two-fold cross-fitted action-mean model.
+fold_ids = (
+    torch.arange(batch_size) % 2
+)
+
+crossfit_q = torch.zeros_like(
+    leaky_q
+)
+
+for heldout_fold in range(2):
+    training_rows = ...
+    heldout_rows = ...
+
+    for action in range(num_actions):
+        matching_training_rows = ...
+
+        counts = ...
+        reward_sums = ...
+
+        assert bool(
+            (counts &gt; 0).all()
+        )
+
+        fitted_means = ...
+
+        crossfit_q[
+            :,
+            heldout_rows,
+            action,
+        ] = fitted_means[:, None]
+
+# TODO 4: Cross-fitted DR.
+crossfit_logged_q = ...
+
+crossfit_direct_terms = ...
+
+crossfit_dr_estimates = ...
+
+# TODO 5: Oracle DR and diagnostics.
+oracle_logged_q = ...
+
+oracle_direct_value = ...
+
+oracle_dr_estimates = ...
+
+exact_target_value = ...
+
+all_estimates = torch.stack([
+    is_estimates,
+    leaky_dr_estimates,
+    crossfit_dr_estimates,
+    oracle_dr_estimates,
+], dim=1)
+
+means = ...
+biases = ...
+standard_deviations = ...
+rmses = ...
+
+names = [
+    &quot;Importance sampling&quot;,
+    &quot;Leaky same-data DR&quot;,
+    &quot;Cross-fitted DR&quot;,
+    &quot;Oracle DR&quot;,
+]
+
+print(
+    &quot;Exact target value:&quot;,
+    exact_target_value.item(),
+)
+
+print(
+    &quot;Maximum leaky residual:&quot;,
+    leaky_residuals.abs().max().item(),
+)
+
+for index, name in enumerate(names):
+    print(
+        name,
+        {
+            &quot;mean&quot;:
+                means[index].item(),
+            &quot;bias&quot;:
+                biases[index].item(),
+            &quot;std&quot;:
+                standard_deviations[index].item(),
+            &quot;rmse&quot;:
+                rmses[index].item(),
+        },
+    )</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the exact target-policy value?</p></li>
+<li><p>Will the memorizer’s zero residual make its DR estimate accurate?</p></li>
+<li><p>Which estimators should center near the exact value?</p></li>
+<li><p>Should cross-fitted DR have lower variance than ordinary IS?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Selected probability is <span class="math inline">\(p\)</span> for action <span style="background-color: codeinlinebg"><code> 1</code></span> and <span class="math inline">\(1-p\)</span> for action <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+<li><p>Scatter with tensors shaped <span style="background-color: codeinlinebg"><code> [R, B, 1]</code></span>.</p></li>
+<li><p>Gather the logged <span class="math inline">\(Q\)</span>-value using the same action indices.</p></li>
+<li><p>Cross-fitting trains on <span style="background-color: codeinlinebg"><code> fold_ids != heldout_fold</code></span>.</p></li>
+<li><p>Broadcast the training-row mask across repetitions.</p></li>
+<li><p>Compute an action’s fitted mean using only matching training rows.</p></li>
+<li><p>The oracle model uses <span style="background-color: codeinlinebg"><code> true_reward_means[actions]</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Train and evaluate the outcome model on identical rows. Training residuals can look excellent while OPE is badly biased.</p></li>
+<li><p>Split tokens from one conversation across folds. The model can reconstruct held-out tokens from neighboring context.</p></li>
+<li><p>Fit preprocessing, feature selection or hyperparameters on all folds. Leakage is not limited to neural-network weights.</p></li>
+<li><p>Create folds by stored row order when deployment data changes over time. Random folds may hide temporal drift.</p></li>
+<li><p>Use too many folds with rare actions. Some training folds may contain no samples for an action.</p></li>
+<li><p>Select the best reward model using the final evaluation fold. That fold is no longer untouched.</p></li>
+<li><p>Leave predictions connected to the training graph. Detach and persist fold-specific predictions before OPE.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is a zero training residual not evidence of a good DR estimator?</p></li>
+<li><p>What independence does cross-fitting restore?</p></li>
+<li><p>What should be the splitting unit for multi-step agent traces?</p></li>
+<li><p>Does cross-fitting fix missing behavior-policy support?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Probabilities, ratios and IS:</p>
+<pre class="code python"><code class="language-python">behavior_action_probabilities = torch.where(
+    actions == 1,
+    torch.tensor(
+        behavior_one_probability
+    ),
+    torch.tensor(
+        1.0 - behavior_one_probability
+    ),
+)
+
+target_action_probabilities = torch.where(
+    actions == 1,
+    torch.tensor(
+        target_one_probability
+    ),
+    torch.tensor(
+        1.0 - target_one_probability
+    ),
+)
+
+weights = (
+    target_action_probabilities
+    / behavior_action_probabilities
+)
+
+is_estimates = (
+    weights * rewards
+).mean(dim=1)</code></pre>
+<p>Leaky model:</p>
+<pre class="code python"><code class="language-python">leaky_q.scatter_(
+    dim=-1,
+    index=actions.unsqueeze(-1),
+    src=rewards.unsqueeze(-1),
+)
+
+leaky_logged_q = (
+    leaky_q.gather(
+        dim=-1,
+        index=actions.unsqueeze(-1),
+    ).squeeze(-1)
+)
+
+leaky_direct_terms = (
+    leaky_q
+    * target_policy[None, None, :]
+).sum(dim=-1)
+
+leaky_residuals = (
+    rewards - leaky_logged_q
+)
+
+leaky_dr_estimates = (
+    leaky_direct_terms
+    + weights * leaky_residuals
+).mean(dim=1)</code></pre>
+<p>Cross-fitted model:</p>
+<pre class="code python"><code class="language-python">for heldout_fold in range(2):
+    training_rows = (
+        fold_ids != heldout_fold
+    )
+
+    heldout_rows = (
+        fold_ids == heldout_fold
+    )
+
+    for action in range(num_actions):
+        matching_training_rows = (
+            training_rows[None, :]
+            &amp; (actions == action)
+        )
+
+        counts = (
+            matching_training_rows
+            .sum(dim=1)
+        )
+
+        reward_sums = (
+            rewards
+            * matching_training_rows
+        ).sum(dim=1)
+
+        assert bool(
+            (counts &gt; 0).all()
+        )
+
+        fitted_means = (
+            reward_sums / counts
+        )
+
+        crossfit_q[
+            :,
+            heldout_rows,
+            action,
+        ] = fitted_means[:, None]</code></pre>
+<p>Cross-fitted DR:</p>
+<pre class="code python"><code class="language-python">crossfit_logged_q = (
+    crossfit_q.gather(
+        dim=-1,
+        index=actions.unsqueeze(-1),
+    ).squeeze(-1)
+)
+
+crossfit_direct_terms = (
+    crossfit_q
+    * target_policy[None, None, :]
+).sum(dim=-1)
+
+crossfit_dr_estimates = (
+    crossfit_direct_terms
+    + weights
+    * (
+        rewards
+        - crossfit_logged_q
+    )
+).mean(dim=1)</code></pre>
+<p>Oracle and diagnostics:</p>
+<pre class="code python"><code class="language-python">oracle_logged_q = (
+    true_reward_means[actions]
+)
+
+oracle_direct_value = (
+    target_policy
+    * true_reward_means
+).sum()
+
+oracle_dr_estimates = (
+    oracle_direct_value
+    + weights
+    * (
+        rewards
+        - oracle_logged_q
+    )
+).mean(dim=1)
+
+exact_target_value = (
+    target_policy
+    * true_reward_means
+).sum()
+
+means = all_estimates.mean(dim=0)
+
+biases = (
+    means - exact_target_value
+)
+
+standard_deviations = (
+    all_estimates.std(
+        dim=0,
+        correction=1,
+    )
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)</code></pre>
+<p>The exact target value is:</p>
+<p><span class="math display">\[J(\pi)
+=
+0.2(0.2)+0.8(0.9)
+=
+0.76\]</span></p>
+<p>The memorizer has exactly zero logged residual:</p>
+<p><span class="math display">\[r_i-\hat q(x_i,a_i)=0\]</span></p>
+<p>Its DR correction therefore vanishes. Because it predicts zero for the unseen action, its expected estimate is only:</p>
+<p><span class="math display">\[0.8(0.2)(0.2)
++
+0.2(0.8)(0.9)
+=
+0.176\]</span></p>
+<p>A perfect training residual has produced a severely biased evaluation.</p>
+<p>Typical results are:</p>
+<ul>
+<li><p>IS: mean near <span style="background-color: codeinlinebg"><code> 0.76</code></span>, standard deviation around <span style="background-color: codeinlinebg"><code> 0.10</code></span>;</p></li>
+<li><p>leaky DR: mean near <span style="background-color: codeinlinebg"><code> 0.176</code></span>;</p></li>
+<li><p>cross-fitted DR: mean near <span style="background-color: codeinlinebg"><code> 0.76</code></span>, standard deviation around <span style="background-color: codeinlinebg"><code> 0.035</code></span>;</p></li>
+<li><p>oracle DR: mean near <span style="background-color: codeinlinebg"><code> 0.76</code></span>, with slightly lower variance.</p></li>
+</ul>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>A memorizer can force <span class="math inline">\(r-\hat q=0\)</span> without learning counterfactual rewards, disabling the correction term.</p></li>
+<li><p>Each evaluated reward becomes independent of the data used to fit its corresponding outcome prediction, conditional on the fold construction.</p></li>
+<li><p>Split complete episodes—and usually group by user, prompt family or conversation—to prevent correlated information crossing folds.</p></li>
+<li><p>No. Cross-fitting controls model leakage; it cannot infer outcomes for actions absent from the logging policy.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Sequential DR weights <span class="math inline">\(r_t+\gamma\hat V(s_{t+1})-\hat Q(s_t,a_t)\)</span>.</p></li>
+<li><p>A useful model removes predictable return variation, leaving smaller residuals for potentially large importance ratios to amplify.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> impressive same-data residuals can be evidence of leakage. Generate every OPE prediction out of fold, split at the episode or user level, and preserve a genuinely untouched final evaluation set.</p>

@@ -1,0 +1,163 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How a binary heap stores a tree in an array, why building a heap is <span class="math inline">\(O(n)\)</span>, and the patterns heaps solve: top-<span class="math inline">\(k\)</span>, <span class="math inline">\(k\)</span>-way merge, the two-heap median, and scheduling. In ML, heaps power top-<span class="math inline">\(k\)</span> retrieval, beam search, and merging results from shards.</p>
+</div>
+<h1 id="the-binary-heap">The Binary Heap</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A hospital emergency room does not treat patients in arrival order; the most urgent patient is always next. A priority queue keeps everyone sorted “just enough” to always know who is most urgent, without fully sorting the room.</p>
+</div>
+<figure class="tikz"><img src="figs/dsa/070bd8041642.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A min-heap as a tree and as an array.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A binary min-heap is a complete binary tree where every parent is <span class="math inline">\(\le\)</span> its children, stored level by level in an array. The minimum is at index 0.</p>
+<ul>
+<li><p><strong>Push</strong>: append at the end, then <em>sift up</em> (swap with the parent while smaller). <span class="math inline">\(O(\log n)\)</span>.</p></li>
+<li><p><strong>Pop</strong>: take the root, move the last element to the root, then <em>sift down</em> (swap with the smaller child while larger). <span class="math inline">\(O(\log n)\)</span>.</p></li>
+<li><p><strong>Peek</strong>: <span class="math inline">\(O(1)\)</span>.</p></li>
+<li><p><strong>Heapify</strong> an array of <span class="math inline">\(n\)</span> items: sift down every non-leaf from the last one to the root. <span class="math inline">\(O(n)\)</span>.</p></li>
+</ul>
+</div>
+<p><em>Sift down (min-heap)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> SiftDown(<span class="math inline">\(H, i, n\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>loop</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(s \gets i\)</span>; <span class="math inline">\(l \gets 2i+1\)</span>; <span class="math inline">\(r \gets 2i+2\)</span></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(l &lt; n\)</span> <strong>and</strong> <span class="math inline">\(H[l] &lt; H[s]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(s \gets l\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(r &lt; n\)</span> <strong>and</strong> <span class="math inline">\(H[r] &lt; H[s]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(s \gets r\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(s = i\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><strong>return</strong> <em>▷ heap property holds</em></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2">swap <span class="math inline">\(H[i], H[s]\)</span>; <span class="math inline">\(i \gets s\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Why heapify is <span class="math inline">\(O(n)\)</span>, not <span class="math inline">\(O(n\log n)\)</span>.</strong> Half the nodes are leaves (no work), a quarter are one level up (at most 1 swap), an eighth at most 2 swaps, and so on. Total work <span class="math inline">\(\le \sum_{h} \frac{n}{2^{h+1}} h = n\sum_h \frac{h}{2^{h+1}}
+= O(n)\)</span>, because the series converges to 1. Most nodes are near the bottom, where sifting down is cheap. (Pushing items one by one is <span class="math inline">\(O(n\log n)\)</span> because sifting <em>up</em> is expensive for the many bottom nodes.)</p>
+</div>
+<h1 id="pattern-top-k">Pattern: Top-<span class="math inline">\(k\)</span></h1>
+<p><em><span class="math inline">\(k\)</span> largest elements of a stream</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(H \gets\)</span> empty <strong>min</strong>-heap</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each <span class="math inline">\(x\)</span> in the stream <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(|H| &lt; k\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">push <span class="math inline">\(x\)</span></div>
+<div class="algo-line" style="--d:1"><strong>else if</strong> <span class="math inline">\(x &gt; \text{peek}(H)\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">pop; push <span class="math inline">\(x\)</span> <em>▷ evict the smallest of the top <span class="math inline">\(k\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(H\)</span> <em>▷ the <span class="math inline">\(k\)</span> largest; <span class="math inline">\(\text{peek}(H)\)</span> is the <span class="math inline">\(k\)</span>-th largest</em></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Invariant: the heap holds the <span class="math inline">\(k\)</span> largest items seen so far, and its root is the smallest of them, the bar a new item must beat. <strong>Time:</strong> <span class="math inline">\(O(n\log k)\)</span> <strong>Space:</strong> <span class="math inline">\(O(k)\)</span>. The surprising part is the <em>min</em>-heap for the <em>largest</em> items: you need fast access to the one you would throw away.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Choosing a top-<span class="math inline">\(k\)</span> method:</strong></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Method</th>
+<th style="text-align: left;">Time</th>
+<th style="text-align: left;">Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Sort everything</td>
+<td style="text-align: left;"><span class="math inline">\(O(n\log n)\)</span></td>
+<td style="text-align: left;">simplest; fine for small <span class="math inline">\(n\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Size-<span class="math inline">\(k\)</span> heap</td>
+<td style="text-align: left;"><span class="math inline">\(O(n\log k)\)</span></td>
+<td style="text-align: left;">streaming; memory <span class="math inline">\(O(k)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Quickselect</td>
+<td style="text-align: left;"><span class="math inline">\(O(n)\)</span> expected</td>
+<td style="text-align: left;">in-memory, unordered result (Chapter 10)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Bucket counting</td>
+<td style="text-align: left;"><span class="math inline">\(O(n)\)</span></td>
+<td style="text-align: left;">“top <span class="math inline">\(k\)</span> frequent” with bounded counts</td>
+</tr>
+<tr>
+<td style="text-align: left;">Partial merge of sorted shards</td>
+<td style="text-align: left;"><span class="math inline">\(O(k\log s)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(s\)</span> sorted sources (below)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h1 id="pattern-k-way-merge">Pattern: <span class="math inline">\(k\)</span>-Way Merge</h1>
+<p><em>Merge <span class="math inline">\(k\)</span> sorted lists</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(H \gets\)</span> min-heap of <span class="math inline">\((\text{first value}, \text{list id})\)</span> for each non-empty list</div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(H\)</span> not empty <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\((v, j) \gets\)</span> pop<span class="math inline">\((H)\)</span>; output <span class="math inline">\(v\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> list <span class="math inline">\(j\)</span> has a next element <span class="math inline">\(w\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">push <span class="math inline">\((w, j)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The heap always holds one candidate per list, so the smallest remaining item overall is at the root. <strong>Time:</strong> <span class="math inline">\(O(N\log k)\)</span> <strong>Space:</strong> <span class="math inline">\(O(k)\)</span> for <span class="math inline">\(N\)</span> total items. Same pattern: smallest range covering one element from each of <span class="math inline">\(k\)</span> lists; <span class="math inline">\(k\)</span>-th smallest in a sorted matrix (treat rows as lists); <span class="math inline">\(k\)</span> smallest pair sums; external merge sort.</p>
+</div>
+<h1 id="pattern-two-heaps-for-the-running-median">Pattern: Two Heaps for the Running Median</h1>
+<figure class="tikz"><img src="figs/dsa/0201e2ddc089.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Add a number and keep the median</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Add(<span class="math inline">\(x\)</span>)</div>
+<div class="algo-line" style="--d:1">push <span class="math inline">\(x\)</span> to <span class="math inline">\(lo\)</span> <em>▷ max-heap</em></div>
+<div class="algo-line" style="--d:1">move top of <span class="math inline">\(lo\)</span> to <span class="math inline">\(hi\)</span> <em>▷ ensures every <span class="math inline">\(lo \le\)</span> every <span class="math inline">\(hi\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(|hi| &gt; |lo|\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">move top of <span class="math inline">\(hi\)</span> to <span class="math inline">\(lo\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Median()</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(|lo| &gt; |hi|\)</span> <strong>then</strong> <strong>return</strong> top<span class="math inline">\((lo)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>else</strong>  <strong>return</strong> <span class="math inline">\((\text{top}(lo) + \text{top}(hi))/2\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Sliding window median</strong> needs deletion of arbitrary elements. Options: lazy deletion (keep a “to delete” count map and discard stale tops when they surface, rebalancing by <em>valid</em> sizes), or an order-statistics structure (two balanced multisets, or a Fenwick tree over compressed values for <span class="math inline">\(O(\log n)\)</span> <span class="math inline">\(k\)</span>-th element queries). <strong>Indexed priority queues</strong> support <code>decrease-key</code> in <span class="math inline">\(O(\log n)\)</span> by tracking each item’s position; most library heaps lack this, so Dijkstra implementations push duplicates and skip stale entries instead.</p>
+</div>
+<h1 id="pattern-scheduling-and-greedy-with-heaps">Pattern: Scheduling and Greedy with Heaps</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Meeting rooms II</strong> (minimum rooms): sort meetings by start; a min-heap of end times; reuse a room if the earliest end <span class="math inline">\(\le\)</span> start. Heap size at the end is the answer.</p></li>
+<li><p><strong>Task scheduler with cooldown</strong>: always run the most frequent remaining task (max-heap), parking used tasks in a queue until cooldown ends.</p></li>
+<li><p><strong>IPO / maximize capital</strong>: sort projects by required capital; as capital grows, push affordable projects into a max-heap by profit and take the best.</p></li>
+<li><p><strong>Reorganize string</strong> (no two adjacent equal): repeatedly take the two most frequent characters.</p></li>
+<li><p><strong>Dijkstra and Prim</strong> (Chapter 9) are heap-driven greedy algorithms.</p></li>
+</ul>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“<span class="math inline">\(k\)</span> largest / smallest / most frequent / closest,” “merge sorted,” “median of a stream,” “schedule with the earliest finishing / most urgent first,” “repeatedly take the best available option,” “shortest path with weights.”</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<ul>
+<li><p><strong>Top-<span class="math inline">\(k\)</span> retrieval</strong>: a vector search returns the <span class="math inline">\(k\)</span> nearest neighbors by maintaining a bounded heap of candidates; HNSW search keeps a candidate heap and a result heap (Chapter 18).</p></li>
+<li><p><strong>Sharded retrieval</strong>: each shard returns its local top-<span class="math inline">\(k\)</span>; a coordinator merges them with a <span class="math inline">\(k\)</span>-way merge. Only <span class="math inline">\(k\)</span> per shard is needed.</p></li>
+<li><p><strong>Beam search</strong> keeps the <span class="math inline">\(B\)</span> highest-scoring partial sequences at each step: a bounded top-<span class="math inline">\(k\)</span> over expanded candidates.</p></li>
+<li><p><strong>Top-<span class="math inline">\(k\)</span> sampling</strong> selects the <span class="math inline">\(k\)</span> highest-probability tokens (on GPUs usually with a partial sort or radix select rather than a heap).</p></li>
+<li><p><strong>Schedulers</strong> in training clusters and inference servers use priority queues (shortest job first, deadline-aware batching).</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: <span class="math inline">\(k\)</span> closest points to the origin</div>
+<p>Clarify: return any order? ties? <span class="math inline">\(k \le n\)</span>? Options: sort by distance, <span class="math inline">\(O(n\log n)\)</span>; a size-<span class="math inline">\(k\)</span> <em>max</em>-heap keyed by squared distance (no square root needed), <span class="math inline">\(O(n\log k)\)</span>, streaming-friendly; quickselect on distances, <span class="math inline">\(O(n)\)</span> expected but modifies the array and is <span class="math inline">\(O(n^2)\)</span> worst case. I would code the heap for clarity and mention quickselect. Follow-ups: points arrive as a stream (heap works as is); billions of points across machines (each machine computes local top-<span class="math inline">\(k\)</span>, then merge); high-dimensional embeddings (approximate nearest neighbor indexes).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>A heap is a complete tree in an array: push/pop <span class="math inline">\(O(\log n)\)</span>, heapify <span class="math inline">\(O(n)\)</span>.</p></li>
+<li><p>Top-<span class="math inline">\(k\)</span> largest uses a min-heap of size <span class="math inline">\(k\)</span>.</p></li>
+<li><p><span class="math inline">\(k\)</span>-way merge and two-heap median are the other core patterns.</p></li>
+<li><p>Heaps underlie top-<span class="math inline">\(k\)</span> retrieval, beam search, and shard merging in ML systems.</p></li>
+</ul>
+</div>

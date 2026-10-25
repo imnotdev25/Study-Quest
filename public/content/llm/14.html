@@ -1,0 +1,75 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> The likelihood <span class="math inline">\(L(\theta)=\prod_ip(x_i\mid\theta)\)</span> is the probability of the observed data as a function of the parameter. The maximum-likelihood estimate (MLE) picks the <span class="math inline">\(\theta\)</span> that makes the data most probable. Part 0 showed that every standard loss (cross-entropy, BCE, MSE) is a negative log-likelihood, so training a network is MLE.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Two MLEs</div>
+<p><strong>Step 1.</strong> Bernoulli: <span class="math inline">\(\ell(p)=h\log p+(n-h)\log(1-p)\)</span>. <span class="math inline">\(\ell&#39;(p)=\frac hp-\frac{n-h}{1-p}=0\Rightarrow\hat p=h/n\)</span>.</p>
+<p><strong>Step 2.</strong> Gaussian: <span class="math inline">\(\ell(\mu,\sigma^2)=-\frac n2\log(2\pi\sigma^2)-\frac1{2\sigma^2}\sum(x_i-\mu)^2\)</span>. <span class="math inline">\(\partial_\mu=0\Rightarrow\hat\mu=\bar x\)</span>; <span class="math inline">\(\partial_{\sigma^2}=0\Rightarrow\hat\sigma^2=\frac1n\sum(x_i-\bar x)^2\)</span>, the biased-low divisor from the last chapter.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Fisher information and the Cramér–Rao bound</div>
+<p><strong>Step 1.</strong> The score is <span class="math inline">\(s(\theta)=\partial_\theta\log p(x\mid\theta)\)</span>. It has mean zero: <span class="math inline">\(\mathbb E[s]=\int\partial_\theta p=\partial_\theta\int p=0\)</span>.</p>
+<p><strong>Step 2.</strong> Fisher information <span class="math inline">\(I(\theta)=\operatorname{Var}(s)=-\mathbb E[\partial^2_\theta\log p]\)</span>: how sharply the log-likelihood curves around the truth. For a Bernoulli, <span class="math inline">\(I(p)=\frac1{p(1-p)}\)</span>.</p>
+<p><strong>Step 3.</strong> Cramér–Rao: any unbiased estimator from <span class="math inline">\(n\)</span> samples has <span class="math inline">\(\operatorname{Var}\hat\theta\ge\frac1{nI(\theta)}\)</span>, and the MLE reaches it as <span class="math inline">\(n\)</span> grows: <span class="math inline">\(\hat\theta\approx N\big(\theta,\frac1{nI(\theta)}\big)\)</span>. For <span class="math inline">\(p=0.3,n=200\)</span>: <span class="math inline">\(0.00105\)</span>, matched by simulation.</p>
+<p><strong>Step 4.</strong> In several parameters, <span class="math inline">\(I\)</span> is a matrix, and the standard errors are <span class="math inline">\(\sqrt{\operatorname{diag}(H^{-1})}\)</span> with <span class="math inline">\(H\)</span> the Hessian of the negative log-likelihood at the MLE. The Fisher matrix is also the metric behind natural gradients and TRPO’s KL constraint (<span class="math inline">\(\mathrm{KL}\approx\tfrac12\delta^\top I\delta\)</span>).</p>
+</div>
+<h2 class="unnumbered" id="map-the-prior-as-a-regulariser">MAP: the prior as a regulariser</h2>
+<p>The maximum a posteriori estimate maximises <span class="math inline">\(\log p(\text{data}\mid\theta)+\log p(\theta)\)</span>. A Beta<span class="math inline">\((a,b)\)</span> prior on a coin gives <span class="math inline">\(\hat p_{\text{MAP}}=\frac{h+a-1}{n+a+b-2}\)</span>: three heads in three flips gives 1.0 by MLE but 0.64 with a Beta(5,5) prior. A Gaussian prior on weights gives L2 weight decay; a Laplace prior gives L1.</p>
+<h2 class="unnumbered" id="logistic-regression-by-newtons-method">Logistic regression by Newton’s method</h2>
+<p>The negative log-likelihood of logistic regression is binary cross-entropy. Gradient <span class="math inline">\(X^\top(p-y)\)</span>, Hessian <span class="math inline">\(X^\top\operatorname{diag}(p(1-p))X\)</span> (positive definite, so the problem is convex). Newton’s method (iteratively reweighted least squares) converges quadratically: the gradient norm goes from 22 to <span class="math inline">\(10^{-4}\)</span> in three steps, and the inverse Hessian gives the standard errors for free.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference: maximum likelihood, Fisher information, MAP, and logistic regression by Newton&#x27;s method.&quot;&quot;&quot;
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# 1. Bernoulli MLE = sample mean; Gaussian MLE = sample mean and the 1/n variance.
+x = rng.random(200) &lt; 0.3
+grid = np.linspace(0.01, 0.99, 9801)
+ll = x.sum() * np.log(grid) + (len(x) - x.sum()) * np.log(1 - grid)
+print(f&quot;[mle] Bernoulli: grid argmax {grid[ll.argmax()]:.4f}  closed form mean {x.mean():.4f}&quot;)
+g = rng.normal(5, 2, 500)
+print(f&quot;[mle] Gaussian: mu-hat {g.mean():.4f}  sigma2-hat (1/n) {((g - g.mean())**2).mean():.4f}  true 5, 4&quot;)
+
+# 2. Fisher information and the sampling spread of the MLE: Var(p-hat) ~ 1 / (n I(p)), I(p) = 1/(p(1-p)).
+p, n = 0.3, 200
+est = (rng.random((20_000, n)) &lt; p).mean(1)
+print(f&quot;[fisher] Var of MLE across 20,000 datasets {est.var():.6f}   Cramer-Rao 1/(n I) = {p * (1 - p) / n:.6f}&quot;)
+
+# 3. Exponential rate MLE 1/mean is biased in small samples: E = n/(n-1) lam.
+lam = 2.0
+for n in (5, 50):
+    e = 1 / rng.exponential(1 / lam, (200_000, n)).mean(1)
+    print(f&quot;[bias] n={n:2d}: mean of rate MLE {e.mean():.4f}   theory n/(n-1) lam = {n / (n - 1) * lam:.4f}&quot;)
+
+# 4. MAP with a Beta(a, b) prior = (h + a - 1) / (n + a + b - 2): shrinks small samples toward the prior.
+a = b = 5
+for h, n in ((3, 3), (30, 50), (300, 500)):
+    print(f&quot;[map] {h:3d}/{n:3d} heads: MLE {h / n:.3f}   MAP {(h + a - 1) / (n + a + b - 2):.3f}&quot;)
+
+# 5. Logistic regression: NLL = binary cross-entropy. Gradient X^T (p - y), Hessian X^T diag(p(1-p)) X.
+X = np.c_[np.ones(1000), rng.normal(size=(1000, 2))]
+w_true = np.array([-0.5, 2.0, -1.0])
+y = (rng.random(1000) &lt; 1 / (1 + np.exp(-X @ w_true))).astype(float)
+w = np.zeros(3)
+for it in range(8):
+    pr = 1 / (1 + np.exp(-X @ w))
+    grad, H = X.T @ (pr - y), X.T @ (X * (pr * (1 - pr))[:, None])
+    w -= np.linalg.solve(H, grad)
+    nll = -(y * np.log(pr) + (1 - y) * np.log(1 - pr)).mean()
+    if it in (0, 1, 2, 5, 7):
+        print(f&quot;[logreg] Newton iter {it}: mean BCE {nll:.6f}  |grad| {np.linalg.norm(grad):.2e}&quot;)
+se = np.sqrt(np.diag(np.linalg.inv(H)))
+print(f&quot;[logreg] w-hat {np.round(w, 3)}  true {w_true}  standard errors from the inverse Hessian {np.round(se, 3)}&quot;)</code></pre>
+<pre class="code output"><code class="output">[mle] Bernoulli: grid argmax 0.2650  closed form mean 0.2650
+[mle] Gaussian: mu-hat 4.9354  sigma2-hat (1/n) 4.0687  true 5, 4
+[fisher] Var of MLE across 20,000 datasets 0.001061   Cramer-Rao 1/(n I) = 0.001050
+[bias] n= 5: mean of rate MLE 2.5033   theory n/(n-1) lam = 2.5000
+[bias] n=50: mean of rate MLE 2.0408   theory n/(n-1) lam = 2.0408
+[map]   3/  3 heads: MLE 1.000   MAP 0.636
+[map]  30/ 50 heads: MLE 0.600   MAP 0.586
+[map] 300/500 heads: MLE 0.600   MAP 0.598
+[logreg] Newton iter 0: mean BCE 0.693147  |grad| 3.23e+02
+[logreg] Newton iter 1: mean BCE 0.451829  |grad| 8.15e+01
+[logreg] Newton iter 2: mean BCE 0.415413  |grad| 2.19e+01
+[logreg] Newton iter 5: mean BCE 0.410607  |grad| 8.52e-05
+[logreg] Newton iter 7: mean BCE 0.410607  |grad| 6.22e-15
+[logreg] w-hat [-0.61   2.3   -0.837]  true [-0.5  2.  -1. ]  standard errors from the inverse Hessian [0.092 0.15  0.097]</code></pre>

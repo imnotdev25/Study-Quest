@@ -1,0 +1,37 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>MLA</strong> stores one small <em>latent</em> vector per token instead of full keys and values, and reconstructs per-head keys and values from it with up-projections. The trick that makes it fast is that the up-projections can be <em>folded into</em> the query and output matrices, so the full keys are never materialized during decoding.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/8afab1b58626.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Multi-head latent attention caches only the red box. Per-head keys and values are implied by the latent, and their up-projections fold into the query and output matrices.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: MLA and why RoPE needs a separate part</div>
+<p><strong>Step 1.</strong> Latent: <span class="math inline">\(c_t=x_tW_{DKV}\in\mathbb R^{d_c}\)</span> (<span class="math inline">\(d_c=512\)</span> in V3). Per head <span class="math inline">\(h\)</span>: <span class="math inline">\(k_{t,h}=c_tW_{UK}^{(h)}\)</span>, <span class="math inline">\(v_{t,h}=c_tW_{UV}^{(h)}\)</span>. Cache only <span class="math inline">\(c_t\)</span>.</p>
+<p><strong>Step 2.</strong> Score: <span class="math inline">\(q_{t,h}^\top k_{s,h}=(x_tW_Q^{(h)})(c_sW_{UK}^{(h)})^\top=x_t\underbrace{W_Q^{(h)}W_{UK}^{(h)\top}}_{\text{precompute}}c_s^\top\)</span>. Attention runs directly against the cached latents.</p>
+<p><strong>Step 3.</strong> Similarly <span class="math inline">\(\sum_sa_{ts}v_{s,h}W_O^{(h)}=\big(\sum_sa_{ts}c_s\big)W_{UV}^{(h)}W_O^{(h)}\)</span>: fold <span class="math inline">\(W_{UV}\)</span> into <span class="math inline">\(W_O\)</span>.</p>
+<p><strong>Step 4.</strong> <strong>RoPE breaks step 2:</strong> with RoPE, <span class="math inline">\(q^\top k=x_tW_QR_{t}^\top R_{s}W_{UK}^\top c_s^\top\)</span>, and the position-dependent <span class="math inline">\(R_{s-t}\)</span> sits <em>between</em> <span class="math inline">\(W_Q\)</span> and <span class="math inline">\(W_{UK}\)</span>, so they can no longer be merged.</p>
+<p><strong>Step 5.</strong> <strong>Fix: decoupled RoPE.</strong> Add a small extra key <span class="math inline">\(k^R_s=\operatorname{RoPE}(x_sW_{KR})\in\mathbb R^{64}\)</span>, shared across heads, and an extra query part. Score <span class="math inline">\(=q^{C\top}k^C+q^{R\top}k^R\)</span>: content part absorbed, position part tiny.</p>
+<p><strong>Step 6.</strong> <strong>Cache per token</strong> (V3: 61 layers, BF16): <span class="math inline">\((512+64)\cdot61\cdot2=70{,}272\)</span> bytes <span class="math inline">\(\approx69\)</span> KB, versus about 3.8 MB for full MHA with 128 heads of 128 dimensions: <span class="math inline">\(\approx57\times\)</span> smaller.</p>
+</div>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">DeepSeek-V3 (Dec 2024)</th>
+<th style="text-align: left;">671B total / 37B active; 61 layers, <span class="math inline">\(D=7168\)</span>, 128 heads; MLA with <span class="math inline">\(d_c=512\)</span>, RoPE dim 64; first 3 layers dense, then MoE with 256 routed experts (top-8) + 1 shared; aux-loss-free balancing; multi-token prediction (MTP) depth 1; FP8 mixed-precision training; 14.8T tokens.</th>
+</tr>
+</thead>
+<tbody>
+</tbody>
+</table>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/91a8ba2743bb.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Bytes the decoder must keep per token of context. “DSV3 as MHA” is the same model with full 128-head keys and values. DSV4.1-Flash’s 0.87 KB (890 bytes) is from its model card.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: multi-token prediction</div>
+<p><strong>Step 1.</strong> Besides predicting <span class="math inline">\(x_{t+1}\)</span>, an extra module (sharing the embedding and output head) predicts <span class="math inline">\(x_{t+2}\)</span> from the main model’s hidden state at <span class="math inline">\(t\)</span> combined with the embedding of <span class="math inline">\(x_{t+1}\)</span>.</p>
+<p><strong>Step 2.</strong> Loss <span class="math inline">\(L=L_{\text{main}}+\lambda\cdot\frac1D\sum_{d=1}^{D}L_{\text{MTP}}^{(d)}\)</span>, each term an ordinary next-token NLL shifted by <span class="math inline">\(d\)</span> more positions.</p>
+<p><strong>Step 3.</strong> More predictions per token means a denser training signal. At inference the MTP head can be dropped, or used to draft the next token for speculative decoding.</p>
+</div>

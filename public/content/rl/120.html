@@ -1,0 +1,443 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What are the two valid routes for applying a KL penalty?</p></li>
+<li><p>Why should shaped rewards and advantages remain fixed across PPO epochs?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="reward-placement-is-not-credit-assignment">2. Reward placement is not credit assignment</h3>
+<p>An LLM reward model or verifier often returns one score <span class="math inline">\(R_b\)</span> for an entire response. To create token rewards, place that score once at the final valid token:</p>
+<p><span class="math display">\[r^{\text{task}}_{b,t}
+=
+\mathbf 1[t=L_b-1]R_b\]</span></p>
+<p>Then reward-to-go distributes it backward:</p>
+<p><span class="math display">\[G_{b,t}
+=
+\sum_{k=t}^{L_b-1}
+\gamma^{k-t}r_{b,k}\]</span></p>
+<p>With <span class="math inline">\(\gamma=1\)</span>:</p>
+<p><span class="math display">\[G_{b,t}=R_b\]</span></p>
+<p>for every earlier valid token. The return calculation—not reward broadcasting—assigns credit to preceding actions.</p>
+<p>If <span class="math inline">\(R_b\)</span> is copied to every token:</p>
+<p><span class="math display">\[r_{b,t}=R_b\]</span></p>
+<p>then:</p>
+<p><span class="math display">\[G_{b,t}=(L_b-t)R_b\]</span></p>
+<p>and total immediate task reward becomes <span class="math inline">\(L_bR_b\)</span>. Longer responses silently receive larger rewards or penalties.</p>
+<p>With token-level KL shaping:</p>
+<p><span class="math display">\[r_{b,t}
+=
+-\beta k_{b,t}
++
+\mathbf 1[t=L_b-1]R_b\]</span></p>
+<p>The KL cost occurs at each generated token; the sequence score occurs once.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>sequence scores and lengths: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>response mask, token rewards and returns: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>final valid indices: <span style="background-color: codeinlinebg"><code> [B, 1]</code></span></p></li>
+</ul>
+<p>Never place every score at tensor column <span style="background-color: codeinlinebg"><code> T-1</code></span>: shorter responses end earlier. Empty outputs and truncated responses require explicit policies rather than clamping their lengths silently.</p>
+<p>DPO uses one preference label with sequence log-probability sums. It does not construct temporal rewards or returns, so it is preference optimization rather than online token-level credit assignment.</p>
+<h3 class="unnumbered" id="pytorch-exercise-broadcasting-reverses-the-prompt-balanced-signal">3. PyTorch exercise — broadcasting reverses the prompt-balanced signal</h3>
+<p>The short response scores <span style="background-color: codeinlinebg"><code> -1.0</code></span>; the long response scores <span style="background-color: codeinlinebg"><code> +0.4</code></span>.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 2
+maximum_length = 8
+discount = 1.0
+
+lengths = torch.tensor([
+    2,
+    8,
+])
+
+sequence_rewards = torch.tensor([
+    -1.0,
+    0.4,
+])
+
+
+# TODO 1: Build the response mask and final indices.
+token_positions = ...
+
+response_mask = ...
+
+assert ...
+
+final_valid_indices = ...
+
+
+# TODO 2: Construct three immediate-reward tensors.
+# Correct: sequence reward appears once.
+correct_token_rewards = ...
+
+# Incorrect: sequence reward appears at every token.
+broadcast_token_rewards = ...
+
+# Incorrect: always use the final padded column.
+fixed_slot_rewards = ...
+
+fixed_slot_rewards = ...
+
+
+# TODO 3: Calculate masked discounted returns.
+def calculate_returns(token_rewards):
+    returns = ...
+
+    running_return = ...
+
+    for token_index in reversed(
+        range(maximum_length)
+    ):
+        candidate_return = ...
+
+        running_return = ...
+
+        returns[:, token_index] = ...
+
+    return returns
+
+
+correct_returns = calculate_returns(
+    correct_token_rewards
+)
+
+broadcast_returns = calculate_returns(
+    broadcast_token_rewards
+)
+
+fixed_slot_returns = calculate_returns(
+    fixed_slot_rewards
+)
+
+
+# TODO 4: Compare immediate reward sums and
+# prompt-balanced return signals.
+valid_counts = ...
+
+correct_reward_sums = ...
+broadcast_reward_sums = ...
+fixed_slot_reward_sums = ...
+
+
+def mean_valid_tokens(values):
+    safe_values = ...
+
+    return ...
+
+
+correct_prompt_signals = mean_valid_tokens(
+    correct_returns
+)
+
+broadcast_prompt_signals = mean_valid_tokens(
+    broadcast_returns
+)
+
+fixed_slot_prompt_signals = mean_valid_tokens(
+    fixed_slot_returns
+)
+
+correct_prompt_objective = ...
+broadcast_prompt_objective = ...
+fixed_slot_prompt_objective = ...
+
+
+# TODO 5: Also expose token-weighted reductions.
+float_mask = ...
+
+correct_token_objective = ...
+
+broadcast_token_objective = ...
+
+fixed_slot_token_objective = ...
+
+print(&quot;Response mask:&quot;)
+print(response_mask)
+
+print(&quot;\nCorrect immediate rewards:&quot;)
+print(correct_token_rewards)
+
+print(&quot;\nBroadcast immediate rewards:&quot;)
+print(broadcast_token_rewards)
+
+print(&quot;\nCorrect returns:&quot;)
+print(correct_returns)
+
+print(&quot;\nBroadcast returns:&quot;)
+print(broadcast_returns)
+
+print(
+    &quot;\nImmediate reward sums: &quot;
+    &quot;correct, broadcast, fixed-slot&quot;
+)
+print(correct_reward_sums)
+print(broadcast_reward_sums)
+print(fixed_slot_reward_sums)
+
+print(
+    &quot;\nPer-prompt mean return signals: &quot;
+    &quot;correct, broadcast, fixed-slot&quot;
+)
+print(correct_prompt_signals)
+print(broadcast_prompt_signals)
+print(fixed_slot_prompt_signals)
+
+print(
+    &quot;\nPrompt-balanced objectives: &quot;
+    &quot;correct, broadcast, fixed-slot&quot;
+)
+print(
+    correct_prompt_objective.item(),
+    broadcast_prompt_objective.item(),
+    fixed_slot_prompt_objective.item(),
+)
+
+print(
+    &quot;Token-weighted objectives: &quot;
+    &quot;correct, broadcast, fixed-slot&quot;
+)
+print(
+    correct_token_objective.item(),
+    broadcast_token_objective.item(),
+    fixed_slot_token_objective.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What should each correct immediate-reward sum equal?</p></li>
+<li><p>What will broadcasting produce for lengths <span style="background-color: codeinlinebg"><code> 2</code></span> and <span style="background-color: codeinlinebg"><code> 8</code></span>?</p></li>
+<li><p>Which response loses its reward under fixed-column placement?</p></li>
+<li><p>Can prompt-balanced credit change from negative to positive?</p></li>
+<li><p>With <span class="math inline">\(\gamma&lt;1\)</span>, which tokens receive the most terminal-reward credit?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>The response mask is:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">token_positions &lt; lengths[:, None]</code></pre>
+<ul>
+<li><p>Require every length to satisfy <span style="background-color: codeinlinebg"><code> 1 &lt;= length &lt;= T</code></span>.</p></li>
+<li><p>Final indices are <span style="background-color: codeinlinebg"><code> lengths - 1</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> scatter</code></span> to place <span style="background-color: codeinlinebg"><code> [B]</code></span> rewards into <span style="background-color: codeinlinebg"><code> [B, T]</code></span>.</p></li>
+<li><p>During the reverse recursion, reset <span style="background-color: codeinlinebg"><code> running_return</code></span> to zero at padding.</p></li>
+<li><p>Prompt-balanced reduction first averages within each response.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span>; padding values must not enter sums or denominators.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Broadcast every sequence score across valid tokens.</p></li>
+<li><p>Scatter rewards at <span style="background-color: codeinlinebg"><code> maximum_length - 1</code></span>.</p></li>
+<li><p>Include padding when averaging returns.</p></li>
+<li><p>Treat an empty response as though token zero were its terminal token.</p></li>
+<li><p>Give a truncated response the same success reward as a completed response.</p></li>
+<li><p>Repeat both task reward and sequence-level safety penalties at every token.</p></li>
+<li><p>Backpropagate through reward-model scores.</p></li>
+<li><p>Compare runs without logging reward sum versus response length.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does a terminal reward influence earlier actions without being copied?</p></li>
+<li><p>How should token KL and sequence reward be combined?</p></li>
+<li><p>Why does broadcasting introduce length dependence even with prompt averaging?</p></li>
+<li><p>What invariant can catch incorrect task-reward placement?</p></li>
+<li><p>What metadata is needed for truncated generations?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Mask and final positions:</p>
+<pre class="code python"><code class="language-python">token_positions = torch.arange(
+    maximum_length
+)[None, :]
+
+response_mask = (
+    token_positions
+    &lt; lengths[:, None]
+)
+
+assert (
+    (lengths &gt;= 1)
+    &amp; (lengths &lt;= maximum_length)
+).all()
+
+final_valid_indices = (
+    lengths - 1
+)[:, None]</code></pre>
+<p>Immediate rewards:</p>
+<pre class="code python"><code class="language-python">correct_token_rewards = torch.zeros(
+    batch_size,
+    maximum_length,
+).scatter(
+    dim=1,
+    index=final_valid_indices,
+    src=sequence_rewards[:, None],
+)
+
+broadcast_token_rewards = torch.where(
+    response_mask,
+    sequence_rewards[:, None],
+    torch.zeros(
+        batch_size,
+        maximum_length,
+    ),
+)
+
+fixed_slot_rewards = torch.zeros(
+    batch_size,
+    maximum_length,
+)
+
+fixed_slot_rewards[:, -1] = sequence_rewards
+
+fixed_slot_rewards = torch.where(
+    response_mask,
+    fixed_slot_rewards,
+    torch.zeros_like(
+        fixed_slot_rewards
+    ),
+)</code></pre>
+<p>Masked return calculation:</p>
+<pre class="code python"><code class="language-python">def calculate_returns(token_rewards):
+    returns = torch.zeros_like(
+        token_rewards
+    )
+
+    running_return = torch.zeros(
+        batch_size
+    )
+
+    for token_index in reversed(
+        range(maximum_length)
+    ):
+        candidate_return = (
+            token_rewards[:, token_index]
+            + discount * running_return
+        )
+
+        running_return = torch.where(
+            response_mask[:, token_index],
+            candidate_return,
+            torch.zeros_like(
+                candidate_return
+            ),
+        )
+
+        returns[:, token_index] = (
+            running_return
+        )
+
+    return returns</code></pre>
+<p>Reward sums and prompt signals:</p>
+<pre class="code python"><code class="language-python">valid_counts = (
+    response_mask.sum(dim=1)
+    .to(torch.float64)
+)
+
+correct_reward_sums = (
+    correct_token_rewards.sum(dim=1)
+)
+
+broadcast_reward_sums = (
+    broadcast_token_rewards.sum(dim=1)
+)
+
+fixed_slot_reward_sums = (
+    fixed_slot_rewards.sum(dim=1)
+)
+
+
+def mean_valid_tokens(values):
+    safe_values = torch.where(
+        response_mask,
+        values,
+        torch.zeros_like(values),
+    )
+
+    return (
+        safe_values.sum(dim=1)
+        / valid_counts
+    )
+
+
+correct_prompt_signals = mean_valid_tokens(
+    correct_returns
+)
+
+broadcast_prompt_signals = mean_valid_tokens(
+    broadcast_returns
+)
+
+fixed_slot_prompt_signals = mean_valid_tokens(
+    fixed_slot_returns
+)
+
+correct_prompt_objective = (
+    correct_prompt_signals.mean()
+)
+
+broadcast_prompt_objective = (
+    broadcast_prompt_signals.mean()
+)
+
+fixed_slot_prompt_objective = (
+    fixed_slot_prompt_signals.mean()
+)</code></pre>
+<p>Token reductions:</p>
+<pre class="code python"><code class="language-python">float_mask = response_mask.to(
+    torch.float64
+)
+
+correct_token_objective = (
+    correct_returns * float_mask
+).sum() / float_mask.sum()
+
+broadcast_token_objective = (
+    broadcast_returns * float_mask
+).sum() / float_mask.sum()
+
+fixed_slot_token_objective = (
+    fixed_slot_returns * float_mask
+).sum() / float_mask.sum()</code></pre>
+<p>Correct immediate reward sums remain:</p>
+<p><span class="math display">\[[-1.0,\;0.4]\]</span></p>
+<p>Broadcasting instead produces:</p>
+<p><span class="math display">\[[2(-1.0),\;8(0.4)]
+=
+[-2.0,\;3.2]\]</span></p>
+<p>With correct placement and <span class="math inline">\(\gamma=1\)</span>, returns are:</p>
+<p><span class="math display">\[[-1,-1]\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[[0.4,0.4,\ldots,0.4]\]</span></p>
+<p>Their prompt-balanced signal is:</p>
+<p><span class="math display">\[\frac{-1+0.4}{2}
+=
+-0.3\]</span></p>
+<p>Broadcasting gives per-prompt mean returns:</p>
+<p><span class="math display">\[\frac{-2-1}{2}=-1.5\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\frac{3.2+2.8+\cdots+0.4}{8}
+=
+1.8\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\frac{-1.5+1.8}{2}
+=
+0.15\]</span></p>
+<p>The apparent update direction reverses solely because one sequence score was counted repeatedly. Fixed-column placement discards the short response’s negative reward entirely.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Reward-to-go, TD or GAE propagates the final outcome backward to earlier actions.</p></li>
+<li><p>Apply the KL cost at each valid generated token and add the task score once at the final valid token.</p></li>
+<li><p>Broadcasting makes early-token returns proportional to remaining response length, so even each response’s mean return changes with length.</p></li>
+<li><p>For task rewards alone:</p></li>
+</ol>
+<p><span class="math display">\[\sum_t r^{\text{task}}_{b,t}=R_b\]</span></p>
+<p>for every nonempty response. 5. Store finish reason, true generated length, whether EOS was produced, truncation limit and the scoring rule for incomplete responses.</p>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Use either detached KL reward shaping or an explicit differentiable KL loss. Applying both normally doubles the penalty.</p></li>
+<li><p>PPO repeatedly optimizes one collected rollout. Recomputing rewards or advantages makes its training target change between epochs.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> a sequence score belongs in the token-reward tensor once. Returns provide temporal credit; broadcasting the score manufactures a length-dependent objective and can reverse the policy update.</p>

@@ -1,0 +1,281 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a thermostat</div>
+<p>A thermostat doesn’t decide what temperature is good; you set the target. It turns the heat up when the room is too cold and down when it’s too warm. Adaptive KL control is a thermostat for policy drift: raise <span class="math inline">\(\beta\)</span> when KL is above target, lower it when below. It controls how far you move, not whether the movement is good.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/08a71adfcf35.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Stylized: KL starts off target, the controller adjusts <span class="math inline">\(\beta\)</span>, and KL settles into the band.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can group standardization amplify insignificant reward differences?</p></li>
+<li><p>Why does multiplying rewards change their balance against an unchanged KL penalty?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="kl-coefficient-as-an-adjustable-brake">2. KL coefficient as an adjustable brake</h3>
+<p>Online RLHF often optimizes:</p>
+<p><span class="math display">\[J(\theta)
+=
+\mathbb E_{y\sim\pi_\theta}[R(y)]
+-
+\beta\,
+D_{\mathrm{KL}}
+(\pi_\theta\Vert\pi_{\mathrm{ref}})\]</span></p>
+<p>Reward pulls the policy toward high-scoring responses. KL keeps it near the reference policy.</p>
+<p>A fixed <span class="math inline">\(\beta\)</span> is difficult to tune:</p>
+<ul>
+<li><p>too small: the policy may drift, exploit rewards or lose capabilities;</p></li>
+<li><p>too large: learning barely changes the policy;</p></li>
+<li><p>reward-scale changes alter the effective strength of the same <span class="math inline">\(\beta\)</span>.</p></li>
+</ul>
+<p>Treat <span class="math inline">\(\beta\)</span> like a thermostat:</p>
+<p><span class="math display">\[\beta
+\leftarrow
+\beta
+\exp\left[
+\eta\left(
+\frac{D_{\mathrm{KL}}}{D_{\text{target}}}-1
+\right)
+\right]\]</span></p>
+<p>If observed KL exceeds the target, increase <span class="math inline">\(\beta\)</span>. If KL is too low, decrease it.</p>
+<p>Usually clamp both the controller error and <span class="math inline">\(\beta\)</span>:</p>
+<p><span class="math display">\[e=
+\operatorname{clip}
+\left(
+\frac{D_{\mathrm{KL}}}{D_{\text{target}}}-1,
+-e_{\max},e_{\max}
+\right)\]</span></p>
+<p>This prevents one noisy rollout batch from making the penalty explode.</p>
+<p>For categorical actions:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(\pi\Vert\pi_{\mathrm{ref}})
+=
+\sum_a
+\pi(a)
+\left[
+\log\pi(a)-\log\pi_{\mathrm{ref}}(a)
+\right]\]</span></p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>policy and reference logits: <span style="background-color: codeinlinebg"><code> [actions]</code></span></p></li>
+<li><p>probabilities and log-probabilities: <span style="background-color: codeinlinebg"><code> [actions]</code></span></p></li>
+<li><p>reward, KL, objective and <span class="math inline">\(\beta\)</span>: scalar</p></li>
+</ul>
+<p>The controller update is an outer-loop rule, not part of actor backpropagation. Use a detached KL diagnostic.</p>
+<p>DPO also contains a reference-relative scale commonly called <span class="math inline">\(\beta\)</span>, but ordinary DPO does not collect online rollouts and adjust that coefficient from observed rollout KL.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: a proportional controller</div>
+<p>A common rule, from Ziegler et al. (2019): <span class="math display">\[e_t=\operatorname{clip}\Big(\frac{\mathrm{KL}_t-\mathrm{KL}_{\text{target}}}{\mathrm{KL}_{\text{target}}},-0.2,0.2\Big),\qquad\beta_{t+1}=\beta_t\,(1+K_\beta\,e_t).\]</span></p>
+<ul>
+<li><p>The error is <em>relative</em> and <em>clipped</em>, so one noisy KL reading can’t swing <span class="math inline">\(\beta\)</span> wildly.</p></li>
+<li><p>The update is multiplicative, which keeps <span class="math inline">\(\beta&gt;0\)</span>.</p></li>
+<li><p>Update <span class="math inline">\(\beta\)</span> outside backprop. It’s a controller, not a learned parameter.</p></li>
+</ul>
+<p><strong>Watch the whole KL distribution:</strong> a mean on target can hide a few prompts with huge KL.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Adaptive <span class="math inline">\(\beta\)</span> regulates movement, not quality.</p></li>
+<li><p>Clip the controller’s error and monitor KL per prompt, not only the average.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: two controller steps</div>
+<p>Target 6, <span class="math inline">\(K_\beta=0.1\)</span>, <span class="math inline">\(\beta=0.1\)</span>. KL measured 9: <span class="math inline">\(e=\operatorname{clip}(0.5)=0.2\)</span>, so <span class="math inline">\(\beta\gets0.1\cdot1.02=0.102\)</span>. KL measured 3: <span class="math inline">\(e=\operatorname{clip}(-0.5)=-0.2\)</span>, so <span class="math inline">\(\beta\gets0.102\cdot0.98=0.09996\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Putting <span class="math inline">\(\beta\)</span> into the optimizer as a parameter.</p></li>
+<li><p>Updating in the wrong direction (lowering <span class="math inline">\(\beta\)</span> when KL is too high).</p></li>
+<li><p>Measuring KL per token and comparing it with a sequence-level target.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Adaptive KL controller</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> target KL, gain <span class="math inline">\(K_\beta\)</span> (e.g. <span class="math inline">\(0.1\)</span>), initial <span class="math inline">\(\beta_0\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\beta\gets\beta_0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each PPO iteration <strong>do</strong></div>
+<div class="algo-line" style="--d:1">run the PPO update with KL penalty <span class="math inline">\(\beta\)</span></div>
+<div class="algo-line" style="--d:1">measure <span class="math inline">\(\mathrm{KL}_t\)</span> on the batch (sequence-total, response tokens only)</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(e\gets\operatorname{clip}\big((\mathrm{KL}_t-\text{target})/\text{target},-0.2,0.2\big)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\beta\gets\beta\,(1+K_\beta e)\)</span> <em>▷ outside autograd: a controller, not a parameter</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-build-a-kl-thermostat">3. PyTorch exercise — build a KL thermostat</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+# Reference prefers action 0; reward prefers action 2.
+reference_logits = torch.tensor([
+    1.0, 0.0, -1.0
+])
+
+action_rewards = torch.tensor([
+    0.0, 1.0, 2.0
+])
+
+policy_logits = torch.nn.Parameter(
+    reference_logits.clone()
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.03,
+)
+
+target_kl = torch.tensor(0.15)
+beta = torch.tensor(0.20)
+
+controller_rate = 0.05
+maximum_error = 0.20
+
+reference_log_probs = reference_logits.log_softmax(
+    dim=-1
+)
+
+for step in range(400):
+    # TODO 1: Current log-probabilities and probabilities.
+    policy_log_probs = ...
+    probabilities = ...
+
+    # TODO 2: Exact expected reward.
+    expected_reward = ...
+
+    # TODO 3: Forward KL(policy || reference).
+    kl = ...
+
+    # TODO 4: Reward-minus-KL objective and minimization loss.
+    objective = ...
+    loss = ...
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    # Outer-loop controller: never backpropagate through this.
+    with torch.no_grad():
+        # TODO 5: Relative KL error, clipped update and beta bounds.
+        relative_error = ...
+        clipped_error = ...
+        beta = ...
+
+    if step in [0, 1, 9, 49, 199, 399]:
+        print(
+            f&quot;step={step:3d}&quot;,
+            f&quot;reward={expected_reward.item():.3f}&quot;,
+            f&quot;KL={kl.item():.3f}&quot;,
+            f&quot;beta={beta.item():.3f}&quot;,
+            f&quot;probs={probabilities.detach().tolist()}&quot;,
+        )
+
+with torch.no_grad():
+    final_log_probs = policy_logits.log_softmax(
+        dim=-1
+    )
+    final_probs = final_log_probs.exp()
+
+    final_kl = (
+        final_probs
+        * (
+            final_log_probs
+            - reference_log_probs
+        )
+    ).sum()
+
+print(&quot;Reference probabilities:&quot;,
+      reference_logits.softmax(dim=-1))
+print(&quot;Final probabilities:&quot;, final_probs)
+print(&quot;Final KL:&quot;, final_kl.item())
+print(&quot;Target KL:&quot;, target_kl.item())
+print(&quot;Final beta:&quot;, beta.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action gains probability?</p></li>
+<li><p>What happens to <span class="math inline">\(\beta\)</span> when KL rises above <span style="background-color: codeinlinebg"><code> 0.15</code></span>?</p></li>
+<li><p>Should the policy collapse completely onto action <span style="background-color: codeinlinebg"><code> 2</code></span>?</p></li>
+<li><p>Why might the reported KL oscillate around, rather than equal, the target?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> log_softmax</code></span>, then exponentiate.</p></li>
+<li><p>Expected reward is <span style="background-color: codeinlinebg"><code> sum(probability * reward)</code></span>.</p></li>
+<li><p>Forward KL weights each log-ratio by the current policy.</p></li>
+<li><p>The optimizer minimizes, so negate the objective.</p></li>
+<li><p>Detach KL before updating the controller.</p></li>
+<li><p>Clamp <span class="math inline">\(\beta\)</span> to a positive, finite range.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Reverse the controller sign:</p>
+<pre class="code python"><code class="language-python">beta = beta * torch.exp(
+    -controller_rate * clipped_error
+)</code></pre>
+<p>Now excessive KL reduces the penalty, creating positive feedback: more drift causes a weaker brake.</p>
+<p>Next, remove the error clamp. A noisy high-KL batch can multiply <span class="math inline">\(\beta\)</span> sharply and stall learning.</p>
+<p>Finally, multiply rewards by <span style="background-color: codeinlinebg"><code> 100</code></span>. The policy pressure becomes much stronger, so the controller must raise <span class="math inline">\(\beta\)</span> substantially. Advantage normalization does not automatically normalize every reward-versus-KL tradeoff.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why must the controller use detached KL?</p></li>
+<li><p>Can a target KL guarantee that the policy is safe or correct?</p></li>
+<li><p>Why should KL be logged by prompt category and token position?</p></li>
+<li><p>What happens if the target KL is unrealistically small?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Policy quantities:</p>
+<pre class="code python"><code class="language-python">policy_log_probs = policy_logits.log_softmax(
+    dim=-1
+)
+
+probabilities = policy_log_probs.exp()</code></pre>
+<p>Expected reward:</p>
+<pre class="code python"><code class="language-python">expected_reward = (
+    probabilities * action_rewards
+).sum()</code></pre>
+<p>Forward KL:</p>
+<pre class="code python"><code class="language-python">kl = (
+    probabilities
+    * (
+        policy_log_probs
+        - reference_log_probs
+    )
+).sum()</code></pre>
+<p>Actor objective:</p>
+<pre class="code python"><code class="language-python">objective = (
+    expected_reward - beta * kl
+)
+
+loss = -objective</code></pre>
+<p>Controller:</p>
+<pre class="code python"><code class="language-python">relative_error = (
+    kl.detach() / target_kl - 1.0
+)
+
+clipped_error = relative_error.clamp(
+    -maximum_error,
+    maximum_error,
+)
+
+beta = (
+    beta
+    * torch.exp(
+        controller_rate * clipped_error
+    )
+).clamp(
+    min=1e-4,
+    max=100.0,
+)</code></pre>
+<p>Action <span style="background-color: codeinlinebg"><code> 2</code></span> gains probability because it has the highest reward. As KL exceeds the target, <span class="math inline">\(\beta\)</span> increases and makes further movement away from the reference more expensive.</p>
+<p>The controller and actor continually react to each other, so finite learning rates can produce oscillation. Real RLHF adds sampling noise and delayed measurements; implementations commonly smooth KL over rollout batches and adjust <span class="math inline">\(\beta\)</span> slowly.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The controller is a hyperparameter update, not part of the actor objective. Differentiating through it introduces an unintended gradient path.</p></li>
+<li><p>No. KL measures distributional distance from the reference, not factuality, safety or task success.</p></li>
+<li><p>An acceptable mean can hide extreme drift on rare prompts or late tokens.</p></li>
+<li><p>The controller drives <span class="math inline">\(\beta\)</span> upward until policy updates become very small, potentially preventing useful learning.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Dividing by a tiny group standard deviation turns small—and possibly noisy—reward gaps into order-one advantages.</p></li>
+<li><p>Scaling reward scales its gradient, but does not scale the KL gradient; their relative strength therefore changes.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> adaptive KL control regulates policy movement, not policy quality. Update its coefficient outside actor backpropagation, clamp noisy controller changes, and monitor both independent evaluation metrics and the full distribution of KL—not merely its mean.</p>

@@ -1,0 +1,430 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What is the difference between sampling uncertainty and identification uncertainty?</p></li>
+<li><p>What can legitimately reduce uncertainty caused by a group with zero support?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="oversample-strategically-then-restore-deployment-weights">2. Oversample strategically, then restore deployment weights</h3>
+<p>Suppose deployment contains groups with probabilities <span class="math inline">\(p_g\)</span>, conditional reward means <span class="math inline">\(\mu_g\)</span>, and variances <span class="math inline">\(\sigma_g^2\)</span>. The deployment value is:</p>
+<p><span class="math display">\[J=\sum_g p_g\mu_g\]</span></p>
+<p>If evaluation deliberately collects <span class="math inline">\(n_g\)</span> episodes from each group, estimate:</p>
+<p><span class="math display">\[\hat J=\sum_g p_g\bar R_g\]</span></p>
+<p>Its variance is approximately:</p>
+<p><span class="math display">\[\operatorname{Var}(\hat J)
+=
+\sum_g
+\frac{p_g^2\sigma_g^2}{n_g}\]</span></p>
+<p>With a fixed budget <span class="math inline">\(N=\sum_g n_g\)</span>, the variance-minimizing Neyman allocation is:</p>
+<p><span class="math display">\[n_g
+\propto
+p_g\sigma_g\]</span></p>
+<p>So allocation depends on both:</p>
+<ul>
+<li><p>deployment importance <span class="math inline">\(p_g\)</span>;</p></li>
+<li><p>outcome variability <span class="math inline">\(\sigma_g\)</span>.</p></li>
+</ul>
+<p>A common group with nearly deterministic outcomes may need fewer evaluations than proportional sampling suggests. A rare, noisy group may deserve oversampling.</p>
+<p>Crucially, after oversampling, do not report the raw pooled reward. Reweight the group means using deployment probabilities <span class="math inline">\(p_g\)</span>.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>deployment probabilities, means, variances and allocations: <span style="background-color: codeinlinebg"><code> [G]</code></span></p></li>
+<li><p>simulated success counts: <span style="background-color: codeinlinebg"><code> [R, G]</code></span></p></li>
+<li><p>repeated value estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>In practice, estimate <span class="math inline">\(\sigma_g\)</span> from a frozen pilot and impose minimum counts. Neyman allocation optimizes precision for the aggregate value; subgroup safety gates may require larger group-specific floors.</p>
+<p>DPO dataset sampling has the same distinction: oversampling difficult preference pairs changes the training distribution. It does not mean those pairs should receive their sampling frequency as their deployment evaluation weight.</p>
+<h3 class="unnumbered" id="pytorch-exercise-oversample-rare-noisy-groups">3. PyTorch exercise — oversample rare, noisy groups</h3>
+<p>Group <span style="background-color: codeinlinebg"><code> 0</code></span> is 80% of deployment but has almost deterministic rewards. Groups <span style="background-color: codeinlinebg"><code> 1</code></span> and <span style="background-color: codeinlinebg"><code> 2</code></span> are rarer and much noisier.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 5_000
+evaluation_budget = 600
+
+target_probabilities = torch.tensor([
+    0.80, 0.15, 0.05
+])
+
+true_group_values = torch.tensor([
+    0.995, 0.50, 0.50
+])
+
+
+# Allocate integer counts whose sum equals the budget.
+def allocate_budget(weights):
+    normalized = weights / weights.sum()
+    raw_counts = evaluation_budget * normalized
+
+    counts = torch.floor(
+        raw_counts
+    ).to(torch.long)
+
+    remainder = (
+        evaluation_budget
+        - counts.sum().item()
+    )
+
+    if remainder &gt; 0:
+        fractional_parts = (
+            raw_counts - counts
+        )
+
+        selected = torch.topk(
+            fractional_parts,
+            k=remainder,
+        ).indices
+
+        counts[selected] += 1
+
+    return counts
+
+
+# TODO 1: Population quantities.
+exact_target_value = ...
+
+group_variances = ...
+group_standard_deviations = ...
+
+# TODO 2: Three evaluation designs.
+proportional_allocation = ...
+
+equal_allocation = ...
+
+neyman_weights = ...
+neyman_allocation = ...
+
+
+# TODO 3: Theoretical standard error of a design.
+def theoretical_standard_error(allocation):
+    allocation = allocation.to(
+        torch.float64
+    )
+
+    variance = ...
+
+    return ...
+
+
+proportional_theoretical_se = ...
+equal_theoretical_se = ...
+neyman_theoretical_se = ...
+
+
+# TODO 4: Simulate stratified evaluation.
+def simulate(allocation):
+    float_allocation = allocation.to(
+        torch.float64
+    )
+
+    total_counts = (
+        float_allocation[None, :]
+        .expand(num_repetitions, -1)
+    )
+
+    probabilities = (
+        true_group_values[None, :]
+        .expand(num_repetitions, -1)
+    )
+
+    successes = ...
+
+    group_sample_means = ...
+
+    target_value_estimates = ...
+
+    # Incorrect after disproportionate sampling.
+    raw_pooled_estimates = ...
+
+    return (
+        target_value_estimates,
+        raw_pooled_estimates,
+    )
+
+
+proportional_estimates, _ = ...
+equal_estimates, _ = ...
+
+(
+    neyman_estimates,
+    neyman_raw_pooled_estimates,
+) = ...
+
+
+# TODO 5: Compare bias, empirical SE and RMSE.
+all_estimates = torch.stack([
+    proportional_estimates,
+    equal_estimates,
+    neyman_estimates,
+], dim=1)
+
+mean_estimates = ...
+biases = ...
+
+empirical_standard_errors = ...
+
+rmses = ...
+
+raw_neyman_mean = ...
+raw_neyman_bias = ...
+
+results = torch.stack([
+    mean_estimates,
+    biases,
+    empirical_standard_errors,
+    rmses,
+], dim=1)
+
+print(
+    &quot;Allocations: proportional, equal, Neyman&quot;
+)
+print(proportional_allocation)
+print(equal_allocation)
+print(neyman_allocation)
+
+print(
+    &quot;Theoretical SEs:&quot;,
+    proportional_theoretical_se.item(),
+    equal_theoretical_se.item(),
+    neyman_theoretical_se.item(),
+)
+
+print(
+    &quot;Rows: proportional, equal, Neyman\n&quot;
+    &quot;Columns: mean, bias, empirical SE, RMSE&quot;
+)
+print(results)
+
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+print(&quot;Raw Neyman pooled mean:&quot;, raw_neyman_mean.item())
+print(&quot;Raw Neyman pooled bias:&quot;, raw_neyman_bias.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Proportional sampling gives approximately which counts?</p></li>
+<li><p>Why will Neyman allocation move episodes away from group <span style="background-color: codeinlinebg"><code> 0</code></span>?</p></li>
+<li><p>Which design should have the lowest standard error?</p></li>
+<li><p>Will the raw pooled reward under Neyman allocation estimate the deployment value?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>A Bernoulli variable has variance <span class="math inline">\(\mu(1-\mu)\)</span>.</p></li>
+<li><p>Proportional weights are <span style="background-color: codeinlinebg"><code> target_probabilities</code></span>.</p></li>
+<li><p>Equal weights are <span style="background-color: codeinlinebg"><code> torch.ones_like(target_probabilities)</code></span>.</p></li>
+<li><p>Neyman weights are <span style="background-color: codeinlinebg"><code> target_probability * group_standard_deviation</code></span>.</p></li>
+<li><p>Sample success counts with <span style="background-color: codeinlinebg"><code> torch.distributions.Binomial</code></span>.</p></li>
+<li><p>The stratified estimate multiplies sampled group means by target probabilities.</p></li>
+<li><p>RMSE is the square root of mean squared error around the exact target value.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Oversample rare groups, then report the unweighted pooled mean.</p></li>
+<li><p>Calculate Neyman weights from reward means rather than standard deviations.</p></li>
+<li><p>Estimate variances using evaluation outcomes and repeatedly redesign the same study.</p></li>
+<li><p>Permit a group to receive zero samples because its pilot variance was zero.</p></li>
+<li><p>Rescale rewards but continue using stale pilot variances.</p></li>
+<li><p>Optimize aggregate precision while forgetting a required rare-group safety gate.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is proportional allocation not generally variance-optimal?</p></li>
+<li><p>Why must deployment weights remain unchanged after oversampling?</p></li>
+<li><p>When might you deliberately reject Neyman allocation?</p></li>
+<li><p>Can optimal allocation repair a completely unmeasured group after data collection?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Population quantities:</p>
+<pre class="code python"><code class="language-python">exact_target_value = (
+    target_probabilities
+    * true_group_values
+).sum()
+
+group_variances = (
+    true_group_values
+    * (1.0 - true_group_values)
+)
+
+group_standard_deviations = (
+    group_variances.sqrt()
+)</code></pre>
+<p>Evaluation designs:</p>
+<pre class="code python"><code class="language-python">proportional_allocation = allocate_budget(
+    target_probabilities
+)
+
+equal_allocation = allocate_budget(
+    torch.ones_like(
+        target_probabilities
+    )
+)
+
+neyman_weights = (
+    target_probabilities
+    * group_standard_deviations
+)
+
+neyman_allocation = allocate_budget(
+    neyman_weights
+)</code></pre>
+<p>Theoretical uncertainty:</p>
+<pre class="code python"><code class="language-python">def theoretical_standard_error(allocation):
+    allocation = allocation.to(
+        torch.float64
+    )
+
+    variance = (
+        target_probabilities.square()
+        * group_variances
+        / allocation
+    ).sum()
+
+    return variance.sqrt()
+
+
+proportional_theoretical_se = (
+    theoretical_standard_error(
+        proportional_allocation
+    )
+)
+
+equal_theoretical_se = (
+    theoretical_standard_error(
+        equal_allocation
+    )
+)
+
+neyman_theoretical_se = (
+    theoretical_standard_error(
+        neyman_allocation
+    )
+)</code></pre>
+<p>Simulation:</p>
+<pre class="code python"><code class="language-python">def simulate(allocation):
+    float_allocation = allocation.to(
+        torch.float64
+    )
+
+    total_counts = (
+        float_allocation[None, :]
+        .expand(num_repetitions, -1)
+    )
+
+    probabilities = (
+        true_group_values[None, :]
+        .expand(num_repetitions, -1)
+    )
+
+    successes = torch.distributions.Binomial(
+        total_count=total_counts,
+        probs=probabilities,
+    ).sample()
+
+    group_sample_means = (
+        successes / total_counts
+    )
+
+    target_value_estimates = (
+        group_sample_means
+        * target_probabilities[None, :]
+    ).sum(dim=1)
+
+    raw_pooled_estimates = (
+        successes.sum(dim=1)
+        / float_allocation.sum()
+    )
+
+    return (
+        target_value_estimates,
+        raw_pooled_estimates,
+    )
+
+
+proportional_estimates, _ = simulate(
+    proportional_allocation
+)
+
+equal_estimates, _ = simulate(
+    equal_allocation
+)
+
+(
+    neyman_estimates,
+    neyman_raw_pooled_estimates,
+) = simulate(
+    neyman_allocation
+)</code></pre>
+<p>Estimator diagnostics:</p>
+<pre class="code python"><code class="language-python">mean_estimates = all_estimates.mean(
+    dim=0
+)
+
+biases = (
+    mean_estimates
+    - exact_target_value
+)
+
+empirical_standard_errors = (
+    all_estimates.std(
+        dim=0,
+        correction=1,
+    )
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)
+
+raw_neyman_mean = (
+    neyman_raw_pooled_estimates.mean()
+)
+
+raw_neyman_bias = (
+    raw_neyman_mean
+    - exact_target_value
+)</code></pre>
+<p>The exact deployment value is:</p>
+<p><span class="math display">\[J
+=
+0.8(0.995)+0.15(0.5)+0.05(0.5)
+=
+0.896\]</span></p>
+<p>Proportional allocation gives:</p>
+<p><span class="math display">\[[480,\;90,\;30]\]</span></p>
+<p>But group <span style="background-color: codeinlinebg"><code> 0</code></span> has standard deviation:</p>
+<p><span class="math display">\[\sqrt{0.995(0.005)}\approx0.071\]</span></p>
+<p>while the other groups have standard deviation <span style="background-color: codeinlinebg"><code> 0.5</code></span>. Neyman allocation is therefore approximately:</p>
+<p><span class="math display">\[[216,\;288,\;96]\]</span></p>
+<p>Typical theoretical standard errors are:</p>
+<ul>
+<li><p>proportional: approximately <span style="background-color: codeinlinebg"><code> 0.0095</code></span>;</p></li>
+<li><p>equal: approximately <span style="background-color: codeinlinebg"><code> 0.0069</code></span>;</p></li>
+<li><p>Neyman: approximately <span style="background-color: codeinlinebg"><code> 0.0064</code></span>.</p></li>
+</ul>
+<p>All three target-weighted estimators remain centered near <span style="background-color: codeinlinebg"><code> 0.896</code></span>. The raw pooled Neyman estimate instead approaches:</p>
+<p><span class="math display">\[\frac{
+216(0.995)+288(0.5)+96(0.5)
+}{600}
+\approx0.678\]</span></p>
+<p>That severe bias comes from confusing the deliberately constructed evaluation mixture with deployment traffic.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Proportional allocation ignores that conditional reward variance differs between groups.</p></li>
+<li><p>Oversampling changes data-collection frequency, not the deployment estimand.</p></li>
+<li><p>Reject it when subgroup guarantees, safety floors, collection costs or robustness to inaccurate pilot variances matter more than aggregate variance.</p></li>
+<li><p>No. Allocation must occur before or during collection. Once a required group has zero observations, analysis alone cannot restore support.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Sampling uncertainty concerns imperfect estimates from observed data; identification uncertainty concerns outcomes the data never reveal.</p></li>
+<li><p>Collect data under the missing condition, narrow the target population, or introduce a clearly defended assumption restricting the missing outcome.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> evaluation traffic should be designed for information, then reweighted for deployment. Oversample noisy or decision-critical groups—but never let the sampling mixture silently redefine the value you claim to estimate.</p>

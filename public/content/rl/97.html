@@ -1,0 +1,484 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a campus poll vs the country</div>
+<p>A poll of university students says one thing, but the country isn’t made of students. Pollsters reweight by age and region to estimate the national result. A canary’s traffic mix (more easy prompts, more power users) may differ from full deployment, so reweight the effect to the target mix.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why is <span style="background-color: codeinlinebg"><code> p &gt; 0.05</code></span> not evidence that a candidate is safe?</p></li>
+<li><p>What confidence-bound condition establishes noninferiority for a harm metric?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-canary-estimates-value-for-the-traffic-it-receives">2. A canary estimates value for the traffic it receives</h3>
+<p>Suppose policy effects differ across prompt groups:</p>
+<p><span class="math display">\[\tau_g
+=
+E[Y(1)-Y(0)\mid G=g]\]</span></p>
+<p>The canary’s average effect is:</p>
+<p><span class="math display">\[\tau_{\text{canary}}
+=
+\sum_g p_{\text{canary}}(g)\tau_g\]</span></p>
+<p>Deployment may have another mixture:</p>
+<p><span class="math display">\[\tau_{\text{target}}
+=
+\sum_g p_{\text{target}}(g)\tau_g\]</span></p>
+<p>Thus, even a perfectly randomized experiment may answer the wrong population question. Randomization identifies effects within the sampled population; it does not make that population representative.</p>
+<p>Two equivalent estimators are useful.</p>
+<p>Direct standardization:</p>
+<p><span class="math display">\[\hat\tau_{\text{target}}
+=
+\sum_g p_{\text{target}}(g)\hat\tau_g\]</span></p>
+<p>Population importance weighting:</p>
+<p><span class="math display">\[w(g)
+=
+\frac{p_{\text{target}}(g)}
+{p_{\text{canary}}(g)}\]</span></p>
+<p>Large weights mean the canary underrepresented a group important in deployment. Weight concentration reduces effective sample size:</p>
+<p><span class="math display">\[N_{\text{eff}}
+=
+\frac{(\sum_i w_i)^2}
+{\sum_i w_i^2}\]</span></p>
+<p>Transportability still requires support:</p>
+<p><span class="math display">\[p_{\text{target}}(g)&gt;0
+\Rightarrow
+p_{\text{canary}}(g)&gt;0\]</span></p>
+<p>It also assumes the measured groups capture the important effect modifiers. Reweighting language and domain cannot fix an unmeasured difference such as unseen user expertise.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>group and reward: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>one-hot membership: <span style="background-color: codeinlinebg"><code> [N, G]</code></span></p></li>
+<li><p>group-specific effects: <span style="background-color: codeinlinebg"><code> [G]</code></span></p></li>
+<li><p>transport weights: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+</ul>
+<p>These are population weights, not policy-action importance ratios. If assignment was also context-dependent, combine transport weights with the logged assignment propensities.</p>
+<p>A DPO checkpoint can perform well on the preference-data mixture yet regress on deployment traffic. DPO optimizes that fixed dataset’s preference objective; it does not automatically transport outcomes to another user or prompt distribution.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: transport by reweighting</div>
+<p>With pre-treatment groups <span class="math inline">\(g\)</span>, canary shares <span class="math inline">\(p_g\)</span> and target shares <span class="math inline">\(q_g\)</span>: <span class="math inline">\(\tau_{\text{target}}=\sum_gq_g\tau_g=\sum_gp_g\frac{q_g}{p_g}\tau_g\)</span>. <strong>Costs:</strong> the weights <span class="math inline">\(q_g/p_g\)</span> shrink the ESS, and groups with <span class="math inline">\(p_g\approx0\)</span> can’t be transported at all (positivity). Report the transported estimate, its CI and the ESS it consumed. Use only pre-treatment features for <span class="math inline">\(g\)</span>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>A canary estimates the effect for its own traffic.</p></li>
+<li><p>Transport only across supported, pre-treatment groups, and report the ESS cost.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: a positive canary turns negative</div>
+<p>Easy prompts: <span class="math inline">\(\tau=+0.05\)</span>. Hard prompts: <span class="math inline">\(\tau=-0.08\)</span>. Canary mix 80/20: <span class="math inline">\(0.04-0.016=+0.024\)</span>. Deployment mix 30/70: <span class="math inline">\(0.015-0.056=-0.041\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Reweighting on post-treatment features.</p></li>
+<li><p>Extrapolating to groups absent from the canary.</p></li>
+<li><p>Reporting the transported point estimate without its (wider) CI.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-a-positive-canary-becomes-negative-after-transport">3. PyTorch exercise — a positive canary becomes negative after transport</h3>
+<p>The canary mostly contains group <span style="background-color: codeinlinebg"><code> 0</code></span>. Deployment mostly contains group <span style="background-color: codeinlinebg"><code> 2</code></span>, where the candidate performs worse.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 30_000
+num_groups = 3
+
+canary_group_probabilities = torch.tensor([
+    0.70, 0.20, 0.10
+])
+
+target_group_probabilities = torch.tensor([
+    0.20, 0.30, 0.50
+])
+
+control_success_probabilities = torch.tensor([
+    0.60, 0.50, 0.40
+])
+
+candidate_success_probabilities = torch.tensor([
+    0.68, 0.56, 0.30
+])
+
+groups = torch.multinomial(
+    canary_group_probabilities,
+    num_samples=num_episodes,
+    replacement=True,
+)
+
+candidate_assigned = (
+    torch.rand(num_episodes) &lt; 0.50
+)
+
+assignment = candidate_assigned.to(
+    torch.float64
+)
+
+control_assignment = (
+    1.0 - assignment
+)
+
+success_probabilities = torch.where(
+    candidate_assigned,
+    candidate_success_probabilities[groups],
+    control_success_probabilities[groups],
+)
+
+rewards = (
+    torch.rand(num_episodes)
+    &lt; success_probabilities
+).to(torch.float64)
+
+# TODO 1: Raw effect in canary traffic.
+raw_candidate_value = ...
+
+raw_control_value = ...
+
+raw_canary_effect = ...
+
+# TODO 2: Estimate effects separately by group.
+group_one_hot = ...
+
+candidate_membership = ...
+control_membership = ...
+
+candidate_group_counts = ...
+control_group_counts = ...
+
+candidate_group_values = ...
+control_group_values = ...
+
+estimated_group_effects = ...
+
+# TODO 3: Standardize effects to each population.
+standardized_canary_effect = ...
+
+standardized_target_effect = ...
+
+# TODO 4: Obtain the same target estimand through
+# self-normalized population weights.
+group_transport_ratios = ...
+
+episode_transport_weights = ...
+
+weighted_candidate_value = ...
+
+weighted_control_value = ...
+
+weighted_target_effect = ...
+
+# TODO 5: Weight diagnostics and oracle values.
+candidate_weights = ...
+control_weights = ...
+
+candidate_transport_ess = ...
+control_transport_ess = ...
+
+candidate_ess_fraction = ...
+control_ess_fraction = ...
+
+exact_group_effects = ...
+
+exact_canary_effect = ...
+
+exact_target_control_value = ...
+exact_target_candidate_value = ...
+
+exact_target_effect = ...
+
+results = torch.stack([
+    canary_group_probabilities,
+    target_group_probabilities,
+    group_transport_ratios,
+    estimated_group_effects,
+    exact_group_effects,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: canary probability, target probability, &quot;
+    &quot;transport ratio, estimated effect, exact effect&quot;
+)
+print(results)
+
+print(&quot;Raw canary effect:&quot;, raw_canary_effect.item())
+print(
+    &quot;Standardized canary effect:&quot;,
+    standardized_canary_effect.item(),
+)
+print(
+    &quot;Standardized target effect:&quot;,
+    standardized_target_effect.item(),
+)
+print(
+    &quot;Weighted target effect:&quot;,
+    weighted_target_effect.item(),
+)
+
+print(
+    &quot;Candidate transport ESS fraction:&quot;,
+    candidate_ess_fraction.item(),
+)
+print(
+    &quot;Control transport ESS fraction:&quot;,
+    control_ess_fraction.item(),
+)
+
+print(
+    &quot;Exact canary effect:&quot;,
+    exact_canary_effect.item(),
+)
+print(
+    &quot;Exact target control value:&quot;,
+    exact_target_control_value.item(),
+)
+print(
+    &quot;Exact target candidate value:&quot;,
+    exact_target_candidate_value.item(),
+)
+print(
+    &quot;Exact target effect:&quot;,
+    exact_target_effect.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the exact canary effect positive or negative?</p></li>
+<li><p>Is the exact target-population effect positive or negative?</p></li>
+<li><p>Which group receives a transport weight of <span style="background-color: codeinlinebg"><code> 5</code></span>?</p></li>
+<li><p>Should transport weighting increase or decrease effective sample size?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>An arm value is its masked reward sum divided by its assignment count.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> F.one_hot(groups, num_groups)</code></span>.</p></li>
+<li><p>Group effects are candidate group means minus control group means.</p></li>
+<li><p>Standardization multiplies group effects by the desired group probabilities.</p></li>
+<li><p>Group transport ratio is <span style="background-color: codeinlinebg"><code> target / canary</code></span>.</p></li>
+<li><p>Self-normalize weights separately within each arm.</p></li>
+<li><p>Compute ESS using weights that are zero outside the relevant arm.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Report only the randomized canary average despite a different deployment mix.</p></li>
+<li><p>Weight by <span style="background-color: codeinlinebg"><code> canary / target</code></span> instead of <span style="background-color: codeinlinebg"><code> target / canary</code></span>.</p></li>
+<li><p>Use response-derived properties as if they were pre-treatment groups.</p></li>
+<li><p>Estimate target frequencies from a stale deployment period.</p></li>
+<li><p>Silently drop a target group absent from the canary.</p></li>
+<li><p>Combine transport weights with adaptive routing but omit assignment propensities.</p></li>
+<li><p>Bootstrap episodes instead of complete users.</p></li>
+<li><p>Oversample a rare group and forget to restore target proportions.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does randomization not guarantee transportability?</p></li>
+<li><p>When are standardization and population weighting equivalent?</p></li>
+<li><p>What does a large transport weight indicate?</p></li>
+<li><p>What must happen if a target group has no canary support?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Raw canary effect:</p>
+<pre class="code python"><code class="language-python">raw_candidate_value = (
+    assignment * rewards
+).sum() / assignment.sum()
+
+raw_control_value = (
+    control_assignment * rewards
+).sum() / control_assignment.sum()
+
+raw_canary_effect = (
+    raw_candidate_value
+    - raw_control_value
+)</code></pre>
+<p>Group-specific effects:</p>
+<pre class="code python"><code class="language-python">group_one_hot = F.one_hot(
+    groups,
+    num_classes=num_groups,
+).to(torch.float64)
+
+candidate_membership = (
+    group_one_hot
+    * assignment[:, None]
+)
+
+control_membership = (
+    group_one_hot
+    * control_assignment[:, None]
+)
+
+candidate_group_counts = (
+    candidate_membership.sum(dim=0)
+)
+
+control_group_counts = (
+    control_membership.sum(dim=0)
+)
+
+candidate_group_values = (
+    (
+        candidate_membership
+        * rewards[:, None]
+    ).sum(dim=0)
+    / candidate_group_counts
+)
+
+control_group_values = (
+    (
+        control_membership
+        * rewards[:, None]
+    ).sum(dim=0)
+    / control_group_counts
+)
+
+estimated_group_effects = (
+    candidate_group_values
+    - control_group_values
+)</code></pre>
+<p>Direct standardization:</p>
+<pre class="code python"><code class="language-python">standardized_canary_effect = (
+    canary_group_probabilities
+    * estimated_group_effects
+).sum()
+
+standardized_target_effect = (
+    target_group_probabilities
+    * estimated_group_effects
+).sum()</code></pre>
+<p>Population weighting:</p>
+<pre class="code python"><code class="language-python">group_transport_ratios = (
+    target_group_probabilities
+    / canary_group_probabilities
+)
+
+episode_transport_weights = (
+    group_transport_ratios[groups]
+)
+
+weighted_candidate_value = (
+    episode_transport_weights
+    * assignment
+    * rewards
+).sum() / (
+    episode_transport_weights
+    * assignment
+).sum()
+
+weighted_control_value = (
+    episode_transport_weights
+    * control_assignment
+    * rewards
+).sum() / (
+    episode_transport_weights
+    * control_assignment
+).sum()
+
+weighted_target_effect = (
+    weighted_candidate_value
+    - weighted_control_value
+)</code></pre>
+<p>ESS and exact values:</p>
+<pre class="code python"><code class="language-python">candidate_weights = (
+    episode_transport_weights
+    * assignment
+)
+
+control_weights = (
+    episode_transport_weights
+    * control_assignment
+)
+
+candidate_transport_ess = (
+    candidate_weights.sum().square()
+    / candidate_weights.square().sum()
+)
+
+control_transport_ess = (
+    control_weights.sum().square()
+    / control_weights.square().sum()
+)
+
+candidate_ess_fraction = (
+    candidate_transport_ess
+    / assignment.sum()
+)
+
+control_ess_fraction = (
+    control_transport_ess
+    / control_assignment.sum()
+)
+
+exact_group_effects = (
+    candidate_success_probabilities
+    - control_success_probabilities
+)
+
+exact_canary_effect = (
+    canary_group_probabilities
+    * exact_group_effects
+).sum()
+
+exact_target_control_value = (
+    target_group_probabilities
+    * control_success_probabilities
+).sum()
+
+exact_target_candidate_value = (
+    target_group_probabilities
+    * candidate_success_probabilities
+).sum()
+
+exact_target_effect = (
+    exact_target_candidate_value
+    - exact_target_control_value
+)</code></pre>
+<p>The conditional effects are:</p>
+<p><span class="math display">\[\tau_g=[0.08,\;0.06,\;-0.10]\]</span></p>
+<p>Under canary traffic:</p>
+<p><span class="math display">\[\tau_{\text{canary}}
+=
+0.7(0.08)+0.2(0.06)+0.1(-0.10)
+=
+0.058\]</span></p>
+<p>The candidate appears strongly beneficial.</p>
+<p>Under target traffic:</p>
+<p><span class="math display">\[\tau_{\text{target}}
+=
+0.2(0.08)+0.3(0.06)+0.5(-0.10)
+=
+-0.016\]</span></p>
+<p>The deployment conclusion reverses.</p>
+<p>Target values are:</p>
+<p><span class="math display">\[J_0^{\text{target}}
+=
+0.2(0.60)+0.3(0.50)+0.5(0.40)
+=
+0.47\]</span></p>
+<p><span class="math display">\[J_1^{\text{target}}
+=
+0.2(0.68)+0.3(0.56)+0.5(0.30)
+=
+0.454\]</span></p>
+<p>The transport ratios are:</p>
+<p><span class="math display">\[w_g=
+\left[
+\frac{0.2}{0.7},
+\frac{0.3}{0.2},
+\frac{0.5}{0.1}
+\right]
+=
+[0.286,\;1.5,\;5.0]\]</span></p>
+<p>Group <span style="background-color: codeinlinebg"><code> 2</code></span> receives weight <span style="background-color: codeinlinebg"><code> 5</code></span> because it represents half of deployment but only one-tenth of the canary. This concentration should reduce each arm’s ESS to roughly one-third of its raw size.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Randomization balances candidate and control within the sampled traffic. It does not make sampled traffic equal to the target population.</p></li>
+<li><p>They are equivalent when the same pre-treatment groups capture effect heterogeneity and the corresponding population probabilities and support are valid.</p></li>
+<li><p>The target population depends heavily on observations scarce in the canary, so the transported estimate will have greater variance.</p></li>
+<li><p>The target effect is not identified from that canary. Collect data for the missing group, narrow the target population or state the unsupported extrapolation explicitly.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Failure to detect harm may result from wide uncertainty; it does not bound the harm below an acceptable level.</p></li>
+<li><p>For harm <span class="math inline">\(d\)</span>, noninferiority requires the one-sided upper confidence bound to satisfy <span class="math inline">\(U_d&lt;\Delta_{\max}\)</span>.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> a randomized canary estimates the effect for its own traffic. Before deployment, compare its context mixture with the target, transport only across supported pre-treatment groups, and report how much effective sample size the reweighting consumed.</p>

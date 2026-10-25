@@ -1,0 +1,207 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<p><strong>Curriculum position:</strong> LLM × RL → agent/tool-use policies<br />
+<strong>Assumed completed:</strong> Sessions 189–194 delivered; mastery not yet assessed.</p>
+<h3 class="unnumbered" id="spaced-retrieval-2-minutes">1. Spaced retrieval — 2 minutes</h3>
+<ol>
+<li><p>Why should forbidden actions be masked before softmax?</p></li>
+<li><p>Why must PPO’s old and new policies use the same action mask for a recorded state?</p></li>
+<li><p>What pattern suggests reward overoptimization?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="which-tool-call-deserves-the-outcome-5-minutes">2. Which tool call deserves the outcome? — 5 minutes</h3>
+<p>Consider an agent trajectory:</p>
+<blockquote>
+<p>search → open page → calculate → answer → reward</p>
+</blockquote>
+<p>If only the final answer receives reward, earlier tool calls still influenced it. We therefore propagate later outcomes backward using a return-to-go.</p>
+<p><span class="math display">\[\underbrace{G_t}_{\text{credit from step }t}
+=
+\underbrace{\sum_{k=t}^{T-1}\gamma^{\,k-t}r_k}_{\text{current and future rewards}}\]</span></p>
+<p>Annotations:</p>
+<ul>
+<li><p><span class="math inline">\(r_k\)</span>: reward emitted after step <span class="math inline">\(k\)</span></p></li>
+<li><p><span class="math inline">\(\gamma\in[0,1]\)</span>: discount factor</p></li>
+<li><p><span class="math inline">\(G_t\)</span>: credit assigned to the action taken at step <span class="math inline">\(t\)</span></p></li>
+</ul>
+<p>With rewards <span class="math inline">\([0,0,0,1]\)</span> and <span class="math inline">\(\gamma=0.9\)</span>:</p>
+<p><span class="math display">\[G=[0.9^3,\;0.9^2,\;0.9,\;1]\]</span></p>
+<p>The final answer receives full credit. Earlier tool calls receive progressively discounted credit.</p>
+<p>But this is only temporal credit—it does not prove which tool call caused success. A useless search before a correct answer can still receive positive return. A value baseline reduces variance:</p>
+<p><span class="math display">\[\underbrace{A_t}_{\text{action quality above expectation}}
+=
+\underbrace{G_t}_{\text{observed return}}
+-
+\underbrace{V_\phi(s_t)}_{\text{expected return before acting}}\]</span></p>
+<p>The masked actor loss is:</p>
+<p><span class="math display">\[L_{\text{actor}}
+=
+-\frac{
+\sum_{b,t}
+\underbrace{m_{b,t}}_{\text{valid trajectory step}}
+\underbrace{\operatorname{stopgrad}(A_{b,t})}_{\text{fixed credit}}
+\underbrace{\log\pi_\theta(a_{b,t}\mid s_{b,t})}_{\text{chosen action log-probability}}
+}{
+\underbrace{\sum_{b,t}m_{b,t}}_{\text{number of real steps}}
+}\]</span></p>
+<p>Padding must not receive rewards, returns, losses, or diagnostic statistics.</p>
+<p>The critic learns with:</p>
+<p><span class="math display">\[L_{\text{value}}
+=
+\frac{
+\sum_{b,t}m_{b,t}
+\left(
+\underbrace{V_\phi(s_{b,t})}_{\text{prediction}}
+-
+\underbrace{\operatorname{stopgrad}(G_{b,t})}_{\text{return target}}
+\right)^2
+}{
+\sum_{b,t}m_{b,t}
+}\]</span></p>
+<p>Shapes:</p>
+<ul>
+<li><p>rewards, returns, values, advantages, step mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>policy logits: <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span></p></li>
+<li><p>selected actions and log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>actor and value losses: scalar <span style="background-color: codeinlinebg"><code> []</code></span></p></li>
+</ul>
+<p>Practical limitation: a final scalar reward broadcasts coarse credit across the whole trajectory. Tool-level rewards, process supervision, counterfactual evaluation or learned critics can improve attribution—but can also introduce new reward-hacking surfaces.</p>
+<h3 class="unnumbered" id="pytorch-exercise-10-minutes">3. PyTorch exercise — 10 minutes</h3>
+<p>Complete the TODOs. No environment or model download is required.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 3
+max_steps = 5
+num_actions = 4
+gamma = 0.90
+
+# Action IDs: answer, search, calculate, stop.
+lengths = torch.tensor([4, 3, 5])
+step_mask = (
+    torch.arange(max_steps)[None, :]
+    &lt; lengths[:, None]
+).to(torch.float64)
+
+actions = torch.tensor([
+    [1, 2, 0, 3, 0],  # final position is padding
+    [1, 0, 3, 0, 0],  # last two positions are padding
+    [1, 1, 2, 0, 3],
+])
+
+# Mostly terminal rewards, plus a tool cost.
+rewards = torch.tensor([
+    [0.0, -0.1, 0.0,  1.0, 0.0],
+    [0.0,  0.0, 0.4,  0.0, 0.0],
+    [0.0, -0.1, 0.0, -0.2, 1.0],
+]) * step_mask
+
+values = torch.tensor([
+    [0.40, 0.55, 0.70, 0.80, 0.00],
+    [0.20, 0.35, 0.30, 0.00, 0.00],
+    [0.30, 0.35, 0.50, 0.65, 0.75],
+], requires_grad=True)
+
+logits = torch.nn.Parameter(
+    0.2 * torch.randn(batch_size, max_steps, num_actions)
+)
+
+# TODO 1: Compute masked discounted returns backward.
+returns = torch.zeros_like(rewards)
+running_return = torch.zeros(batch_size)
+
+for t in reversed(range(max_steps)):
+    running_return = ...
+    returns[:, t] = ...
+
+# TODO 2: Construct detached advantages.
+advantages = ...
+
+distribution = torch.distributions.Categorical(logits=logits)
+chosen_log_probs = distribution.log_prob(actions)
+
+# TODO 3: Mask and normalize the actor loss by real steps.
+actor_loss = ...
+
+# TODO 4: Critic regression against detached returns.
+value_loss = ...
+
+actor_gradient = torch.autograd.grad(
+    actor_loss, logits, retain_graph=True
+)[0]
+value_gradient = torch.autograd.grad(
+    value_loss, values
+)[0]
+
+print(&quot;Returns:\n&quot;, returns)
+print(&quot;Advantages:\n&quot;, advantages)
+print(&quot;Actor loss:&quot;, actor_loss.item())
+print(&quot;Value loss:&quot;, value_loss.item())
+print(
+    &quot;Largest padded actor gradient:&quot;,
+    (actor_gradient * (1.0 - step_mask)[..., None]).abs().max().item(),
+)
+print(
+    &quot;Largest padded value gradient:&quot;,
+    (value_gradient * (1.0 - step_mask)).abs().max().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should the first action of trajectory 0 receive positive return?</p></li>
+<li><p>Can trajectory 2’s failed answer action receive negative immediate reward but positive return?</p></li>
+<li><p>Should any padded logit or value receive a gradient?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Backward recurrence:</p>
+<p><span class="math display">\[G_t=r_t+\gamma G_{t+1}\]</span></p></li>
+<li><p>Multiply the updated running return by the mask for step <span class="math inline">\(t\)</span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> (returns - values).detach()</code></span> for actor advantages.</p></li>
+<li><p>Divide masked losses by <span style="background-color: codeinlinebg"><code> step_mask.sum()</code></span>, not <span style="background-color: codeinlinebg"><code> B*T</code></span>.</p></li>
+<li><p>Detach only the target side of the critic loss.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">returns = torch.zeros_like(rewards)
+running_return = torch.zeros(batch_size)
+
+for t in reversed(range(max_steps)):
+    running_return = rewards[:, t] + gamma * running_return
+    running_return = running_return * step_mask[:, t]
+    returns[:, t] = running_return
+
+advantages = (returns - values).detach()
+
+distribution = torch.distributions.Categorical(logits=logits)
+chosen_log_probs = distribution.log_prob(actions)
+
+actor_loss = -(
+    advantages * chosen_log_probs * step_mask
+).sum() / step_mask.sum()
+
+value_loss = (
+    (values - returns.detach()).square() * step_mask
+).sum() / step_mask.sum()</code></pre>
+<p>Expected returns:</p>
+<pre class="code text"><code class="language-plaintext">trajectory 0: [0.6390, 0.7100, 0.9000, 1.0000, 0.0000]
+trajectory 1: [0.3240, 0.3600, 0.4000, 0.0000, 0.0000]
+trajectory 2: [0.4654, 0.5171, 0.6857, 0.7620, 1.0000]</code></pre>
+<p>Both padded-gradient diagnostics should be zero.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Yes. Its search action preceded the eventual success, so return-to-go assigns discounted positive credit.</p></li>
+<li><p>Yes. At trajectory 2, step 3:</p>
+<p><span class="math display">\[G_3=-0.2+0.9(1.0)=0.7\]</span></p>
+<p>The later success outweighs the immediate penalty.</p></li>
+<li><p>No. Padding is not part of the environment trajectory and must contribute neither loss nor gradient.</p></li>
+<li><p>Return-to-go is imperfect because temporal precedence is not causality. Irrelevant tool calls can inherit reward from later success.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Masking after softmax leaves invalid actions inside the normalization and can produce a probability vector whose allowed entries sum to less than one.</p></li>
+<li><p>A PPO ratio must compare the same recorded decision under both policies. Changing the mask changes the action space itself.</p></li>
+<li><p>Training reward rises while an independent audit peaks, stagnates or falls.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> propagate outcomes backward with return-to-go, subtract expected value for lower-variance credit, and mask padding everywhere—not only in the final loss.</p>

@@ -1,0 +1,146 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How a search engine works end to end: crawling and indexing, inverted indexes and posting lists, boolean and tiered retrieval, TF-IDF and BM25, champion lists and stop words, query understanding, relevance feedback and learning to rank, evaluation, keeping the index in sync, sharding, hybrid vector search, autocomplete, spelling correction, and related and recent searches.</p>
+</div>
+<h1 id="the-shape-of-a-search-system">The Shape of a Search System</h1>
+<figure class="tikz"><img src="figs/sd/6c886cb25cbd.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Indexing and querying pipelines.</em></p>
+<h1 id="inverted-index-and-posting-lists">Inverted Index and Posting Lists</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>The index at the back of a book lists each important word and the pages it appears on. An inverted index is exactly that for millions of documents: for each word, the list of documents containing it.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Analysis</strong> turns text into terms: tokenize, lowercase, remove or keep punctuation, normalize accents, optionally stem (“running” <span class="math inline">\(\to\)</span> “run”) or lemmatize, and handle language-specific rules (word segmentation for Chinese and Japanese). The same analyzer must run on documents and queries.</p>
+<p>For each term the index stores a <strong>posting list</strong>: sorted document IDs, and per document the term frequency and optionally positions (for phrase queries). The dictionary (term <span class="math inline">\(\to\)</span> posting list location) is held in memory, often as a sorted array, a trie, or a finite-state transducer (Lucene). Posting lists are compressed: store <em>gaps</em> between sorted doc IDs (small numbers) and encode them with variable-byte or bit-packed (PForDelta) codes. Skip pointers let intersection jump ahead.</p>
+</div>
+<h1 id="boolean-and-tiered-retrieval">Boolean and Tiered Retrieval</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Boolean queries</strong>: <code>AND</code> intersects posting lists (merge two sorted lists in <span class="math inline">\(O(m+n)\)</span>, or galloping search when one is much shorter; start with the rarest term), <code>OR</code> unions them, <code>NOT</code> subtracts. Phrase queries check positions.</p>
+<p><strong>Tiered indexes</strong>: split each posting list into tiers by quality (tier 1: the highest-quality or most authoritative documents for the term). Search tier 1 first and go to lower tiers only if too few results are found. This makes common queries fast and keeps the long tail correct.</p>
+</div>
+<h1 id="scoring-tf-idf-and-bm25">Scoring: TF-IDF and BM25</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>TF-IDF</strong>: a term matters more if it appears often in a document (term frequency) and rarely across the collection (inverse document frequency): <span class="math inline">\(\text{idf}(t) = \log\frac{N}{df(t)}\)</span>, score <span class="math inline">\(= \sum_{t \in q} tf(t,d)\cdot\text{idf}(t)\)</span>, usually with documents and queries as normalized vectors (cosine similarity).</p>
+<p><strong>BM25</strong>, the default in Lucene, Elasticsearch, and OpenSearch, fixes two TF-IDF problems: term frequency should <em>saturate</em> (10 mentions is not 10 times as relevant as one), and long documents should not win just by length: <span class="math display">\[\text{BM25}(q,d) = \sum_{t\in q} \text{idf}(t)\cdot\frac{tf(t,d)\,(k_1+1)}{tf(t,d) + k_1\big(1 - b + b\,\frac{|d|}{\text{avgdl}}\big)}\]</span> with <span class="math inline">\(k_1 \approx 1.2\)</span> (saturation speed) and <span class="math inline">\(b \approx 0.75\)</span> (length normalization). BM25 is a strong, cheap first-stage ranker; production systems re-rank its top results with machine-learned models.</p>
+</div>
+<h1 id="stop-words-and-champion-lists">Stop Words and Champion Lists</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Stop words</strong> (“the,” “of,” “is”) appear in almost every document, have tiny IDF, and have enormous posting lists. Old engines dropped them; modern engines usually index them (needed for phrases like “to be or not to be” and for names) but treat them specially during query processing. <strong>Champion lists</strong>: for each term, precompute the top <span class="math inline">\(r\)</span> documents by a static score or term weight; at query time, compute scores only over the union of champion lists of query terms. Related <strong>dynamic pruning</strong> algorithms (WAND, Block-Max WAND) skip documents whose maximum possible score cannot enter the current top <span class="math inline">\(k\)</span>, giving exact top-<span class="math inline">\(k\)</span> results while scoring only a fraction of matches.</p>
+</div>
+<h1 id="query-understanding">Query Understanding</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Before retrieval, a pipeline interprets the query:</p>
+<ol>
+<li><p>Normalize and tokenize with the document analyzer.</p></li>
+<li><p><strong>Spelling correction</strong> (below).</p></li>
+<li><p><strong>Segmentation and entity recognition</strong>: “new york pizza” is a city plus a food; “iphone 15 pro case” is a product with attributes.</p></li>
+<li><p><strong>Intent classification</strong>: navigational (find a site or item), informational, transactional; category prediction (which department in e-commerce).</p></li>
+<li><p><strong>Query rewriting and expansion</strong>: synonyms (“tv” / “television”), learned rewrites from logs, relaxation when there are no results.</p></li>
+<li><p><strong>Filters</strong>: extract structured constraints (“under $50,” “near me,” “open now”).</p></li>
+</ol>
+</div>
+<h1 id="relevance-signals-and-learning-to-rank">Relevance Signals and Learning to Rank</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Signals</strong>: text match (BM25 per field: title, body, anchors), document quality (authority, popularity, freshness, reviews), personalization and location, and <strong>behavioral feedback</strong>: clicks, dwell time, add-to-cart, query reformulations, “pogo-sticking” back to results (a sign of dissatisfaction).</p>
+<p>Clicks are <strong>biased by position</strong>: top results get clicks because they are on top. Correct with position-bias models (estimate examination probability by position, e.g. from randomized swaps) or train with inverse propensity weighting.</p>
+<p><strong>Learning to rank</strong>: <em>pointwise</em> (predict relevance per document), <em>pairwise</em> (predict which of two documents is better; RankNet, LambdaMART with gradient-boosted trees), <em>listwise</em> (optimize a list metric such as NDCG directly). Cross-encoders (a transformer reading query and document together) are the strongest and most expensive re-rankers, used on the top tens to hundreds of candidates.</p>
+</div>
+<h1 id="evaluating-search">Evaluating Search</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Offline</strong>: a judged set of queries with graded relevance labels; metrics precision@<span class="math inline">\(k\)</span>, recall@<span class="math inline">\(k\)</span>, MRR, NDCG@<span class="math inline">\(k\)</span>. <strong>Online</strong>: click-through rate, abandonment (no click), time to first click, reformulation rate, conversions, and <strong>interleaving</strong> (mix results from two rankers in one list and see which ranker’s results get clicked), which detects differences with far less traffic than A/B tests. Always slice by query frequency: head queries (frequent) and tail queries behave very differently.</p>
+</div>
+<h1 id="keeping-the-index-in-sync">Keeping the Index in Sync</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The database is the source of truth; the search index is a derived copy.</p>
+<ul>
+<li><p><strong>Change data capture</strong> from the database log (Debezium to Kafka to an indexing consumer) is the robust approach: no dual writes, ordering per key, replayable (Chapter (messaging)).</p></li>
+<li><p>Make indexing <strong>idempotent</strong>: use the document ID and a version number; Elasticsearch’s external versioning rejects older updates arriving late.</p></li>
+<li><p>Near-real-time search: Lucene-based engines make new documents searchable after a <em>refresh</em> (about 1 second by default), when the in-memory buffer becomes a new immutable segment; segments are merged in the background (an LSM idea).</p></li>
+<li><p><strong>Full reindex</strong> for mapping or analyzer changes: build a new index from a snapshot plus the change stream, then switch an <em>alias</em> atomically.</p></li>
+</ul>
+</div>
+<h1 id="sharding-a-search-index">Sharding a Search Index</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"></th>
+<th style="text-align: left;">Document partitioning</th>
+<th style="text-align: left;">Term partitioning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">How</td>
+<td style="text-align: left;">each shard holds all terms for a subset of documents</td>
+<td style="text-align: left;">each shard holds full posting lists for a subset of terms</td>
+</tr>
+<tr>
+<td style="text-align: left;">Query</td>
+<td style="text-align: left;">fan out to every shard, merge top <span class="math inline">\(k\)</span></td>
+<td style="text-align: left;">only shards owning query terms</td>
+</tr>
+<tr>
+<td style="text-align: left;">Pros</td>
+<td style="text-align: left;">balanced, simple, easy to add documents</td>
+<td style="text-align: left;">fewer shards per query</td>
+</tr>
+<tr>
+<td style="text-align: left;">Cons</td>
+<td style="text-align: left;">every query hits every shard (tail latency)</td>
+<td style="text-align: left;">hot terms create hot shards; multi-term queries ship large lists</td>
+</tr>
+<tr>
+<td style="text-align: left;">Used by</td>
+<td style="text-align: left;">Elasticsearch, Solr, most systems</td>
+<td style="text-align: left;">rarely in practice</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>With document partitioning, each shard returns its local top <span class="math inline">\(k\)</span> and a coordinator merges (Chapter (foundations)’s fan-out tail latency applies; use replicas and hedged requests). Global statistics (IDF) differ per shard; with random document assignment they converge, or a first round can collect global statistics. Size shards so each fits a node’s memory and disk comfortably (tens of GB is a common guideline for Elasticsearch) and add replicas for query throughput.</p>
+</div>
+<h1 id="crawling">Crawling</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A web crawler is a distributed BFS over URLs (the companion interview book covers BFS).</p>
+<ul>
+<li><p><strong>URL frontier</strong>: a prioritized queue (by importance, freshness need) with per-host sub-queues to enforce <strong>politeness</strong>: one connection per host, delay between requests, obeying <code>robots.txt</code>.</p></li>
+<li><p><strong>Fetchers</strong> with DNS caching, timeouts, and redirects.</p></li>
+<li><p><strong>Dedup</strong>: normalize URLs (lowercase host, remove fragments and tracking parameters); a Bloom filter or key-value store of seen URLs; content fingerprints (SimHash, MinHash) to detect near-duplicate pages and mirrors.</p></li>
+<li><p><strong>Parsing and link extraction</strong>, then enqueue new URLs.</p></li>
+<li><p><strong>Recrawl scheduling</strong> based on how often each page changes.</p></li>
+<li><p><strong>Traps</strong>: infinite calendars and session IDs in URLs; cap depth and URLs per host.</p></li>
+</ul>
+</div>
+<h1 id="vector-search-and-hybrid-retrieval">Vector Search and Hybrid Retrieval</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Dense retrieval embeds queries and documents into vectors and finds nearest neighbors (HNSW or IVF-PQ). It matches meaning (“cheap flights” <span class="math inline">\(\approx\)</span> “low-cost airfare”) but misses exact identifiers (product codes, error messages, names). <strong>Hybrid search</strong> runs BM25 and vector retrieval in parallel and merges with reciprocal rank fusion or a learned blend, then re-ranks (Chapter (genai)). Most modern engines support both in one index (Elasticsearch, OpenSearch, Vespa, Weaviate, pgvector with full-text search).</p>
+</div>
+<h1 id="autocomplete">Autocomplete</h1>
+<figure class="tikz"><img src="figs/sd/7f3e5607710b.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Autocomplete: precompute top completions per prefix.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Requirements: suggestions within about 50–100 ms per keystroke, ranked by popularity, fresh for trending queries, filtered for offensive content. Design: aggregate query logs into counts with time decay; for every prefix up to a length limit, precompute the top-<span class="math inline">\(k\)</span> completions and store them at the trie node or in a key-value store (<code>prefix </code><span class="math inline">\(\to\)</span><code> list</code>). A request is then a single lookup. Shard by prefix (careful: some prefixes are much hotter), cache popular prefixes at the edge and in the client, debounce keystrokes on the client. Merge a slower-moving daily list with a fast trending list from a streaming pipeline. Personalize by blending in the user’s own recent queries.</p>
+</div>
+<h1 id="did-you-mean-and-spelling-correction">Did-You-Mean and Spelling Correction</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The <strong>noisy channel model</strong>: pick the candidate <span class="math inline">\(c\)</span> maximizing <span class="math inline">\(P(c)\cdot P(\text{typed} \mid c)\)</span>: a language model of how likely the intended query is, times an error model of how likely that typo is (based on edit distance, keyboard adjacency, and learned from logs of users correcting themselves). Candidate generation: all strings within edit distance 1–2 (fast with <strong>SymSpell</strong>’s precomputed deletions, a BK-tree, or a Levenshtein automaton over the term dictionary). Query logs are the best source: pairs where a user retyped a query within seconds show real corrections. Decide between “showing results for X” (high confidence, auto-correct) and “did you mean X?” (lower confidence).</p>
+</div>
+<h1 id="related-and-recent-searches">Related and Recent Searches</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Related searches</strong>: queries that co-occur in sessions (“people who searched A also searched B”), queries leading to clicks on the same documents (a query–document bipartite graph), or nearest neighbors in a query embedding space; filter out near duplicates and unsafe suggestions. <strong>Recent searches</strong>: per user, a capped, deduplicated list (Redis list or sorted set by timestamp, trimmed to 20), stored on device for privacy where possible, with a user-visible clear button and retention limits.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: E-commerce product search</div>
+<p>Catalog changes stream through CDC into a sharded Elasticsearch index with fields for title, brand, attributes, and price. Query understanding extracts category and price filters. BM25 plus vector retrieval returns 1<span>,</span>000 candidates; a LambdaMART ranker with text, popularity, price, availability, and personalization features re-ranks; business rules (in-stock first, sponsored slots) apply last. Offline NDCG on judged queries and an online interleaving test gate each ranker change.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Search in a SaaS app</div>
+<p>Each tenant’s documents are indexed with a <code>tenant_id</code> field and every query filters on it (or large tenants get their own index). Permissions are checked at query time with filters on ACL groups, never only at indexing time, so revoked access takes effect immediately.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Inverted indexes map terms to compressed, sorted posting lists; intersect the rarest first.</p></li>
+<li><p>BM25 saturates term frequency and normalizes length; re-rank its top results with ML.</p></li>
+<li><p>Query understanding, click feedback with position-bias correction, and offline + online evaluation drive quality.</p></li>
+<li><p>Keep indexes in sync with CDC and versions; shard by document; hybridize with vectors.</p></li>
+<li><p>Autocomplete and spelling correction are precomputation plus noisy-channel ranking over query logs.</p></li>
+</ul>
+</div>

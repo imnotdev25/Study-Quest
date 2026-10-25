@@ -1,0 +1,68 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>A tokenizer maps text to integer IDs. <strong>Byte-pair encoding</strong> starts from the 256 possible bytes (so any text can be encoded) and repeatedly <em>merges the most frequent adjacent pair</em> into a new token, until the vocabulary reaches its target size. Common words become single tokens; rare words stay as several pieces.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why vocabulary size is a trade-off</div>
+<p><strong>Step 1.</strong> <strong>Compression</strong> <span class="math inline">\(c\)</span> = bytes per token. English text with a 50K–150K vocabulary gets about 4–4.5 bytes per token. A fixed amount of text costs <span class="math inline">\(\text{bytes}/c\)</span> tokens, so better compression means more text per FLOP and longer effective context.</p>
+<p><strong>Step 2.</strong> <strong>Cost of a bigger vocabulary:</strong> the embedding and output layers have <span class="math inline">\(VD\)</span> parameters each. For <span class="math inline">\(V=128\)</span>K, <span class="math inline">\(D=4096\)</span>: 524M parameters per matrix, a big share of a small model. The softmax also costs <span class="math inline">\(O(V)\)</span> per token.</p>
+<p><strong>Step 3.</strong> <strong>Rare tokens:</strong> a token seen only a few times during training gets a poorly trained embedding, so very large vocabularies need very large datasets.</p>
+<p><strong>Step 4.</strong> Typical choices: GPT-2 50K, SmolLM2 49K, Llama 3 128K, Gemma 4 262K (multilingual), Qwen3.8 248K.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Byte-pair encoding: the merge algorithm from scratch, then a real tokenizer with the `tokenizers` library.
+
+Run:  python bpe.py
+&quot;&quot;&quot;
+from collections import Counter
+
+
+def train_bpe(text: str, num_merges: int):
+    &quot;&quot;&quot;Start from bytes; repeatedly merge the most frequent adjacent pair into a new token.&quot;&quot;&quot;
+    ids = list(text.encode(&quot;utf-8&quot;))
+    merges = {}
+    for step in range(num_merges):
+        pairs = Counter(zip(ids, ids[1:]))
+        if not pairs:
+            break
+        (a, b), count = pairs.most_common(1)[0]
+        new = 256 + step
+        merges[(a, b)] = new
+        out, i = [], 0
+        while i &lt; len(ids):                       # replace every occurrence of (a, b)
+            if i + 1 &lt; len(ids) and ids[i] == a and ids[i + 1] == b:
+                out.append(new)
+                i += 2
+            else:
+                out.append(ids[i])
+                i += 1
+        ids = out
+    return merges, ids
+
+
+if __name__ == &quot;__main__&quot;:
+    corpus = &quot;low lower lowest newer newest wider widest &quot; * 50
+    merges, ids = train_bpe(corpus, num_merges=20)
+    n_bytes = len(corpus.encode())
+    print(f&quot;bytes {n_bytes} -&gt; tokens {len(ids)}   compression {n_bytes / len(ids):.2f} bytes/token&quot;)
+    vocab = {i: bytes([i]) for i in range(256)}
+    for (a, b), new in merges.items():
+        vocab[new] = vocab[a] + vocab[b]
+    print(&quot;first merges:&quot;, [vocab[t].decode() for t in list(merges.values())[:8]])
+
+    # A production-style byte-level BPE tokenizer.
+    from tokenizers import Tokenizer, models, pre_tokenizers, trainers, decoders
+
+    tok = Tokenizer(models.BPE())
+    tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tok.decoder = decoders.ByteLevel()
+    trainer = trainers.BpeTrainer(vocab_size=400, special_tokens=[&quot;&lt;|endoftext|&gt;&quot;], show_progress=False,
+                               initial_alphabet=pre_tokenizers.ByteLevel.alphabet())   # all 256 bytes, so any text encodes
+    tok.train_from_iterator([corpus], trainer)
+    enc = tok.encode(&quot;the newest lowest widest&quot;)
+    print(&quot;tokens:&quot;, enc.tokens)
+    print(&quot;round trip ok:&quot;, tok.decode(enc.ids) == &quot;the newest lowest widest&quot;)</code></pre>
+<p>Output:</p>
+<pre class="code output"><code class="output">bytes 2150 -&gt; tokens 300   compression 7.17 bytes/token
+first merges: [&#x27;we&#x27;, &#x27;lo&#x27;, &#x27;r &#x27;, &#x27;st&#x27;, &#x27;st &#x27;, &#x27;lowe&#x27;, &#x27;ne&#x27;, &#x27;newe&#x27;]
+tokens: [&#x27;t&#x27;, &#x27;h&#x27;, &#x27;e&#x27;, &#x27;Ġnewest&#x27;, &#x27;Ġlowest&#x27;, &#x27;Ġwidest&#x27;]
+round trip ok: True</code></pre>
+<p><strong>Pre-tokenization</strong> (the <code>ByteLevel</code> step) first splits text on spaces and punctuation, so merges never cross word boundaries. That’s why “newest” and “newest” can be different tokens. Training a real tokenizer is the same code with <code>train_from_iterator</code> over a few GB of your pre-training mix.</p>

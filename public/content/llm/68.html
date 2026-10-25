@@ -1,0 +1,314 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>A shared backbone</strong> feeds both the actor head and the critic head, so its parameters receive <span class="math inline">\(g=g_\pi+c_Vg_V\)</span>. If the two gradients point in different directions, one loss’s progress costs the other’s. The cosine similarity <span class="math inline">\(\cos(g_\pi,g_V)\)</span> measures how aligned they are.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>What sign should the entropy term have in a loss that is minimized?</p></li>
+<li><p>Why is the entropy gradient zero at an exactly uniform categorical distribution?</p></li>
+</ol>
+<p>An actor–critic model often has:</p>
+<p><span class="math display">\[X\in\mathbb{R}^{B\times T\times D_{\text{in}}}\]</span></p>
+<p><span class="math display">\[H=f_{\theta_s}(X)
+\in\mathbb{R}^{B\times T\times D}\]</span></p>
+<p>with two heads:</p>
+<p><span class="math display">\[Z=W_\pi H
+\in\mathbb{R}^{B\times T\times A}\]</span></p>
+<p><span class="math display">\[V=W_VH
+\in\mathbb{R}^{B\times T}\]</span></p>
+<p>The backbone parameters <span class="math inline">\(\theta_s\)</span> receive both actor and critic gradients:</p>
+<p><span class="math display">\[g_\pi=\nabla_{\theta_s}L_\pi,
+\qquad
+g_V=\nabla_{\theta_s}L_V\]</span></p>
+<p>For:</p>
+<p><span class="math display">\[L=L_\pi+c_VL_V\]</span></p>
+<p>the shared gradient is:</p>
+<p><span class="math display">\[g=g_\pi+c_Vg_V\]</span></p>
+<p>Their relationship can be inspected with cosine similarity:</p>
+<p><span class="math display">\[\cos(g_\pi,g_V)
+=
+\frac{g_\pi^\top g_V}
+{\lVert g_\pi\rVert\lVert g_V\rVert}\]</span></p>
+<ul>
+<li><p>Positive cosine: locally compatible updates.</p></li>
+<li><p>Near zero: mostly independent directions.</p></li>
+<li><p>Negative cosine: gradient interference.</p></li>
+<li><p>Large <span class="math inline">\(c_V\lVert g_V\rVert\)</span>: critic may dominate even if its raw loss looks reasonable.</p></li>
+</ul>
+<p>For LLM PPO, the shared network is usually the transformer, with an LM policy head and scalar value head. Per-loss gradient measurement requires retained graphs or extra backward passes, so it is usually an occasional diagnostic rather than an every-step metric.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: when the critic undoes the actor</div>
+<p><strong>Step 1.</strong> One step on the backbone: <span class="math inline">\(\Delta\theta=-\eta(g_\pi+c_Vg_V)\)</span>.</p>
+<p><strong>Step 2.</strong> First-order change in the actor loss: <span class="math inline">\(\Delta L_\pi\approx g_\pi^\top\Delta\theta=-\eta\big(\|g_\pi\|^2+c_V\,g_\pi^\top g_V\big)\)</span>.</p>
+<p><strong>Step 3.</strong> The actor loss <em>increases</em> if <span class="math inline">\(c_Vg_\pi^\top g_V&lt;-\|g_\pi\|^2\)</span>, i.e. <span class="math inline">\(\cos(g_\pi,g_V)&lt;-\frac{\|g_\pi\|}{c_V\|g_V\|}\)</span>.</p>
+<p><strong>Step 4.</strong> So conflict needs both an opposing direction <em>and</em> a critic gradient larger than <span class="math inline">\(\|g_\pi\|/c_V\)</span>. Since <span class="math inline">\(L_V\)</span> is in squared return units, a large reward scale inflates <span class="math inline">\(\|g_V\|\)</span> and makes this easy.</p>
+<p><strong>Step 5.</strong> <strong>Example:</strong> <span class="math inline">\(g_\pi=(1,0)\)</span>, <span class="math inline">\(g_V=(-3,1)\)</span>, <span class="math inline">\(c_V=0.5\)</span>: <span class="math inline">\(g=(-0.5,0.5)\)</span>, and <span class="math inline">\(g^\top g_\pi=-0.5&lt;0\)</span>. With <span class="math inline">\(c_V=0.25\)</span>: <span class="math inline">\(g=(0.25,0.25)\)</span>, <span class="math inline">\(g^\top g_\pi=0.25&gt;0\)</span>.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: measure actor–critic gradient interference</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> shared parameters <span class="math inline">\(\theta_s\)</span>, losses <span class="math inline">\(L_\pi,L_V\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(g_\pi\gets\nabla_{\theta_s}L_\pi\)</span> (retain graph); <span class="math inline">\(g_V\gets\nabla_{\theta_s}L_V\)</span></div>
+<div class="algo-line" style="--d:0">log <span class="math inline">\(\|g_\pi\|\)</span>, <span class="math inline">\(c_V\|g_V\|\)</span>, <span class="math inline">\(\cos(g_\pi,g_V)\)</span>, and <span class="math inline">\(g_\pi^\top(g_\pi+c_Vg_V)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> the last value is negative for many steps <strong>then</strong> lower <span class="math inline">\(c_V\)</span>, normalize returns, or separate the heads’ trunks</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Measure actor–critic gradient alignment on a shared MLP backbone.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(251)
+
+B, T, D_in, D, A = 3, 4, 5, 6, 4
+value_coef = 0.5
+
+observations = torch.randn(B, T, D_in)
+
+actions = torch.tensor([
+    [0, 1, 2, 0],
+    [3, 2, 1, 0],
+    [1, 3, 0, 2],
+])
+
+advantages = torch.tensor([
+    [1.2, -0.4, 0.7, 0.0],
+    [-1.0, 0.5, 1.4, -0.3],
+    [0.2, -0.8, 0.0, 2.0],
+])
+
+returns = torch.tensor([
+    [1.5, 0.2, -0.4, 0.0],
+    [-1.2, 0.8, 1.1, -0.5],
+    [0.3, -0.7, 0.0, 1.8],
+])
+
+valid_mask = torch.tensor([
+    [1, 1, 1, 0],
+    [1, 1, 1, 1],
+    [1, 1, 0, 1],
+], dtype=torch.bool)
+
+
+backbone = nn.Linear(D_in, D, bias=False)
+policy_head = nn.Linear(D, A, bias=False)
+value_head = nn.Linear(D, 1, bias=False)
+
+hidden = ...                                        # TODO 1: [B,T,D]
+logits = ...                                        # TODO 2: [B,T,A]
+values = ...                                        # TODO 3: [B,T]
+
+log_probs = ...                                     # TODO 4
+selected_logp = ...                                 # TODO 5: [B,T]
+
+# Rollout quantities must not carry gradients.
+fixed_advantages = ...                              # TODO 6
+fixed_returns = ...                                 # TODO 7
+
+actor_loss = -(
+    selected_logp * fixed_advantages
+)[valid_mask].mean()
+
+critic_loss = 0.5 * (
+    values - fixed_returns
+).square()[valid_mask].mean()
+
+
+shared_parameters = list(backbone.parameters())
+
+
+def flattened_gradient(loss):
+    gradients = torch.autograd.grad(
+        loss,
+        shared_parameters,
+        retain_graph=True,
+    )
+
+    return torch.cat([
+        gradient.reshape(-1)
+        for gradient in gradients
+    ])
+
+
+actor_gradient = ...                                # TODO 8
+critic_gradient = ...                               # TODO 9
+
+total_loss = ...                                    # TODO 10
+total_gradient = flattened_gradient(total_loss)
+
+expected_total_gradient = ...                       # TODO 11
+
+cosine = ...                                        # TODO 12
+
+print(&quot;actor loss:&quot;, actor_loss.item())
+print(&quot;critic loss:&quot;, critic_loss.item())
+
+print(&quot;actor gradient norm:&quot;, actor_gradient.norm().item())
+print(&quot;critic gradient norm:&quot;, critic_gradient.norm().item())
+print(&quot;gradient cosine:&quot;, cosine.item())
+
+print(
+    &quot;gradient addition correct:&quot;,
+    torch.allclose(
+        total_gradient,
+        expected_total_gradient,
+        atol=1e-7,
+    ),
+)
+
+assert torch.allclose(
+    total_gradient,
+    expected_total_gradient,
+    atol=1e-7,
+)</code></pre>
+<p>Before running, predict what a negative cosine means for a sufficiently small step along the critic gradient: will it locally help or hurt the actor loss?</p>
+<p>Now inspect how the critic coefficient rotates the shared update:</p>
+<pre class="code python"><code class="language-python">print(&quot;\ncoefficient sweep&quot;)
+
+for coefficient in [0.0, 0.1, 0.5, 1.0, 5.0, 20.0]:
+    combined = ...                                   # TODO 13
+
+    actor_alignment = F.cosine_similarity(
+        combined,
+        actor_gradient,
+        dim=0,
+    )
+
+    critic_alignment = F.cosine_similarity(
+        combined,
+        critic_gradient,
+        dim=0,
+    )
+
+    print(
+        f&quot;c_v={coefficient:&gt;4}&quot;,
+        f&quot;norm={combined.norm().item():.4f}&quot;,
+        f&quot;cos(actor)={actor_alignment.item():+.3f}&quot;,
+        f&quot;cos(critic)={critic_alignment.item():+.3f}&quot;,
+    )</code></pre>
+<p>Predict the limiting direction as <code>coefficient</code> becomes very large.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>torch.tanh(backbone(observations))</code>.</p></li>
+<li><p>Remove the last singleton value dimension with <code>.squeeze(-1)</code>.</p></li>
+<li><p>Gather selected log-probabilities with <code>actions.unsqueeze(-1)</code>.</p></li>
+<li><p>Explicitly detach advantages and returns.</p></li>
+<li><p>Flatten and concatenate gradients before computing cosine similarity.</p></li>
+<li><p>The combined gradient is <code>actor + coefficient * critic</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Which parameters receive both actor and critic gradients: the shared backbone, the policy head, or the value head?</p></li>
+<li><p>What does a cosine similarity of <span class="math inline">\(-1\)</span> mean?</p></li>
+<li><p>Prediction: if <span class="math inline">\(g_\pi=-c_Vg_V\)</span>, what shared-backbone update results?</p></li>
+<li><p>Debugging: critic loss falls rapidly while reward stalls and policy KL behaves erratically. What gradient diagnostic would you inspect?</p></li>
+<li><p>Why should actor–critic gradient cosine be measured occasionally rather than by multiple backward passes on every training step?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">hidden = torch.tanh(
+    backbone(observations)
+)
+
+logits = policy_head(hidden)
+
+values = value_head(hidden).squeeze(-1)
+
+log_probs = F.log_softmax(
+    logits,
+    dim=-1,
+)
+
+selected_logp = log_probs.gather(
+    dim=-1,
+    index=actions.unsqueeze(-1),
+).squeeze(-1)
+
+fixed_advantages = advantages.detach()
+fixed_returns = returns.detach()
+
+actor_loss = -(
+    selected_logp * fixed_advantages
+)[valid_mask].mean()
+
+critic_loss = 0.5 * (
+    values - fixed_returns
+).square()[valid_mask].mean()
+
+
+actor_gradient = flattened_gradient(actor_loss)
+critic_gradient = flattened_gradient(critic_loss)
+
+total_loss = actor_loss + value_coef * critic_loss
+total_gradient = flattened_gradient(total_loss)
+
+expected_total_gradient = (
+    actor_gradient
+    + value_coef * critic_gradient
+)
+
+cosine = F.cosine_similarity(
+    actor_gradient,
+    critic_gradient,
+    dim=0,
+)</code></pre>
+<p>Coefficient sweep:</p>
+<pre class="code python"><code class="language-python">for coefficient in [0.0, 0.1, 0.5, 1.0, 5.0, 20.0]:
+    combined = (
+        actor_gradient
+        + coefficient * critic_gradient
+    )
+
+    actor_alignment = F.cosine_similarity(
+        combined,
+        actor_gradient,
+        dim=0,
+    )
+
+    critic_alignment = F.cosine_similarity(
+        combined,
+        critic_gradient,
+        dim=0,
+    )
+
+    print(
+        f&quot;c_v={coefficient:&gt;4}&quot;,
+        f&quot;norm={combined.norm().item():.4f}&quot;,
+        f&quot;cos(actor)={actor_alignment.item():+.3f}&quot;,
+        f&quot;cos(critic)={critic_alignment.item():+.3f}&quot;,
+    )</code></pre>
+<p>For a small gradient-descent step using <span class="math inline">\(g_V\)</span>, the first-order actor-loss change is:</p>
+<p><span class="math display">\[\Delta L_\pi
+\approx
+-\eta g_\pi^\top g_V\]</span></p>
+<p>If their cosine is negative:</p>
+<p><span class="math display">\[g_\pi^\top g_V&lt;0\]</span></p>
+<p>then:</p>
+<p><span class="math display">\[\Delta L_\pi&gt;0\]</span></p>
+<p>so the critic step locally increases the actor loss.</p>
+<p>As <span class="math inline">\(c_V\)</span> grows:</p>
+<p><span class="math display">\[g_\pi+c_Vg_V\]</span></p>
+<p>becomes increasingly aligned with <span class="math inline">\(g_V\)</span>. Its limiting direction is the critic-gradient direction, assuming <span class="math inline">\(g_V\neq0\)</span>.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>The shared backbone. Each task-specific head normally receives only its corresponding loss gradient.</p></li>
+<li><p>The gradients point in exactly opposite directions; improving one objective locally worsens the other along that direction.</p></li>
+<li><p>They cancel, producing a zero shared-backbone gradient even though both individual gradients are nonzero.</p></li>
+<li><p>Compare actor and critic gradient norms and their cosine similarity on the shared backbone. Also inspect whether <code>value_coef</code> makes the weighted critic norm dominate.</p></li>
+<li><p>Separate gradient extraction retains or recomputes the graph, increasing memory and computation. Sampled diagnostic batches are usually sufficient.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>A minimized PPO objective uses: <span class="math display">\[-c_HH\]</span> to encourage entropy.</p></li>
+<li><p>Uniform probabilities maximize entropy, so the entropy gradient is zero at that point.</p></li>
+</ul>

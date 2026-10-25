@@ -1,0 +1,268 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: recognizing faces</div>
+<p>You don’t memorize a separate entry for every face in every lighting condition; you learn features (eyes, shape, smile) that generalize. A Q-table is pure memorization. A neural Q-function learns features, so learning about one state changes its guesses about similar states. That’s great until learning something new overwrites something old, like how learning Spanish can make your French a bit wobbly.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/119d2f032ec0.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Write the Q-learning target for a nonterminal transition.</p></li>
+<li><p>Which policy generates Q-learning experience, and which policy defines its target?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="why-tables-stop-working">2. Why tables stop working</h3>
+<p>Tabular Q-learning stores one number for every state-action pair:</p>
+<p><span class="math display">\[Q\in\mathbb{R}^{|\mathcal S|\times|\mathcal A|}\]</span></p>
+<p>This works for three positions, but not for images, continuous measurements, or every possible LLM prefix.</p>
+<p>Instead, use a neural network:</p>
+<p><span class="math display">\[Q_\theta(s)\rightarrow
+\begin{bmatrix}
+Q_\theta(s,a_0) &amp; \cdots &amp; Q_\theta(s,a_{A-1})
+\end{bmatrix}\]</span></p>
+<p>For a batch:</p>
+<ul>
+<li><p>states: <span style="background-color: codeinlinebg"><code> [B, state_features]</code></span></p></li>
+<li><p>network output: <span style="background-color: codeinlinebg"><code> [B, actions]</code></span></p></li>
+<li><p>selected actions: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>selected Q-values: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<p>The network shares parameters across states. Learning about one state can therefore affect similar states. This is <strong>generalization</strong>, but unwanted changes to other predictions are <strong>interference</strong>.</p>
+<h3 class="unnumbered" id="q-learning-as-regression">Q-learning as regression</h3>
+<p>For one transition, construct a fixed target:</p>
+<p><span class="math display">\[Y_t=
+R_{t+1}
++
+\gamma(1-D_t)\max_{a&#39;}Q_\theta(S_{t+1},a&#39;)\]</span></p>
+<p>Then minimize:</p>
+<p><span class="math display">\[L(\theta)
+=
+\frac12
+\left(Q_\theta(S_t,A_t)-Y_t\right)^2\]</span></p>
+<p>This connects directly to slope and SGD. Let <span class="math inline">\(q=Q_\theta(S_t,A_t)\)</span>:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial q}=q-Y_t\]</span></p>
+<ul>
+<li><p>If <span class="math inline">\(q&lt;Y_t\)</span>, the derivative is negative; gradient descent raises <span class="math inline">\(q\)</span>.</p></li>
+<li><p>If <span class="math inline">\(q&gt;Y_t\)</span>, the derivative is positive; gradient descent lowers <span class="math inline">\(q\)</span>.</p></li>
+</ul>
+<p>The target must be detached. Otherwise, optimization can move both the prediction and the value supplying its target.</p>
+<p>This version uses correlated online transitions and a moving target, so it is deliberately fragile. Replay buffers and target networks will stabilize it in upcoming sessions.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>An LLM critic cannot store a table containing every prefix. It learns:</p>
+<p><span class="math display">\[V_\phi(x,y_{&lt;t})\]</span></p>
+<p>from a prefix representation. Parameter sharing lets related prefixes share evidence, but a critic update for one response can also disturb predictions for unrelated responses.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: semi-gradient Q-learning and the deadly triad</div>
+<p>Loss with a stop-gradient target: <span class="math inline">\(\mathcal L(\theta)=\tfrac12\big(y-Q_\theta(s,a)\big)^2\)</span>, where <span class="math inline">\(y=\text{sg}\big[r+\gamma\max_{a&#39;}Q_\theta(s&#39;,a&#39;)\big]\)</span>. Then <span class="math display">\[\theta\leftarrow\theta+\alpha\,\big(y-Q_\theta(s,a)\big)\,\nabla_\theta Q_\theta(s,a).\]</span> <strong>Why updates leak:</strong> after one step, the change at another state <span class="math inline">\(\tilde s\)</span> is about <span class="math inline">\(\Delta Q(\tilde s,\tilde a)\approx\alpha\,\delta\,\nabla_\theta Q(\tilde s,\tilde a)^\top\nabla_\theta Q(s,a)\)</span>. Similar gradients mean shared learning. That’s generalization, and also interference.</p>
+<p><strong>The deadly triad:</strong> function approximation + bootstrapping + off-policy data can diverge, even for linear models (Baird’s counterexample). DQN’s replay buffer and target network (next two topics) are practical patches for exactly this.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Q-learning becomes regression on a moving, self-generated label.</p></li>
+<li><p>Generalization and interference are the same mechanism.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: one update, two states change</div>
+<p>Linear <span class="math inline">\(Q=w^\top\phi\)</span>, with <span class="math inline">\(w=(0.5,0.5)\)</span>. State 1: <span class="math inline">\(\phi_1=(1,1)\)</span>, so <span class="math inline">\(Q_1=1.0\)</span>. State 2: <span class="math inline">\(\phi_2=(1,0)\)</span>, so <span class="math inline">\(Q_2=0.5\)</span>. Target for state 1: <span class="math inline">\(y=2\)</span>, with <span class="math inline">\(\alpha=0.1\)</span>. Then <span class="math inline">\(w\gets w+0.1(2-1)\phi_1=(0.6,0.6)\)</span>. New values: <span class="math inline">\(Q_1=1.2\)</span>, and <span class="math inline">\(Q_2=0.6\)</span> changed too, although it was never trained. That is generalization (or interference).</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Not detaching the target <span class="math inline">\(y\)</span>.</p></li>
+<li><p>Gathering the wrong action’s <span class="math inline">\(Q\)</span> (forgetting <code>.gather(1, a)</code>).</p></li>
+<li><p>Missing <span class="math inline">\((1-d)\)</span> at terminal transitions.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Online semi-gradient Q-learning with a neural network</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> network <span class="math inline">\(Q_\theta\)</span>, learning rate <span class="math inline">\(\eta\)</span>, discount <span class="math inline">\(\gamma\)</span>, exploration <span class="math inline">\(\epsilon\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each environment step <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(a\gets\epsilon\text{-greedy}(Q_\theta,s)\)</span>; take <span class="math inline">\(a\)</span>; observe <span class="math inline">\(r,s&#39;,d\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(y\gets r+\gamma(1-d)\max_{a&#39;}Q_\theta(s&#39;,a&#39;)\)</span> <em>▷ no gradient through <span class="math inline">\(y\)</span></em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\theta\gets\theta-\eta\,\nabla_\theta\tfrac12\big(y-Q_\theta(s,a)\big)^2\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(s\gets s&#39;\)</span> (reset if <span class="math inline">\(d=1\)</span>)</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-a-tiny-neural-q-function">3. PyTorch exercise — a tiny neural Q-function</h3>
+<p>The line world now has states <span style="background-color: codeinlinebg"><code> 0, 1, 2, 3</code></span>, where <span style="background-color: codeinlinebg"><code> 3</code></span> is terminal. The state is represented by one normalized scalar.</p>
+<p>Complete the TODOs:</p>
+<pre class="code python"><code class="language-python">import torch
+from torch import nn
+
+torch.manual_seed(7)
+
+num_states = 4
+num_actions = 2
+gamma = 0.95
+epsilon = 0.2
+
+q_net = nn.Sequential(
+    nn.Linear(1, 16),
+    nn.Tanh(),
+    nn.Linear(16, num_actions),
+)
+
+optimizer = torch.optim.Adam(q_net.parameters(), lr=1e-2)
+
+
+def encode(state):
+    # Scalar state -&gt; tensor [batch=1, features=1]
+    return torch.tensor(
+        [[state / (num_states - 1)]],
+        dtype=torch.float32,
+    )
+
+
+def choose_action(state):
+    if torch.rand(()) &lt; epsilon:
+        return torch.randint(num_actions, ()).item()
+
+    with torch.no_grad():
+        # TODO 1: Produce [1, actions], then select greedily.
+        q_values = ...
+        return ...
+
+
+loss_history = []
+
+for episode in range(600):
+    state = 0
+
+    for step in range(20):
+        action = choose_action(state)
+
+        next_state = (
+            max(0, state - 1)
+            if action == 0
+            else min(num_states - 1, state + 1)
+        )
+
+        done = next_state == num_states - 1
+        reward = 1.0 if done else -0.01
+
+        all_q_values = q_net(encode(state))  # [1, actions]
+
+        action_tensor = torch.tensor([[action]])  # [1, 1]
+
+        # TODO 2:
+        # Select Q(state, action), preserving shape [1, 1].
+        prediction = ...
+
+        with torch.no_grad():
+            if done:
+                target = torch.tensor([[reward]])
+            else:
+                # TODO 3: Maximum next-action value, shape [1, 1].
+                best_next_q = ...
+
+                # TODO 4: Fixed Q-learning target.
+                target = ...
+
+        # TODO 5: Regression loss
+        loss = ...
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        loss_history.append(loss.item())
+
+        if done:
+            break
+
+        state = next_state
+
+
+with torch.no_grad():
+    encoded_states = torch.tensor([
+        [0.0],
+        [1.0 / 3.0],
+        [2.0 / 3.0],
+        [1.0],
+    ])  # [states=4, features=1]
+
+    learned_q = q_net(encoded_states)  # [states=4, actions=2]
+
+print(&quot;Learned Q:\n&quot;, learned_q)
+print(&quot;Greedy actions:&quot;, learned_q.argmax(dim=1))
+print(&quot;Final mean loss:&quot;, sum(loss_history[-100:]) / 100)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action should become greedy in states <span style="background-color: codeinlinebg"><code> 0</code></span>, <span style="background-color: codeinlinebg"><code> 1</code></span>, and <span style="background-color: codeinlinebg"><code> 2</code></span>?</p></li>
+<li><p>What is the output shape of <span style="background-color: codeinlinebg"><code> q_net(encode(state))</code></span>?</p></li>
+<li><p>Should the terminal row necessarily contain zeros?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Greedy action: <span style="background-color: codeinlinebg"><code> q_values.argmax(dim=1).item()</code></span></p></li>
+<li><p>Select actions with <span style="background-color: codeinlinebg"><code> gather(dim=1, index=action_tensor)</code></span></p></li>
+<li><p>Maximum across actions: <span style="background-color: codeinlinebg"><code> .max(dim=1, keepdim=True).values</code></span></p></li>
+<li><p>Target: reward plus discounted best next value</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> nn.functional.smooth_l1_loss</code></span> or mean squared error</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> torch.no_grad()</code></span> makes the bootstrapped target fixed</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Change:</p>
+<pre class="code python"><code class="language-python">q_net(encoded_states)</code></pre>
+<p>to:</p>
+<pre class="code python"><code class="language-python">q_net(encoded_states.squeeze())</code></pre>
+<p>The input becomes shape <span style="background-color: codeinlinebg"><code> [4]</code></span>, so PyTorch interprets it as one example with four features. The layer expects one feature per example. This is a shape bug, not an RL bug.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What does function approximation provide that a Q-table cannot?</p></li>
+<li><p>Why do we use <span style="background-color: codeinlinebg"><code> gather</code></span> instead of averaging all action outputs?</p></li>
+<li><p>Why should the target-side next-state prediction be detached?</p></li>
+<li><p>Why might the loss fluctuate even after the greedy policy is correct?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">def choose_action(state):
+    if torch.rand(()) &lt; epsilon:
+        return torch.randint(num_actions, ()).item()
+
+    with torch.no_grad():
+        q_values = q_net(encode(state))
+        return q_values.argmax(dim=1).item()</code></pre>
+<p>Training TODOs:</p>
+<pre class="code python"><code class="language-python">prediction = all_q_values.gather(
+    dim=1,
+    index=action_tensor,
+)
+
+with torch.no_grad():
+    if done:
+        target = torch.tensor([[reward]])
+    else:
+        best_next_q = (
+            q_net(encode(next_state))
+            .max(dim=1, keepdim=True)
+            .values
+        )
+        target = reward + gamma * best_next_q
+
+loss = nn.functional.smooth_l1_loss(
+    prediction,
+    target,
+)</code></pre>
+<p>The nonterminal greedy actions should normally be:</p>
+<pre class="code text"><code class="language-plaintext">state 0: right
+state 1: right
+state 2: right</code></pre>
+<p>The approximate optimal right-action values are:</p>
+<p><span class="math display">\[Q^*(2,\text{right})=1\]</span></p>
+<p><span class="math display">\[Q^*(1,\text{right})=-0.01+0.95(1)=0.94\]</span></p>
+<p><span class="math display">\[Q^*(0,\text{right})=-0.01+0.95(0.94)=0.883\]</span></p>
+<p>The learned values need not match these exactly. Online samples are correlated, exploration continues, and the same network supplies both predictions and moving targets.</p>
+<p>The terminal row is not necessarily zero because the network generalizes to it even though no terminal action is trained. Its values are irrelevant as long as terminal transitions correctly disable bootstrapping.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It shares information across large or continuous state spaces instead of storing every state-action pair separately.</p></li>
+<li><p>Only the action actually taken should be trained toward this transition’s target.</p></li>
+<li><p>The target should supervise the current prediction, not move through the same gradient update.</p></li>
+<li><p>Exploration keeps producing different transitions, and each shared-parameter update can change several state predictions.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(R_{t+1}+\gamma(1-D_t)\max_{a&#39;}Q(S_{t+1},a&#39;)\)</span>.</p></li>
+<li><p>An exploratory behaviour policy generates experience; a greedy target policy defines the update.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> A Q-table remembers each situation separately. A neural Q-function shares what it learns—but sharing creates both useful generalization and potentially unstable interference.</p>

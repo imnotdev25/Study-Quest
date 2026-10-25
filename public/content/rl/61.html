@@ -1,0 +1,303 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: paying an employee per email sent</div>
+<p>Pay staff per email sent and you’ll get a lot of emails, not more work done. A per-tool-call bonus does the same to an agent: it learns to call tools, not to solve tasks. Shaping rewards silently redefine the task unless they’re designed so they can’t change which behaviour is best.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/435b2a75b877.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A <span class="math inline">\(+0.1\)</span> per-call bonus makes the failing, spammy trajectory rank first.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why must return recursion stop between unrelated tool trajectories?</p></li>
+<li><p>What does increasing <span class="math inline">\(\gamma\)</span> do to credit for early tool calls?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="extra-rewards-can-silently-redefine-the-task">2. Extra rewards can silently redefine the task</h3>
+<p>Suppose the real objective rewards successful completion:</p>
+<p><span class="math display">\[r_t^{\text{task}}\]</span></p>
+<p>To encourage tool use, we might add a bonus:</p>
+<p><span class="math display">\[r_t&#39;
+=
+r_t^{\text{task}}
++
+c\cdot
+\mathbf 1[\text{tool called}]\]</span></p>
+<p>This does not merely accelerate learning. It changes the objective. An agent may learn to call unnecessary tools because each call earns reward.</p>
+<p>A safer construction is potential-based shaping:</p>
+<p><span class="math display">\[r_t&#39;
+=
+r_t
++
+\gamma\Phi(s_{t+1})
+-
+\Phi(s_t)\]</span></p>
+<p>Here, <span class="math inline">\(\Phi(s)\)</span> estimates progress rather than rewarding a particular action. Across a trajectory, shaping terms telescope:</p>
+<p><span class="math display">\[G_0&#39;
+=
+G_0
+-\Phi(s_0)
++\gamma^T\Phi(s_T)\]</span></p>
+<p>If all compared trajectories share the same initial potential and terminal potential is handled consistently, their ordering is preserved.</p>
+<p>Think of potential shaping as giving temporary progress credit that must be paid back unless it leads somewhere. A raw tool-call bonus is like paying a taxi by the number of turns rather than whether it reaches the destination.</p>
+<p>Limits:</p>
+<ul>
+<li><p>the potential must depend on state, not the action you want to force;</p></li>
+<li><p>use the same discount factor as the RL objective;</p></li>
+<li><p>terminal potentials require careful handling;</p></li>
+<li><p>an incorrect or non-Markov progress signal can still cause exploitation;</p></li>
+<li><p>always evaluate raw task reward separately from shaped reward.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>transition rewards and shaping terms: <span style="background-color: codeinlinebg"><code> [T]</code></span></p></li>
+<li><p>state potentials: <span style="background-color: codeinlinebg"><code> [T+1]</code></span></p></li>
+<li><p>discounted trajectory return: scalar</p></li>
+</ul>
+<p>DPO can also learn unnecessary tool use if preferred traces systematically contain more calls. Because it optimizes fixed preferences, this is a data-labeling bias rather than online reward shaping.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: potential-based shaping keeps the goal</div>
+<p>Add <span class="math inline">\(F(s,s&#39;)=\gamma\Phi(s&#39;)-\Phi(s)\)</span> for any function <span class="math inline">\(\Phi\)</span> of the state. Along a trajectory it telescopes: <span class="math inline">\(\sum_t\gamma^tF(s_t,s_{t+1})=\gamma^T\Phi(s_T)-\Phi(s_0)\)</span>, which doesn’t depend on the path taken. So shaped and unshaped returns differ only by terms that can’t change which policy is optimal (Ng et al., 1999). A per-call bonus is <em>not</em> of this form. It rewards the path, so it changes the optimum.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Reward outcomes, not activity that looks like progress.</p></li>
+<li><p>If you shape, use potentials and check that trajectory rankings are unchanged.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: rank check</div>
+<p>Solved with 1 call: raw 1, shaped <span class="math inline">\(1+0.1=1.1\)</span>. Failed with 12 calls: raw 0, shaped <span class="math inline">\(1.2\)</span>. The ranking flipped, so the shaping is broken. A potential <span class="math inline">\(\Phi=\)</span>“fraction of required facts retrieved” adds the same amount to any path that ends in the same state, so the ranking holds.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Logging only shaped reward (the raw task reward disappears from view).</p></li>
+<li><p>Shaping on actions rather than states.</p></li>
+<li><p>Forgetting the terminal <span class="math inline">\(\Phi(s_T)\)</span> term with <span class="math inline">\(\gamma&lt;1\)</span>.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-expose-the-tool-call-bonus-failure">3. PyTorch exercise — expose the tool-call bonus failure</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.9
+
+def discounted_return(rewards):
+    # TODO 1: Discount powers [T] and scalar return.
+    powers = ...
+    return ...
+
+def potential_shape(rewards, potentials):
+    assert potentials.shape[0] == (
+        rewards.shape[0] + 1
+    )
+
+    # TODO 2: Potential-based shaping term.
+    shaping = ...
+
+    # TODO 3: Add shaping to task rewards.
+    shaped_rewards = ...
+
+    return shaped_rewards, shaping
+
+# Direct answer: one transition and success.
+direct_rewards = torch.tensor([
+    1.0,
+])
+
+direct_potentials = torch.tensor([
+    0.0,  # start
+    0.0,  # terminal
+])
+
+# Detour: two unnecessary tool actions,
+# followed by the same success.
+detour_rewards = torch.tensor([
+    0.0,
+    0.0,
+    1.0,
+])
+
+detour_potentials = torch.tensor([
+    0.0,  # start
+    0.5,  # apparent progress
+    0.5,  # no additional progress
+    0.0,  # terminal
+])
+
+# Naively reward each tool call.
+tool_bonus = torch.tensor([
+    0.2,
+    0.2,
+    0.0,
+])
+
+# TODO 4: Original and naive-bonus returns.
+original_returns = ...
+naive_returns = ...
+
+# TODO 5: Potential-shaped rewards and returns.
+direct_shaped, direct_shaping = ...
+detour_shaped, detour_shaping = ...
+
+potential_returns = ...
+
+print(&quot;Original returns:&quot;,
+      original_returns)
+
+print(&quot;Naive tool-bonus returns:&quot;,
+      naive_returns)
+
+print(&quot;Direct shaping terms:&quot;,
+      direct_shaping)
+
+print(&quot;Detour shaping terms:&quot;,
+      detour_shaping)
+
+print(&quot;Detour shaped rewards:&quot;,
+      detour_shaped)
+
+print(&quot;Potential-shaped returns:&quot;,
+      potential_returns)
+
+print(
+    &quot;Original preferred trajectory:&quot;,
+    original_returns.argmax().item(),
+)
+
+print(
+    &quot;Naive-bonus preferred trajectory:&quot;,
+    naive_returns.argmax().item(),
+)
+
+print(
+    &quot;Potential-shaped preferred trajectory:&quot;,
+    potential_returns.argmax().item(),
+)</code></pre>
+<p>Trajectory indices are:</p>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> 0</code></span>: direct answer;</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> 1</code></span>: unnecessary tool detour.</p></li>
+</ul>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which trajectory does raw task reward prefer?</p></li>
+<li><p>Can the <span style="background-color: codeinlinebg"><code> 0.2</code></span> tool bonus reverse that preference?</p></li>
+<li><p>Does potential shaping give the first detour action an immediate positive reward?</p></li>
+<li><p>Why does that temporary reward not make the detour optimal?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Discount powers are <span style="background-color: codeinlinebg"><code> gamma ** torch.arange(T)</code></span>.</p></li>
+<li><p>Shaping is <span style="background-color: codeinlinebg"><code> gamma * next_potential - current_potential</code></span>.</p></li>
+<li><p>Stack direct and detour scalar returns.</p></li>
+<li><p>The direct trajectory receives no tool bonus.</p></li>
+<li><p>Compute potential-shaped returns using the same return function.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Set every tool transition’s bonus to <span style="background-color: codeinlinebg"><code> 1.0</code></span>. The agent is now strongly rewarded for making trajectories longer.</p>
+<p>Use a different discount factor inside the shaping term. The terms no longer telescope with the actual return calculation, so trajectory ordering may change.</p>
+<p>Set the terminal potential to a large positive value. Unless terminal-state handling is consistent, trajectories of different lengths receive different residual bonuses:</p>
+<p><span class="math display">\[\gamma^T\Phi(s_T)\]</span></p>
+<p>Finally, log only shaped reward. Training may appear successful while actual task success, latency and tool cost deteriorate.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is a per-tool reward not “just a learning aid”?</p></li>
+<li><p>What makes potential-based shaping telescope?</p></li>
+<li><p>When can potential shaping still change the effective objective?</p></li>
+<li><p>What should be logged for a production tool agent?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Discounted return:</p>
+<pre class="code python"><code class="language-python">def discounted_return(rewards):
+    powers = gamma ** torch.arange(
+        rewards.shape[0],
+        dtype=rewards.dtype,
+    )
+
+    return (
+        powers * rewards
+    ).sum()</code></pre>
+<p>Potential shaping:</p>
+<pre class="code python"><code class="language-python">shaping = (
+    gamma * potentials[1:]
+    - potentials[:-1]
+)</code></pre>
+<p>Shaped rewards:</p>
+<pre class="code python"><code class="language-python">shaped_rewards = (
+    rewards + shaping
+)</code></pre>
+<p>Original and naive returns:</p>
+<pre class="code python"><code class="language-python">original_returns = torch.stack([
+    discounted_return(
+        direct_rewards
+    ),
+    discounted_return(
+        detour_rewards
+    ),
+])
+
+naive_returns = torch.stack([
+    discounted_return(
+        direct_rewards
+    ),
+    discounted_return(
+        detour_rewards + tool_bonus
+    ),
+])</code></pre>
+<p>Potential-shaped returns:</p>
+<pre class="code python"><code class="language-python">direct_shaped, direct_shaping = (
+    potential_shape(
+        direct_rewards,
+        direct_potentials,
+    )
+)
+
+detour_shaped, detour_shaping = (
+    potential_shape(
+        detour_rewards,
+        detour_potentials,
+    )
+)
+
+potential_returns = torch.stack([
+    discounted_return(
+        direct_shaped
+    ),
+    discounted_return(
+        detour_shaped
+    ),
+])</code></pre>
+<p>The original returns are:</p>
+<p><span class="math display">\[G_{\text{direct}}=1\]</span></p>
+<p><span class="math display">\[G_{\text{detour}}
+=
+0+\gamma(0)+\gamma^2(1)
+=
+0.81\]</span></p>
+<p>With naïve tool bonuses:</p>
+<p><span class="math display">\[G_{\text{detour}}^{\text{bonus}}
+=
+0.2+0.9(0.2)+0.9^2(1)
+=
+1.19\]</span></p>
+<p>The bonus therefore reverses the preferred behavior.</p>
+<p>For the detour, potential shaping terms are:</p>
+<p><span class="math display">\[[0.45,\;-0.05,\;-0.5]\]</span></p>
+<p>The shaped return remains:</p>
+<p><span class="math display">\[0.45+0.9(-0.05)+0.9^2(0.5)
+=
+0.81\]</span></p>
+<p>The initial progress credit is later cancelled because it did not create a better terminal outcome.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It changes which trajectories maximize return, potentially making redundant calls optimal.</p></li>
+<li><p>Every intermediate potential appears once positively and once negatively with matching discount factors.</p></li>
+<li><p>Incorrect discounting, inconsistent terminal potentials, non-Markov potentials or action-specific “progress” signals can change behavior ordering.</p></li>
+<li><p>Log raw success reward, shaped reward, tool-call count, latency, monetary cost, failure rate, return by trajectory length and independent task quality.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Otherwise, rewards from another prompt can propagate backward and assign fictitious credit to earlier actions.</p></li>
+<li><p>A larger <span class="math inline">\(\gamma\)</span> discounts delayed rewards less, giving earlier actions stronger credit but often increasing variance.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> reward the outcome, not activity that merely resembles progress. If shaping is needed, keep raw task reward visible and test whether trajectory rankings remain unchanged.</p>

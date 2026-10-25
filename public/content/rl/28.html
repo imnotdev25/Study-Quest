@@ -1,0 +1,318 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a rubber band to your old self</div>
+<p>Picture a rubber band tying you to who you were. You can stretch toward new goals, but the further you go, the harder it pulls back. KL regularization ties the policy to the reference model this way: it can chase reward, but each step away from trusted behaviour costs something. It doesn’t say what’s good. It limits how far you’ll go to get it.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why does reward-only RLHF tend to collapse onto the reward-model favourite?</p></li>
+<li><p>How is reward-model-based RLHF different from DPO?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="keep-the-policy-near-a-trusted-starting-point">2. Keep the policy near a trusted starting point</h3>
+<p>Let <span class="math inline">\(\pi_{\text{ref}}\)</span> be the frozen SFT model and <span class="math inline">\(\pi_\theta\)</span> the trainable policy.</p>
+<p>Reward-only optimization asks:</p>
+<p><span class="math display">\[\max_\theta
+\mathbb E_{y\sim\pi_\theta}
+[r_\phi(x,y)]\]</span></p>
+<p>KL-regularized RLHF instead asks:</p>
+<p><span class="math display">\[\max_\theta
+\mathbb E_{y\sim\pi_\theta}
+[r_\phi(x,y)]
+-
+\beta
+D_{\mathrm{KL}}
+\left(
+\pi_\theta(\cdot\mid x)
+\|
+\pi_{\text{ref}}(\cdot\mid x)
+\right)\]</span></p>
+<p>The KL term measures how much the trainable policy has moved away from the reference:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(\pi_\theta\|\pi_{\text{ref}})
+=
+\mathbb E_{y\sim\pi_\theta}
+\left[
+\log\pi_\theta(y\mid x)
+-
+\log\pi_{\text{ref}}(y\mid x)
+\right]\]</span></p>
+<p>Think of the reference policy as an elastic tether. Reward pulls toward higher-scoring responses; KL pulls toward behaviour already learned during SFT.</p>
+<h3 class="unnumbered" id="the-role-of-beta">The role of <span class="math inline">\(\beta\)</span></h3>
+<ul>
+<li><p>Small <span class="math inline">\(\beta\)</span>: reward dominates; larger policy movement.</p></li>
+<li><p>Large <span class="math inline">\(\beta\)</span>: reference behaviour dominates.</p></li>
+<li><p><span class="math inline">\(\beta=0\)</span>: reward-only optimization.</p></li>
+<li><p>Reward rescaling without adjusting <span class="math inline">\(\beta\)</span> changes the trade-off.</p></li>
+</ul>
+<p>For a fixed reward over a finite response space, the optimal policy is:</p>
+<p><span class="math display">\[\pi^*(y\mid x)
+\propto
+\pi_{\text{ref}}(y\mid x)
+\exp\left(\frac{r(x,y)}{\beta}\right)\]</span></p>
+<p>A high reward increases probability, but the reference probability still matters.</p>
+<h3 class="unnumbered" id="token-level-implementation">Token-level implementation</h3>
+<p>For a generated response:</p>
+<p><span class="math display">\[\log\frac{\pi_\theta(y\mid x)}
+{\pi_{\text{ref}}(y\mid x)}
+=
+\sum_t M_t
+\left[
+\log\pi_\theta(y_t\mid s_t)
+-
+\log\pi_{\text{ref}}(y_t\mid s_t)
+\right]\]</span></p>
+<p>A sampled token-level KL penalty is often incorporated into reward:</p>
+<p><span class="math display">\[r_t^{\text{shaped}}
+=
+r_t
+-
+\beta
+\left(
+\log\pi_\theta(y_t\mid s_t)
+-
+\log\pi_{\text{ref}}(y_t\mid s_t)
+\right)\]</span></p>
+<p>Individual sampled log-ratios can be negative. Only their expectation under <span class="math inline">\(\pi_\theta\)</span> equals the nonnegative forward KL.</p>
+<p>Prompt and padding positions must be masked. Summing KL over tokens also means longer responses can accumulate larger penalties, so reduction conventions matter.</p>
+<h3 class="unnumbered" id="two-different-anchors">Two different anchors</h3>
+<p>Do not confuse:</p>
+<ul>
+<li><p><strong>Reference KL:</strong> current policy versus fixed SFT model; preserves behaviour.</p></li>
+<li><p><strong>PPO old-policy KL:</strong> current policy versus rollout policy; controls update stability.</p></li>
+</ul>
+<p>They may both be monitored in one training run.</p>
+<h3 class="unnumbered" id="dpo-connection">DPO connection</h3>
+<p>DPO places policy-versus-reference log-ratios directly inside a pairwise preference loss. It can be derived from a KL-regularized preference objective, but it trains on fixed preference pairs rather than reward-scored online rollouts.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the closed-form optimal policy</div>
+<p>For each prompt, <span class="math inline">\(\max_\pi\ \mathbb E_{y\sim\pi}[r(y)]-\beta\,\mathrm{KL}(\pi\|\pi_{\text{ref}})\)</span> has the solution <span class="math display">\[\pi^*(y)=\frac{1}{Z}\,\pi_{\text{ref}}(y)\,e^{r(y)/\beta},\qquad Z=\sum_y\pi_{\text{ref}}(y)e^{r(y)/\beta}.\]</span> <strong>Proof in one line:</strong> <span class="math inline">\(\mathbb E_\pi[r]-\beta\mathrm{KL}(\pi\|\pi_{\text{ref}})=-\beta\,\mathrm{KL}(\pi\|\pi^*)+\beta\log Z\)</span>, which is maximized exactly when <span class="math inline">\(\pi=\pi^*\)</span>.</p>
+<p><strong>Example:</strong> three responses with <span class="math inline">\(\pi_{\text{ref}}=(0.6,0.3,0.1)\)</span> and rewards <span class="math inline">\(r=(0,1,2)\)</span>:</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/238789b46df4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Small <span class="math inline">\(\beta\)</span>: the rare high-reward response takes over. Large <span class="math inline">\(\beta\)</span>: back to the reference. Rearranging gives <span class="math inline">\(r=\beta\log\frac{\pi^*}{\pi_{\text{ref}}}+\beta\log Z\)</span>, which is the seed of DPO.</em></p>
+</div>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>The optimal KL-regularized policy is the reference, tilted by <span class="math inline">\(e^{r/\beta}\)</span>.</p></li>
+<li><p><span class="math inline">\(\beta\)</span> controls how much trusted behaviour you’ll trade for reward.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: <span class="math inline">\(\beta=1\)</span></div>
+<p><span class="math inline">\(\pi_{\text{ref}}=(0.6,0.3,0.1)\)</span>, <span class="math inline">\(r=(0,1,2)\)</span>. Weights <span class="math inline">\(0.6e^0,\ 0.3e^1,\ 0.1e^2=(0.600,0.815,0.739)\)</span>, <span class="math inline">\(Z=2.154\)</span>, so <span class="math inline">\(\pi^*=(0.279,0.379,0.343)\)</span>. The rare response <span class="math inline">\(C\)</span> grew from 10% to 34%. Reward pulled it up, and KL kept it from taking over.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Exponentiating before adding logs (overflow for large <span class="math inline">\(r/\beta\)</span>).</p></li>
+<li><p>Treating <span class="math inline">\(\beta\)</span> as “reward strength” (it’s the inverse: smaller <span class="math inline">\(\beta\)</span> means more reward-chasing).</p></li>
+<li><p>Comparing <span class="math inline">\(\beta\)</span> across reward models with different scales.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Exact KL-regularized policy over a candidate set</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> candidates <span class="math inline">\(y_1,\dots,y_n\)</span>, reference probabilities <span class="math inline">\(\pi_{\text{ref}}(y_i)\)</span>, rewards <span class="math inline">\(r(y_i)\)</span>, <span class="math inline">\(\beta&gt;0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i=1,\dots,n\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\ell_i\gets\log\pi_{\text{ref}}(y_i)+r(y_i)/\beta\)</span> <em>▷ work in log space</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\pi^*\gets\operatorname{softmax}(\ell_1,\dots,\ell_n)\)</span> <em>▷ <span class="math inline">\(=\pi_{\text{ref}}e^{r/\beta}/Z\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\pi^*\)</span></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-solve-a-kl-regularized-policy-exactly">3. PyTorch exercise — solve a KL-regularized policy exactly</h3>
+<p>The reference policy prefers response <span style="background-color: codeinlinebg"><code> 0</code></span>, while the reward model prefers response <span style="background-color: codeinlinebg"><code> 2</code></span>.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+
+reward_scores = torch.tensor([
+    0.0, 1.0, 2.0
+])
+
+reference_logits = torch.tensor([
+    1.0, 0.0, -1.0
+])
+
+beta = 0.5
+
+# Frozen reference quantities.
+reference_log_probs = F.log_softmax(
+    reference_logits,
+    dim=-1,
+).detach()
+
+reference_probs = reference_log_probs.exp()
+
+# Begin exactly at the reference policy.
+policy_logits = torch.nn.Parameter(
+    reference_logits.clone()
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.05,
+)
+
+for step in range(400):
+    # TODO 1: Stable current log-probabilities and probabilities.
+    policy_log_probs = ...
+    policy_probs = ...
+
+    # TODO 2: Exact expected reward.
+    expected_reward = ...
+
+    # TODO 3: Forward KL: current policy || reference policy.
+    kl_to_reference = ...
+
+    # TODO 4: KL-regularized objective and minimization loss.
+    objective = ...
+    loss = ...
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    if step in [0, 1, 9, 99, 399]:
+        print(
+            f&quot;step={step:3d}&quot;,
+            f&quot;reward={expected_reward.item():.4f}&quot;,
+            f&quot;KL={kl_to_reference.item():.4f}&quot;,
+            f&quot;objective={objective.item():.4f}&quot;,
+            f&quot;probs={policy_probs.detach().tolist()}&quot;,
+        )
+
+with torch.no_grad():
+    learned_probs = policy_logits.softmax(dim=-1)
+
+    # TODO 5: Closed-form KL-regularized optimum.
+    optimal_logits = ...
+    theoretical_probs = ...
+
+    # Sampled log-ratio diagnostic.
+    final_policy = torch.distributions.Categorical(
+        probs=learned_probs
+    )
+
+    samples = final_policy.sample((10_000,))
+
+    sampled_log_ratios = (
+        final_policy.log_prob(samples)
+        - reference_log_probs[samples]
+    )
+
+print(&quot;Reference probabilities:&quot;, reference_probs)
+print(&quot;Learned probabilities:&quot;, learned_probs)
+print(&quot;Theoretical probabilities:&quot;, theoretical_probs)
+print(&quot;Mean sampled log-ratio:&quot;, sampled_log_ratios.mean())
+print(&quot;Minimum sampled log-ratio:&quot;, sampled_log_ratios.min())
+print(
+    &quot;Maximum probability error:&quot;,
+    (learned_probs - theoretical_probs).abs().max(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the KL divergence at initialization?</p></li>
+<li><p>Which response should have the largest final probability?</p></li>
+<li><p>Should its probability approach exactly one?</p></li>
+<li><p>Can the minimum sampled log-ratio be negative?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> F.log_softmax</code></span>.</p></li>
+<li><p>Expected reward is the probability-weighted reward sum.</p></li>
+<li><p>Forward KL uses <span style="background-color: codeinlinebg"><code> policy_probs * (policy_log_probs - reference_log_probs)</code></span>.</p></li>
+<li><p>Maximize reward minus <span style="background-color: codeinlinebg"><code> beta * KL</code></span>.</p></li>
+<li><p>Closed-form optimal logits are <span style="background-color: codeinlinebg"><code> reference_log_probs + reward / beta</code></span>.</p></li>
+<li><p>Softmax ignores a shared additive constant.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Use the wrong KL sign:</p>
+<pre class="code python"><code class="language-python">objective = (
+    expected_reward
+    + beta * kl_to_reference
+)</code></pre>
+<p>The optimizer is now rewarded for moving away from the reference. KL can grow even when that movement provides little extra reward.</p>
+<p>Then remove <span style="background-color: codeinlinebg"><code> .detach()</code></span> from a reference model that shares an active computation graph. Gradients may update both the policy and its anchor, allowing the anchor to follow the policy instead of constraining it.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does the reference model affect the optimal policy even though it supplies no task reward?</p></li>
+<li><p>Why is KL not an independent measure of response quality?</p></li>
+<li><p>What happens if reward scores are multiplied by 100 while <span class="math inline">\(\beta\)</span> remains fixed?</p></li>
+<li><p>Why can per-token KL create a response-length effect?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Current probabilities:</p>
+<pre class="code python"><code class="language-python">policy_log_probs = F.log_softmax(
+    policy_logits,
+    dim=-1,
+)
+
+policy_probs = policy_log_probs.exp()</code></pre>
+<p>Expected reward:</p>
+<pre class="code python"><code class="language-python">expected_reward = (
+    policy_probs * reward_scores
+).sum()</code></pre>
+<p>Forward KL:</p>
+<pre class="code python"><code class="language-python">kl_to_reference = (
+    policy_probs
+    * (
+        policy_log_probs
+        - reference_log_probs
+    )
+).sum()</code></pre>
+<p>Regularized objective:</p>
+<pre class="code python"><code class="language-python">objective = (
+    expected_reward
+    - beta * kl_to_reference
+)
+
+loss = -objective</code></pre>
+<p>Closed-form optimum:</p>
+<pre class="code python"><code class="language-python">optimal_logits = (
+    reference_log_probs
+    + reward_scores / beta
+)
+
+theoretical_probs = torch.softmax(
+    optimal_logits,
+    dim=-1,
+)</code></pre>
+<p>Initially, the trainable and reference policies are identical:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}
+(\pi_{\text{ref}}\|\pi_{\text{ref}})
+=0\]</span></p>
+<p>The reference logits are:</p>
+<p><span class="math display">\[[1,0,-1]\]</span></p>
+<p>With <span class="math inline">\(\beta=0.5\)</span>:</p>
+<p><span class="math display">\[\frac{r}{\beta}=[0,2,4]\]</span></p>
+<p>Therefore, the optimal logits are equivalent to:</p>
+<p><span class="math display">\[[1,0,-1]+[0,2,4]=[1,2,3]\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\pi^*=\operatorname{softmax}([1,2,3])\]</span></p>
+<p>Approximately:</p>
+<pre class="code text"><code class="language-plaintext">response 0: 0.090
+response 1: 0.245
+response 2: 0.665</code></pre>
+<p>Response <span style="background-color: codeinlinebg"><code> 2</code></span> becomes most likely, but does not reach probability one. The KL penalty preserves meaningful probability on responses favoured by the reference.</p>
+<p>A sampled log-ratio can be negative:</p>
+<p><span class="math display">\[\log\pi_\theta(y)-\log\pi_{\text{ref}}(y)&lt;0\]</span></p>
+<p>for responses whose probability decreased. Nevertheless:</p>
+<p><span class="math display">\[\mathbb E_{y\sim\pi_\theta}
+\left[
+\log\pi_\theta(y)-\log\pi_{\text{ref}}(y)
+\right]
+=
+D_{\mathrm{KL}}(\pi_\theta\|\pi_{\text{ref}})
+\geq0\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It acts as a prior or behavioural anchor: high-reference-probability responses are cheaper to retain.</p></li>
+<li><p>KL measures distributional change, not factuality, helpfulness or safety.</p></li>
+<li><p>Reward overwhelms the unchanged penalty, making the effective constraint much weaker.</p></li>
+<li><p>Each generated token adds another log-ratio term, so longer responses have more opportunities to accumulate KL.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Reward-only optimization keeps increasing the probability of whatever the frozen scorer ranks highest, driving entropy toward zero.</p></li>
+<li><p>DPO trains directly on fixed preference pairs; reward-model RLHF scores newly generated rollouts and performs policy optimization.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> KL regularization does not tell the policy what is good. It limits how much trusted behaviour the policy may trade away while pursuing learned reward.</p>

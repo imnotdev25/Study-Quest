@@ -1,0 +1,220 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Attention backward</strong> chains three steps: the matrix product <span class="math inline">\(O=AV\)</span>, the row-wise softmax <span class="math inline">\(A=\operatorname{softmax}(S)\)</span>, and the scaled product <span class="math inline">\(S=QK^\top/\sqrt d\)</span>. The only new piece is the softmax VJP, which can be computed without forming the <span class="math inline">\(T\times T\)</span> Jacobian of each row.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>For <span class="math inline">\(Z=XW\)</span>, how do you compute <span class="math inline">\(dW\)</span> and <span class="math inline">\(dX\)</span>?</p></li>
+<li><p>For softmax cross-entropy, why does each logits-gradient row sum to zero?</p></li>
+</ol>
+<p>Consider single-head attention:</p>
+<p><span class="math display">\[Q,K,V\in\mathbb{R}^{B\times T\times d}\]</span></p>
+<p><span class="math display">\[S=\frac{QK^\top}{\sqrt d}
+\in\mathbb{R}^{B\times T\times T}\]</span></p>
+<p><span class="math display">\[A=\operatorname{softmax}(S,\text{dim}=-1)\]</span></p>
+<p><span class="math display">\[O=AV\in\mathbb{R}^{B\times T\times d}\]</span></p>
+<p>Given upstream gradient:</p>
+<p><span class="math display">\[G=\frac{\partial L}{\partial O}\]</span></p>
+<p>backpropagate through <span class="math inline">\(O=AV\)</span>:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial V}=A^\top G\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial A}=GV^\top\]</span></p>
+<p>For one softmax row <span class="math inline">\(a=\operatorname{softmax}(s)\)</span>, its vector–Jacobian product is:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial s}
+=
+a\odot
+\left(
+g_a-\sum_j g_{a,j}a_j
+\right)\]</span></p>
+<p>This avoids constructing the full softmax Jacobian.</p>
+<p>Finally:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial Q}
+=
+\frac{1}{\sqrt d}
+\frac{\partial L}{\partial S}K\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial K}
+=
+\frac{1}{\sqrt d}
+\left(\frac{\partial L}{\partial S}\right)^\top Q\]</span></p>
+<p>For masked positions, <span class="math inline">\(A_{ij}=0\)</span>, so their score gradients should also be zero.</p>
+<p>Practical concern: ordinary attention backward may retain <span class="math inline">\(A:[B,T,T]\)</span>, which is expensive at long sequence lengths. Fused attention implementations reduce this memory traffic and may recompute intermediate quantities during backward.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: gradients of <span class="math inline">\(Q\)</span>, <span class="math inline">\(K\)</span> and <span class="math inline">\(V\)</span></div>
+<p>Upstream <span class="math inline">\(G=\partial L/\partial O\in\mathbb R^{T\times d}\)</span> (one batch element).</p>
+<p><strong>Step 1.</strong> <span class="math inline">\(O=AV\)</span> (Part 0 identities): <span class="math inline">\(\nabla V=A^\top G\)</span>, <span class="math inline">\(\nabla A=GV^\top\)</span>.</p>
+<p><strong>Step 2.</strong> One softmax row <span class="math inline">\(a=\operatorname{softmax}(s)\)</span>, upstream <span class="math inline">\(g=\nabla a\)</span>: <span class="math inline">\(\frac{\partial L}{\partial s_j}=\sum_ig_i\,a_i(\delta_{ij}-a_j)=a_j\Big(g_j-\sum_ig_ia_i\Big)\)</span>.</p>
+<p><strong>Step 3.</strong> All rows at once: <span class="math inline">\(\nabla S=A\odot\big(\nabla A-\operatorname{rowsum}(\nabla A\odot A)\big)\)</span>. Cost <span class="math inline">\(O(T^2)\)</span>, no <span class="math inline">\(T^3\)</span> Jacobians.</p>
+<p><strong>Step 4.</strong> <span class="math inline">\(S=QK^\top/\sqrt d\)</span>: <span class="math inline">\(\nabla Q=\frac{1}{\sqrt d}\nabla S\,K\)</span> and <span class="math inline">\(\nabla K=\frac{1}{\sqrt d}(\nabla S)^\top Q\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Masked entries:</strong> <span class="math inline">\(A_{ij}=0\Rightarrow(\nabla S)_{ij}=0\)</span> by step 2, so future tokens receive no gradient, as they should.</p>
+<p><strong>Step 6.</strong> <strong>Memory:</strong> steps 1–3 need <span class="math inline">\(A\)</span> (<span class="math inline">\(T^2\)</span> per head). Fused kernels (FlashAttention) store only the per-row <span class="math inline">\(\LSE\)</span> and recompute <span class="math inline">\(A\)</span> block by block during backward.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: attention backward (one head)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> saved <span class="math inline">\(Q,K,V,A\)</span>; upstream <span class="math inline">\(G\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\nabla V\gets A^\top G\)</span>; <span class="math inline">\(\nabla A\gets GV^\top\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(c_i\gets\sum_j(\nabla A)_{ij}A_{ij}\)</span> for each row <span class="math inline">\(i\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\nabla S\gets A\odot(\nabla A-c\mathbf 1^\top)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\nabla Q\gets\nabla S\,K/\sqrt d\)</span>; <span class="math inline">\(\nabla K\gets(\nabla S)^\top Q/\sqrt d\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement the complete manual backward pass for causal attention.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(121)
+
+B, T, d = 2, 4, 5
+
+Q = torch.randn(B, T, d, requires_grad=True)
+K = torch.randn(B, T, d, requires_grad=True)
+V = torch.randn(B, T, d, requires_grad=True)
+
+# Fixed upstream signal
+G = torch.randn(B, T, d) / math.sqrt(B * T * d)
+
+# Forward
+scores = ...                                  # TODO 1: [B, T, T]
+
+causal_mask = torch.tril(
+    torch.ones(T, T, dtype=torch.bool)
+)                                             # [T, T]
+
+masked_scores = ...                           # TODO 2
+A = ...                                       # TODO 3: softmax over keys
+O = ...                                       # TODO 4: [B, T, d]
+
+# Produces dL/dO = G
+loss = ...                                    # TODO 5: scalar
+
+# Detached values for manual backward
+a = A.detach()
+q = Q.detach()
+k = K.detach()
+v = V.detach()
+
+# Backward through O = A @ V
+manual_dV = ...                               # TODO 6: [B, T, d]
+dA = ...                                      # TODO 7: [B, T, T]
+
+# Softmax vector-Jacobian product
+row_inner_product = ...                       # TODO 8: [B, T, 1]
+dS = ...                                      # TODO 9: [B, T, T]
+
+# Backward through S = Q @ K.T / sqrt(d)
+manual_dQ = ...                               # TODO 10: [B, T, d]
+manual_dK = ...                               # TODO 11: [B, T, d]
+
+# Autograd reference
+loss.backward()
+
+for name, manual, automatic in [
+    (&quot;Q&quot;, manual_dQ, Q.grad),
+    (&quot;K&quot;, manual_dK, K.grad),
+    (&quot;V&quot;, manual_dV, V.grad),
+]:
+    error = (manual - automatic).abs().max().item()
+    print(f&quot;{name} max error: {error:.3e}&quot;)
+    assert torch.allclose(manual, automatic, atol=1e-6)
+
+future_positions = (
+    ~causal_mask[None, :, :]
+).expand_as(dS)
+
+print(&quot;largest forbidden score gradient:&quot;,
+      dS[future_positions].abs().max().item())
+
+print(&quot;dS row sums:&quot;,
+      dS.sum(dim=-1))</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>The gradient at causally forbidden score positions.</p></li>
+<li><p>The sum of every <code>dS</code> row.</p></li>
+</ul>
+<p>Debugging extension: remove the factor <span class="math inline">\(1/\sqrt d\)</span> only from <code>manual_dQ</code> and <code>manual_dK</code>. By what factor should those manual gradients disagree with autograd?</p>
+<p>Hints:</p>
+<ul>
+<li><p><code>scores = Q @ K.transpose(-2, -1) / math.sqrt(d)</code>.</p></li>
+<li><p><code>manual_dV = A.transpose(-2, -1) @ G</code>.</p></li>
+<li><p><code>dA = G @ V.transpose(-2, -1)</code>.</p></li>
+<li><p>The softmax correction term is <code>(dA * A).sum(dim=-1, keepdim=True)</code>.</p></li>
+<li><p>Reverse the score matrix multiplication separately for <span class="math inline">\(Q\)</span> and <span class="math inline">\(K\)</span>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why are contributions to <code>dV</code> summed over query positions?</p></li>
+<li><p>Why does every row of <code>dS</code> sum approximately to zero?</p></li>
+<li><p>Prediction: if a causal query can attend to only one key, what is its attention probability, and what is its score gradient?</p></li>
+<li><p>Debugging: <code>V.grad</code> is healthy, but <code>Q.grad</code> and <code>K.grad</code> are nearly zero. What attention behavior could cause this?</p></li>
+<li><p>Why can inspecting attention probabilities require substantially more memory than using a fused attention operation that returns only <span class="math inline">\(O\)</span>?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python"># Forward
+scores = (
+    Q @ K.transpose(-2, -1)
+) / math.sqrt(d)
+
+masked_scores = scores.masked_fill(
+    ~causal_mask,
+    float(&quot;-inf&quot;),
+)
+
+A = torch.softmax(masked_scores, dim=-1)
+O = A @ V
+
+loss = (O * G).sum()
+
+# Backward through O = A @ V
+manual_dV = a.transpose(-2, -1) @ G
+dA = G @ v.transpose(-2, -1)
+
+# Softmax backward
+row_inner_product = (
+    dA * a
+).sum(dim=-1, keepdim=True)
+
+dS = a * (dA - row_inner_product)
+
+# Score backward
+manual_dQ = (dS @ k) / math.sqrt(d)
+
+manual_dK = (
+    dS.transpose(-2, -1) @ q
+) / math.sqrt(d)</code></pre>
+<p>Forbidden score gradients are zero because their attention probabilities are zero:</p>
+<p><span class="math display">\[dS_{ij}
+=
+A_{ij}
+\left(
+dA_{ij}-\sum_k dA_{ik}A_{ik}
+\right)
+=0\]</span></p>
+<p>Each score-gradient row sums to zero:</p>
+<p><span class="math display">\[\sum_j dS_j
+=
+\sum_j A_jdA_j
+-
+\left(\sum_jA_j\right)
+\left(\sum_kA_kdA_k\right)
+=0\]</span></p>
+<p>Removing <span class="math inline">\(1/\sqrt d\)</span> makes <code>manual_dQ</code> and <code>manual_dK</code> approximately <span class="math inline">\(\sqrt d\)</span> times too large.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>One value vector can influence every query that attends to it, so backward sums contributions from all those query outputs.</p></li>
+<li><p>Softmax is invariant to adding a constant to an entire score row; the gradient therefore has no component in that all-ones direction.</p></li>
+<li><p>Its probability is exactly one. Because changing its only allowed score cannot change the distribution, its score gradient is zero.</p></li>
+<li><p>Attention may be extremely saturated or effectively one-hot. The output still depends on selected values, while small changes to queries and keys barely change the probabilities.</p></li>
+<li><p>Explicit probabilities require storing <span><code>[</code></span><code>B,H,T,T</code><span><code>]</code></span>; fused kernels can avoid returning that quadratic tensor and manage backward intermediates internally.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<p><span class="math display">\[dW=X^\top dZ,\qquad dX=dZW^\top\]</span></p>
+<p>Cross-entropy logits-gradient rows sum to zero because probabilities and one-hot targets both sum to one.</p>

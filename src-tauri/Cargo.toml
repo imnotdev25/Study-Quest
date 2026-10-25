@@ -1,0 +1,18 @@
+[package]
+name = "study-quest"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "study_quest_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.5", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-notification = "=2.7.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "=0.3.4"

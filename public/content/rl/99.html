@@ -1,0 +1,422 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a class average with missing grades</div>
+<p>You know 80% of a class’s grades, averaging 70. The other 20% are missing. Without assumptions, the true class average could be anywhere from <span class="math inline">\(0.8\times70+0.2\times0=56\)</span> to <span class="math inline">\(0.8\times70+0.2\times100=76\)</span>. That range is honest. Any single number would be a guess dressed up as a fact.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/b586876485f7.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Manski bounds. The baseline sits inside the interval, so promotion is blocked.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What two components explain aggregate performance drift?</p></li>
+<li><p>Why should policy-induced tool usage not automatically be treated as ordinary traffic composition?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="missing-support-creates-uncertainty-that-more-fitting-cannot-remove">2. Missing support creates uncertainty that more fitting cannot remove</h3>
+<p>Imagine evaluating a vehicle using city-road data when 20% of deployment will be off-road. Predicting off-road performance with a flexible model may produce a number, but the logs did not identify that number.</p>
+<p>Let target group probabilities be <span class="math inline">\(p(g)\)</span>, group outcomes be <span class="math inline">\(\mu_g\)</span>, and <span class="math inline">\(S\)</span> be the groups represented in the logs:</p>
+<p><span class="math display">\[J
+=
+\sum_{g\in S}p(g)\mu_g
++
+\sum_{g\notin S}p(g)\mu_g\]</span></p>
+<p>Suppose rewards are known to satisfy:</p>
+<p><span class="math display">\[L\le R\le U\]</span></p>
+<p>Define the supported contribution and unsupported target mass:</p>
+<p><span class="math display">\[C=\sum_{g\in S}p(g)\hat\mu_g,
+\qquad
+u=\sum_{g\notin S}p(g)\]</span></p>
+<p>Then the defensible identification bounds are:</p>
+<p><span class="math display">\[C+uL
+\le J\le
+C+uU\]</span></p>
+<p>Their width is:</p>
+<p><span class="math display">\[u(U-L)\]</span></p>
+<p>More samples from already-supported groups reduce sampling error in <span class="math inline">\(C\)</span>, but cannot reduce this identification width. To narrow it, collect data in missing groups, narrow the target population, or add an explicit structural assumption.</p>
+<p>These are different uncertainties:</p>
+<ul>
+<li><p><strong>Sampling uncertainty:</strong> we observed a group but estimated its mean imperfectly.</p></li>
+<li><p><strong>Identification uncertainty:</strong> we never observed the required group-policy outcome.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>logged groups and rewards: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>one-hot membership: <span style="background-color: codeinlinebg"><code> [N, G]</code></span></p></li>
+<li><p>counts, means and target probabilities: <span style="background-color: codeinlinebg"><code> [G]</code></span></p></li>
+<li><p>final value bounds: scalars</p></li>
+</ul>
+<p>For LLM agents, missing support can involve languages, tool schemas, long-horizon tasks or prompt families. Token-level similarity does not establish outcome support.</p>
+<p>DPO can keep a policy close to a reference on preference data, but that does not reveal its deployment reward in an unseen group. A model prediction is an extrapolation assumption, not online RL evidence.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: Manski-style bounds</div>
+<p>Let a fraction <span class="math inline">\(s\)</span> of target traffic be supported by the logs (estimate <span class="math inline">\(\hat V_s\)</span>) and <span class="math inline">\(1-s\)</span> unsupported, with rewards in <span class="math inline">\([r_{\min},r_{\max}]\)</span>. Then <span class="math display">\[V\in\big[s\hat V_s+(1-s)r_{\min},\ s\hat V_s+(1-s)r_{\max}\big].\]</span> The width <span class="math inline">\((1-s)(r_{\max}-r_{\min})\)</span> shrinks only with new data on the unsupported traffic, <em>not</em> with better models of the old data. Assumptions such as monotonicity or a bounded effect can narrow the bounds, but state them.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>When target traffic leaves the logs’ support, report a range.</p></li>
+<li><p>Modelling can’t substitute for missing interventions.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: 20% unsupported blocks promotion</div>
+<p>Supported 80% with <span class="math inline">\(\hat V_s=0.70\)</span>, rewards in <span class="math inline">\([0,1]\)</span>: <span class="math inline">\(V\in[0.56,0.76]\)</span>. The baseline 0.65 lies inside, so the candidate could be worse. Collect canary data on the unsupported 20%.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Extrapolating a model into the unsupported region and reporting a point estimate.</p></li>
+<li><p>Unstated assumptions that narrow the bounds.</p></li>
+<li><p>Forgetting the reward range when rewards are unbounded (the bounds become infinite).</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Partial-identification promotion check</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> supported fraction <span class="math inline">\(s\)</span>, supported estimate <span class="math inline">\(\hat V_s\)</span> (with its CI), reward range <span class="math inline">\([r_{\min},r_{\max}]\)</span>, baseline <span class="math inline">\(V_0\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets s\cdot\mathrm{LCB}(\hat V_s)+(1-s)r_{\min}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(U\gets s\cdot\mathrm{UCB}(\hat V_s)+(1-s)r_{\max}\)</span></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> <span class="math inline">\(L&gt;V_0\)</span> <strong>then</strong> promote</div>
+<div class="algo-line" style="--d:0"><strong>else if</strong> <span class="math inline">\(U&lt;V_0\)</span> <strong>then</strong> reject</div>
+<div class="algo-line" style="--d:0"><strong>else</strong> inconclusive: collect data on the unsupported traffic</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-an-unsupported-20-blocks-promotion">3. PyTorch exercise — an unsupported 20% blocks promotion</h3>
+<p>The logs contain groups <span style="background-color: codeinlinebg"><code> 0</code></span> and <span style="background-color: codeinlinebg"><code> 1</code></span>. Deployment also contains group <span style="background-color: codeinlinebg"><code> 2</code></span>, but it has no logged candidate outcomes.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_logged_episodes = 8_000
+num_groups = 3
+
+target_group_probabilities = torch.tensor([
+    0.50, 0.30, 0.20
+])
+
+# Logged traffic contains only groups 0 and 1.
+logged_group_probabilities = torch.tensor([
+    0.625, 0.375
+])
+
+true_candidate_group_values = torch.tensor([
+    0.70, 0.80, 0.30
+])
+
+baseline_target_value = torch.tensor(0.62)
+
+reward_minimum = 0.0
+reward_maximum = 1.0
+z_value = 1.96
+
+logged_groups = torch.multinomial(
+    logged_group_probabilities,
+    num_samples=num_logged_episodes,
+    replacement=True,
+)
+
+reward_probabilities = (
+    true_candidate_group_values[logged_groups]
+)
+
+rewards = (
+    torch.rand(num_logged_episodes)
+    &lt; reward_probabilities
+).to(torch.float64)
+
+# TODO 1: Estimate supported group means safely.
+group_one_hot = ...
+
+group_counts = ...
+group_reward_sums = ...
+
+supported_groups = ...
+
+estimated_group_values = ...
+
+# TODO 2: Identification bounds, initially ignoring
+# sampling uncertainty.
+unsupported_target_mass = ...
+
+supported_contribution = ...
+
+identification_lower_bound = ...
+identification_upper_bound = ...
+identification_width = ...
+
+# TODO 3: Add approximate sampling uncertainty for
+# the supported Bernoulli means.
+supported_standard_error = ...
+
+combined_lower_bound = ...
+combined_upper_bound = ...
+
+# TODO 4: Test robust improvement over the baseline.
+lower_improvement_bound = ...
+upper_improvement_bound = ...
+
+robustly_improves = ...
+
+# TODO 5: Compare an unsupported imputation with the
+# oracle value used only to construct this simulation.
+global_logged_mean = ...
+
+imputed_group_values = ...
+
+imputed_target_value = ...
+
+oracle_target_value = ...
+oracle_improvement = ...
+
+results = torch.stack([
+    target_group_probabilities,
+    group_counts,
+    estimated_group_values,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: target probability, logged count, &quot;
+    &quot;estimated value&quot;
+)
+print(results)
+
+print(
+    &quot;Unsupported target mass:&quot;,
+    unsupported_target_mass.item(),
+)
+print(
+    &quot;Identification-only bounds:&quot;,
+    identification_lower_bound.item(),
+    identification_upper_bound.item(),
+)
+print(
+    &quot;Identification width:&quot;,
+    identification_width.item(),
+)
+print(
+    &quot;Combined bounds:&quot;,
+    combined_lower_bound.item(),
+    combined_upper_bound.item(),
+)
+print(
+    &quot;Improvement bounds:&quot;,
+    lower_improvement_bound.item(),
+    upper_improvement_bound.item(),
+)
+print(
+    &quot;Robustly improves:&quot;,
+    robustly_improves.item(),
+)
+print(
+    &quot;Global-mean imputed value:&quot;,
+    imputed_target_value.item(),
+)
+print(
+    &quot;Oracle target value:&quot;,
+    oracle_target_value.item(),
+)
+print(
+    &quot;Oracle improvement:&quot;,
+    oracle_improvement.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the unsupported target mass?</p></li>
+<li><p>Ignoring sampling error, should the value bounds be near <span style="background-color: codeinlinebg"><code> [0.59, 0.79]</code></span>?</p></li>
+<li><p>Can the candidate robustly beat a baseline value of <span style="background-color: codeinlinebg"><code> 0.62</code></span>?</p></li>
+<li><p>Why will global-mean imputation substantially overestimate group <span style="background-color: codeinlinebg"><code> 2</code></span> here?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> F.one_hot(..., num_classes=3)</code></span> preserves the absent group as an all-zero column.</p></li>
+<li><p>Support is <span style="background-color: codeinlinebg"><code> group_counts &gt; 0</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> counts.clamp_min(1)</code></span> to avoid division by zero, but retain <span style="background-color: codeinlinebg"><code> NaN</code></span> for unsupported means.</p></li>
+<li><p>Sum target-weighted means only over supported groups.</p></li>
+<li><p>For independent Bernoulli group means:</p></li>
+</ul>
+<p><span class="math display">\[SE(C)
+=
+\sqrt{
+\sum_{g\in S}
+p(g)^2
+\frac{\hat\mu_g(1-\hat\mu_g)}{n_g}
+}\]</span></p>
+<ul>
+<li><p>Imputation produces a point estimate only by assuming something about the unseen group.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Divide by the zero count and let a <span style="background-color: codeinlinebg"><code> NaN</code></span> contaminate every result.</p></li>
+<li><p>Replace the missing mean with zero and describe that choice as data-driven.</p></li>
+<li><p>Let a reward model’s extrapolation erase the identification interval.</p></li>
+<li><p>Bootstrap logged rows and expect missing support to reappear.</p></li>
+<li><p>Rescale rewards without changing <span class="math inline">\(L\)</span> and <span class="math inline">\(U\)</span>.</p></li>
+<li><p>Treat one rare observation as strong support; nonzero support can still be extremely weak.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can more logged data fail to narrow the total uncertainty?</p></li>
+<li><p>What does the width <span class="math inline">\(u(U-L)\)</span> measure?</p></li>
+<li><p>Which actions can legitimately narrow the identification bounds?</p></li>
+<li><p>Can a candidate’s true value exceed the baseline while robust promotion still fails?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Safe group summaries:</p>
+<pre class="code python"><code class="language-python">group_one_hot = F.one_hot(
+    logged_groups,
+    num_classes=num_groups,
+).to(torch.float64)
+
+group_counts = group_one_hot.sum(dim=0)
+
+group_reward_sums = (
+    group_one_hot
+    * rewards[:, None]
+).sum(dim=0)
+
+supported_groups = (
+    group_counts &gt; 0
+)
+
+estimated_group_values = torch.where(
+    supported_groups,
+    group_reward_sums
+    / group_counts.clamp_min(1.0),
+    torch.full_like(
+        group_counts,
+        float(&quot;nan&quot;),
+    ),
+)</code></pre>
+<p>Identification bounds:</p>
+<pre class="code python"><code class="language-python">unsupported_target_mass = (
+    target_group_probabilities[
+        ~supported_groups
+    ].sum()
+)
+
+supported_contribution = (
+    target_group_probabilities[
+        supported_groups
+    ]
+    * estimated_group_values[
+        supported_groups
+    ]
+).sum()
+
+identification_lower_bound = (
+    supported_contribution
+    + unsupported_target_mass
+    * reward_minimum
+)
+
+identification_upper_bound = (
+    supported_contribution
+    + unsupported_target_mass
+    * reward_maximum
+)
+
+identification_width = (
+    identification_upper_bound
+    - identification_lower_bound
+)</code></pre>
+<p>Sampling uncertainty:</p>
+<pre class="code python"><code class="language-python">supported_standard_error = torch.sqrt(
+    (
+        target_group_probabilities[
+            supported_groups
+        ].square()
+        * estimated_group_values[
+            supported_groups
+        ]
+        * (
+            1.0
+            - estimated_group_values[
+                supported_groups
+            ]
+        )
+        / group_counts[
+            supported_groups
+        ]
+    ).sum()
+)
+
+combined_lower_bound = (
+    identification_lower_bound
+    - z_value * supported_standard_error
+)
+
+combined_upper_bound = (
+    identification_upper_bound
+    + z_value * supported_standard_error
+)</code></pre>
+<p>Promotion decision:</p>
+<pre class="code python"><code class="language-python">lower_improvement_bound = (
+    combined_lower_bound
+    - baseline_target_value
+)
+
+upper_improvement_bound = (
+    combined_upper_bound
+    - baseline_target_value
+)
+
+robustly_improves = (
+    lower_improvement_bound &gt; 0.0
+)</code></pre>
+<p>Imputation and oracle comparison:</p>
+<pre class="code python"><code class="language-python">global_logged_mean = rewards.mean()
+
+imputed_group_values = torch.where(
+    supported_groups,
+    estimated_group_values,
+    global_logged_mean,
+)
+
+imputed_target_value = (
+    target_group_probabilities
+    * imputed_group_values
+).sum()
+
+oracle_target_value = (
+    target_group_probabilities
+    * true_candidate_group_values
+).sum()
+
+oracle_improvement = (
+    oracle_target_value
+    - baseline_target_value
+)</code></pre>
+<p>Ignoring sampling noise, the supported contribution is:</p>
+<p><span class="math display">\[C
+=
+0.5(0.70)+0.3(0.80)
+=
+0.59\]</span></p>
+<p>Because 20% of target traffic is unsupported and rewards lie in <span class="math inline">\([0,1]\)</span>:</p>
+<p><span class="math display">\[J\in[0.59,\;0.59+0.20]=[0.59,0.79]\]</span></p>
+<p>Relative to the baseline:</p>
+<p><span class="math display">\[J-0.62\in[-0.03,0.17]\]</span></p>
+<p>The data therefore cannot certify improvement. Yet the simulation’s hidden oracle value is:</p>
+<p><span class="math display">\[J_{\text{oracle}}
+=
+0.5(0.70)+0.3(0.80)+0.2(0.30)
+=
+0.65\]</span></p>
+<p>So the candidate truly improves by <span style="background-color: codeinlinebg"><code> 0.03</code></span>, but robust promotion still fails. That is an appropriate “insufficient evidence” conclusion, not a claim that the candidate is worse.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Additional observations reduce estimation error for supported groups but provide no outcomes for the unsupported group.</p></li>
+<li><p>It is the irreducible worst-case uncertainty contributed by unsupported target mass under the stated reward range.</p></li>
+<li><p>Collect representative outcomes, exclude unsupported traffic from the target, or defend a stronger assumption that restricts unseen outcomes.</p></li>
+<li><p>Yes. Truth and identifiability differ: a beneficial policy may remain uncertifiable from inadequate data.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Aggregate change decomposes into traffic-composition change and within-group performance change.</p></li>
+<li><p>Tool usage may be caused by the policy and mediate its real effect. Controlling for it can remove part of the policy outcome rather than isolate external drift.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> when target traffic leaves the support of your logs, report a range rather than manufacture a point estimate. More modeling cannot substitute for the missing intervention data.</p>

@@ -1,0 +1,201 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A neuron computes <span class="math inline">\(a=\phi(w\cdot x+b)\)</span>. A layer is many neurons at once, <span class="math inline">\(A=\phi(XW+\mathbf 1b^\top)\)</span>. A network chains layers, and training is: forward, loss, backward (Part 0’s rules), update. Here we write all four in NumPy, add RMSNorm between layers, and replace plain SGD with Adam and a warmup–cosine schedule.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/c46f687af7f6.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: RMSNorm backward, <span class="math inline">\(y=w\odot\hat x\)</span>, <span class="math inline">\(\hat x=x/r\)</span>, <span class="math inline">\(r=\sqrt{\overline{x^2}+\epsilon}\)</span></div>
+<p><strong>Step 1.</strong> Weight gradient: <span class="math inline">\(\partial L/\partial w=\sum_{\text{rows}}g\odot\hat x\)</span>.</p>
+<p><strong>Step 2.</strong> Let <span class="math inline">\(\tilde g=g\odot w\)</span> (gradient w.r.t. <span class="math inline">\(\hat x\)</span>). From <span class="math inline">\(\partial r/\partial x_k=x_k/(Dr)\)</span>: <span class="math inline">\(\partial\hat x_j/\partial x_k=\delta_{jk}/r-x_jx_k/(Dr^3)\)</span>.</p>
+<p><strong>Step 3.</strong> Contract with <span class="math inline">\(\tilde g\)</span>: <span class="math inline">\(\frac{\partial L}{\partial x_k}=\frac{\tilde g_k}{r}-\frac{x_k}{Dr^3}\sum_j\tilde g_jx_j=\boxed{\frac1r\big(\tilde g-\hat x\,\overline{\tilde g\odot\hat x}\big)}\)</span>. This is exactly the line in <code>RMSNorm.backward</code>.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Adam, and why its step size is roughly the learning rate</div>
+<p><strong>Step 1.</strong> Two EMAs of the gradient: <span class="math inline">\(m_t=\beta_1m_{t-1}+(1-\beta_1)g_t\)</span>, <span class="math inline">\(v_t=\beta_2v_{t-1}+(1-\beta_2)g_t^2\)</span>.</p>
+<p><strong>Step 2.</strong> Bias-correct as in the EMA derivation: <span class="math inline">\(\hat m_t=m_t/(1-\beta_1^t)\)</span>, <span class="math inline">\(\hat v_t=v_t/(1-\beta_2^t)\)</span>.</p>
+<p><strong>Step 3.</strong> Update <span class="math inline">\(\theta\leftarrow\theta-\eta\,\hat m_t/(\sqrt{\hat v_t}+\epsilon)\)</span>.</p>
+<p><strong>Step 4.</strong> If the gradient is steady, <span class="math inline">\(\hat m\approx g\)</span> and <span class="math inline">\(\sqrt{\hat v}\approx|g|\)</span>, so each coordinate moves by about <span class="math inline">\(\eta\)</span>, whatever the gradient’s scale. If the gradient flips sign at random, <span class="math inline">\(\hat m\approx0\)</span> and the step shrinks. Adam is sign-descent with a noise filter.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Training loop with warmup and cosine decay</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> data <span class="math inline">\((X,y)\)</span>, steps <span class="math inline">\(S\)</span>, peak rate <span class="math inline">\(\eta_{\max}\)</span>, warmup <span class="math inline">\(W\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(s=0,\dots,S-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\eta_s\gets\eta_{\max}(s+1)/W\)</span> if <span class="math inline">\(s&lt;W\)</span>, else <span class="math inline">\(\eta_{\max}\big(0.1+0.45(1+\cos\pi\tfrac{s-W}{S-W})\big)\)</span></div>
+<div class="algo-line" style="--d:1">forward: <span class="math inline">\(Z\gets\text{net}(X)\)</span>; <span class="math inline">\(L\gets\mathrm{CE}(Z,y)\)</span></div>
+<div class="algo-line" style="--d:1">backward: <span class="math inline">\(G\gets(\operatorname{softmax}Z-\onehot y)/B\)</span>; each layer returns <span class="math inline">\(G\,\partial(\text{out})/\partial(\text{in})\)</span></div>
+<div class="algo-line" style="--d:1">Adam step with <span class="math inline">\(\eta_s\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Toolkit ch. 4: a neural network from scratch in NumPy, with RMSNorm, Adam and an LR schedule.&quot;&quot;&quot;
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+
+class Linear:
+    def __init__(self, din, dout):
+        self.W = rng.normal(size=(din, dout)) * np.sqrt(2 / din)   # He init for ReLU
+        self.b = np.zeros(dout)
+
+    def forward(self, x):
+        self.x = x
+        return x @ self.W + self.b
+
+    def backward(self, g):
+        self.grads = [self.x.T @ g, g.sum(0)]
+        return g @ self.W.T
+
+    @property
+    def params(self):
+        return [self.W, self.b]
+
+
+class RMSNorm:
+    def __init__(self, d, eps=1e-6):
+        self.w, self.eps = np.ones(d), eps
+
+    def forward(self, x):
+        self.r = np.sqrt((x**2).mean(-1, keepdims=True) + self.eps)
+        self.xh = x / self.r
+        return self.xh * self.w
+
+    def backward(self, g):
+        self.grads = [(g * self.xh).sum(0)]
+        gx = g * self.w                                     # gradient wrt x-hat
+        return (gx - self.xh * (gx * self.xh).mean(-1, keepdims=True)) / self.r
+
+    @property
+    def params(self):
+        return [self.w]
+
+
+class ReLU:
+    params = []
+
+    def forward(self, x):
+        self.m = x &gt; 0
+        return x * self.m
+
+    def backward(self, g):
+        self.grads = []
+        return g * self.m
+
+
+def softmax_ce(z, y):
+    z = z - z.max(1, keepdims=True)
+    p = np.exp(z) / np.exp(z).sum(1, keepdims=True)
+    loss = -np.log(p[np.arange(len(y)), y]).mean()
+    g = p.copy()
+    g[np.arange(len(y)), y] -= 1                            # dL/dz = p - onehot(y)
+    return loss, g / len(y)
+
+
+class Net:
+    def __init__(self, sizes):
+        self.layers = []
+        for i, (a, b) in enumerate(zip(sizes, sizes[1:])):
+            self.layers.append(Linear(a, b))
+            if i &lt; len(sizes) - 2:
+                self.layers += [RMSNorm(b), ReLU()]
+
+    def forward(self, x):
+        for l in self.layers:
+            x = l.forward(x)
+        return x
+
+    def backward(self, g):
+        for l in reversed(self.layers):
+            g = l.backward(g)
+
+    def params_grads(self):
+        return [(p, g) for l in self.layers for p, g in zip(l.params, l.grads)]
+
+
+class Adam:
+    def __init__(self, net, b1=0.9, b2=0.999, eps=1e-8):
+        self.b1, self.b2, self.eps, self.t = b1, b2, eps, 0
+        params = [p for l in net.layers for p in l.params]
+        self.m = [np.zeros_like(p) for p in params]
+        self.v = [np.zeros_like(p) for p in params]
+
+    def step(self, net, lr):
+        self.t += 1
+        for i, (p, g) in enumerate(net.params_grads()):
+            self.m[i] = self.b1 * self.m[i] + (1 - self.b1) * g          # EMA of gradient
+            self.v[i] = self.b2 * self.v[i] + (1 - self.b2) * g * g      # EMA of squared gradient
+            mh = self.m[i] / (1 - self.b1**self.t)
+            vh = self.v[i] / (1 - self.b2**self.t)
+            p -= lr * mh / (np.sqrt(vh) + self.eps)
+
+
+def lr_at(step, total, peak, warmup):
+    &quot;&quot;&quot;Linear warmup, then cosine decay to 10% of peak.&quot;&quot;&quot;
+    if step &lt; warmup:
+        return peak * (step + 1) / warmup
+    t = (step - warmup) / max(1, total - warmup)
+    return peak * (0.1 + 0.9 * 0.5 * (1 + np.cos(np.pi * t)))
+
+
+def spirals(n=200, k=3):
+    X, y = [], []
+    for c in range(k):
+        r = np.linspace(0.05, 1, n)
+        t = np.linspace(c * 4, (c + 1) * 4, n) + rng.normal(scale=0.2, size=n)
+        X.append(np.c_[r * np.sin(t), r * np.cos(t)])
+        y += [c] * n
+    return np.vstack(X), np.array(y)
+
+
+X, y = spirals()
+
+# Gradient check on a small net: analytic backward vs central differences.
+net = Net([2, 8, 3])
+loss, g = softmax_ce(net.forward(X[:16]), y[:16])
+net.backward(g)
+worst = 0.0
+for p, gp in net.params_grads():
+    for idx in [tuple(rng.integers(s) for s in p.shape) for _ in range(5)]:
+        old = p[idx]
+        p[idx] = old + 1e-5; lp = softmax_ce(net.forward(X[:16]), y[:16])[0]
+        p[idx] = old - 1e-5; lm = softmax_ce(net.forward(X[:16]), y[:16])[0]
+        p[idx] = old
+        num = (lp - lm) / 2e-5
+        worst = max(worst, abs(num - gp[idx]) / max(1e-8, abs(num) + abs(gp[idx])))
+print(f&quot;[gradcheck] worst relative error {worst:.1e}&quot;)
+
+# Train: Adam + warmup/cosine vs plain SGD at a fixed rate.
+for name in (&quot;sgd&quot;, &quot;adam&quot;):
+    rng = np.random.default_rng(1)
+    net = Net([2, 64, 64, 3])
+    opt = Adam(net)
+    total = 600
+    for step in range(total):
+        loss, g = softmax_ce(net.forward(X), y)
+        net.backward(g)
+        if name == &quot;adam&quot;:
+            opt.step(net, lr_at(step, total, peak=1e-2, warmup=100))
+        else:
+            for p, gp in net.params_grads():
+                p -= 0.1 * gp
+        if step in (0, 25, 75, 150, total - 1):
+            acc = (net.forward(X).argmax(1) == y).mean()
+            print(f&quot;[train:{name:4s}] step {step:4d}  loss {loss:.3f}  acc {acc:.2f}&quot;)</code></pre>
+<pre class="code output"><code class="output">[gradcheck] worst relative error 3.6e-09
+[train:sgd ] step    0  loss 1.617  acc 0.48
+[train:sgd ] step   25  loss 0.427  acc 0.91
+[train:sgd ] step   75  loss 0.138  acc 0.98
+[train:sgd ] step  150  loss 0.039  acc 1.00
+[train:sgd ] step  599  loss 0.003  acc 1.00
+[train:adam] step    0  loss 1.617  acc 0.33
+[train:adam] step   25  loss 0.792  acc 0.65
+[train:adam] step   75  loss 0.032  acc 1.00
+[train:adam] step  150  loss 0.001  acc 1.00
+[train:adam] step  599  loss 0.000  acc 1.00</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>The gradient check agrees to <span class="math inline">\(4\times10^{-9}\)</span>: the hand-written backward is right before any training starts.</p></li>
+<li><p>Adam’s warmup makes it <em>slower</em> at step 25 (its rate is still tiny), then it passes SGD by step 75 and reaches zero loss by 150.</p></li>
+<li><p>Warmup exists because Adam’s <span class="math inline">\(\hat v\)</span> is a poor estimate in the first steps, so early updates can be large in the wrong direction.</p></li>
+</ul>
+</div>

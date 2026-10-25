@@ -1,0 +1,122 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>An agent acts in turns: it calls a tool, reads the result, calls another, and finally answers. TRL v1.16 trains this with <code>GRPOTrainer(environment_factory=Env)</code>. The trainer makes one <code>Env</code> per rollout, calls <code>reset()</code> for the prompt, exposes every other public method (with type hints and a Google-style docstring) as a tool, runs the tool loop, and adds <code>get_reward()</code> to the reward. Tool outputs are observations, not actions, so they’re masked from the loss (RL book, Topic 35).</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/c429379fbc95.svg" alt="diagram" loading="lazy"></figure>
+<p><em>One rollout. Every rollout in a GRPO group runs this loop, and the rewards are compared within the group.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: designing the reward and the group</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(R=\mathbb 1[\text{correct}]-c\cdot\#\text{calls}\)</span>. Without <span class="math inline">\(c\)</span> the agent can call tools endlessly; with <span class="math inline">\(c\)</span> too large it never calls them. Here <span class="math inline">\(c=0.05\)</span>: the careful agent below scores 0.70 (correct, 6 calls), the guessing agent 0.</p>
+<p><strong>Step 2.</strong> A correct answer must be worth more than its tool cost: with <span class="math inline">\(k\)</span> calls needed, choose <span class="math inline">\(c&lt;1/k\)</span>, or the optimum is to guess.</p>
+<p><strong>Step 3.</strong> <strong>Group baseline:</strong> if each <code>reset()</code> samples a new task, the <span class="math inline">\(G\)</span> rollouts in a group face different tasks and the group mean is a noisy baseline. Pass the same <code>seed</code> column to all members (the trainer forwards dataset columns to <code>reset</code>) so they share one task.</p>
+<p><strong>Step 4.</strong> Cap turns with <code>max_tool_calling_iterations</code>, so a looping agent ends its rollout instead of the run.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Agentic RL: a tool-using environment for TRL&#x27;s GRPOTrainer(environment_factory=...).
+
+The trainer creates one environment per rollout, calls reset() to get the prompt, exposes every other
+public method as a tool, runs the multi-turn tool-calling loop itself, and adds get_reward() to the reward.
+
+Local test (drives the environment by hand):  python tool_env.py
+On Modal (Qwen3-0.6B, 1x H100):               modal run tool_env.py::train_remote
+&quot;&quot;&quot;
+import random
+
+import modal
+
+
+class ShopEnv:
+    &quot;&quot;&quot;Answer a question about an order using lookup tools. Reward: correct final answer, minus a cost per call.&quot;&quot;&quot;
+
+    PRICES = {&quot;apple&quot;: 0.5, &quot;bread&quot;: 2.25, &quot;coffee&quot;: 7.0, &quot;eggs&quot;: 3.1, &quot;milk&quot;: 1.2}
+    CALL_COST = 0.05
+
+    def reset(self, **kwargs) -&gt; str:
+        rng = random.Random(kwargs.get(&quot;seed&quot;))
+        self.items = {k: rng.randint(1, 5) for k in rng.sample(sorted(self.PRICES), 3)}
+        self.calls, self.answer = 0, None
+        self.target = round(sum(self.PRICES[k] * n for k, n in self.items.items()), 2)
+        order = &quot;, &quot;.join(f&quot;{n} x {k}&quot; for k, n in self.items.items())
+        return f&quot;An order contains {order}. What is the total price? Use the tools, then call submit.&quot;
+
+    def price(self, item: str) -&gt; float:
+        &quot;&quot;&quot;Look up the unit price of an item.
+
+        Args:
+            item: Name of the item, e.g. &quot;milk&quot;.
+
+        Returns:
+            The unit price in dollars, or -1 if the item is unknown.
+        &quot;&quot;&quot;
+        self.calls += 1
+        return self.PRICES.get(item.strip().lower(), -1.0)
+
+    def multiply(self, a: float, b: float) -&gt; float:
+        &quot;&quot;&quot;Multiply two numbers.
+
+        Args:
+            a: First number.
+            b: Second number.
+
+        Returns:
+            The product a * b.
+        &quot;&quot;&quot;
+        self.calls += 1
+        return a * b
+
+    def submit(self, total: float) -&gt; str:
+        &quot;&quot;&quot;Submit the final total price. Call this exactly once, at the end.
+
+        Args:
+            total: The total price in dollars.
+
+        Returns:
+            A confirmation message.
+        &quot;&quot;&quot;
+        self.answer = total
+        return &quot;submitted&quot;
+
+    def get_reward(self) -&gt; float:
+        correct = self.answer is not None and abs(self.answer - self.target) &lt; 0.01
+        return float(correct) - self.CALL_COST * self.calls
+
+
+app = modal.App(&quot;pt-book-agent&quot;)
+image = modal.Image.debian_slim(python_version=&quot;3.12&quot;).uv_pip_install(
+    &quot;trl[vllm]==1.16.0&quot;, &quot;transformers==5.20.2&quot;, &quot;datasets==5.1.0&quot;, &quot;accelerate==1.15.0&quot;
+).add_local_python_source(&quot;tool_env&quot;)
+models = modal.Volume.from_name(&quot;pt-book-models&quot;, create_if_missing=True)
+
+
+@app.function(gpu=&quot;H100&quot;, image=image, volumes={&quot;/models&quot;: models}, timeout=6 * 60 * 60)
+def train_remote(max_steps: int = 300):
+    from datasets import Dataset
+    from trl import GRPOConfig, GRPOTrainer
+
+    # Same seed for every member of a group -&gt; identical initial state -&gt; a clean group baseline.
+    ds = Dataset.from_dict({&quot;prompt&quot;: [[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Start.&quot;}]] * 4000, &quot;seed&quot;: list(range(4000))})
+    args = GRPOConfig(output_dir=&quot;/models/qwen3-0.6b-agent&quot;, max_steps=max_steps, num_generations=8,
+                      per_device_train_batch_size=16, learning_rate=1e-6, max_tool_calling_iterations=8,
+                      chat_template_kwargs={&quot;enable_thinking&quot;: False}, bf16=True, use_vllm=True,
+                      vllm_mode=&quot;colocate&quot;, report_to=&quot;none&quot;)
+    trainer = GRPOTrainer(model=&quot;Qwen/Qwen3-0.6B&quot;, args=args, train_dataset=ds, environment_factory=ShopEnv)
+    trainer.train()
+    trainer.save_model(&quot;/models/qwen3-0.6b-agent&quot;)
+    models.commit()
+
+
+if __name__ == &quot;__main__&quot;:
+    env = ShopEnv()
+    print(env.reset(seed=3))
+    # A careful agent: price -&gt; multiply for each item, then submit the sum.
+    total = sum(env.multiply(env.price(k), n) for k, n in env.items.items())
+    env.submit(round(total, 2))
+    print(f&quot;careful agent: {env.calls} calls, reward {env.get_reward():.2f}&quot;)
+    env.reset(seed=3)
+    env.submit(10.0)                                       # guesses without tools
+    print(f&quot;guessing agent: {env.calls} calls, reward {env.get_reward():.2f}&quot;)</code></pre>
+<p>Local output (the environment driven by hand, to check the reward before any training):</p>
+<pre class="code output"><code class="output">An order contains 5 x bread, 4 x milk, 5 x eggs. What is the total price? Use the tools, then call submit.
+careful agent: 6 calls, reward 0.70
+guessing agent: 0 calls, reward 0.00</code></pre>
+<p>TRL’s environment slot also accepts OpenEnv environments (Gymnasium-style, served over WebSocket or in containers), OpenReward environments over HTTP, and Harbor’s sandboxed task suites with in-sandbox verifiers. For code-execution tools, run the code in a sandbox, never in the training process.</p>

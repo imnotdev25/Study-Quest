@@ -1,0 +1,48 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>A loss is computed in four stages: <strong>(1) logits</strong> from the model, <strong>(2) a stable log-probability</strong> of each target, <strong>(3) masking</strong> of positions that shouldn’t count, <strong>(4) reduction</strong> to one number. Most bugs in this book are a mistake in stage 3 or 4.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: one example by hand</div>
+<p>Logits <span class="math inline">\(z=(2,1,0)\)</span>, true class <span class="math inline">\(y=0\)</span>.</p>
+<p><strong>Step 1.</strong> Stabilize: subtract <span class="math inline">\(m=\max z=2\)</span>: <span class="math inline">\(z-m=(0,-1,-2)\)</span>. Softmax is unchanged, because the <span class="math inline">\(e^{-m}\)</span> cancels in numerator and denominator.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\LSE(z)=m+\log(e^0+e^{-1}+e^{-2})=2+\log(1.5032)=2.4076\)</span>.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(\ell=\LSE(z)-z_y=2.4076-2=\mathbf{0.4076}\)</span>.</p>
+<p><strong>Step 4.</strong> Probabilities <span class="math inline">\(p=e^{z-\LSE}=(0.665,0.245,0.090)\)</span>. Check: <span class="math inline">\(-\log0.665=0.408\)</span>.</p>
+<p><strong>Step 5.</strong> Gradient <span class="math inline">\(p-\onehot(0)=(-0.335,\,0.245,\,0.090)\)</span>. It sums to 0: pushing the true logit up and the others down by the same total.</p>
+</div>
+<p><strong>Without step 1,</strong> logits like <span class="math inline">\((1000,999)\)</span> give <span class="math inline">\(e^{1000}=\infty\)</span> in float32 and the loss becomes NaN. Every library implementation subtracts the max.</p>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: a batch with masking and reduction</div>
+<p>Four token positions with per-token losses <span class="math inline">\(\ell=(0.41,1.20,0.05,2.30)\)</span> and mask <span class="math inline">\(M=(1,1,1,0)\)</span> (the last is padding).</p>
+<p><strong>Step 1.</strong> Masked sum <span class="math inline">\(S=\sum_tM_t\ell_t=0.41+1.20+0.05=1.66\)</span>.</p>
+<p><strong>Step 2.</strong> Valid count <span class="math inline">\(N=\sum_tM_t=3\)</span>.</p>
+<p><strong>Step 3.</strong> Mean loss <span class="math inline">\(L=S/N=0.553\)</span>. Dividing by 4 instead gives <span class="math inline">\(0.415\)</span>, silently underweighting this batch.</p>
+<p><strong>Step 4.</strong> Gradient of each valid token’s loss is scaled by <span class="math inline">\(1/N\)</span>, and padding gets exactly 0.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: computing a classification or language-model loss</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logits <span class="math inline">\(Z\in\mathbb R^{N\times C}\)</span>, targets <span class="math inline">\(y\in\{0..C-1\}^N\)</span>, mask <span class="math inline">\(M\in\{0,1\}^N\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(m_i\gets\max_cZ_{ic}\)</span> <em>▷ stability shift, per row</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\LSE_i\gets m_i+\log\sum_ce^{Z_{ic}-m_i}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\ell_i\gets\LSE_i-Z_{i,y_i}\)</span> <em>▷ <span class="math inline">\(-\log p_{i,y_i}\)</span></em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets\sum_iM_i\ell_i\,/\,\sum_iM_i\)</span> <em>▷ masked mean</em></div>
+<div class="algo-line" style="--d:0">backward: <span class="math inline">\(\partial L/\partial Z_{i,:}=M_i\big(\operatorname{softmax}(Z_i)-\onehot(y_i)\big)/\sum_jM_j\)</span></div>
+</div>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: one training step (the loop every session refines)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> model <span class="math inline">\(f_\theta\)</span>, batch <span class="math inline">\((X,y,M)\)</span>, learning rate <span class="math inline">\(\eta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Z\gets f_\theta(X)\)</span> <em>▷ forward</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets\)</span> masked mean loss (algorithm above)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(g\gets\nabla_\theta L\)</span> <em>▷ backward: VJPs from the loss to every parameter</em></div>
+<div class="algo-line" style="--d:0">optionally clip <span class="math inline">\(g\)</span> (Session 21)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\theta\gets\theta-\eta\,g\)</span> <em>▷ or an optimizer: momentum, AdamW (Sessions 4, 15)</em></div>
+<div class="algo-line" style="--d:0">clear <span class="math inline">\(g\)</span> before the next step <em>▷ PyTorch accumulates gradients</em></div>
+</div>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Loss <span class="math inline">\(=\)</span> negative log-likelihood. Choose the distribution (Bernoulli, categorical, Gaussian), take <span class="math inline">\(-\log\)</span>, average.</p></li>
+<li><p>Gradient at the logits is always “prediction minus target”: <span class="math inline">\(\sigma(z)-y\)</span> or <span class="math inline">\(p-\onehot(y)\)</span>.</p></li>
+<li><p>Compute in log space with a max shift, mask what shouldn’t count, and divide by the number of things that do.</p></li>
+</ul>
+</div>

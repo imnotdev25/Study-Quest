@@ -1,0 +1,317 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: shuffled flashcards beat rereading one chapter</div>
+<p>If you only study today’s chapter over and over, you get great at today’s chapter and forget last week’s. Shuffled flashcards from the whole course make your learning steadier. A replay buffer is a shuffled flashcard deck of past experience.</p>
+<p>Your brain does this too: during sleep, the hippocampus “replays” the day’s experiences. DQN’s replay buffer was partly inspired by that.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/794341db12a9.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Data goes in chronologically and comes out shuffled.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why must a neural Q-learning target be detached?</p></li>
+<li><p>What danger accompanies parameter sharing across states?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="why-online-neural-q-learning-can-be-unstable">2. Why online neural Q-learning can be unstable</h3>
+<p>Last session trained on transitions in their observed order:</p>
+<pre class="code text"><code class="language-plaintext">state 0 → state 1 → state 2 → goal
+state 0 → state 1 → ...</code></pre>
+<p>Adjacent samples are strongly correlated. It is like studying only today’s last three events instead of shuffling flashcards from many days. Each update pushes the network toward the latest narrow slice of experience.</p>
+<p>A replay buffer stores transitions:</p>
+<p><span class="math display">\[(S_t,A_t,R_{t+1},S_{t+1},D_t)\]</span></p>
+<p>Training samples random minibatches from this history.</p>
+<p>For batch size <span class="math inline">\(B\)</span>:</p>
+<ul>
+<li><p>states: <span style="background-color: codeinlinebg"><code> [B, features]</code></span></p></li>
+<li><p>actions: <span style="background-color: codeinlinebg"><code> [B, 1]</code></span></p></li>
+<li><p>rewards: <span style="background-color: codeinlinebg"><code> [B, 1]</code></span></p></li>
+<li><p>next states: <span style="background-color: codeinlinebg"><code> [B, features]</code></span></p></li>
+<li><p>terminal flags: <span style="background-color: codeinlinebg"><code> [B, 1]</code></span></p></li>
+<li><p>selected Q-values: <span style="background-color: codeinlinebg"><code> [B, 1]</code></span></p></li>
+</ul>
+<p>The batched target is:</p>
+<p><span class="math display">\[Y_i
+=
+R_i+\gamma(1-D_i)\max_{a&#39;}Q_\theta(S&#39;_i,a&#39;)\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[L(\theta)
+=
+\frac1B\sum_{i=1}^{B}
+\operatorname{Huber}\left(
+Q_\theta(S_i,A_i)-Y_i
+\right)\]</span></p>
+<h3 class="unnumbered" id="what-replay-provides">What replay provides</h3>
+<ul>
+<li><p><strong>Less correlation:</strong> random batches mix different episodes and states.</p></li>
+<li><p><strong>Data reuse:</strong> one expensive environment transition can train the network multiple times.</p></li>
+<li><p><strong>Off-policy data:</strong> Q-learning can learn from older exploratory behaviour.</p></li>
+</ul>
+<p>But replay is not automatically unbiased. A buffer can overrepresent common, boring transitions and dilute rare successes. Buffer size, warm-up length and sampling distribution are real hyperparameters.</p>
+<h3 class="unnumbered" id="is-this-already-dqn">Is this already DQN?</h3>
+<p>DQN is neural Q-learning stabilized primarily with:</p>
+<ol>
+<li><p>experience replay;</p></li>
+<li><p>a separate target network.</p></li>
+</ol>
+<p>Today we add replay. The target still comes from the rapidly changing online network. Next session will separate the target network.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>LLM RL also reuses stored prompts, responses, rewards and log-probabilities. But old language-model trajectories can become stale quickly as the policy changes. Later, importance ratios and PPO will make that policy mismatch explicit.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: why correlated batches are bad</div>
+<p>If a batch of <span class="math inline">\(B\)</span> gradient samples has variance <span class="math inline">\(\sigma^2\)</span> and pairwise correlation <span class="math inline">\(\rho\)</span>, then <span class="math display">\[\operatorname{Var}\Big[\tfrac1B\textstyle\sum_i g_i\Big]=\frac{\sigma^2}{B}\big(1+(B-1)\rho\big),
+\qquad B_{\text{eff}}=\frac{B}{1+(B-1)\rho}.\]</span></p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/f04397411eef.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Consecutive frames are highly correlated: a batch of 32 can carry the information of about 2 samples.</em></p>
+</div>
+<p><strong>Why replay needs an off-policy method:</strong> old transitions came from an older <span class="math inline">\(\epsilon\)</span>-greedy policy. Q-learning’s target <span class="math inline">\(\max_{a&#39;}Q(s&#39;,a&#39;)\)</span> doesn’t care which policy collected the data, so reusing it is valid. SARSA’s target would be stale.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Replay = decorrelation + data reuse.</p></li>
+<li><p>It works because Q-learning is off-policy.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: FIFO buffer, capacity 4</div>
+<p>Push transitions <span class="math inline">\(t_1\ldots t_6\)</span> into a buffer of capacity 4: <span class="math inline">\(t_1,t_2\)</span> are evicted, leaving <span class="math inline">\(\{t_3,t_4,t_5,t_6\}\)</span>. Without replay, a batch of 2 is always <span class="math inline">\((t_5,t_6)\)</span>: two adjacent, correlated frames. With uniform replay, each of the <span class="math inline">\(\binom42=6\)</span> pairs is equally likely, and only 3 of the 6 are adjacent.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Storing the <em>reset</em> observation as <span class="math inline">\(s&#39;\)</span> at an episode end.</p></li>
+<li><p>Training before the buffer has a reasonable warm-up size.</p></li>
+<li><p>Storing tensors that still carry gradients (memory blow-up).</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Neural Q-learning with an experience replay buffer</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> buffer capacity <span class="math inline">\(C\)</span>, batch size <span class="math inline">\(B\)</span>, warm-up size <span class="math inline">\(W\)</span>, network <span class="math inline">\(Q_\theta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\mathcal D\gets\)</span> empty FIFO buffer of capacity <span class="math inline">\(C\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each environment step <strong>do</strong></div>
+<div class="algo-line" style="--d:1">act <span class="math inline">\(\epsilon\)</span>-greedily; store <span class="math inline">\((s,a,r,s&#39;,d)\)</span> in <span class="math inline">\(\mathcal D\)</span> <em>▷ oldest item evicted when full</em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(|\mathcal D|\ge W\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">sample a minibatch <span class="math inline">\(\{(s_j,a_j,r_j,s&#39;_j,d_j)\}_{j=1}^B\)</span> <strong>uniformly</strong> from <span class="math inline">\(\mathcal D\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(y_j\gets r_j+\gamma(1-d_j)\max_{a&#39;}Q_\theta(s&#39;_j,a&#39;)\)</span> <em>▷ no gradient</em></div>
+<div class="algo-line" style="--d:2">gradient step on <span class="math inline">\(\frac1B\sum_j\big(y_j-Q_\theta(s_j,a_j)\big)^2\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-add-a-replay-buffer">3. PyTorch exercise — add a replay buffer</h3>
+<p>Complete the TODOs:</p>
+<pre class="code python"><code class="language-python">import random
+from collections import deque
+
+import torch
+from torch import nn
+
+random.seed(7)
+torch.manual_seed(7)
+
+num_states = 4
+num_actions = 2
+gamma = 0.95
+epsilon = 0.2
+
+batch_size = 32
+buffer = deque(maxlen=1000)
+
+q_net = nn.Sequential(
+    nn.Linear(1, 32),
+    nn.ReLU(),
+    nn.Linear(32, num_actions),
+)
+
+optimizer = torch.optim.Adam(q_net.parameters(), lr=3e-3)
+
+
+def encode(states):
+    # List of integer states -&gt; [batch, features=1]
+    return torch.tensor(
+        states, dtype=torch.float32
+    ).unsqueeze(1) / (num_states - 1)
+
+
+def choose_action(state):
+    if random.random() &lt; epsilon:
+        return random.randrange(num_actions)
+
+    with torch.no_grad():
+        return q_net(encode([state])).argmax(dim=1).item()
+
+
+def train_batch():
+    # TODO 1: Randomly sample transitions.
+    batch = ...
+
+    states, actions, rewards, next_states, dones = zip(*batch)
+
+    states = encode(states)                  # [B, 1]
+    next_states = encode(next_states)        # [B, 1]
+    actions = torch.tensor(actions).unsqueeze(1)  # [B, 1]
+    rewards = torch.tensor(
+        rewards, dtype=torch.float32
+    ).unsqueeze(1)                           # [B, 1]
+    dones = torch.tensor(
+        dones, dtype=torch.float32
+    ).unsqueeze(1)                           # [B, 1]
+
+    # TODO 2: Select Q(s, a) for each transition.
+    predictions = ...
+
+    with torch.no_grad():
+        # TODO 3: Find the maximum next-action value.
+        best_next_q = ...
+
+        # TODO 4: Apply the terminal continuation mask.
+        targets = ...
+
+    # TODO 5: Calculate the batch loss.
+    loss = ...
+
+    optimizer.zero_grad()
+    loss.backward()
+
+    # Practical protection against occasional large updates.
+    nn.utils.clip_grad_norm_(q_net.parameters(), max_norm=5.0)
+
+    optimizer.step()
+    return loss.item()
+
+
+losses = []
+episode_lengths = []
+
+for episode in range(800):
+    state = 0
+
+    for step in range(20):
+        action = choose_action(state)
+
+        next_state = (
+            max(0, state - 1)
+            if action == 0
+            else min(num_states - 1, state + 1)
+        )
+
+        done = next_state == num_states - 1
+        reward = 1.0 if done else -0.01
+
+        # TODO 6: Store the transition.
+        buffer.append(...)
+
+        # Warm up before requesting a full minibatch.
+        if len(buffer) &gt;= batch_size:
+            losses.append(train_batch())
+
+        if done:
+            episode_lengths.append(step + 1)
+            break
+
+        state = next_state
+
+
+with torch.no_grad():
+    all_states = encode(range(num_states))
+    learned_q = q_net(all_states)
+
+print(&quot;Buffer size:&quot;, len(buffer))
+print(&quot;Learned Q:\n&quot;, learned_q)
+print(&quot;Greedy actions:&quot;, learned_q.argmax(dim=1))
+print(&quot;Final mean loss:&quot;, sum(losses[-100:]) / 100)
+print(&quot;Final mean episode length:&quot;, sum(episode_lengths[-50:]) / 50)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What should the greedy action be in states <span style="background-color: codeinlinebg"><code> 0</code></span>, <span style="background-color: codeinlinebg"><code> 1</code></span>, and <span style="background-color: codeinlinebg"><code> 2</code></span>?</p></li>
+<li><p>Why must training wait until the buffer contains at least 32 transitions?</p></li>
+<li><p>Does a buffer size of 1000 mean exactly 1000 unique transitions?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample with <span style="background-color: codeinlinebg"><code> random.sample(buffer, batch_size)</code></span>.</p></li>
+<li><p>Network outputs <span style="background-color: codeinlinebg"><code> [B, actions]</code></span>; use <span style="background-color: codeinlinebg"><code> gather(1, actions)</code></span>.</p></li>
+<li><p>Preserve <span style="background-color: codeinlinebg"><code> [B, 1]</code></span> using <span style="background-color: codeinlinebg"><code> max(dim=1, keepdim=True)</code></span>.</p></li>
+<li><p>Continuation mask: <span style="background-color: codeinlinebg"><code> 1.0 - dones</code></span></p></li>
+<li><p>Store <span style="background-color: codeinlinebg"><code> (state, action, reward, next_state, done)</code></span>.</p></li>
+<li><p>Huber loss: <span style="background-color: codeinlinebg"><code> nn.functional.smooth_l1_loss</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Remove <span style="background-color: codeinlinebg"><code> .unsqueeze(1)</code></span> from <span style="background-color: codeinlinebg"><code> rewards</code></span>.</p>
+<p>You then combine:</p>
+<pre class="code python"><code class="language-python">rewards:    [B]
+best_next_q: [B, 1]</code></pre>
+<p>Broadcasting produces <span style="background-color: codeinlinebg"><code> [B, B]</code></span> targets without necessarily raising an exception. This silent shape expansion is especially dangerous because training still runs.</p>
+<p>Add:</p>
+<pre class="code python"><code class="language-python">assert predictions.shape == targets.shape == (batch_size, 1)</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why are consecutive environment transitions not IID?</p></li>
+<li><p>How does replay improve sample efficiency?</p></li>
+<li><p>Why can Q-learning use transitions generated by an older behaviour policy?</p></li>
+<li><p>Does detaching targets prevent the numerical target values from changing between updates?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">def train_batch():
+    batch = random.sample(buffer, batch_size)
+
+    states, actions, rewards, next_states, dones = zip(*batch)
+
+    states = encode(states)
+    next_states = encode(next_states)
+    actions = torch.tensor(actions).unsqueeze(1)
+    rewards = torch.tensor(
+        rewards, dtype=torch.float32
+    ).unsqueeze(1)
+    dones = torch.tensor(
+        dones, dtype=torch.float32
+    ).unsqueeze(1)
+
+    predictions = q_net(states).gather(1, actions)
+
+    with torch.no_grad():
+        best_next_q = (
+            q_net(next_states)
+            .max(dim=1, keepdim=True)
+            .values
+        )
+
+        targets = (
+            rewards
+            + gamma * (1.0 - dones) * best_next_q
+        )
+
+    assert predictions.shape == targets.shape == (batch_size, 1)
+
+    loss = nn.functional.smooth_l1_loss(
+        predictions,
+        targets,
+    )
+
+    optimizer.zero_grad()
+    loss.backward()
+    nn.utils.clip_grad_norm_(q_net.parameters(), 5.0)
+    optimizer.step()
+
+    return loss.item()</code></pre>
+<p>Store each transition with:</p>
+<pre class="code python"><code class="language-python">buffer.append(
+    (state, action, reward, next_state, done)
+)</code></pre>
+<p>The greedy actions for nonterminal states should normally be:</p>
+<pre class="code text"><code class="language-plaintext">state 0: right
+state 1: right
+state 2: right</code></pre>
+<p>The terminal row can contain arbitrary network outputs because no action is taken there. Correct terminal masking prevents those outputs from entering the target.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Each transition’s state depends directly on the preceding transition, so nearby samples contain similar information.</p></li>
+<li><p>Stored transitions can participate in multiple gradient updates.</p></li>
+<li><p>Its greedy target policy is separate from the behaviour policy that collected the transition.</p></li>
+<li><p>No. Detaching blocks gradients; the online network’s changing parameters can still produce different target values later.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The target is supervision for the current prediction; target-side gradients would let optimization move both sides.</p></li>
+<li><p>Updating shared parameters for one state can unintentionally change predictions for other states.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> Experience replay turns a chronological stream into shuffled training batches. It reduces correlation and reuses data, but the targets are still moving—so DQN needs one more stabilizer: a target network.</p>

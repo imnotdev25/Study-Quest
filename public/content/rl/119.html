@@ -1,0 +1,540 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>If measured KL exceeds its target, should an adaptive controller increase or decrease <span class="math inline">\(\beta\)</span>?</p></li>
+<li><p>Why should that controller use a globally aggregated rollout statistic rather than individual minibatches?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="two-valid-routes-to-kl-regularization">2. Two valid routes to KL regularization</h3>
+<p>Consider:</p>
+<p><span class="math display">\[J(\theta)
+=
+E_{\pi_\theta}[R]
+-
+\beta D_{\mathrm{KL}}
+(\pi_\theta\|\pi_{\text{ref}})\]</span></p>
+<p>There are two common implementations.</p>
+<p><strong>Route A — reward shaping</strong></p>
+<p>For a sampled token:</p>
+<p><span class="math display">\[r_t^{\text{shaped}}
+=
+r_t^{\text{task}}
+-
+\beta
+\left[
+\log\pi_\theta(a_t|s_t)
+-
+\log\pi_{\text{ref}}(a_t|s_t)
+\right]\]</span></p>
+<p>Freeze this reward, calculate returns or advantages, then use the ordinary policy-gradient objective:</p>
+<p><span class="math display">\[E[
+\nabla_\theta\log\pi_\theta(a_t|s_t)
+\operatorname{stopgrad}(A_t)
+]\]</span></p>
+<p><strong>Route B — explicit KL loss</strong></p>
+<p>Keep task rewards unshaped and optimize:</p>
+<p><span class="math display">\[J_{\text{actor}}
+=
+J_{\text{task}}
+-
+\beta D_{\mathrm{KL}}
+(\pi_\theta\|\pi_{\text{ref}})\]</span></p>
+<p>Both routes represent one KL penalty under ideal on-policy expectations. Applying both normally counts it twice.</p>
+<p>Why is detaching the shaped KL reward valid? For:</p>
+<p><span class="math display">\[x_\theta(a)=\log\pi_\theta(a)-\log q(a)\]</span></p>
+<p>the direct derivative contributes:</p>
+<p><span class="math display">\[E_{\pi_\theta}[
+\nabla_\theta x_\theta(a)
+]
+=
+E_{\pi_\theta}[
+\nabla_\theta\log\pi_\theta(a)
+]
+=0\]</span></p>
+<p>The score-function path already supplies the expected KL gradient. Leaving the reward attached inside <span style="background-color: codeinlinebg"><code> log_prob * advantage</code></span> introduces an additional finite-sample gradient path.</p>
+<p>For PPO, calculate shaped rewards at rollout collection and freeze them across PPO epochs. Recomputing them after every update makes the advantages move while optimizing them.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>sampled actions, rewards and log-probabilities: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>LLM task rewards, token KL and mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>full categorical logits for explicit KL: <span style="background-color: codeinlinebg"><code> [B, T, V]</code></span></p></li>
+</ul>
+<p>Apply token KL only to valid response tokens. Sequence-level task reward is usually placed once, often at the final valid token—not repeated at every position.</p>
+<p>DPO already incorporates reference log-ratios inside its preference loss. Adding an additional PPO-style KL reward produces a new hybrid objective, not standard DPO.</p>
+<h3 class="unnumbered" id="pytorch-exercise-double-counting-reverses-the-update">3. PyTorch exercise — double-counting reverses the update</h3>
+<p>A Bernoulli policy currently chooses action <span style="background-color: codeinlinebg"><code> 1</code></span> with probability <span style="background-color: codeinlinebg"><code> 0.8</code></span>. Action <span style="background-color: codeinlinebg"><code> 1</code></span> earns reward <span style="background-color: codeinlinebg"><code> 1</code></span>; the reference chooses it with probability <span style="background-color: codeinlinebg"><code> 0.5</code></span>.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_samples = 200_000
+beta = 0.50
+
+initial_probability = torch.tensor(0.80)
+reference_probability = torch.tensor(0.50)
+
+policy_snapshot_logit = torch.logit(
+    initial_probability
+)
+
+reference_logit = torch.logit(
+    reference_probability
+)
+
+
+# TODO 1: Stable Bernoulli utilities.
+def sampled_log_probability(logit, actions):
+    return ...
+
+
+def exact_bernoulli_kl(
+    policy_logit,
+    reference_logit,
+):
+    policy_probability = ...
+
+    policy_log_probability = ...
+    policy_log_complement = ...
+
+    reference_log_probability = ...
+    reference_log_complement = ...
+
+    return ...
+
+
+# Collect one frozen on-policy rollout.
+actions = (
+    torch.rand(num_samples)
+    &lt; initial_probability
+).to(torch.float64)
+
+task_rewards = actions.clone()
+
+
+# TODO 2: Calculate the exact regularized objective
+# and gradient using full probabilities.
+exact_theta = (
+    policy_snapshot_logit
+    .detach()
+    .clone()
+    .requires_grad_(True)
+)
+
+exact_task_value = ...
+
+exact_kl = ...
+
+exact_objective = ...
+
+exact_objective.backward()
+
+exact_gradient = ...
+
+
+# TODO 3: Construct detached shaped rewards using
+# policy and reference values at collection time.
+with torch.no_grad():
+    rollout_log_probabilities = ...
+
+    reference_sample_log_probabilities = ...
+
+    sampled_kl_rewards = ...
+
+    shaped_rewards = ...
+
+
+# TODO 4: Compare four gradient paths.
+def estimate_gradient(mode):
+    theta = (
+        policy_snapshot_logit
+        .detach()
+        .clone()
+        .requires_grad_(True)
+    )
+
+    current_log_probabilities = ...
+
+    task_surrogate = ...
+
+    current_exact_kl = ...
+
+    if mode == &quot;detached_reward&quot;:
+        objective = ...
+
+    elif mode == &quot;explicit_kl&quot;:
+        objective = ...
+
+    elif mode == &quot;double_counted&quot;:
+        objective = ...
+
+    elif mode == &quot;live_reward&quot;:
+        # Incorrect: the sampled reward remains
+        # attached to current policy log-probability.
+        live_shaped_rewards = ...
+
+        objective = ...
+
+    else:
+        raise ValueError(mode)
+
+    objective.backward()
+
+    return theta.grad.detach()
+
+
+detached_reward_gradient = estimate_gradient(
+    &quot;detached_reward&quot;
+)
+
+explicit_kl_gradient = estimate_gradient(
+    &quot;explicit_kl&quot;
+)
+
+double_counted_gradient = estimate_gradient(
+    &quot;double_counted&quot;
+)
+
+live_reward_gradient = estimate_gradient(
+    &quot;live_reward&quot;
+)
+
+
+# TODO 5: Analytic diagnostics and Monte Carlo SE.
+task_gradient = ...
+
+kl_gradient = ...
+
+expected_regularized_gradient = ...
+
+expected_double_counted_gradient = ...
+
+score_gradients = ...
+
+correct_sample_contributions = ...
+
+correct_estimator_se = ...
+
+print(&quot;Exact task value:&quot;, exact_task_value.item())
+print(&quot;Exact KL:&quot;, exact_kl.item())
+print(&quot;Exact regularized gradient:&quot;, exact_gradient.item())
+
+print(&quot;\nEstimated gradients&quot;)
+print(
+    &quot;Detached shaped reward:&quot;,
+    detached_reward_gradient.item(),
+)
+print(
+    &quot;Explicit KL loss:&quot;,
+    explicit_kl_gradient.item(),
+)
+print(
+    &quot;Double-counted KL:&quot;,
+    double_counted_gradient.item(),
+)
+print(
+    &quot;Non-detached reward:&quot;,
+    live_reward_gradient.item(),
+)
+
+print(&quot;\nAnalytic task gradient:&quot;, task_gradient.item())
+print(&quot;Analytic KL gradient:&quot;, kl_gradient.item())
+print(
+    &quot;Expected regularized gradient:&quot;,
+    expected_regularized_gradient.item(),
+)
+print(
+    &quot;Expected double-counted gradient:&quot;,
+    expected_double_counted_gradient.item(),
+)
+print(
+    &quot;Detached-estimator SE:&quot;,
+    correct_estimator_se.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Does task reward alone increase or decrease the policy logit?</p></li>
+<li><p>Does KL toward the <span style="background-color: codeinlinebg"><code> 0.5</code></span> reference push in the same direction?</p></li>
+<li><p>Should the detached-reward and explicit-KL gradients agree?</p></li>
+<li><p>Can double-counting reverse the update direction?</p></li>
+<li><p>What happens if <span style="background-color: codeinlinebg"><code> beta</code></span> is set to zero?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Stable Bernoulli log-probability:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">torch.where(
+    actions.bool(),
+    F.logsigmoid(logit),
+    F.logsigmoid(-logit),
+)</code></pre>
+<ul>
+<li><p>Use full Bernoulli probabilities for exact KL.</p></li>
+<li><p>Freeze sampled KL rewards inside <span style="background-color: codeinlinebg"><code> torch.no_grad()</code></span>.</p></li>
+<li><p>A REINFORCE surrogate is <span style="background-color: codeinlinebg"><code> mean(log_probability * reward)</code></span>.</p></li>
+<li><p>For a Bernoulli logit:</p></li>
+</ul>
+<p><span class="math display">\[\nabla_\theta\log\pi_\theta(a)=a-p\]</span></p>
+<ul>
+<li><p>Its KL gradient is:</p></li>
+</ul>
+<p><span class="math display">\[\nabla_\theta D_{\mathrm{KL}}(p\|q)
+=
+p(1-p)(\theta-\theta_{\text{ref}})\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use shaped rewards and also add an explicit KL loss.</p></li>
+<li><p>Recompute shaped rewards during every PPO epoch.</p></li>
+<li><p>Forget <span style="background-color: codeinlinebg"><code> .detach()</code></span> on advantages or returns.</p></li>
+<li><p>Reverse the KL sign and reward divergence.</p></li>
+<li><p>Repeat a sequence reward at every response token.</p></li>
+<li><p>Include prompt and padding tokens in KL shaping.</p></li>
+<li><p>Freeze the policy instead of the reference model.</p></li>
+<li><p>Compare gradient norms after changing task-reward scale.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does detaching shaped KL reward not discard the expected KL gradient?</p></li>
+<li><p>When are reward shaping and explicit KL most nearly equivalent?</p></li>
+<li><p>Why might explicit full-vocabulary KL have lower variance?</p></li>
+<li><p>Which quantities should remain frozen across PPO epochs?</p></li>
+<li><p>What diagnostics reveal accidental double-counting?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Bernoulli utilities:</p>
+<pre class="code python"><code class="language-python">def sampled_log_probability(logit, actions):
+    return torch.where(
+        actions.bool(),
+        F.logsigmoid(logit),
+        F.logsigmoid(-logit),
+    )
+
+
+def exact_bernoulli_kl(
+    policy_logit,
+    reference_logit,
+):
+    policy_probability = torch.sigmoid(
+        policy_logit
+    )
+
+    policy_log_probability = F.logsigmoid(
+        policy_logit
+    )
+
+    policy_log_complement = F.logsigmoid(
+        -policy_logit
+    )
+
+    reference_log_probability = F.logsigmoid(
+        reference_logit
+    )
+
+    reference_log_complement = F.logsigmoid(
+        -reference_logit
+    )
+
+    return (
+        policy_probability
+        * (
+            policy_log_probability
+            - reference_log_probability
+        )
+        + (1.0 - policy_probability)
+        * (
+            policy_log_complement
+            - reference_log_complement
+        )
+    )</code></pre>
+<p>Exact objective:</p>
+<pre class="code python"><code class="language-python">exact_task_value = torch.sigmoid(
+    exact_theta
+)
+
+exact_kl = exact_bernoulli_kl(
+    exact_theta,
+    reference_logit,
+)
+
+exact_objective = (
+    exact_task_value
+    - beta * exact_kl
+)
+
+exact_objective.backward()
+
+exact_gradient = (
+    exact_theta.grad.detach()
+)</code></pre>
+<p>Detached shaped rewards:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    rollout_log_probabilities = (
+        sampled_log_probability(
+            policy_snapshot_logit,
+            actions,
+        )
+    )
+
+    reference_sample_log_probabilities = (
+        sampled_log_probability(
+            reference_logit,
+            actions,
+        )
+    )
+
+    sampled_kl_rewards = (
+        rollout_log_probabilities
+        - reference_sample_log_probabilities
+    )
+
+    shaped_rewards = (
+        task_rewards
+        - beta * sampled_kl_rewards
+    )</code></pre>
+<p>Gradient paths:</p>
+<pre class="code python"><code class="language-python">def estimate_gradient(mode):
+    theta = (
+        policy_snapshot_logit
+        .detach()
+        .clone()
+        .requires_grad_(True)
+    )
+
+    current_log_probabilities = (
+        sampled_log_probability(
+            theta,
+            actions,
+        )
+    )
+
+    task_surrogate = (
+        current_log_probabilities
+        * task_rewards
+    ).mean()
+
+    current_exact_kl = (
+        exact_bernoulli_kl(
+            theta,
+            reference_logit,
+        )
+    )
+
+    if mode == &quot;detached_reward&quot;:
+        objective = (
+            current_log_probabilities
+            * shaped_rewards.detach()
+        ).mean()
+
+    elif mode == &quot;explicit_kl&quot;:
+        objective = (
+            task_surrogate
+            - beta * current_exact_kl
+        )
+
+    elif mode == &quot;double_counted&quot;:
+        objective = (
+            (
+                current_log_probabilities
+                * shaped_rewards.detach()
+            ).mean()
+            - beta * current_exact_kl
+        )
+
+    elif mode == &quot;live_reward&quot;:
+        live_shaped_rewards = (
+            task_rewards
+            - beta
+            * (
+                current_log_probabilities
+                - reference_sample_log_probabilities
+            )
+        )
+
+        objective = (
+            current_log_probabilities
+            * live_shaped_rewards
+        ).mean()
+
+    else:
+        raise ValueError(mode)
+
+    objective.backward()
+
+    return theta.grad.detach()</code></pre>
+<p>Analytic diagnostics:</p>
+<pre class="code python"><code class="language-python">task_gradient = (
+    initial_probability
+    * (1.0 - initial_probability)
+)
+
+kl_gradient = (
+    initial_probability
+    * (1.0 - initial_probability)
+    * (
+        policy_snapshot_logit
+        - reference_logit
+    )
+)
+
+expected_regularized_gradient = (
+    task_gradient
+    - beta * kl_gradient
+)
+
+expected_double_counted_gradient = (
+    task_gradient
+    - 2.0 * beta * kl_gradient
+)
+
+score_gradients = (
+    actions - initial_probability
+)
+
+correct_sample_contributions = (
+    score_gradients
+    * shaped_rewards
+)
+
+correct_estimator_se = (
+    correct_sample_contributions.std(
+        correction=0
+    )
+    / math.sqrt(num_samples)
+)</code></pre>
+<p>At <span class="math inline">\(p=0.8\)</span> and <span class="math inline">\(q=0.5\)</span>:</p>
+<p><span class="math display">\[\nabla J_{\text{task}}
+=
+0.8(0.2)
+=
+0.16\]</span></p>
+<p>The KL gradient is:</p>
+<p><span class="math display">\[\nabla D_{\mathrm{KL}}
+=
+0.8(0.2)\log(4)
+\approx0.2218\]</span></p>
+<p>Therefore, one KL penalty gives:</p>
+<p><span class="math display">\[0.16-0.5(0.2218)
+\approx0.0491\]</span></p>
+<p>The policy still moves toward action <span style="background-color: codeinlinebg"><code> 1</code></span>, but cautiously.</p>
+<p>Counting KL twice gives:</p>
+<p><span class="math display">\[0.16-2(0.5)(0.2218)
+\approx-0.0618\]</span></p>
+<p>The update direction reverses. In this particular uniform-reference example, leaving the shaped reward attached produces approximately the same incorrect gradient as explicit double-counting.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The score-function gradient through the fixed shaped reward already supplies the KL gradient; the omitted direct term has zero expectation.</p></li>
+<li><p>They are closest with on-policy samples, fixed rewards, matching reductions, full support and sufficiently large batches.</p></li>
+<li><p>It sums over the complete action distribution rather than relying on sampled token log-ratios, though <span style="background-color: codeinlinebg"><code> [B,T,V]</code></span> computation can be expensive.</p></li>
+<li><p>Rollout actions, old log-probabilities, shaped rewards, returns, advantages, masks and normalization statistics.</p></li>
+<li><p>Compare task-only, KL-only and total gradients; log raw versus shaped reward, KL coefficient, KL loss, gradient norms and update direction.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Increase <span class="math inline">\(\beta\)</span>: a stronger penalty should reduce future KL.</p></li>
+<li><p>Minibatches are noisy and can have different valid-token counts. Aggregate the intended numerator and denominator globally before updating the controller.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> choose one KL gradient path. Either freeze sampled KL inside reward-shaped advantages or apply an explicit differentiable KL loss; doing both—or leaving the reward attached—can turn cautious improvement into an update in the opposite direction.</p>

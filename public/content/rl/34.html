@@ -1,0 +1,339 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: cooking with a recipe app</div>
+<p>You decide “check the fridge” (action). The fridge shows you what’s inside (observation, which you didn’t create). You decide “make an omelette.” Training should judge <em>your</em> decisions, not the fridge’s contents. In tool-use RL, the agent’s tokens are actions, while tool outputs are the environment talking back, and they get masked out of the loss.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/5acc41842e9b.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Train on blue (agent) tokens only. Orange is an observation, like a game screen.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why must RL evaluation hold tool and token budgets constant?</p></li>
+<li><p>Why can training reward improve while independent task utility declines?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="an-llm-agent-has-actions-beyond-ordinary-tokens">2. An LLM agent has actions beyond ordinary tokens</h3>
+<p>For a tool-using agent, the state includes the prompt and interaction history:</p>
+<p><span class="math display">\[S_t=
+(x,\;y_{&lt;t},\;\text{previous tool calls},\;\text{tool results})\]</span></p>
+<p>An action may be:</p>
+<ul>
+<li><p>produce another language token;</p></li>
+<li><p>issue a structured tool call;</p></li>
+<li><p>return the final answer;</p></li>
+<li><p>terminate or ask for clarification.</p></li>
+</ul>
+<p>When the agent calls a tool, the environment executes it and returns an observation:</p>
+<p><span class="math display">\[A_t=\texttt{search(query)}\]</span></p>
+<p><span class="math display">\[O_{t+1}=\text{actual search result}\]</span></p>
+<p>The tool result is not an action selected by the policy. It is new environmental evidence used to construct the next state.</p>
+<p>A trajectory might be:</p>
+<p><span class="math display">\[\text{prompt}
+\rightarrow
+\text{search call}
+\rightarrow
+\text{search result}
+\rightarrow
+\text{database call}
+\rightarrow
+\text{database result}
+\rightarrow
+\text{answer}\]</span></p>
+<h3 class="unnumbered" id="rewards-and-costs">Rewards and costs</h3>
+<p>An agent objective often includes outcome reward and interaction costs:</p>
+<p><span class="math display">\[G
+=
+R_{\text{success}}
+-
+c_{\text{tool}}N_{\text{calls}}
+-
+c_{\text{token}}N_{\text{tokens}}
+-
+c_{\text{invalid}}N_{\text{invalid}}\]</span></p>
+<p>Without costs, an agent may call tools repeatedly. With excessive costs, it may guess rather than retrieve necessary evidence.</p>
+<p>The policy-gradient loss is still:</p>
+<p><span class="math display">\[L
+=
+-\mathbb E
+\left[
+\hat A
+\sum_t M_t
+\log\pi_\theta(A_t\mid S_t)
+\right]\]</span></p>
+<p>Here <span class="math inline">\(M_t\)</span> marks actions that actually occurred. Once an episode terminates, later placeholder actions must be masked.</p>
+<p>Tool use creates delayed credit: a search call may have immediate cost but enable a correct final answer later.</p>
+<p>For batch size <span class="math inline">\(B\)</span> and maximum two decisions:</p>
+<ul>
+<li><p>states and actions: <span style="background-color: codeinlinebg"><code> [B, 2]</code></span></p></li>
+<li><p>action-validity mask: <span style="background-color: codeinlinebg"><code> [B, 2]</code></span></p></li>
+<li><p>rewards per step: <span style="background-color: codeinlinebg"><code> [B, 2]</code></span></p></li>
+<li><p>episode returns: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="why-offline-demonstrations-are-not-enough">Why offline demonstrations are not enough</h3>
+<p>SFT or DPO can teach what a good tool-call trace looks like. They do not, by themselves, let the policy discover how its current calls affect a live environment.</p>
+<p>Online agent RL repeatedly:</p>
+<ol>
+<li><p>samples a tool call;</p></li>
+<li><p>executes it;</p></li>
+<li><p>observes the real result;</p></li>
+<li><p>continues from that result;</p></li>
+<li><p>rewards the final outcome.</p></li>
+</ol>
+<p>Never substitute an imagined tool result for the actual environment response during evaluation.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the trajectory objective</div>
+<p><span class="math inline">\(\log\pi_\theta(\tau)=\sum_tm_t\log\pi_\theta(\text{token}_t\mid\text{history}_{&lt;t})\)</span>, with <span class="math inline">\(m_t=1\)</span> only on agent-generated tokens. Tool outputs are <em>transitions</em>: <span class="math inline">\(s_{t+1}=s_t\oplus\text{call}\oplus\text{tool}(\text{call})\)</span>.</p>
+<p><strong>Reward with costs:</strong> <span class="math inline">\(R=\mathbb 1[\text{correct}]-c\cdot\#\text{tool calls}\)</span>. Without <span class="math inline">\(c\)</span>, the agent may learn to search 40 times. With <span class="math inline">\(c\)</span> too high, it never searches.</p>
+<p><strong>Delayed credit:</strong> the search call’s credit comes from the final answer several turns later. This is plain REINFORCE/GAE credit assignment across turns, with masks so steps after termination never count.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Agent tokens are actions, and tool outputs are observations.</p></li>
+<li><p>Explicit costs and strict masks define what “good tool use” means.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: tool cost changes the best plan</div>
+<p>One search gives success 0.70. Five searches give 0.80. With cost <span class="math inline">\(c=0.05\)</span> per call: <span class="math inline">\(0.70-0.05=0.65\)</span> vs <span class="math inline">\(0.80-0.25=0.55\)</span>, so one call wins. With <span class="math inline">\(c=0.01\)</span>: <span class="math inline">\(0.69\)</span> vs <span class="math inline">\(0.75\)</span>, so five calls win. The cost <em>defines</em> the trade-off.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Training on tool-output tokens.</p></li>
+<li><p>Tools leaking the answer (for example, search over the test set).</p></li>
+<li><p>Steps after the final answer still counted in returns.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Tool-use rollout with an action mask</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy <span class="math inline">\(\pi_\theta\)</span>, tools, max turns <span class="math inline">\(H\)</span>, cost per tool call <span class="math inline">\(c\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(h\gets\)</span> question; mask <span class="math inline">\(\gets\)</span> all zeros for the question; calls <span class="math inline">\(\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> turn <span class="math inline">\(=1,\dots,H\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">generate segment <span class="math inline">\(g\sim\pi_\theta(\cdot|h)\)</span> until a tool call or a final answer</div>
+<div class="algo-line" style="--d:1">append <span class="math inline">\(g\)</span> to <span class="math inline">\(h\)</span> with mask <span class="math inline">\(1\)</span> <em>▷ agent tokens are actions</em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(g\)</span> is a tool call <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(o\gets\)</span> tool output; append <span class="math inline">\(o\)</span> to <span class="math inline">\(h\)</span> with mask <span class="math inline">\(0\)</span>; calls <span class="math inline">\(\gets\)</span> calls <span class="math inline">\(+1\)</span> <em>▷ observation</em></div>
+<div class="algo-line" style="--d:1"><strong>else</strong></div>
+<div class="algo-line" style="--d:2"><strong>break</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(R\gets\mathbb 1[\text{answer correct}]-c\cdot\text{calls}\)</span></div>
+<div class="algo-line" style="--d:0">train with a masked policy gradient on mask <span class="math inline">\(=1\)</span> tokens only</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-learn-search-then-answer">3. PyTorch exercise — learn “search, then answer”</h3>
+<p>There are two states and three actions:</p>
+<pre class="code text"><code class="language-plaintext">state 0: before searching
+state 1: after receiving evidence
+
+action 0: answer
+action 1: search
+action 2: irrelevant lookup</code></pre>
+<p>The successful trajectory is <span style="background-color: codeinlinebg"><code> search → answer</code></span>.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+batch_size = 512
+num_updates = 180
+
+# [states=2, actions=3]
+policy_logits = torch.nn.Parameter(
+    torch.zeros(2, 3)
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.05,
+)
+
+for update in range(num_updates):
+    # ----- First decision: state 0 -----
+    policy_state_0 = Categorical(
+        logits=policy_logits[0]
+    )
+
+    # TODO 1: Sample first actions and their log-probabilities.
+    actions_0 = ...
+    log_probs_0 = ...
+
+    # Only search transitions to state 1.
+    # TODO 2: Construct the second-step validity mask.
+    step_1_mask = ...
+
+    # ----- Second decision: state 1 -----
+    policy_state_1 = Categorical(
+        logits=policy_logits[1]
+    )
+
+    # Sample for the whole batch; the mask will exclude
+    # episodes that terminated after the first action.
+    actions_1 = ...
+    log_probs_1 = ...
+
+    with torch.no_grad():
+        # Immediate first-step reward:
+        # direct answer=0, search=-0.05, irrelevant=-0.2
+        # TODO 3: Compute [B] first-step rewards.
+        rewards_0 = ...
+
+        # After search:
+        # answer=+1, repeated search=-0.1, irrelevant=-0.2
+        second_action_rewards = torch.tensor([
+            1.0, -0.1, -0.2
+        ])
+
+        # TODO 4: Mask rewards after terminated episodes.
+        rewards_1 = ...
+
+        returns = rewards_0 + rewards_1
+
+        advantages = returns - returns.mean()
+        advantages = advantages / (
+            returns.std(unbiased=False) + 1e-8
+        )
+
+    # TODO 5: Sum log-probabilities of actions that occurred.
+    trajectory_log_probs = ...
+
+    policy_loss = -(
+        trajectory_log_probs
+        * advantages.detach()
+    ).mean()
+
+    optimizer.zero_grad()
+    policy_loss.backward()
+    optimizer.step()
+
+    with torch.no_grad():
+        probabilities = policy_logits.softmax(dim=-1)
+
+        success = (
+            (actions_0 == 1)
+            &amp; (actions_1 == 0)
+        ).float().mean()
+
+        initial_search_rate = (
+            actions_0 == 1
+        ).float().mean()
+
+        mean_calls = (
+            1.0 + step_1_mask
+        ).mean()
+
+    if update in [0, 1, 9, 49, 179]:
+        print(
+            f&quot;update={update:3d}&quot;,
+            f&quot;return={returns.mean().item():.3f}&quot;,
+            f&quot;success={success.item():.3f}&quot;,
+            f&quot;search={initial_search_rate.item():.3f}&quot;,
+            f&quot;calls={mean_calls.item():.3f}&quot;,
+            f&quot;probs={probabilities.tolist()}&quot;,
+        )
+
+print(
+    &quot;Final policy probabilities:\n&quot;,
+    policy_logits.softmax(dim=-1).detach(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which first-state action should dominate?</p></li>
+<li><p>Which second-state action should dominate?</p></li>
+<li><p>Why can the first search action be valuable despite reward <span style="background-color: codeinlinebg"><code> -0.05</code></span>?</p></li>
+<li><p>Should the second-state policy receive gradients from episodes that answered immediately?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample with <span style="background-color: codeinlinebg"><code> policy.sample((batch_size,))</code></span>.</p></li>
+<li><p>The second step occurs only when <span style="background-color: codeinlinebg"><code> actions_0 == 1</code></span>.</p></li>
+<li><p>Use nested <span style="background-color: codeinlinebg"><code> torch.where</code></span> for first-step rewards.</p></li>
+<li><p>Index <span style="background-color: codeinlinebg"><code> second_action_rewards</code></span> using <span style="background-color: codeinlinebg"><code> actions_1</code></span>.</p></li>
+<li><p>Multiply both the second reward and log-probability by <span style="background-color: codeinlinebg"><code> step_1_mask</code></span>.</p></li>
+<li><p>Advantages are fixed trajectory-level credit.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Remove the mask:</p>
+<pre class="code python"><code class="language-python">trajectory_log_probs = (
+    log_probs_0 + log_probs_1
+)</code></pre>
+<p>Now an arbitrary second action receives credit even when the episode terminated after the first action. Training can appear numerically healthy while optimizing actions that never occurred.</p>
+<p>Also remove the tool cost:</p>
+<pre class="code python"><code class="language-python">rewards_0 = torch.zeros(batch_size)</code></pre>
+<p>This particular environment may still learn the correct path, but there is no pressure against unnecessary calls. In a larger environment, repeated harmless-looking tool use can become the easiest reward strategy.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is a tool result an observation rather than a policy action?</p></li>
+<li><p>Why must terminal masking apply to rewards and log-probabilities?</p></li>
+<li><p>What happens if the tool-call penalty is too large?</p></li>
+<li><p>Which metrics should accompany final success rate?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>First decision:</p>
+<pre class="code python"><code class="language-python">actions_0 = policy_state_0.sample(
+    (batch_size,)
+)
+
+log_probs_0 = policy_state_0.log_prob(
+    actions_0
+)</code></pre>
+<p>Second-step mask:</p>
+<pre class="code python"><code class="language-python">step_1_mask = (
+    actions_0 == 1
+).float()</code></pre>
+<p>Second decision:</p>
+<pre class="code python"><code class="language-python">actions_1 = policy_state_1.sample(
+    (batch_size,)
+)
+
+log_probs_1 = policy_state_1.log_prob(
+    actions_1
+)</code></pre>
+<p>First-step rewards:</p>
+<pre class="code python"><code class="language-python">rewards_0 = torch.where(
+    actions_0 == 1,
+    torch.tensor(-0.05),
+    torch.where(
+        actions_0 == 2,
+        torch.tensor(-0.2),
+        torch.tensor(0.0),
+    ),
+)</code></pre>
+<p>Masked second-step rewards:</p>
+<pre class="code python"><code class="language-python">rewards_1 = (
+    second_action_rewards[actions_1]
+    * step_1_mask
+)</code></pre>
+<p>Trajectory log-probabilities:</p>
+<pre class="code python"><code class="language-python">trajectory_log_probs = (
+    log_probs_0
+    + step_1_mask * log_probs_1
+)</code></pre>
+<p>The successful return is:</p>
+<p><span class="math display">\[G(\text{search}\rightarrow\text{answer})
+=
+-0.05+1
+=
+0.95\]</span></p>
+<p>Although search has a negative immediate reward, it enables the later success reward. The same trajectory advantage updates both actions:</p>
+<p><span class="math display">\[\hat A
+\left[
+\nabla\log\pi(\text{search}\mid S_0)
++
+\nabla\log\pi(\text{answer}\mid S_1)
+\right]\]</span></p>
+<p>Training should approach:</p>
+<pre class="code text"><code class="language-plaintext">state 0: search dominates
+state 1: answer dominates</code></pre>
+<p>Episodes that answer immediately have <span style="background-color: codeinlinebg"><code> step_1_mask = 0</code></span>. Their sampled second actions contribute neither reward nor gradient.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The policy chooses the call, but the external system determines what the call returns.</p></li>
+<li><p>Otherwise, artificial actions after termination enter the return and policy loss.</p></li>
+<li><p>The agent may avoid useful tools and guess directly because evidence acquisition becomes too expensive.</p></li>
+<li><p>Track tool-call count, invalid-call rate, latency, token cost, success per step budget, repeated calls and claimed-versus-verified success.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Different tool or token budgets change the opportunity to solve the task, confounding policy quality with inference compute.</p></li>
+<li><p>The optimizer can successfully exploit a proxy that diverges from intended utility.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> tool-use RL trains decisions across an interaction, not just isolated text. Correct trajectories require real observations, delayed credit, explicit costs and strict masks so nonexistent post-termination actions never influence learning.</p>

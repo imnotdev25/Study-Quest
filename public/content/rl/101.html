@@ -1,0 +1,346 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Under equal collection costs, what allocation minimizes the variance of a target-weighted stratified estimate?</p></li>
+<li><p>Why is the raw pooled mean generally biased after deliberate group oversampling?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-best-observed-checkpoint-contains-the-best-noise">2. The best observed checkpoint contains the best noise</h3>
+<p>Suppose <span class="math inline">\(K\)</span> checkpoints have estimated values:</p>
+<p><span class="math display">\[\hat J_k=J_k+\epsilon_k\]</span></p>
+<p>Selecting:</p>
+<p><span class="math display">\[\hat k=\arg\max_k\hat J_k\]</span></p>
+<p>also selects unusually positive noise. Even when every checkpoint has identical true value <span class="math inline">\(J\)</span>:</p>
+<p><span class="math display">\[E[\hat J_{\hat k}]&gt;J\]</span></p>
+<p>This is the winner’s curse. With roughly independent Gaussian estimation errors of standard deviation <span class="math inline">\(s\)</span>, its size grows approximately like:</p>
+<p><span class="math display">\[s\sqrt{2\log K}\]</span></p>
+<p>More candidates and noisier evaluations produce greater optimism.</p>
+<p>An independent confirmation set repairs the claim:</p>
+<ol>
+<li><p>use development data to choose <span class="math inline">\(\hat k\)</span>;</p></li>
+<li><p>lock the checkpoint, decoding settings and metric;</p></li>
+<li><p>estimate <span class="math inline">\(J_{\hat k}\)</span> on untouched confirmation data.</p></li>
+</ol>
+<p>Alternatively, a simultaneous correction such as Bonferroni tests each candidate using:</p>
+<p><span class="math display">\[\alpha_k=\frac{\alpha}{K}\]</span></p>
+<p>This controls the probability that any null candidate is falsely promoted, although it can be conservative when candidates are correlated.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>selection scores: <span style="background-color: codeinlinebg"><code> [R, K]</code></span></p></li>
+<li><p>selected checkpoint IDs: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+<li><p>selected and confirmation scores: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+<li><p>promotion decisions: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>For DPO, choosing the best checkpoint, <span class="math inline">\(\beta\)</span>, seed and prompt template on one preference set and reporting that same score is still selection bias. Preference optimization does not turn reused evaluation data into independent evidence.</p>
+<h3 class="unnumbered" id="pytorch-exercise-20-identical-candidates-produce-a-winner">3. PyTorch exercise — 20 identical candidates produce a “winner”</h3>
+<p>All candidates truly achieve <span style="background-color: codeinlinebg"><code> 0.60</code></span>. Select the best among 20 using 200 episodes, then confirm it using fresh data.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 5_000
+num_candidates = 20
+
+selection_size = 200
+confirmation_size = 2_000
+
+true_value = torch.tensor(0.60)
+promotion_baseline = torch.tensor(0.60)
+
+family_alpha = 0.05
+
+standard_normal = torch.distributions.Normal(
+    torch.tensor(0.0),
+    torch.tensor(1.0),
+)
+
+single_test_z = standard_normal.icdf(
+    torch.tensor(1.0 - family_alpha)
+)
+
+bonferroni_z = standard_normal.icdf(
+    torch.tensor(
+        1.0
+        - family_alpha / num_candidates
+    )
+)
+
+# TODO 1: Generate selection scores for every candidate.
+selection_probabilities = ...
+
+selection_counts = ...
+
+selection_scores = ...
+
+# TODO 2: Select the apparent winner.
+selected_indices = ...
+
+selected_selection_scores = ...
+
+# TODO 3: Evaluate the locked winner on fresh data.
+confirmation_probabilities = ...
+
+confirmation_counts = ...
+
+confirmation_scores = ...
+
+# TODO 4: Compare three promotion rules.
+selection_null_standard_error = ...
+
+confirmation_null_standard_error = ...
+
+naive_selection_lower_bounds = ...
+
+bonferroni_lower_bounds = ...
+
+confirmation_lower_bounds = ...
+
+naive_promotions = ...
+bonferroni_promotions = ...
+confirmation_promotions = ...
+
+naive_false_promotion_rate = ...
+bonferroni_false_promotion_rate = ...
+confirmation_false_promotion_rate = ...
+
+# TODO 5: Measure selection optimism.
+single_candidate_mean = ...
+
+selected_selection_mean = ...
+confirmation_mean = ...
+
+selection_optimism = ...
+
+selection_confirmation_gap = ...
+
+print(&quot;Single-test z:&quot;, single_test_z.item())
+print(&quot;Bonferroni z:&quot;, bonferroni_z.item())
+
+print(
+    &quot;Mean score of candidate 0:&quot;,
+    single_candidate_mean.item(),
+)
+print(
+    &quot;Mean selected score:&quot;,
+    selected_selection_mean.item(),
+)
+print(
+    &quot;Mean confirmation score:&quot;,
+    confirmation_mean.item(),
+)
+print(
+    &quot;Selection optimism:&quot;,
+    selection_optimism.item(),
+)
+print(
+    &quot;Selection-confirmation gap:&quot;,
+    selection_confirmation_gap.item(),
+)
+
+print(
+    &quot;Naive false-promotion rate:&quot;,
+    naive_false_promotion_rate.item(),
+)
+print(
+    &quot;Bonferroni false-promotion rate:&quot;,
+    bonferroni_false_promotion_rate.item(),
+)
+print(
+    &quot;Fresh-confirmation false-promotion rate:&quot;,
+    confirmation_false_promotion_rate.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will candidate <span style="background-color: codeinlinebg"><code> 0</code></span> average near <span style="background-color: codeinlinebg"><code> 0.60</code></span>?</p></li>
+<li><p>Will the selected candidate’s development score be closer to <span style="background-color: codeinlinebg"><code> 0.60</code></span> or <span style="background-color: codeinlinebg"><code> 0.66</code></span>?</p></li>
+<li><p>Should its fresh confirmation score remain inflated?</p></li>
+<li><p>Can the naive false-promotion rate exceed 50% even though every candidate equals the baseline?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Create selection probabilities with shape <span style="background-color: codeinlinebg"><code> [R, K]</code></span>.</p></li>
+<li><p>Sample counts with <span style="background-color: codeinlinebg"><code> torch.distributions.Binomial</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> .max(dim=1)</code></span> to obtain scores and indices.</p></li>
+<li><p>Confirmation data are independent; because all candidates are identical, their probabilities remain <span style="background-color: codeinlinebg"><code> 0.60</code></span>.</p></li>
+<li><p>The instructional null standard error is:</p></li>
+</ul>
+<p><span class="math display">\[SE_0=\sqrt{\frac{p_0(1-p_0)}{n}}\]</span></p>
+<ul>
+<li><p>Promotion occurs when a lower bound exceeds the baseline.</p></li>
+<li><p>Bonferroni changes the critical value, not the point estimate.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Search hundreds of checkpoints and report the largest validation score as a final estimate.</p></li>
+<li><p>Select the best random seed and present it as typical performance.</p></li>
+<li><p>Tune the judge prompt, rubric and threshold on the claimed test set.</p></li>
+<li><p>Repeatedly inspect the “fresh” confirmation set and keep modifying the policy.</p></li>
+<li><p>Leak confirmation prompts into SFT, DPO or RL training.</p></li>
+<li><p>Ignore checkpoint correlation: Bonferroni remains valid but may be unnecessarily conservative.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is the selected score biased upward when every individual score is unbiased?</p></li>
+<li><p>Does collecting more candidates reduce the winner’s curse?</p></li>
+<li><p>Why does independent confirmation work?</p></li>
+<li><p>What must be locked before confirmation begins?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Selection data:</p>
+<pre class="code python"><code class="language-python">selection_probabilities = torch.full(
+    (
+        num_repetitions,
+        num_candidates,
+    ),
+    true_value.item(),
+)
+
+selection_counts = (
+    torch.distributions.Binomial(
+        total_count=selection_size,
+        probs=selection_probabilities,
+    ).sample()
+)
+
+selection_scores = (
+    selection_counts / selection_size
+)</code></pre>
+<p>Winner selection:</p>
+<pre class="code python"><code class="language-python">(
+    selected_selection_scores,
+    selected_indices,
+) = selection_scores.max(dim=1)</code></pre>
+<p>The selected IDs are useful for auditing, even though all simulated candidates have the same true value.</p>
+<p>Fresh confirmation:</p>
+<pre class="code python"><code class="language-python">confirmation_probabilities = torch.full(
+    (num_repetitions,),
+    true_value.item(),
+)
+
+confirmation_counts = (
+    torch.distributions.Binomial(
+        total_count=confirmation_size,
+        probs=confirmation_probabilities,
+    ).sample()
+)
+
+confirmation_scores = (
+    confirmation_counts
+    / confirmation_size
+)</code></pre>
+<p>Promotion rules:</p>
+<pre class="code python"><code class="language-python">selection_null_standard_error = torch.sqrt(
+    promotion_baseline
+    * (1.0 - promotion_baseline)
+    / selection_size
+)
+
+confirmation_null_standard_error = torch.sqrt(
+    promotion_baseline
+    * (1.0 - promotion_baseline)
+    / confirmation_size
+)
+
+naive_selection_lower_bounds = (
+    selected_selection_scores
+    - single_test_z
+    * selection_null_standard_error
+)
+
+bonferroni_lower_bounds = (
+    selected_selection_scores
+    - bonferroni_z
+    * selection_null_standard_error
+)
+
+confirmation_lower_bounds = (
+    confirmation_scores
+    - single_test_z
+    * confirmation_null_standard_error
+)
+
+naive_promotions = (
+    naive_selection_lower_bounds
+    &gt; promotion_baseline
+)
+
+bonferroni_promotions = (
+    bonferroni_lower_bounds
+    &gt; promotion_baseline
+)
+
+confirmation_promotions = (
+    confirmation_lower_bounds
+    &gt; promotion_baseline
+)
+
+naive_false_promotion_rate = (
+    naive_promotions
+    .to(torch.float64)
+    .mean()
+)
+
+bonferroni_false_promotion_rate = (
+    bonferroni_promotions
+    .to(torch.float64)
+    .mean()
+)
+
+confirmation_false_promotion_rate = (
+    confirmation_promotions
+    .to(torch.float64)
+    .mean()
+)</code></pre>
+<p>Optimism diagnostics:</p>
+<pre class="code python"><code class="language-python">single_candidate_mean = (
+    selection_scores[:, 0].mean()
+)
+
+selected_selection_mean = (
+    selected_selection_scores.mean()
+)
+
+confirmation_mean = (
+    confirmation_scores.mean()
+)
+
+selection_optimism = (
+    selected_selection_mean
+    - true_value
+)
+
+selection_confirmation_gap = (
+    selected_selection_scores
+    - confirmation_scores
+).mean()</code></pre>
+<p>One candidate’s selection score remains centered near:</p>
+<p><span class="math display">\[0.60\]</span></p>
+<p>Its standard error is:</p>
+<p><span class="math display">\[\sqrt{\frac{0.6(0.4)}{200}}
+\approx0.0346\]</span></p>
+<p>The maximum of 20 such noisy scores typically lies near <span style="background-color: codeinlinebg"><code> 0.66</code></span>. Fresh confirmation returns near <span style="background-color: codeinlinebg"><code> 0.60</code></span> because it does not inherit the selection noise.</p>
+<p>For one nominal 5% test, the false-promotion probability is about 5%. Searching 20 approximately independent candidates makes the probability that at least one crosses roughly:</p>
+<p><span class="math display">\[1-(1-0.05)^{20}
+\approx0.64\]</span></p>
+<p>Therefore, typical results are:</p>
+<ul>
+<li><p>naive selected-checkpoint promotion: roughly 60%;</p></li>
+<li><p>Bonferroni-adjusted promotion: near or below 5%;</p></li>
+<li><p>independent confirmation: near 5%.</p></li>
+</ul>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Selection conditions on unusually positive errors; the maximum of unbiased estimates is not itself unbiased.</p></li>
+<li><p>No. Holding per-candidate noise fixed, searching more candidates increases expected optimism.</p></li>
+<li><p>Conditional on the locked selection, fresh outcomes contain independent noise centered on that checkpoint’s true value.</p></li>
+<li><p>Lock the checkpoint, decoding configuration, evaluator, aggregation rule, target population, primary metric and stopping rule.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>With equal costs, Neyman allocation uses <span class="math inline">\(n_g\propto p_g\sigma_g\)</span>.</p></li>
+<li><p>The pooled mean weights groups by evaluation frequency. After oversampling, that frequency differs from deployment probability.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> development data may choose the winner; it cannot also provide an unbiased victory margin. Lock the full evaluation contract, then confirm once on genuinely untouched data.</p>

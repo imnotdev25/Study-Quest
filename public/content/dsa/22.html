@@ -1,0 +1,293 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How engineers move into research, and into AI safety research in particular: the map of safety research areas, the roles and what each needs, what to learn (and how little to learn before starting), how to run your first projects, the research skills and habits that experienced researchers recommend, programs and mentorship, publishing your work, testing your fit, and a 6-month plan.</p>
+</div>
+<h4 id="sources.">Sources.</h4>
+<p>This chapter synthesizes advice published by people working in the field, chiefly: 80,000 Hours’ career review <em>AI safety technical researcher</em>; Neel Nanda’s <em>How to Become a Mechanistic Interpretability Researcher</em> (Alignment Forum); Ethan Perez’s <em>Tips for Empirical Alignment Research</em> (LessWrong, 2024); and the public descriptions of MATS and BlueDot Impact. Program details (stipends, cohorts, deadlines) change often; check the program sites before applying. Where those authors disagree or where advice is one person’s view, the text says so.</p>
+<h1 id="why-safety-and-what-the-field-works-on">Why Safety, and What the Field Works On</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>AI safety research asks: as AI systems become more capable, how do we make sure they do what we intend, how do we find out when they do not, and how do we keep control if something goes wrong? It is a young field with more open problems than researchers, which is why people with solid engineering skills can contribute quickly.</p>
+</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Area</th>
+<th style="text-align: left;">Core question</th>
+<th style="text-align: left;">Typical work</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Interpretability</td>
+<td style="text-align: left;">What is actually happening inside the model?</td>
+<td style="text-align: left;">probes, activation patching, sparse autoencoders, attribution graphs, steering</td>
+</tr>
+<tr>
+<td style="text-align: left;">Evaluations and red-teaming</td>
+<td style="text-align: left;">What can the model do, and what dangerous things can it be made to do?</td>
+<td style="text-align: left;">capability and propensity evals, jailbreaks, dangerous-capability testing</td>
+</tr>
+<tr>
+<td style="text-align: left;">Scalable oversight</td>
+<td style="text-align: left;">How do humans supervise models that may exceed them on a task?</td>
+<td style="text-align: left;">debate, critique models, weak-to-strong generalization</td>
+</tr>
+<tr>
+<td style="text-align: left;">AI control</td>
+<td style="text-align: left;">How do we stay safe even if a model is trying to subvert us?</td>
+<td style="text-align: left;">monitoring protocols, trusted vs untrusted models, red-team/blue-team games</td>
+</tr>
+<tr>
+<td style="text-align: left;">Model organisms</td>
+<td style="text-align: left;">Can we build controlled examples of failures (deception, reward hacking) to study them?</td>
+<td style="text-align: left;">deliberately trained misbehaving models, auditing games</td>
+</tr>
+<tr>
+<td style="text-align: left;">Robustness</td>
+<td style="text-align: left;">Does the model behave well under adversarial or shifted inputs?</td>
+<td style="text-align: left;">adversarial training, jailbreak defenses</td>
+</tr>
+<tr>
+<td style="text-align: left;">Alignment training</td>
+<td style="text-align: left;">How do we instill the intended values and behaviors?</td>
+<td style="text-align: left;">RLHF/RLAIF, constitutional methods, reward model failures</td>
+</tr>
+<tr>
+<td style="text-align: left;">Theory and agent foundations</td>
+<td style="text-align: left;">What are the mathematical foundations of agency and alignment?</td>
+<td style="text-align: left;">formal frameworks, learning theory, decision theory</td>
+</tr>
+<tr>
+<td style="text-align: left;">Security</td>
+<td style="text-align: left;">Can we protect model weights and infrastructure?</td>
+<td style="text-align: left;">weight security, side channels, cluster security</td>
+</tr>
+<tr>
+<td style="text-align: left;">Governance and policy</td>
+<td style="text-align: left;">What rules, institutions, and standards reduce risk?</td>
+<td style="text-align: left;">policy research, standards, forecasting, compute governance</td>
+</tr>
+</tbody>
+</table>
+<p><em>The research areas listed by safety programs such as MATS, grouped into one map.</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Researchers disagree, sometimes sharply, about which approaches are most promising and about how hard the problem is; 80,000 Hours lists this disagreement and uncertainty about tractability as real downsides of the career. Read across agendas before committing to one. Some safety-relevant work also advances capabilities; think about the net effect of the specific project and role you take, as 80,000 Hours explicitly recommends.</p>
+</div>
+<h1 id="roles-and-what-they-require">Roles and What They Require</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>80,000 Hours describes two axes: <strong>empirical vs theoretical</strong>, and <strong>research lead vs contributor</strong>.</p>
+<ul>
+<li><p><strong>Empirical contributor / research engineer</strong>: implements experiments, training runs, evals, and tools. Needs strong Python, PyTorch, and ML engineering. Many people in these roles are former software or ML engineers. This is the most natural entry point for readers of this book.</p></li>
+<li><p><strong>Empirical research lead / research scientist</strong>: chooses directions, designs experiments, mentors. Needs research taste and a track record of results; often (not always) a PhD.</p></li>
+<li><p><strong>Theoretical researcher</strong>: proves results and builds formal frameworks. Needs strong maths or theoretical CS; roles are scarce.</p></li>
+<li><p><strong>Governance and policy researcher</strong>: may need little ML coding but a solid technical understanding plus policy, economics, or law skills.</p></li>
+</ul>
+<p><strong>Where the work happens</strong>: frontier AI companies’ safety and alignment teams, government AI safety/security institutes, independent nonprofits and research organizations, and academic groups. Work is concentrated in the San Francisco Bay Area and London, though remote work exists.</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p><strong>Benchmarks for being ready to apply</strong>, as quoted by 80,000 Hours:</p>
+<ul>
+<li><p>Empirical contributor (a Google DeepMind view): you can reproduce a typical ML paper in a few hundred hours.</p></li>
+<li><p>Empirical contributor (an Anthropic hiring manager’s view): you could build a complex new feature or fix a serious bug in a major ML library within a few weeks.</p></li>
+<li><p>Top ML PhD admission: roughly a first-author workshop paper plus a contribution to a paper at a major conference.</p></li>
+</ul>
+<p>Before spending hundreds of hours studying, check what your target role actually expects; much is learned on the job.</p>
+</div>
+<h1 id="the-core-advice-start-doing-research-early">The Core Advice: Start Doing Research Early</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>The most repeated piece of advice is the most counter-intuitive: <strong>do not wait until you feel ready</strong>. Learn the basics quickly, then learn the rest by doing small research projects. Reading papers for months before writing code is the most common way people stall.</p>
+</div>
+<figure class="tikz"><img src="figs/dsa/f3665faf9cc3.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Neel Nanda’s three-stage path into interpretability research (about two months to reach full projects).</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Stage 1, learning the ropes (at most about a month).</strong> Cover the fundamentals broadly; you will not feel finished, and that is expected. Interleave reading with coding. <strong>Stage 2, mini-projects (2–4 weeks, each 1–5 days).</strong> Treat them as practice: aim to explore and understand, not to find a great idea or produce a polished write-up. Spend at least an hour on a post-mortem after each. <strong>Stage 3, full projects.</strong> Work in 1–2 week sprints and decide at the end of each whether to continue; Nanda suggests switching should be the default unless the project has real momentum. Practice choosing ideas and writing up results; a strong sprint can grow into a paper.</p>
+</div>
+<h1 id="what-to-learn-and-what-to-skip-at-first">What to Learn (and What to Skip at First)</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Programming</strong>: Python and PyTorch fluency matters more than maths for most empirical roles. A strong milestone is building a GPT-2-style transformer from scratch (for example, via the ARENA curriculum).</p></li>
+<li><p><strong>Maths</strong>: linear algebra is the most valuable (SVD, change of basis, low-rank vs full-rank matrices). Probability, statistics, calculus, and optimization at the level of this book’s Chapters 17–18 are enough to start.</p></li>
+<li><p><strong>ML</strong>: training loops, transformers, fine-tuning, evaluation, and how to use LLM APIs. Chapters 16–18 of this book cover most of it.</p></li>
+<li><p><strong>Area-specific techniques</strong>. For interpretability, Nanda lists: activation patching, linear probes, using (not training) sparse autoencoders, max-activating dataset examples, and ideally steering vectors and direct logit attribution, all implementable on a small model like GPT-2 Small. He also stresses that black-box methods (reading chains of thought, varying prompts, prefill attacks) are legitimate tools, not second-class ones.</p></li>
+<li><p><strong>Tooling</strong>: one interpretability library (TransformerLens for smaller models, nnsight for larger ones), an LLM API provider, and rented cloud GPUs rather than relying long-term on free notebooks.</p></li>
+<li><p><strong>Literature</strong>: Nanda’s “barbell” approach: skim widely, read at least one paper deeply. Perez considers reading generally lower value than running experiments except when starting a project or when a directly relevant paper appears; for tangential papers, read the abstract and Figure 1.</p></li>
+</ul>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Starter resources</strong> named across these sources: BlueDot Impact’s free courses (an introductory self-paced course of a couple of hours, then deeper courses on technical alignment and governance), ARENA (hands-on curriculum covering transformers, interpretability, RL, and evals), the Center for AI Safety’s <em>Introduction to ML Safety</em>, Rob Miles’ YouTube channel, the AXRP podcast, and the Alignment Forum and LessWrong for current research discussion.</p>
+</div>
+<h1 id="research-skills-ordered-by-how-fast-you-learn-them">Research Skills, Ordered by How Fast You Learn Them</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Feedback speed</th>
+<th style="text-align: left;">Skills</th>
+<th style="text-align: left;">How to build them</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Minutes–hours</td>
+<td style="text-align: left;">writing, running, and debugging experiments; interpreting one result</td>
+<td style="text-align: left;">many small projects</td>
+</tr>
+<tr>
+<td style="text-align: left;">Days</td>
+<td style="text-align: left;">conceptual understanding; exploring without getting stuck; writing up</td>
+<td style="text-align: left;">mini-projects with post-mortems</td>
+</tr>
+<tr>
+<td style="text-align: left;">Weeks</td>
+<td style="text-align: left;">prioritizing experiments; knowing when to pivot; spotting bad ideas early</td>
+<td style="text-align: left;">sprints with explicit continue/stop decisions</td>
+</tr>
+<tr>
+<td style="text-align: left;">Months</td>
+<td style="text-align: left;">generating good ideas (“research taste”)</td>
+<td style="text-align: left;">borrow ideas from mentors or extend papers at first</td>
+</tr>
+</tbody>
+</table>
+<p><em>Nanda’s grouping of research skills; master the fast ones first.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Nanda splits a project into four phases: <strong>ideation</strong> (choose a problem), <strong>exploration</strong> (build intuition; maximize information per hour), <strong>understanding</strong> (test specific hypotheses), and <strong>distillation</strong> (write it up). Practical rules of thumb from his post:</p>
+<ul>
+<li><p>If two hours of exploration yield nothing, try a different approach; after five, rethink; after two days, consider dropping the problem.</p></li>
+<li><p>Use short timed brainstorms and keep a research log of plots and takeaways.</p></li>
+<li><p>In the understanding phase, assume an exciting result is false until you have seriously tried to falsify it: list alternative explanations and design experiments to rule them out. In his words, “Excitement is evidence of bullshit.”</p></li>
+</ul>
+</div>
+<h2 id="iteration-speed-ethan-perezs-central-advice">Iteration Speed (Ethan Perez’s Central Advice)</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Perez weights getting ideas to work quickly above almost everything else, following Jacob Steinhardt’s framing of research as reducing uncertainty as fast as possible.</p>
+<ul>
+<li><p>Escalate methods in order of cost, skipping steps only with reason: zero-shot prompting in a playground, few-shot prompting, few-shot with labeled data, best-of-<span class="math inline">\(N\)</span> sampling, supervised fine-tuning, and RL only as a last resort. Often one message to a model is enough to de-risk an idea.</p></li>
+<li><p>Keep jobs short enough to run overnight (he suggests under about 16 hours), so you can review results each morning.</p></li>
+<li><p>Shorten runs: smaller or quantized models, LoRA, evaluation sets of about 1<span>,</span>000 examples (300 at minimum), shorter prompts, fewer generated tokens.</p></li>
+<li><p>Prefer speed over code polish, unless poor tooling is clearly slowing you down.</p></li>
+</ul>
+<p>A commenter on his post argues that as AI coding agents make implementation cheaper, choosing the right direction becomes the bigger bottleneck; both views are worth holding.</p>
+</div>
+<h2 id="good-science">Good Science</h2>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Habits both authors emphasize, which also separate good papers from weak ones:</p>
+<ul>
+<li><p><strong>Strong baselines</strong>, tuned as carefully as your own method.</p></li>
+<li><p><strong>Ablations</strong> of every component you claim matters.</p></li>
+<li><p><strong>Random examples</strong>, not only cherry-picked ones; read your raw data and model outputs.</p></li>
+<li><p><strong>Informal pre-registration</strong>: write down what you expect before running.</p></li>
+<li><p><strong>Simple methods</strong> and <strong>reproducible</strong> code.</p></li>
+<li><p>Combine qualitative and quantitative evidence; get the statistics right (multiple seeds, confidence intervals).</p></li>
+<li><p>Plot on log–log axes when looking for scaling trends; Perez notes a trend in one of his papers appeared only after transforming the metric.</p></li>
+<li><p>Pitfalls Perez lists: treating RLHF model probabilities as calibrated, comparing preference-model scores across different contexts, and not checking fine-tuned test loss against a trivial baseline.</p></li>
+</ul>
+</div>
+<h1 id="choosing-problems">Choosing Problems</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Early on, borrow taste.</strong> Extend an existing paper, replicate a result, or take a project idea from a mentor. Picking your own direction well is the slowest skill to learn.</p></li>
+<li><p><strong>Generate many ideas.</strong> Nanda suggests brainstorming at least 20 in a session, keeping a running list of curiosities, then for the top few writing down what success would look like, what skills and compute it needs, and what prior work exists.</p></li>
+<li><p><strong>Avoid early traps</strong>: compute-heavy replications, searching for “the best” project, getting attached to your first idea, or switching so fast you never learn to get unstuck.</p></li>
+<li><p><strong>Prefer real safety-relevant behavior</strong> over toy settings. Directions Nanda currently considers promising include model organisms and auditing games, studying deception, evaluation awareness, and reward hacking in real models, probe-based monitoring, attribution graphs, explaining model failures, automated interpretability, and interpretability of reasoning models. He lists as overdone: interpreting toy algorithmic models, plain head-and-layer circuit-finding, and incremental sparse-autoencoder papers (fine as learning exercises, weak as publications).</p></li>
+<li><p><strong>Juniors defer on direction</strong> and explore at the method level (Perez); speak up early when the team seems lost.</p></li>
+</ul>
+</div>
+<h1 id="mentorship-and-programs">Mentorship and Programs</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A mentor accelerates the slow skills: idea selection, prioritization, when to pivot, pointers to literature, red-teaming your results, writing, accountability, and references. Ways to find one:</p>
+<ul>
+<li><p><strong>Structured fellowships.</strong> <strong>MATS</strong> pairs fellows with established mentors for a 12-week in-person program (Berkeley or London) with a stipend, compute budget, and an optional extension; tracks span empirical safety (control, interpretability, scalable oversight, evals, red-teaming, robustness), theory, policy, strategy, security, and field-building. MATS reports that most alumni continue working in the field. Nanda also names Pivotal, LASR, PIBBSS, SPAR, and MARS; 80,000 Hours mentions ARENA, Athena (mentorship for women with technical backgrounds), and residencies or fellowships at AI companies.</p></li>
+<li><p><strong>Courses with cohorts</strong>: BlueDot Impact runs free courses and reading groups, a low-commitment way to meet others and test interest.</p></li>
+<li><p><strong>Cold email</strong>, done well: target people likely to have time (not the most famous), show you have read their work, and attach something concrete (a replication, a GitHub repo, a short write-up). Ask a specific question.</p></li>
+<li><p><strong>Career advising</strong>: 80,000 Hours offers free one-on-one advising that can include introductions.</p></li>
+<li><p><strong>Spaces for independent researchers</strong>: London and Berkeley have shared offices for safety researchers, and grant funding for independent projects exists, though independent work lacks structure, so pair it with mentorship.</p></li>
+</ul>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Working well with a mentor</strong> (Perez): send short daily updates in a <em>Last / Next / Blockers</em> format with full context (a missing detail can make a result uninterpretable); bring weekly slides with plots, prioritized next steps, and open questions (it is easier for a mentor to rank options than to generate them); always propose next experiments alongside results; book meetings liberally; and give feedback early, including to your mentor. Nanda adds: predict what your mentor will say before asking, then discuss where you disagreed; that is how you absorb taste.</p>
+</div>
+<h1 id="publishing-your-work">Publishing Your Work</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Nanda calls public research output “your best credential,” whatever your affiliation, and notes people overestimate the bar for blog posts, Alignment Forum or LessWrong posts, and arXiv preprints. A suggested writing order:</p>
+<ol>
+<li><p>Decide 1–3 key claims and the narrative.</p></li>
+<li><p>Write the abstract.</p></li>
+<li><p>Draft a bullet-point outline and get feedback on it.</p></li>
+<li><p>Write the introduction.</p></li>
+<li><p>Make the figures.</p></li>
+<li><p>Write the full text.</p></li>
+</ol>
+<p>Common writing mistakes: assuming readers share your context, overhyping, verbosity, and not saying why the work matters. Perez notes a paper often takes 2–4+ weeks because writing reveals missing experiments; keep a running log so writing is assembly, not archaeology.</p>
+</div>
+<h1 id="using-ai-tools-in-research">Using AI Tools in Research</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>From Nanda’s advice: use strong reasoning models as tutors and research assistants; put the relevant paper or library source code into the context; counter sycophancy by presenting your work as someone else’s and asking for criticism; cross-check answers across models; learn actively by summarizing back and asking for exercises. Use coding assistants for research code, but while learning the fundamentals use them as a tutor rather than an author, and re-implement or carefully verify any key experiment before publishing it.</p>
+</div>
+<h1 id="should-you-do-a-phd">Should You Do a PhD?</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Per 80,000 Hours: a PhD is close to the default for academic research leads but not needed for most contributor roles at companies and nonprofits. Weigh your long-term goal, whether the topic is useful for safety, supervisor quality, and whether you thrive working with a lot of independence; personal fit matters more than predictions about AI timelines. To get in, build research experience first (a research master’s, internships, research assistant work, or fellowships like those above). Many people enter as research engineers and grow into research leads through publications.</p>
+</div>
+<h1 id="a-6-month-transition-plan-for-an-engineer">A 6-Month Transition Plan for an Engineer</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">When</th>
+<th style="text-align: left;">What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Weeks 1–2</td>
+<td style="text-align: left;">Take an introductory safety course (e.g. BlueDot’s); read an overview of research agendas; choose one area to try first (interpretability, evals, or control are accessible to engineers).</td>
+</tr>
+<tr>
+<td style="text-align: left;">Weeks 3–6</td>
+<td style="text-align: left;">Fundamentals sprint: build a small transformer from scratch; work through an ARENA-style curriculum for your area; implement 3–5 core techniques on a small model; join a reading group.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Weeks 7–10</td>
+<td style="text-align: left;">Three to five mini-projects of 1–5 days each, each with a short write-up and a one-hour post-mortem. Share at least one publicly.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Weeks 11–12</td>
+<td style="text-align: left;">Apply to fellowships (MATS and similar) and relevant roles; send a few targeted cold emails with your best mini-project attached.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Months 4–6</td>
+<td style="text-align: left;">One full project in 1–2 week sprints, ideally with a mentor; publish it as a post or preprint; keep a research log; use it in applications and interviews (Chapter 20’s deep-dive format).</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Reading for months before writing code.</p></li>
+<li><p>Waiting for the perfect project instead of doing disposable practice projects.</p></li>
+<li><p>Trusting the first exciting result without trying to break it.</p></li>
+<li><p>Working alone with no feedback for months.</p></li>
+<li><p>Choosing compute-heavy replications as a first project.</p></li>
+<li><p>Never publishing, so nobody can see your ability.</p></li>
+<li><p>Burning out: both Perez and Nanda emphasize sustainable hours, rest, and measuring productive time rather than total time.</p></li>
+</ul>
+</div>
+<div class="box box-followups" data-kind="followups"><div class="box-title">➕ Follow-ups</div>
+<p><strong>Questions you may get in safety-team interviews</strong> (add to Chapter 22):</p>
+<ul>
+<li><p>Which safety agenda do you find most promising, and what is its strongest criticism?</p></li>
+<li><p>How would you test whether a model is aware it is being evaluated?</p></li>
+<li><p>Design an experiment to detect reward hacking in an RL-trained coding model.</p></li>
+<li><p>How would you know if an interpretability finding is real rather than an artifact of the method?</p></li>
+<li><p>What would a good monitoring protocol for an untrusted model look like?</p></li>
+<li><p>Walk through a research project where your hypothesis turned out to be wrong.</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Learn the basics fast (about a month), then learn by doing many small projects.</p></li>
+<li><p>Iterate quickly: cheapest experiment first, short runs, daily results.</p></li>
+<li><p>Assume exciting results are wrong until you have tried to break them; use strong baselines and ablations.</p></li>
+<li><p>Borrow research taste from mentors early; programs like MATS exist for exactly this.</p></li>
+<li><p>Publish early and often; public work is the strongest credential for a career switch.</p></li>
+</ul>
+</div>
+<h4 id="further-reading.">Further reading.</h4>
+<p>80,000 Hours, “AI safety technical researcher” (80000hours.org/career-reviews/ai-safety-researcher); N. Nanda, “How to Become a Mechanistic Interpretability Researcher” (Alignment Forum); E. Perez, “Tips for Empirical Alignment Research” (LessWrong, 2024); MATS (matsprogram.org); BlueDot Impact (bluedot.org); ARENA curriculum; AXRP podcast.</p>

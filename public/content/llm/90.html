@@ -1,0 +1,12 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>A research paper is an argument: one claim, the evidence for it, and the strongest objections answered. The code and the writing are the same project.</p>
+</div>
+<ol>
+<li><p><strong>Claim first.</strong> Write the one-sentence contribution before running anything. It decides which experiment is the main one.</p></li>
+<li><p><strong>Baselines that could win.</strong> Tune the baseline with the same budget as your method. Most “improvements” disappear against a tuned baseline.</p></li>
+<li><p><strong>Seeds and intervals.</strong> Run at least 3–5 seeds and report mean <span class="math inline">\(\pm\)</span> a bootstrap 95% interval (Session 43). On benchmarks with <span class="math inline">\(n\)</span> items, the standard error of accuracy is <span class="math inline">\(\sqrt{p(1-p)/n}\)</span>: on 500 questions at 70%, about 2 points. Gaps smaller than that are noise.</p></li>
+<li><p><strong>Ablations.</strong> Remove one component at a time; each row of the table should answer “is this part needed?”.</p></li>
+<li><p><strong>Reproducibility.</strong> Pin versions, log configs and commits with every run (MLflow or W&amp;B), and release code with one command per table.</p></li>
+<li><p><strong>Writing order:</strong> figures and tables, then method, experiments, introduction, abstract last. Post to arXiv; submit to a venue or workshop for review.</p></li>
+</ol>

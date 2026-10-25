@@ -1,0 +1,442 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Where should a sequence-level reward be placed in the token-reward tensor?</p></li>
+<li><p>What invariant detects accidental reward broadcasting?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-token-is-not-necessarily-a-unit-of-time">2. A token is not necessarily a unit of time</h3>
+<p>Suppose a response of length <span class="math inline">\(L\)</span> receives terminal reward <span class="math inline">\(R\)</span>. Its reward-to-go is:</p>
+<p><span class="math display">\[G_t
+=
+\gamma^{L-1-t}R\]</span></p>
+<p>With <span class="math inline">\(\gamma=1\)</span>, every action receives the same terminal outcome:</p>
+<p><span class="math display">\[G_t=R\]</span></p>
+<p>With <span class="math inline">\(\gamma&lt;1\)</span>, earlier actions receive exponentially less credit. The first token receives:</p>
+<p><span class="math display">\[G_0=\gamma^{L-1}R\]</span></p>
+<p>For example:</p>
+<p><span class="math display">\[0.95^{63}\approx0.0395\]</span></p>
+<p>So the first token of a 64-token response receives only about 4% of its terminal reward.</p>
+<p>The mean return within a response is:</p>
+<p><span class="math display">\[\bar G_L
+=
+\frac{R}{L}
+\sum_{k=0}^{L-1}\gamma^k
+=
+R\frac{1-\gamma^L}{L(1-\gamma)}\]</span></p>
+<p>Thus prompt-balanced averaging does not remove this length effect.</p>
+<p>In ordinary RL, discounting can express real time preference or continuing-task uncertainty. In an LLM, token count partly depends on tokenizer choice and writing style. Two tokenizers can assign different credit to the same semantic answer.</p>
+<p>For finite text-generation episodes, <span class="math inline">\(\gamma=1\)</span> is often the clearest default. If shorter responses are desired, use an explicit, interpretable token cost:</p>
+<p><span class="math display">\[R_{\text{adjusted}}
+=
+R-cL\]</span></p>
+<p>For tool-using agents, <span class="math inline">\(\gamma&lt;1\)</span> may be appropriate when each step represents genuine latency, cost or delayed utility.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>token rewards and mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>discount factors: <span style="background-color: codeinlinebg"><code> [G]</code></span></p></li>
+<li><p>returns for every response and discount: <span style="background-color: codeinlinebg"><code> [B, G, T]</code></span></p></li>
+</ul>
+<p>Remember that GAE introduces another decay:</p>
+<p><span class="math display">\[(\gamma\lambda)^k\]</span></p>
+<p>Even with <span class="math inline">\(\gamma=1\)</span>, <span class="math inline">\(\lambda&lt;1\)</span> shortens how far TD residuals propagate.</p>
+<p>DPO has no temporal discount factor. It compares sequence log-probability margins on fixed preference data; any length effect comes from sequence summation, normalization or the data—not from <span class="math inline">\(\gamma\)</span>.</p>
+<h3 class="unnumbered" id="pytorch-exercise-identical-rewards-very-different-credit">3. PyTorch exercise — identical rewards, very different credit</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+lengths = torch.tensor([
+    4,
+    16,
+    64,
+])
+
+discounts = torch.tensor([
+    1.00,
+    0.99,
+    0.95,
+])
+
+batch_size = lengths.numel()
+num_discounts = discounts.numel()
+maximum_length = lengths.max().item()
+
+sequence_rewards = torch.ones(
+    batch_size
+)
+
+
+# TODO 1: Build mask and place each reward once.
+token_positions = ...
+
+response_mask = ...
+
+final_indices = ...
+
+terminal_rewards = ...
+
+
+# TODO 2: Calculate returns for every discount.
+# Output shape: [B, G, T]
+def calculate_returns(
+    token_rewards,
+    mask,
+    gammas,
+):
+    returns = ...
+
+    running_returns = ...
+
+    for token_index in reversed(
+        range(maximum_length)
+    ):
+        immediate_rewards = ...
+
+        candidate_returns = ...
+
+        valid_here = ...
+
+        running_returns = ...
+
+        returns[:, :, token_index] = ...
+
+    return returns
+
+
+all_returns = calculate_returns(
+    terminal_rewards,
+    response_mask,
+    discounts,
+)
+
+
+# TODO 3: First-token and mean valid-token credit.
+first_token_credit = ...
+
+expanded_mask = ...
+
+valid_counts = ...
+
+mean_valid_credit = ...
+
+
+# TODO 4: Calculate the same quantities analytically.
+theoretical_first_credit = ...
+
+theoretical_mean_credit = torch.empty(
+    batch_size,
+    num_discounts,
+)
+
+theoretical_mean_credit[:, 0] = ...
+
+nonunit_discounts = discounts[1:]
+
+theoretical_mean_credit[:, 1:] = ...
+
+
+# TODO 5: Tokenization sensitivity.
+# Imagine the same answer represented by 8 or 16 tokens.
+comparison_discount = torch.tensor(0.95)
+
+short_tokenization_length = 8
+long_tokenization_length = 16
+
+short_first_credit = ...
+
+long_first_credit = ...
+
+long_to_short_credit_ratio = ...
+
+maximum_first_credit_error = ...
+
+maximum_mean_credit_error = ...
+
+
+torch.set_printoptions(
+    precision=5,
+    sci_mode=False,
+)
+
+print(
+    &quot;Rows: lengths 4, 16, 64\n&quot;
+    &quot;Columns: gamma 1.00, 0.99, 0.95&quot;
+)
+
+print(&quot;\nFirst-token credit:&quot;)
+print(first_token_credit)
+
+print(&quot;\nMean valid-token credit:&quot;)
+print(mean_valid_credit)
+
+print(
+    &quot;\nMaximum analytic errors:&quot;,
+    maximum_first_credit_error.item(),
+    maximum_mean_credit_error.item(),
+)
+
+print(
+    &quot;\nSame answer, 8-token first credit:&quot;,
+    short_first_credit.item(),
+)
+print(
+    &quot;Same answer, 16-token first credit:&quot;,
+    long_first_credit.item(),
+)
+print(
+    &quot;Long/short credit ratio:&quot;,
+    long_to_short_credit_ratio.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>With <span class="math inline">\(\gamma=1\)</span>, does response length affect terminal-reward credit?</p></li>
+<li><p>What is approximately <span class="math inline">\(0.95^{63}\)</span>?</p></li>
+<li><p>Does prompt averaging eliminate discount-induced length bias?</p></li>
+<li><p>Under <span class="math inline">\(\gamma=0.95\)</span>, what is the approximate effective horizon <span class="math inline">\(1/(1-\gamma)\)</span>?</p></li>
+<li><p>Can changing tokenizers change the learning signal without changing the text?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Mask:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">token_positions &lt; lengths[:, None]</code></pre>
+<ul>
+<li><p>Scatter sequence rewards at <span style="background-color: codeinlinebg"><code> lengths - 1</code></span>.</p></li>
+<li><p>Broadcast immediate rewards from <span style="background-color: codeinlinebg"><code> [B]</code></span> to <span style="background-color: codeinlinebg"><code> [B, G]</code></span>.</p></li>
+<li><p>Expand the mask to <span style="background-color: codeinlinebg"><code> [B, 1, T]</code></span>.</p></li>
+<li><p>The analytical first-token credit is:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">discounts[None, :] ** (
+    lengths[:, None] - 1
+)</code></pre>
+<ul>
+<li><p>Handle <span class="math inline">\(\gamma=1\)</span> separately in the geometric-series formula to avoid division by zero.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> gamma=0.99</code></span> because it is a conventional default without checking response lengths.</p></li>
+<li><p>Compare tokenizers while holding a token-based discount fixed.</p></li>
+<li><p>Interpret <span class="math inline">\(\gamma&lt;1\)</span> as “only numerical stabilization.”</p></li>
+<li><p>Apply both discounting and an unlogged length penalty.</p></li>
+<li><p>Forget that GAE also decays through <span class="math inline">\(\lambda\)</span>.</p></li>
+<li><p>Include padding positions in the mean return.</p></li>
+<li><p>Tune maximum generation length while assuming the training objective stayed unchanged.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>When is <span class="math inline">\(\gamma&lt;1\)</span> meaningful for an LLM agent?</p></li>
+<li><p>Why is an explicit token cost easier to interpret?</p></li>
+<li><p>Does <span class="math inline">\(\gamma=1\)</span> guarantee perfect long-range credit assignment?</p></li>
+<li><p>How can tokenization alter a discounted objective?</p></li>
+<li><p>Which diagnostics reveal accidental length preference?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Mask and terminal rewards:</p>
+<pre class="code python"><code class="language-python">token_positions = torch.arange(
+    maximum_length
+)[None, :]
+
+response_mask = (
+    token_positions
+    &lt; lengths[:, None]
+)
+
+final_indices = (
+    lengths - 1
+)[:, None]
+
+terminal_rewards = torch.zeros(
+    batch_size,
+    maximum_length,
+).scatter(
+    dim=1,
+    index=final_indices,
+    src=sequence_rewards[:, None],
+)</code></pre>
+<p>Batched returns:</p>
+<pre class="code python"><code class="language-python">def calculate_returns(
+    token_rewards,
+    mask,
+    gammas,
+):
+    returns = torch.zeros(
+        batch_size,
+        num_discounts,
+        maximum_length,
+    )
+
+    running_returns = torch.zeros(
+        batch_size,
+        num_discounts,
+    )
+
+    for token_index in reversed(
+        range(maximum_length)
+    ):
+        immediate_rewards = (
+            token_rewards[:, token_index]
+            [:, None]
+        )
+
+        candidate_returns = (
+            immediate_rewards
+            + gammas[None, :]
+            * running_returns
+        )
+
+        valid_here = (
+            mask[:, token_index]
+            [:, None]
+        )
+
+        running_returns = torch.where(
+            valid_here,
+            candidate_returns,
+            torch.zeros_like(
+                candidate_returns
+            ),
+        )
+
+        returns[:, :, token_index] = (
+            running_returns
+        )
+
+    return returns</code></pre>
+<p>Measured credit:</p>
+<pre class="code python"><code class="language-python">first_token_credit = (
+    all_returns[:, :, 0]
+)
+
+expanded_mask = (
+    response_mask[:, None, :]
+    .to(torch.float64)
+)
+
+valid_counts = (
+    lengths[:, None]
+    .to(torch.float64)
+)
+
+mean_valid_credit = (
+    (
+        all_returns
+        * expanded_mask
+    ).sum(dim=2)
+    / valid_counts
+)</code></pre>
+<p>Analytical values:</p>
+<pre class="code python"><code class="language-python">theoretical_first_credit = (
+    discounts[None, :].pow(
+        lengths[:, None] - 1
+    )
+)
+
+theoretical_mean_credit[:, 0] = 1.0
+
+nonunit_discounts = discounts[1:]
+
+theoretical_mean_credit[:, 1:] = (
+    1.0
+    - nonunit_discounts[None, :].pow(
+        lengths[:, None]
+    )
+) / (
+    lengths[:, None]
+    * (
+        1.0
+        - nonunit_discounts[None, :]
+    )
+)</code></pre>
+<p>Tokenization sensitivity and validation:</p>
+<pre class="code python"><code class="language-python">short_first_credit = (
+    comparison_discount.pow(
+        short_tokenization_length - 1
+    )
+)
+
+long_first_credit = (
+    comparison_discount.pow(
+        long_tokenization_length - 1
+    )
+)
+
+long_to_short_credit_ratio = (
+    long_first_credit
+    / short_first_credit
+)
+
+maximum_first_credit_error = (
+    first_token_credit
+    - theoretical_first_credit
+).abs().max()
+
+maximum_mean_credit_error = (
+    mean_valid_credit
+    - theoretical_mean_credit
+).abs().max()</code></pre>
+<p>Expected first-token credit is approximately:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Length</strong></th>
+<th style="text-align: left;"><strong><span class="math inline">\(\gamma=1\)</span></strong></th>
+<th style="text-align: left;"><strong><span class="math inline">\(\gamma=0.99\)</span></strong></th>
+<th style="text-align: left;"><strong><span class="math inline">\(\gamma=0.95\)</span></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Length</strong></td>
+<td style="text-align: left;"><strong><span class="math inline">\(\gamma=1\)</span></strong></td>
+<td style="text-align: left;"><strong><span class="math inline">\(\gamma=0.99\)</span></strong></td>
+<td style="text-align: left;"><strong><span class="math inline">\(\gamma=0.95\)</span></strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">4</td>
+<td style="text-align: left;">1.000</td>
+<td style="text-align: left;">0.970</td>
+<td style="text-align: left;">0.857</td>
+</tr>
+<tr>
+<td style="text-align: left;">16</td>
+<td style="text-align: left;">1.000</td>
+<td style="text-align: left;">0.860</td>
+<td style="text-align: left;">0.463</td>
+</tr>
+<tr>
+<td style="text-align: left;">64</td>
+<td style="text-align: left;">1.000</td>
+<td style="text-align: left;">0.531</td>
+<td style="text-align: left;">0.039</td>
+</tr>
+</tbody>
+</table>
+<p>For <span class="math inline">\(\gamma=0.95\)</span>, the same answer represented with 8 versus 16 tokens receives:</p>
+<p><span class="math display">\[0.95^7\approx0.698\]</span></p>
+<p>versus:</p>
+<p><span class="math display">\[0.95^{15}\approx0.463\]</span></p>
+<p>The ratio is:</p>
+<p><span class="math display">\[\frac{0.95^{15}}{0.95^7}
+=
+0.95^8
+\approx0.663\]</span></p>
+<p>So the earlier decision receives about one-third less credit solely because the tokenizer produced eight additional tokens.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>When steps represent real delay, tool cost, risk exposure or an intentionally time-preferred objective.</p></li>
+<li><p><span class="math inline">\(c\)</span> directly states the cost of one extra token; <span class="math inline">\(\gamma\)</span> produces nonlinear, position-dependent attenuation.</p></li>
+<li><p>No. Sparse rewards, critic error, GAE trace decay and high-variance policy gradients still make long-range credit difficult.</p></li>
+<li><p>Different token counts change discount exponents even when semantic content is identical.</p></li>
+<li><p>Log reward and advantage statistics against response length, finish reason, tokenizer, first-token credit and total generated tokens.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Place the sequence score once at the final valid response token; reward-to-go or GAE propagates it backward.</p></li>
+<li><p>For task rewards alone:</p></li>
+</ol>
+<p><span class="math display">\[\sum_t r^{\text{task}}_{b,t}=R_b\]</span></p>
+<p>for every valid nonempty response.</p>
+<p><strong>Takeaway:</strong> choose <span class="math inline">\(\gamma\)</span> as part of the objective, not as a default constant. In token-based episodes, <span class="math inline">\(\gamma&lt;1\)</span> creates an exponential preference over response length and can make identical text learn differently under different tokenizers.</p>

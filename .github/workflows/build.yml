@@ -1,0 +1,120 @@
+# Builds Study Quest for macOS, Linux and Windows on every push and pull request that touches it.
+# Push a tag like `study-quest-v0.1.0` to also publish every installer as a GitHub Release.
+#
+# Outputs per platform:
+#   macOS   .dmg (Apple Silicon and Intel)
+#   Linux   .AppImage and .deb (x86_64)
+#   Windows .exe (NSIS installer) and .msi (x86_64)
+#
+# The book content (public/content, public/figs) and notebooks are generated locally by `pnpm content`
+# (it needs pandoc, tectonic and the repo's Python venvs) and committed, so CI only builds the app.
+# Builds are unsigned: macOS needs right-click → Open the first time; Windows SmartScreen needs "More info → Run anyway".
+
+name: Study Quest
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["study-quest-v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write          # needed only to create the release on tags
+
+concurrency:
+  group: study-quest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            target: aarch64-apple-darwin
+            files: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          - name: macOS (Intel)
+            os: macos-latest
+            target: x86_64-apple-darwin
+            files: |
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          - name: Linux (x86_64)
+            os: ubuntu-22.04          # oldest supported glibc, so the AppImage runs on more distros
+            target: x86_64-unknown-linux-gnu
+            files: |
+              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+          - name: Windows (x86_64)
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            files: |
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system libraries (WebKitGTK, tray, AppImage)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libssl-dev libgtk-3-dev patchelf file
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check generated content is committed
+        run: |
+          test -f public/content/catalog.json || { echo "::error::public/content is missing. Run 'pnpm content' locally and commit it."; exit 1; }
+          test -d notebooks/interactive || { echo "::error::notebooks/ is missing. Run 'pnpm content' locally and commit it."; exit 1; }
+
+      - name: Type-check and build frontend
+        run: pnpm build
+
+      - name: Generate app icons
+        run: pnpm tauri icon src-tauri/icons/source.png
+
+      - name: Build app
+        run: pnpm tauri build --target ${{ matrix.target }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: study-quest-${{ matrix.target }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/study-quest-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.files }}
+          generate_release_notes: true

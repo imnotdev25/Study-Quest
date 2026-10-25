@@ -1,0 +1,296 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a coffee taste test</div>
+<p>Ask someone to rate a coffee out of 10 and you’ll get “7.3?” that drifts with their mood. Ask “which of these two do you prefer?” and you get a reliable answer. Reward models learn from those pairwise choices. Chess Elo ratings use the same math: one number per player, fitted from who beat whom.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/35826a0cfc05.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Bradley–Terry: preference probability is a sigmoid of the reward difference.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can a sequence-level reward provide poor token-level credit?</p></li>
+<li><p>What gradient sign should a negative advantage produce for a sampled token?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="learning-reward-from-comparisons">2. Learning reward from comparisons</h3>
+<p>For many LLM tasks, writing a numerical reward is difficult. A person may find it easier to compare two responses:</p>
+<pre class="code text"><code class="language-plaintext">Prompt: x
+Preferred response: y_w
+Rejected response: y_l</code></pre>
+<p>A reward model assigns each prompt-response pair a scalar:</p>
+<p><span class="math display">\[r_\phi(x,y)\in\mathbb R\]</span></p>
+<p>The Bradley–Terry model converts the score difference into a preference probability:</p>
+<p><span class="math display">\[P(y_w\succ y_l\mid x)
+=
+\sigma\left(
+r_\phi(x,y_w)-r_\phi(x,y_l)
+\right)\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[\sigma(z)=\frac{1}{1+e^{-z}}\]</span></p>
+<p>If the preferred response scores much higher, the probability approaches one. If both scores are equal, it is <span class="math inline">\(0.5\)</span>.</p>
+<p>The pairwise loss is:</p>
+<p><span class="math display">\[L_{\text{RM}}
+=
+-\log\sigma(r_w-r_l)\]</span></p>
+<p>A numerically stable equivalent is:</p>
+<p><span class="math display">\[L_{\text{RM}}
+=
+\operatorname{softplus}(-(r_w-r_l))\]</span></p>
+<p>This is binary cross-entropy applied to the score margin.</p>
+<h3 class="unnumbered" id="only-score-differences-are-identified">Only score differences are identified</h3>
+<p>Adding the same constant to every reward changes nothing:</p>
+<p><span class="math display">\[(r_w+c)-(r_l+c)=r_w-r_l\]</span></p>
+<p>Therefore, preference data identifies relative scores, not an absolute zero. In a linear reward model, the shared bias cancels completely.</p>
+<p>Reward scale also matters. A policy optimizer reacts differently to rewards around <span style="background-color: codeinlinebg"><code> 0.1</code></span> versus <span style="background-color: codeinlinebg"><code> 100</code></span>, even when their ranking is identical. Real systems commonly normalize rewards and separately monitor their mean, standard deviation and extremes.</p>
+<h3 class="unnumbered" id="what-reward-model-accuracy-misses">What reward-model accuracy misses</h3>
+<p>High held-out pairwise accuracy does not prove that the reward model represents human intent. Problems include:</p>
+<ul>
+<li><p>inconsistent or biased annotators;</p></li>
+<li><p>position and presentation bias;</p></li>
+<li><p>train/test prompt leakage;</p></li>
+<li><p>narrow response coverage;</p></li>
+<li><p>spurious cues such as length or confident wording;</p></li>
+<li><p>policy-generated responses moving beyond the training distribution.</p></li>
+</ul>
+<p>Once optimized, the policy searches for responses that the reward model scores highly—including mistakes in the reward model.</p>
+<p>Tensor shapes for today:</p>
+<ul>
+<li><p>chosen and rejected features: <span style="background-color: codeinlinebg"><code> [B, features]</code></span></p></li>
+<li><p>chosen and rejected scores: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>score margins: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>preference loss: scalar</p></li>
+</ul>
+<h3 class="unnumbered" id="dpo-connection">DPO connection</h3>
+<p>DPO uses a similar logistic comparison, but replaces explicit reward scores with policy-versus-reference log-probability differences:</p>
+<p><span class="math display">\[\log\sigma\left(
+\beta
+\left[
+\log\frac{\pi_\theta(y_w\mid x)}
+{\pi_{\text{ref}}(y_w\mid x)}
+-
+\log\frac{\pi_\theta(y_l\mid x)}
+{\pi_{\text{ref}}(y_l\mid x)}
+\right]
+\right)\]</span></p>
+<p>DPO directly trains the policy on fixed preference pairs. It does not first train a reward model, sample new rollouts, or perform online RL updates.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the pairwise loss and its gradient</div>
+<p><span class="math inline">\(P(y_w\succ y_l\mid x)=\sigma\big(r_\phi(x,y_w)-r_\phi(x,y_l)\big)\)</span>, with loss <span class="math inline">\(\mathcal L=-\log\sigma(\Delta)\)</span>, <span class="math inline">\(\Delta=r_w-r_l\)</span>.</p>
+<p><span class="math inline">\(\frac{\partial\mathcal L}{\partial\Delta}=-(1-\sigma(\Delta))=-\sigma(-\Delta)\)</span>: big pushes when the model ranks the pair wrong, and almost none when it’s already confidently right. <strong>Numbers:</strong> <span class="math inline">\(\Delta=0\)</span> gives loss <span class="math inline">\(\ln2\approx0.693\)</span>. <span class="math inline">\(\Delta=2\)</span> gives <span class="math inline">\(\ln(1+e^{-2})\approx0.127\)</span>.</p>
+<p><strong>Shift invariance:</strong> adding any constant to all rewards for a prompt leaves every probability unchanged. Absolute reward values are therefore meaningless: normalize them before RL.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Reward model = logistic regression on “which is better.”</p></li>
+<li><p>It learns ranking, not truth, and the RL policy will hunt for its blind spots.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: three pairs</div>
+<p>Margins <span class="math inline">\(\Delta=(2,0,-1)\)</span>. Losses <span class="math inline">\(-\log\sigma(\Delta)=(0.127,0.693,1.313)\)</span>, mean <span class="math inline">\(0.711\)</span>. Gradient weights <span class="math inline">\(\sigma(-\Delta)=(0.12,0.50,0.73)\)</span>: the wrongly ranked pair pushes hardest. Accuracy <span class="math inline">\(=1/3\)</span> (only <span class="math inline">\(\Delta&gt;0\)</span> counts).</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Swapping chosen and rejected columns.</p></li>
+<li><p>Scoring a padding token instead of the last real token.</p></li>
+<li><p>Reading raw reward magnitudes as meaningful across prompts.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Train a pairwise (Bradley–Terry) reward model</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> preference data <span class="math inline">\(\{(x,y_w,y_l)\}\)</span> where <span class="math inline">\(y_w\)</span> was preferred, reward model <span class="math inline">\(r_\phi\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each minibatch <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\Delta\gets r_\phi(x,y_w)-r_\phi(x,y_l)\)</span></div>
+<div class="algo-line" style="--d:1">gradient step on <span class="math inline">\(-\operatorname{mean}\log\sigma(\Delta)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">report held-out accuracy <span class="math inline">\(P(\Delta&gt;0)\)</span> and normalize rewards before using them in RL</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-train-a-tiny-pairwise-reward-model">3. PyTorch exercise — train a tiny pairwise reward model</h3>
+<p>Each synthetic response has two features:</p>
+<pre class="code python"><code class="language-python">[correctness, verbosity]</code></pre>
+<p>The hidden preference rule rewards correctness and mildly penalizes verbosity.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+
+num_pairs = 4096
+num_features = 2
+
+true_reward_weight = torch.tensor([
+    2.0,   # correctness helps
+   -0.5,   # excessive verbosity hurts
+])
+
+# Two candidate responses for each prompt.
+features_a = torch.randn(num_pairs, num_features)
+features_b = torch.randn(num_pairs, num_features)
+
+true_score_a = features_a @ true_reward_weight
+true_score_b = features_b @ true_reward_weight
+
+# Human choices are noisy rather than perfectly deterministic.
+probability_a_wins = torch.sigmoid(
+    true_score_a - true_score_b
+)
+
+a_wins = torch.rand(num_pairs) &lt; probability_a_wins
+
+# TODO 1: Orient every pair as [chosen, rejected].
+chosen = ...
+rejected = ...
+
+train_size = 3500
+
+chosen_train = chosen[:train_size]
+rejected_train = rejected[:train_size]
+
+chosen_valid = chosen[train_size:]
+rejected_valid = rejected[train_size:]
+
+reward_model = torch.nn.Linear(
+    num_features,
+    1,
+    bias=True,
+)
+
+optimizer = torch.optim.Adam(
+    reward_model.parameters(),
+    lr=0.03,
+)
+
+for step in range(500):
+    # TODO 2: Produce scalar scores with shape [train_pairs].
+    chosen_scores = ...
+    rejected_scores = ...
+
+    # TODO 3: Preferred-minus-rejected score margins.
+    margins = ...
+
+    # TODO 4: Numerically stable pairwise preference loss.
+    loss = ...
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+with torch.no_grad():
+    valid_chosen_scores = reward_model(
+        chosen_valid
+    ).squeeze(-1)
+
+    valid_rejected_scores = reward_model(
+        rejected_valid
+    ).squeeze(-1)
+
+    valid_margins = (
+        valid_chosen_scores
+        - valid_rejected_scores
+    )
+
+    # TODO 5: Fraction of validation pairs ranked correctly.
+    validation_accuracy = ...
+
+    predicted_preference_probability = torch.sigmoid(
+        valid_margins
+    )
+
+print(&quot;True weight:&quot;, true_reward_weight)
+print(&quot;Learned weight:&quot;, reward_model.weight.detach())
+print(&quot;Learned bias:&quot;, reward_model.bias.detach())
+print(&quot;Final loss:&quot;, loss.item())
+print(&quot;Validation accuracy:&quot;, validation_accuracy.item())
+print(
+    &quot;Mean predicted preference probability:&quot;,
+    predicted_preference_probability.mean().item(),
+)
+print(
+    &quot;Bias gradient:&quot;,
+    reward_model.bias.grad,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What signs should the two learned weights have?</p></li>
+<li><p>Does the shared bias affect any score margin?</p></li>
+<li><p>Should validation accuracy reach exactly <span style="background-color: codeinlinebg"><code> 1.0</code></span>?</p></li>
+<li><p>What preference probability corresponds to margin zero?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span> with <span style="background-color: codeinlinebg"><code> a_wins.unsqueeze(-1)</code></span>.</p></li>
+<li><p>Remove the reward model’s final singleton dimension with <span style="background-color: codeinlinebg"><code> squeeze(-1)</code></span>.</p></li>
+<li><p>Margin direction is <span style="background-color: codeinlinebg"><code> chosen - rejected</code></span>.</p></li>
+<li><p>Stable loss: <span style="background-color: codeinlinebg"><code> F.softplus(-margins).mean()</code></span>.</p></li>
+<li><p>A pair is ranked correctly when its margin is positive.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Reverse the margin:</p>
+<pre class="code python"><code class="language-python">margins = rejected_scores - chosen_scores</code></pre>
+<p>The model learns the opposite preference rule: correctness receives a negative weight and verbosity tends to receive a positive one.</p>
+<p>Also replace the stable loss with:</p>
+<pre class="code python"><code class="language-python">loss = -torch.log(torch.sigmoid(margins)).mean()</code></pre>
+<p>This is mathematically equivalent, but very negative margins can make <span style="background-color: codeinlinebg"><code> sigmoid</code></span> underflow toward zero and <span style="background-color: codeinlinebg"><code> log(0)</code></span> produce <span style="background-color: codeinlinebg"><code> -inf</code></span>. <span style="background-color: codeinlinebg"><code> softplus</code></span> is safer.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can’t pairwise data determine an absolute reward offset?</p></li>
+<li><p>Why might reward-model validation accuracy remain high while RL performance becomes undesirable?</p></li>
+<li><p>What happens to preference confidence as the score margin grows?</p></li>
+<li><p>How does DPO differ from reward-model-based online RL?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Orient the sampled preferences:</p>
+<pre class="code python"><code class="language-python">chosen = torch.where(
+    a_wins.unsqueeze(-1),
+    features_a,
+    features_b,
+)
+
+rejected = torch.where(
+    a_wins.unsqueeze(-1),
+    features_b,
+    features_a,
+)</code></pre>
+<p>Calculate scores and margins:</p>
+<pre class="code python"><code class="language-python">chosen_scores = reward_model(
+    chosen_train
+).squeeze(-1)
+
+rejected_scores = reward_model(
+    rejected_train
+).squeeze(-1)
+
+margins = chosen_scores - rejected_scores</code></pre>
+<p>Stable pairwise loss:</p>
+<pre class="code python"><code class="language-python">loss = F.softplus(
+    -margins
+).mean()</code></pre>
+<p>Validation accuracy:</p>
+<pre class="code python"><code class="language-python">validation_accuracy = (
+    valid_margins &gt; 0
+).float().mean()</code></pre>
+<p>The model should learn approximately the same direction as:</p>
+<pre class="code text"><code class="language-plaintext">correctness weight: positive
+verbosity weight:   negative</code></pre>
+<p>The exact values need not equal <span style="background-color: codeinlinebg"><code> [2.0, -0.5]</code></span>. Finite noisy comparisons and optimization determine the learned scale.</p>
+<p>The bias has no effect:</p>
+<p><span class="math display">\[(w^\top x_w+b)-(w^\top x_l+b)
+=
+w^\top(x_w-x_l)\]</span></p>
+<p>Consequently, its gradient should be zero or numerically indistinguishable from zero. Its initial random value may remain unchanged.</p>
+<p>Validation accuracy will remain below one because preferences were sampled probabilistically. Even when response A has greater latent utility, the simulated annotator sometimes selects B.</p>
+<p>At margin zero:</p>
+<p><span class="math display">\[\sigma(0)=0.5\]</span></p>
+<p>The reward model considers both responses equally likely to be preferred.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Adding a constant to both scores leaves every pairwise probability unchanged.</p></li>
+<li><p>Policy optimization can generate out-of-distribution responses that exploit spurious signals the fixed validation set never tests.</p></li>
+<li><p>A large positive margin approaches probability one; a large negative margin approaches zero.</p></li>
+<li><p>DPO directly adjusts policy log-ratios using fixed chosen/rejected pairs. Reward-model RL trains a separate scorer and uses its outputs to optimize newly sampled policy responses.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>One scalar outcome does not reveal which particular generated decisions caused success or failure.</p></li>
+<li><p>A negative advantage produces a gradient update that decreases the sampled token’s log-probability.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> a reward model learns relative human preference, not objective truth. Pairwise loss teaches ranking; reward calibration, data coverage and resistance to policy exploitation determine whether that ranking remains useful during RL.</p>

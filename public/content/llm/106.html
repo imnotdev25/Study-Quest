@@ -1,0 +1,258 @@
+
+<h2 class="unnumbered" id="a-map-of-vllm-v1-engine">A map of vLLM (V1 engine)</h2>
+<div class="center">
+<table style="width:89%;">
+<colgroup>
+<col style="width: 32%" />
+<col style="width: 57%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Component</strong></th>
+<th style="text-align: left;"><strong>Role</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>entrypoints/openai/</code></td>
+<td style="text-align: left;">HTTP server, OpenAI-compatible routes, tokenisation of requests</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>AsyncLLM</code> / <code>LLMEngine</code></td>
+<td style="text-align: left;">front end: turns requests into engine requests, streams outputs back</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>EngineCore</code></td>
+<td style="text-align: left;">the busy loop in its own process: schedule, execute, update, repeat</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>v1/core/sched/scheduler.py</code></td>
+<td style="text-align: left;">token-budget scheduling, preemption, as in the algorithm above</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>v1/core/kv_cache_manager.py</code></td>
+<td style="text-align: left;">block pool, prefix-cache hashes, allocation and freeing</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>Worker</code> / <code>GPUModelRunner</code></td>
+<td style="text-align: left;">per-GPU: prepare inputs, CUDA graphs, run the model, sample</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>model_executor/models/</code></td>
+<td style="text-align: left;">one file per architecture (e.g. <code>llama.py</code>, <code>qwen3.py</code>)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Following one request: the API server tokenises it, <code>AsyncLLM</code> sends it to <code>EngineCore</code>, the scheduler admits it when blocks and budget allow, the model runner executes the batch, sampled tokens go back to <code>AsyncLLM</code>, which detokenises and streams them.</p>
+<h2 class="unnumbered" id="the-mini-engine">The mini engine</h2>
+<p>The engine below has every piece of this part in about 200 lines: a block pool with reference counts, chained block hashes, LRU reuse of freed cached blocks, a token-budget scheduler that mixes chunked prefill and decode, preemption by recompute, and streaming. The model is the shared tiny GPT in <code>code/tiny_gpt.py</code>, whose <code>forward</code> batches the linear layers over all scheduled tokens and runs attention per sequence through <code>kv_get</code>/<code>kv_put</code> callbacks into the paged pool. Eight requests share a 24-token system prompt and arrive in three waves; the pool holds 192 token slots, less than they need together, so preemption happens.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference ch. &#x27;Build a Mini Inference Engine&#x27;: paged KV, continuous batching with a token budget,
+chunked prefill, prefix caching, preemption by recompute, and streaming. Checked against naive greedy.&quot;&quot;&quot;
+import math
+from collections import OrderedDict, deque
+
+import torch
+
+from tiny_gpt import Cfg, TinyGPT, generate_naive
+
+
+class BlockPool:
+    &quot;&quot;&quot;Fixed pool of KV blocks. Blocks with ref 0 that hold a cached prefix stay reusable (LRU).&quot;&quot;&quot;
+
+    def __init__(self, cfg, n_blocks, bs):
+        shape = (cfg.n_layers, n_blocks, bs, cfg.n_kv, cfg.hd)
+        self.k, self.v = torch.zeros(shape, dtype=cfg.dtype), torch.zeros(shape, dtype=cfg.dtype)
+        self.free = deque(range(n_blocks))
+        self.ref = [0] * n_blocks
+        self.hash_of = [None] * n_blocks
+        self.cached = {}                 # prefix hash -&gt; block
+        self.evictable = OrderedDict()   # cached blocks nobody is using, oldest first
+        self.evictions = 0
+
+    def available(self):
+        return len(self.free) + len(self.evictable)
+
+    def alloc(self):
+        if self.free:
+            b = self.free.popleft()
+        else:
+            b, _ = self.evictable.popitem(last=False)
+            del self.cached[self.hash_of[b]]
+            self.hash_of[b] = None
+            self.evictions += 1
+        self.ref[b] = 1
+        return b
+
+    def release(self, b):
+        self.ref[b] -= 1
+        if self.ref[b] == 0:
+            if self.hash_of[b] is not None:
+                self.evictable[b] = None
+            else:
+                self.free.append(b)
+
+    def lookup(self, h):
+        b = self.cached.get(h)
+        if b is not None:
+            if self.ref[b] == 0:
+                del self.evictable[b]
+            self.ref[b] += 1
+        return b
+
+    def register(self, b, h):
+        if h not in self.cached and self.hash_of[b] is None:
+            self.cached[h], self.hash_of[b] = b, h
+
+
+class Seq:
+    def __init__(self, rid, prompt, max_new):
+        self.id, self.tokens, self.max_new = rid, list(prompt), max_new
+        self.out, self.blocks, self.computed, self.registered = [], [], 0, 0
+
+
+class Engine:
+    def __init__(self, model, n_blocks=24, bs=8, budget=32, max_seqs=8, prefix_cache=True):
+        self.m, self.bs, self.budget, self.max_seqs, self.pc = model, bs, budget, max_seqs, prefix_cache
+        self.pool = BlockPool(model.c, n_blocks, bs)
+        self.waiting, self.running, self.done = deque(), [], {}
+        self.stats = dict(steps=0, computed=0, prefix_hit=0, preempted=0, max_batch=0)
+
+    def add(self, rid, prompt, max_new):
+        self.waiting.append(Seq(rid, prompt, max_new))
+
+    def _hash(self, seq, i):                     # identity of block i = all tokens up to its end
+        return hash(tuple(seq.tokens[:(i + 1) * self.bs]))
+
+    def _grow(self, seq, n):
+        need = math.ceil((seq.computed + n) / self.bs) - len(seq.blocks)
+        if need &gt; self.pool.available():
+            return False
+        seq.blocks += [self.pool.alloc() for _ in range(need)]
+        return True
+
+    def _reset(self, seq):
+        for b in reversed(seq.blocks):           # tail blocks become the first to be evicted
+            self.pool.release(b)
+        seq.blocks, seq.computed, seq.registered = [], 0, 0
+
+    def _match_prefix(self, seq):
+        if not self.pc:
+            return
+        for i in range((len(seq.tokens) - 1) // self.bs):   # always leave &gt;= 1 token to compute
+            b = self.pool.lookup(self._hash(seq, i))
+            if b is None:
+                break
+            seq.blocks.append(b)
+        seq.computed = seq.registered = len(seq.blocks)
+        seq.computed *= self.bs
+        self.stats[&quot;prefix_hit&quot;] += seq.computed
+
+    def step(self):
+        budget, sched = self.budget, []
+        i = 0
+        while i &lt; len(self.running) and budget &gt; 0:            # running sequences first, oldest first
+            seq = self.running[i]
+            n = min(len(seq.tokens) - seq.computed, budget)
+            while not self._grow(seq, n):                      # out of blocks: preempt the newest
+                victim = self.running.pop()
+                self._reset(victim)
+                self.waiting.appendleft(victim)
+                self.stats[&quot;preempted&quot;] += 1
+                if victim is seq:
+                    break
+            else:
+                sched.append((seq, n)); budget -= n; i += 1
+                continue
+            break
+        while self.waiting and budget &gt; 0 and len(self.running) &lt; self.max_seqs:
+            seq = self.waiting[0]
+            self._match_prefix(seq)
+            n = min(len(seq.tokens) - seq.computed, budget)
+            if not self._grow(seq, n):
+                self._reset(seq)
+                break
+            self.running.append(self.waiting.popleft())
+            sched.append((seq, n)); budget -= n
+        if not sched:
+            return {}
+
+        bs, pool = self.bs, self.pool
+        starts = [s.computed for s, _ in sched]
+
+        def kv_get(i, l):
+            s, p = sched[i][0], starts[i]
+            idx = torch.tensor(s.blocks)
+            return (pool.k[l, idx].flatten(0, 1)[:p], pool.v[l, idx].flatten(0, 1)[:p])
+
+        def kv_put(i, l, k, v):
+            s = sched[i][0]
+            for j in range(len(k)):
+                p = starts[i] + j
+                pool.k[l, s.blocks[p // bs], p % bs] = k[j]
+                pool.v[l, s.blocks[p // bs], p % bs] = v[j]
+
+        segs = [torch.tensor(s.tokens[s.computed:s.computed + n]) for s, n in sched]
+        logits = self.m(segs, starts, kv_get, kv_put)
+        self.stats[&quot;steps&quot;] += 1
+        self.stats[&quot;computed&quot;] += sum(n for _, n in sched)
+        self.stats[&quot;max_batch&quot;] = max(self.stats[&quot;max_batch&quot;], len(sched))
+
+        streamed = {}
+        for (s, n), lg in zip(sched, logits):
+            s.computed += n
+            while self.pc and (s.registered + 1) * bs &lt;= s.computed:
+                pool.register(s.blocks[s.registered], self._hash(s, s.registered))
+                s.registered += 1
+            if s.computed == len(s.tokens):                   # caught up: sample the next token
+                tok = int(lg[-1].argmax())
+                s.tokens.append(tok); s.out.append(tok); streamed[s.id] = tok
+                if len(s.out) == s.max_new:
+                    self.running.remove(s); self._reset(s); self.done[s.id] = s.out
+        return streamed
+
+    def busy(self):
+        return bool(self.waiting or self.running)
+
+
+model = TinyGPT(Cfg())
+g = torch.Generator().manual_seed(1)
+system = torch.randint(0, 64, (24,), generator=g).tolist()          # shared system prompt
+reqs = [(r, system + torch.randint(0, 64, (int(torch.randint(4, 13, (1,), generator=g)),), generator=g).tolist(),
+         int(torch.randint(12, 25, (1,), generator=g))) for r in range(8)]
+reference = {r: generate_naive(model, p, n) for r, p, n in reqs}
+
+for pc in (False, True):
+    eng = Engine(model, n_blocks=24, bs=8, budget=32, prefix_cache=pc)
+    stream0 = []
+    for r, p, n in reqs[:4]:
+        eng.add(r, p, n)
+    step = 0
+    while eng.busy():
+        if step in (3, 6):                                           # later arrivals join mid-flight
+            for r, p, n in reqs[4:6] if step == 3 else reqs[6:]:
+                eng.add(r, p, n)
+        out = eng.step()
+        if 0 in out and len(stream0) &lt; 6:
+            stream0.append(f&quot;s{step}:{out[0]}&quot;)
+        step += 1
+    ok = all(eng.done[r] == reference[r] for r, _, _ in reqs)
+    st = eng.stats
+    print(f&quot;[engine] prefix_cache={pc!s:5}  matches naive greedy: {ok}  steps {st[&#x27;steps&#x27;]}  &quot;
+          f&quot;tokens computed {st[&#x27;computed&#x27;]}  prefix hits {st[&#x27;prefix_hit&#x27;]}  preemptions {st[&#x27;preempted&#x27;]}  &quot;
+          f&quot;evictions {eng.pool.evictions}  max batch {st[&#x27;max_batch&#x27;]}&quot;)
+print(f&quot;[engine] streaming, request 0 (step:token): {&#x27; &#x27;.join(stream0)} ...&quot;)
+total_prompt = sum(len(p) for _, p, _ in reqs)
+total_out = sum(n for _, _, n in reqs)
+print(f&quot;[engine] workload: {len(reqs)} requests, {total_prompt} prompt + {total_out} output tokens, &quot;
+      f&quot;KV pool 24 blocks x 8 = 192 token slots&quot;)</code></pre>
+<pre class="code output"><code class="output">[engine] prefix_cache=False  matches naive greedy: True  steps 45  tokens computed 621  prefix hits 0  preemptions 8  evictions 0  max batch 5
+[engine] prefix_cache=True   matches naive greedy: True  steps 25  tokens computed 221  prefix hits 288  preemptions 1  evictions 3  max batch 8
+[engine] streaming, request 0 (step:token): s1:14 s2:57 s3:12 s4:53 s5:52 s6:0 ...
+[engine] workload: 8 requests, 253 prompt + 143 output tokens, KV pool 24 blocks x 8 = 192 token slots</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Both configurations produce exactly the tokens of naive full recomputation, through preemption, chunked prefill and block reuse. That test is the contract of every engine.</p></li>
+<li><p>Prefix caching cuts computed tokens from 621 to 221 and steps from 45 to 25, and reduces preemptions from 8 to 1, because shared blocks take up memory once.</p></li>
+</ul>
+</div>

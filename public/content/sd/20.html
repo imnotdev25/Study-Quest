@@ -1,0 +1,74 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Four end-to-end designs using the six-step framework from Chapter (foundations): a URL shortener (beginner), a real-time chat system (intermediate), a social news feed (intermediate), and a multi-tenant LLM platform with RAG (expert).</p>
+</div>
+<h1 id="url-shortener-beginner">URL Shortener (Beginner)</h1>
+<h4 id="requirements.">Requirements.</h4>
+<p>Create short links, redirect fast, optional expiry and custom alias, click analytics. 100M new links/month, 10:1 read:write. Redirects must be fast and highly available.</p>
+<h4 id="estimates.">Estimates.</h4>
+<p>Writes <span class="math inline">\(\approx 100\text{M}/(30\times10^5) \approx 40\)</span>/s; reads <span class="math inline">\(\approx 400\)</span>/s average, a few thousand at peak. 5 years <span class="math inline">\(\times\)</span> 1.2B links <span class="math inline">\(\times\)</span> 500 bytes <span class="math inline">\(\approx\)</span> 3 TB. A 7-character base62 code gives <span class="math inline">\(62^7 \approx 3.5\times10^{12}\)</span> combinations: plenty.</p>
+<h4 id="api.">API.</h4>
+<p><code>POST /v1/links {url, alias?, expires_at?}</code> <span class="math inline">\(\to\)</span> <code>{code}</code>; <code>GET /{code}</code> <span class="math inline">\(\to\)</span> <code>301/302 Location</code>.</p>
+<figure class="tikz"><img src="figs/sd/a4219c63d06f.svg" alt="diagram" loading="lazy"></figure>
+<p><em>URL shortener architecture.</em></p>
+<h4 id="deep-dives.">Deep dives.</h4>
+<ul>
+<li><p><strong>Code generation:</strong> hashing the URL causes collisions; a counter encoded in base62 is collision-free. Each write server leases a block of 1<span>,</span>000 IDs from a coordinator (or a DB sequence), so there is no per-write coordination. Shuffle the bits if codes should not be guessable.</p></li>
+<li><p><strong>301 vs 302:</strong> 301 is cached by browsers (less load, fewer analytics events); 302 sends every click through you.</p></li>
+<li><p><strong>Read path:</strong> cache-aside in Redis; hot links cached at the CDN. Analytics are async so redirects never wait on them.</p></li>
+<li><p><strong>Abuse:</strong> rate-limit creation per user/IP; scan destination URLs against malware lists.</p></li>
+</ul>
+<h1 id="real-time-chat-intermediate">Real-Time Chat (Intermediate)</h1>
+<h4 id="requirements.-1">Requirements.</h4>
+<p>1:1 and group chat (up to 500 members), online presence, delivery and read receipts, history sync across devices, push notifications. 50M DAU, 40 messages/user/day.</p>
+<h4 id="estimates.-1">Estimates.</h4>
+<p><span class="math inline">\(50\text{M}\times40/10^5 = 20\)</span>K messages/s average, <span class="math inline">\(\sim\)</span>60K peak. At 200 bytes, <span class="math inline">\(\sim\)</span>400 GB/day of messages. 10–20M concurrent WebSocket connections; at 50K connections per gateway node, about 300–400 nodes.</p>
+<figure class="tikz"><img src="figs/sd/036fe683513a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Chat architecture: stateful gateways, stateless message service.</em></p>
+<h4 id="deep-dives.-1">Deep dives.</h4>
+<ul>
+<li><p><strong>Storage:</strong> partition by <code>conversation_id</code>, cluster by message ID (a time-sortable Snowflake-style ID), so loading a chat is one partition range scan.</p></li>
+<li><p><strong>Ordering and dedup:</strong> the client sends a <code>client_msg_id</code> (idempotency key); the server assigns a per-conversation sequence number. Clients sync by asking for messages after their last sequence number.</p></li>
+<li><p><strong>Delivery guarantees:</strong> at-least-once to devices with client-side dedup; receipts are just more messages.</p></li>
+<li><p><strong>Groups:</strong> fan-out on write to members’ gateways for small groups; very large channels fan-out on read.</p></li>
+<li><p><strong>Presence:</strong> heartbeats every 30 s with TTL keys; publish changes only to contacts currently online, batched, to avoid presence storms.</p></li>
+<li><p><strong>Gateway deploys:</strong> drain connections gradually; clients reconnect with jittered backoff and resync.</p></li>
+</ul>
+<h1 id="social-news-feed-intermediate">Social News Feed (Intermediate)</h1>
+<h4 id="requirements.-2">Requirements.</h4>
+<p>Users post; followers see a ranked feed; 300M DAU; average 200 follows; some accounts have 100M followers. Feed load p99 under 300 ms.</p>
+<figure class="tikz"><img src="figs/sd/342939ab976c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Hybrid fan-out: push for normal accounts, pull for celebrities.</em></p>
+<h4 id="deep-dives.-2">Deep dives.</h4>
+<ul>
+<li><p><strong>Fan-out on write</strong> (push to followers’ feed caches) makes reads fast but a 100M-follower post means 100M writes. <strong>Fan-out on read</strong> is cheap to write but slow to read. Use the <strong>hybrid</strong>: push for most users, pull and merge for accounts above a follower threshold.</p></li>
+<li><p><strong>Ranking:</strong> candidate generation (followed posts plus recommendations from embeddings) then a ranking model scoring engagement; keep feature lookups in a low-latency feature store.</p></li>
+<li><p><strong>Cache sizing:</strong> keep the latest 500 post IDs per active user (8 bytes each): 300M <span class="math inline">\(\times\)</span> 4 KB <span class="math inline">\(\approx\)</span> 1.2 TB across a Redis cluster.</p></li>
+<li><p><strong>Degradation:</strong> if ranking times out, serve chronological from cache.</p></li>
+</ul>
+<h1 id="multi-tenant-llm-platform-with-rag-expert">Multi-Tenant LLM Platform with RAG (Expert)</h1>
+<h4 id="requirements.-3">Requirements.</h4>
+<p>An internal platform letting 200 product teams build AI features: chat over company documents, agents with tools, batch summarization. Must enforce document permissions, per-team budgets, provider failover, and audit logging. 5M requests/day, average 6K input / 500 output tokens; mix of hosted frontier models and self-hosted open models.</p>
+<h4 id="estimates.-2">Estimates.</h4>
+<p><span class="math inline">\(5\text{M}/10^5 = 50\)</span> req/s average, <span class="math inline">\(\sim\)</span>200 peak. Tokens/day: 30B input, 2.5B output. With 70% of input served from prompt or prefix cache and 60% of requests routed to a small model, cost falls by well over half versus sending everything uncached to the largest model. Concurrency by Little’s Law: 200 req/s <span class="math inline">\(\times\)</span> 8 s average duration <span class="math inline">\(\approx\)</span> 1<span>,</span>600 in-flight streams.</p>
+<figure class="tikz"><img src="figs/sd/b230871e0bfe.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Multi-tenant LLM platform.</em></p>
+<h4 id="deep-dives.-3">Deep dives.</h4>
+<ul>
+<li><p><strong>Gateway:</strong> OpenAI-compatible API; per-team virtual keys; token budgets (ITPM/OTPM) enforced with a distributed token bucket; reserve <code>max_tokens</code> and refund after completion. Retries with full-jitter backoff, a circuit breaker per provider and model, and failover to an equivalent model. Every request carries a trace ID and team ID for cost attribution.</p></li>
+<li><p><strong>Routing:</strong> a lightweight classifier picks model tier; teams can pin models for reproducibility. Stable prompt prefixes are encouraged so provider prompt caching and self-hosted prefix caching hit.</p></li>
+<li><p><strong>Self-hosted serving:</strong> vLLM or SGLang behind KV-cache-aware routing (prefix affinity plus least-KV-usage); autoscale on waiting requests; FP8 weights and KV; chunked prefill for long RAG prompts; disaggregated prefill only if TTFT SLOs are missed at scale.</p></li>
+<li><p><strong>RAG with permissions:</strong> ingestion via connectors and CDC; every chunk stores tenant and ACL groups; retrieval filters by the caller’s identity at query time; hybrid search plus reranking; answers cite sources.</p></li>
+<li><p><strong>Agents:</strong> run in a durable workflow engine; tools exposed as MCP servers with scoped credentials; side-effecting tools require idempotency keys and human approval above thresholds; code execution in microVM sandboxes.</p></li>
+<li><p><strong>Safety:</strong> input and output guardrails (PII redaction, injection detection, policy classifiers); retrieved content treated as untrusted.</p></li>
+<li><p><strong>Quality:</strong> each team registers an eval set; prompt or model changes are gated in CI; online LLM-judge sampling and user feedback dashboards.</p></li>
+<li><p><strong>Failure modes:</strong> provider outage (failover, degrade to smaller model), GPU node loss (replicas across zones), vector DB slowness (timeout and answer without retrieval with a disclaimer, or fail clearly), runaway agent (step and spend caps).</p></li>
+</ul>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Every design repeats the same moves: estimate, find the pressure, apply a building block.</p></li>
+<li><p>Read-heavy systems lean on caching and CDNs; write-heavy ones on partitioning and queues.</p></li>
+<li><p>Hybrid strategies (push plus pull, small plus large model) handle skewed real-world load.</p></li>
+<li><p>AI platforms are classic distributed systems with new resources: tokens, KV cache, and GPUs.</p></li>
+</ul>
+</div>

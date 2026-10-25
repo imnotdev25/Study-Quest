@@ -1,0 +1,288 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a vending machine with sold-out buttons</div>
+<p>A good vending machine greys out sold-out buttons. A bad one lets you press them and then flashes “ERROR.” The bad design wastes your attempts and teaches you through annoying penalties. Invalid-action masking is the good design: impossible actions get probability exactly zero <em>before</em> sampling.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/22c208b4db0a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Logits <span class="math inline">\((2,1,0.5,3)\)</span>. The invalid action had the highest logit. Masking removes it and renormalizes the rest.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>In a tool trajectory, why must actions after termination be excluded from the loss?</p></li>
+<li><p>Why is a tool result an observation rather than a policy action?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="two-different-masks">2. Two different masks</h3>
+<p>Tool agents often have state-dependent action spaces.</p>
+<p>For example:</p>
+<pre class="code text"><code class="language-plaintext">before search:  search, query_database
+after evidence: answer, submit
+after terminal: no further action</code></pre>
+<p>Two masks serve different purposes:</p>
+<ul>
+<li><p><strong>Response/trajectory mask:</strong> which time steps actually occurred?</p></li>
+<li><p><strong>Action mask:</strong> which actions are legal at the current state?</p></li>
+</ul>
+<p>Given action logits <span class="math inline">\(z(s,a)\)</span>, mask illegal actions before softmax:</p>
+<p><span class="math display">\[\tilde z(s,a)=
+\begin{cases}
+z(s,a),&amp;a\text{ is valid}\\
+-\infty,&amp;a\text{ is invalid}
+\end{cases}\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\pi(a\mid s)
+=
+\operatorname{softmax}(\tilde z(s,\cdot))_a\]</span></p>
+<p>An invalid action receives exactly zero probability.</p>
+<h3 class="unnumbered" id="why-masking-must-happen-before-sampling">Why masking must happen before sampling</h3>
+<p>Sampling first and rejecting illegal actions changes the effective policy distribution. The recorded log-probability must correspond to the distribution from which the executed action was actually sampled.</p>
+<p>If valid actions are <span class="math inline">\(\mathcal A(s)\)</span>, the conditional policy is:</p>
+<p><span class="math display">\[\pi_{\text{valid}}(a\mid s)
+=
+\frac{
+\pi(a\mid s)
+}{
+\sum_{a&#39;\in\mathcal A(s)}
+\pi(a&#39;\mid s)
+}
+\quad
+\text{for }a\in\mathcal A(s)\]</span></p>
+<p>Masking followed by softmax calculates this normalization directly.</p>
+<h3 class="unnumbered" id="practical-dangers">Practical dangers</h3>
+<ul>
+<li><p>An all-invalid row cannot define a categorical distribution.</p></li>
+<li><p>Terminal states should not be sampled, or should expose an explicit termination action.</p></li>
+<li><p>A mistaken mask can make the optimal action unreachable.</p></li>
+<li><p>Using a large negative number such as <span style="background-color: codeinlinebg"><code> -1e9</code></span> usually works in FP32, but behaviour varies with lower-precision types.</p></li>
+<li><p>Manually computing <span class="math inline">\(0\log0\)</span> can produce <span style="background-color: codeinlinebg"><code> nan</code></span>; use stable distribution entropy.</p></li>
+<li><p>Invalid-action rewards must never matter, however large they are.</p></li>
+</ul>
+<p>SFT or DPO can teach valid tool-call syntax, but runtime masks enforce hard environment constraints. Preference optimization does not guarantee that an invalid call receives zero probability.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>logits and valid-action mask: <span style="background-color: codeinlinebg"><code> [states, actions]</code></span></p></li>
+<li><p>probabilities: <span style="background-color: codeinlinebg"><code> [states, actions]</code></span></p></li>
+<li><p>entropy and expected reward: <span style="background-color: codeinlinebg"><code> [states]</code></span></p></li>
+<li><p>final objective: scalar</p></li>
+</ul>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: masks change the gradient too</div>
+<p>Masked logits: <span class="math inline">\(\tilde z_a=z_a\)</span> if valid, else a huge negative number. Then <span class="math inline">\(\pi(a)=\operatorname{softmax}(\tilde z)_a\)</span>. Gradient of <span class="math inline">\(\log\pi(a_t)\)</span> with respect to logit <span class="math inline">\(z_j\)</span>: <span class="math inline">\(\mathbb 1[j=a_t]-\pi(j)\)</span>. For an invalid <span class="math inline">\(j\)</span>, <span class="math inline">\(\pi(j)=0\)</span> and <span class="math inline">\(a_t\neq j\)</span>, so the gradient is exactly <span class="math inline">\(0\)</span>. Invalid actions neither get sampled nor absorb learning signal.</p>
+<p><strong>Implementation:</strong> use <code>torch.finfo(dtype).min</code>, not <span class="math inline">\(-\infty\)</span>. If every action is masked, <span class="math inline">\(-\infty\)</span> everywhere gives NaN. Treat “no legal action” as a bug or an explicit termination.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Trajectory masks say <em>when</em> the agent acted. Action masks say <em>what</em> was allowed.</p></li>
+<li><p>Mask before softmax and sampling, never after.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: masked gradient</div>
+<p>Valid logits <span class="math inline">\((2,1,0.5)\)</span>, invalid masked. <span class="math inline">\(\pi=(0.629,0.231,0.140,0)\)</span>. Sample <span class="math inline">\(a_1\)</span>. <span class="math inline">\(\nabla_z\log\pi(a_1)=e_1-\pi=(0.371,-0.231,-0.140,0)\)</span>. The invalid logit gets exactly 0.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Masking after softmax (probabilities no longer sum to 1).</p></li>
+<li><p>Different masks at rollout time and training time.</p></li>
+<li><p><span class="math inline">\(-\infty\)</span> everywhere, which produces NaN.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Sampling with invalid-action masking</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logits <span class="math inline">\(z\)</span>, validity mask <span class="math inline">\(v\in\{0,1\}^k\)</span></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> <span class="math inline">\(\sum_av_a=0\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:1">raise an error, or end the episode explicitly <em>▷ never sample from an empty set</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\tilde z_a\gets z_a\)</span> if <span class="math inline">\(v_a=1\)</span>, else the most negative float (<code>torch.finfo(dtype).min</code>)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\pi\gets\operatorname{softmax}(\tilde z)\)</span>; sample <span class="math inline">\(a\sim\pi\)</span></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(a\)</span> and <span class="math inline">\(\log\pi(a)\)</span> <em>▷ use the same masked logits in the loss</em></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-optimize-only-over-legal-actions">3. PyTorch exercise — optimize only over legal actions</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+num_states = 2
+num_actions = 4
+entropy_coefficient = 0.2
+
+# Actions:
+# 0=answer, 1=search, 2=database, 3=submit
+valid_actions = torch.tensor([
+    [False, True,  True,  False],  # state 0
+    [True,  False, False, True ],  # state 1
+])
+
+# Invalid actions deliberately have tempting rewards.
+# Correct masking must make those values irrelevant.
+reward_table = torch.tensor([
+    [99.0, 0.2, 0.8, 99.0],
+    [ 1.0, 99.0, 99.0, 0.3],
+])
+
+policy_logits = torch.nn.Parameter(
+    torch.zeros(num_states, num_actions)
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.05,
+)
+
+for step in range(250):
+    # TODO 1: Replace invalid logits with negative infinity.
+    masked_logits = ...
+
+    # TODO 2: Construct the legal categorical policies.
+    policy = ...
+
+    probabilities = policy.probs
+
+    # TODO 3: Exact expected reward for each state.
+    expected_reward_per_state = ...
+
+    # TODO 4: Stable entropy for each state.
+    entropy_per_state = ...
+
+    objective = (
+        expected_reward_per_state
+        + entropy_coefficient * entropy_per_state
+    ).mean()
+
+    loss = -objective
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    if step in [0, 1, 9, 49, 249]:
+        print(
+            f&quot;step={step:3d}&quot;,
+            f&quot;reward={expected_reward_per_state.mean().item():.3f}&quot;,
+            f&quot;entropy={entropy_per_state.mean().item():.3f}&quot;,
+            f&quot;probs={probabilities.detach().tolist()}&quot;,
+        )
+
+with torch.no_grad():
+    final_masked_logits = policy_logits.masked_fill(
+        ~valid_actions,
+        -torch.inf,
+    )
+
+    final_policy = Categorical(
+        logits=final_masked_logits
+    )
+
+    final_probabilities = final_policy.probs
+
+invalid_probability_max = final_probabilities[
+    ~valid_actions
+].max()
+
+invalid_gradient_max = policy_logits.grad[
+    ~valid_actions
+].abs().max()
+
+print(&quot;Final probabilities:\n&quot;, final_probabilities)
+print(&quot;Maximum invalid probability:&quot;, invalid_probability_max)
+print(&quot;Maximum invalid-logit gradient:&quot;, invalid_gradient_max)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action should dominate in state <span style="background-color: codeinlinebg"><code> 0</code></span>?</p></li>
+<li><p>Which action should dominate in state <span style="background-color: codeinlinebg"><code> 1</code></span>?</p></li>
+<li><p>Can either reward of <span style="background-color: codeinlinebg"><code> 99</code></span> affect training?</p></li>
+<li><p>Should the preferred valid actions reach probability exactly one?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> masked_fill(~valid_actions, -torch.inf)</code></span>.</p></li>
+<li><p>Pass masked logits to <span style="background-color: codeinlinebg"><code> Categorical</code></span>.</p></li>
+<li><p>Expected reward is a probability-weighted sum over actions.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> policy.entropy()</code></span> instead of manually multiplying zero probabilities by <span style="background-color: codeinlinebg"><code> -inf</code></span>.</p></li>
+<li><p>Entropy keeps some probability on the weaker valid actions.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>First, remove the action mask:</p>
+<pre class="code python"><code class="language-python">policy = Categorical(
+    logits=policy_logits
+)</code></pre>
+<p>The policy will rapidly select invalid actions because their rewards are <span style="background-color: codeinlinebg"><code> 99</code></span>. The optimizer is behaving correctly; the environment interface is wrong.</p>
+<p>Then calculate entropy manually:</p>
+<pre class="code python"><code class="language-python">log_probs = torch.log_softmax(
+    masked_logits,
+    dim=-1,
+)
+
+entropy_per_state = -(
+    probabilities * log_probs
+).sum(dim=-1)</code></pre>
+<p>At invalid actions this contains:</p>
+<p><span class="math display">\[0\times(-\infty)\]</span></p>
+<p>which produces <span style="background-color: codeinlinebg"><code> nan</code></span>. <span style="background-color: codeinlinebg"><code> Categorical.entropy()</code></span> handles this case stably.</p>
+<p>Finally, append an all-invalid terminal state. Constructing a categorical distribution for it is undefined. Skip that row using a trajectory mask or provide one explicit terminal/no-op action.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>How does an action mask differ from a trajectory mask?</p></li>
+<li><p>Why is “sample, reject and resample” dangerous for policy gradients?</p></li>
+<li><p>Why can an overly restrictive mask reduce capability?</p></li>
+<li><p>What should be logged to debug tool-action masking?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Masked logits and policy:</p>
+<pre class="code python"><code class="language-python">masked_logits = policy_logits.masked_fill(
+    ~valid_actions,
+    -torch.inf,
+)
+
+policy = Categorical(
+    logits=masked_logits
+)</code></pre>
+<p>Expected rewards:</p>
+<pre class="code python"><code class="language-python">expected_reward_per_state = (
+    probabilities * reward_table
+).sum(dim=-1)</code></pre>
+<p>Stable entropy:</p>
+<pre class="code python"><code class="language-python">entropy_per_state = policy.entropy()</code></pre>
+<p>The valid reward choices are:</p>
+<pre class="code text"><code class="language-plaintext">state 0:
+  search   → 0.2
+  database → 0.8
+
+state 1:
+  answer → 1.0
+  submit → 0.3</code></pre>
+<p>Therefore, the final policies should prefer:</p>
+<pre class="code text"><code class="language-plaintext">state 0 → database
+state 1 → answer</code></pre>
+<p>With entropy regularization, the soft-optimal valid policy is:</p>
+<p><span class="math display">\[\pi(a\mid s)
+\propto
+\exp\left(
+\frac{R(s,a)}
+{\alpha}
+\right)\]</span></p>
+<p>For state <span style="background-color: codeinlinebg"><code> 0</code></span>, the two valid logits are proportional to:</p>
+<p><span class="math display">\[[0.2/0.2,\;0.8/0.2]=[1,4]\]</span></p>
+<p>so the approximate valid probabilities are:</p>
+<pre class="code python"><code class="language-python">search:   0.047
+database: 0.953</code></pre>
+<p>For state <span style="background-color: codeinlinebg"><code> 1</code></span>:</p>
+<p><span class="math display">\[[1.0/0.2,\;0.3/0.2]=[5,1.5]\]</span></p>
+<p>giving approximately:</p>
+<pre class="code python"><code class="language-python">answer: 0.971
+submit: 0.029</code></pre>
+<p>Every invalid action should have exactly zero probability and zero gradient. Its reward is irrelevant because the probability multiplying it is zero.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>An action mask removes illegal choices within a valid state; a trajectory mask removes time steps that never occurred.</p></li>
+<li><p>The executed action comes from a renormalized conditional distribution, so its log-probability is not the original unmasked log-probability.</p></li>
+<li><p>If the mask incorrectly removes a useful call, no amount of RL can discover or select it.</p></li>
+<li><p>Log valid-action counts, all-invalid rows, invalid probability mass, selected action legality, pre-mask logits and gradients on invalid logits.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Those actions never occurred, so including their rewards or log-probabilities creates fictitious gradient paths.</p></li>
+<li><p>The policy chooses the request, while the external environment determines the returned evidence.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> trajectory masks say when the agent acted; action masks say what it was allowed to do. Apply action masks before normalization and sampling, and treat all-invalid states as an environment bug or explicit termination case.</p>

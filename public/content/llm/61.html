@@ -1,0 +1,309 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>The goal:</strong> make the model prefer the responses humans chose. Start from the RLHF objective: maximize reward while staying close to a reference model, <span class="math inline">\(\max_\pi\ \mathbb E_{y\sim\pi}[r(x,y)]-\beta\,D_{\mathrm{KL}}(\pi\|\pi_{\text{ref}})\)</span>. <strong>DPO</strong> solves this objective in closed form and turns it into a classification loss on preference pairs, with no reward model and no sampling.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>For an autoregressive response, are token log-probabilities added or averaged to obtain its log-probability?</p></li>
+<li><p>Why must padding and prompt tokens be excluded when scoring a response?</p></li>
+</ol>
+<p>For prompt <span class="math inline">\(x\)</span>, preferred response <span class="math inline">\(y^+\)</span>, and rejected response <span class="math inline">\(y^-\)</span>:</p>
+<p><span class="math display">\[\log \pi_\theta(y\mid x)
+=
+\sum_{t\in\text{response}}
+\log \pi_\theta(y_t\mid x,y_{&lt;t})\]</span></p>
+<p>Define the policy preference margin:</p>
+<p><span class="math display">\[\Delta_\theta
+=
+\log\pi_\theta(y^+\mid x)
+-
+\log\pi_\theta(y^-\mid x)\]</span></p>
+<p>and the frozen reference-model margin:</p>
+<p><span class="math display">\[\Delta_{\text{ref}}
+=
+\log\pi_{\text{ref}}(y^+\mid x)
+-
+\log\pi_{\text{ref}}(y^-\mid x)\]</span></p>
+<p>DPO optimizes:</p>
+<p><span class="math display">\[L_{\text{DPO}}
+=
+-\log\sigma\left(
+\beta(\Delta_\theta-\Delta_{\text{ref}})
+\right)\]</span></p>
+<p>Equivalently, using a numerically stable form:</p>
+<p><span class="math display">\[L_{\text{DPO}}
+=
+\operatorname{softplus}\left(
+-\beta(\Delta_\theta-\Delta_{\text{ref}})
+\right)\]</span></p>
+<p>Interpretation: the policy should prefer <span class="math inline">\(y^+\)</span> over <span class="math inline">\(y^-\)</span> more strongly than the reference does.</p>
+<p>For token logits:</p>
+<p><span class="math display">\[Z^+,Z^-\in\mathbb{R}^{B\times T\times V}\]</span></p>
+<p>the output is one scalar sequence log-probability per response:</p>
+<p><span class="math display">\[s^+,s^-\in\mathbb{R}^{B}\]</span></p>
+<p>The reference model must remain frozen. Accidentally allowing gradients through it increases memory and changes the intended optimization problem.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: from the KL-regularized objective to the DPO loss</div>
+<p><strong>Step 1.</strong> Rewrite the objective for one prompt: <span class="math inline">\(\sum_y\pi(y)\big[r(y)-\beta\log\frac{\pi(y)}{\pi_{\text{ref}}(y)}\big]=-\beta\sum_y\pi(y)\log\frac{\pi(y)}{\pi_{\text{ref}}(y)e^{r(y)/\beta}}\)</span>.</p>
+<p><strong>Step 2.</strong> Define <span class="math inline">\(Z=\sum_y\pi_{\text{ref}}(y)e^{r(y)/\beta}\)</span> and <span class="math inline">\(\pi^*=\pi_{\text{ref}}e^{r/\beta}/Z\)</span>. The objective becomes <span class="math inline">\(-\beta D_{\mathrm{KL}}(\pi\|\pi^*)+\beta\log Z\)</span>, maximized exactly at <span class="math inline">\(\pi=\pi^*\)</span>.</p>
+<p><strong>Step 3.</strong> Solve for the reward: <span class="math inline">\(r(y)=\beta\log\frac{\pi^*(y)}{\pi_{\text{ref}}(y)}+\beta\log Z\)</span>.</p>
+<p><strong>Step 4.</strong> Bradley–Terry preference probability <span class="math inline">\(\sigma(r(y^+)-r(y^-))\)</span>. The <span class="math inline">\(\beta\log Z\)</span> terms are identical for both responses and cancel: <span class="math inline">\(P(y^+\succ y^-)=\sigma\Big(\beta\big[\log\tfrac{\pi^*(y^+)}{\pi_{\text{ref}}(y^+)}-\log\tfrac{\pi^*(y^-)}{\pi_{\text{ref}}(y^-)}\big]\Big)\)</span>.</p>
+<p><strong>Step 5.</strong> Replace <span class="math inline">\(\pi^*\)</span> with the trainable <span class="math inline">\(\pi_\theta\)</span>, and take the NLL of the observed preference: <span class="math inline">\(L_{\text{DPO}}=-\log\sigma\big(\beta(\Delta_\theta-\Delta_{\text{ref}})\big)\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Gradient:</strong> with <span class="math inline">\(u=\beta(\Delta_\theta-\Delta_{\text{ref}})\)</span>, <span class="math inline">\(\nabla L=-\beta\sigma(-u)\big[\nabla\log\pi_\theta(y^+)-\nabla\log\pi_\theta(y^-)\big]\)</span>. It pushes the preferred response up and the rejected one down, weighted by how wrong the current margin is.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: DPO training step</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> pairs <span class="math inline">\((x,y^+,y^-)\)</span>, frozen <span class="math inline">\(\pi_{\text{ref}}\)</span>, policy <span class="math inline">\(\pi_\theta\)</span>, <span class="math inline">\(\beta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(s_\theta^\pm\gets\sum_{t\in y^\pm}\log\pi_\theta(y_t\mid x,y_{&lt;t})\)</span> <em>▷ masked sums over response tokens</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(s_{\text{ref}}^\pm\gets\)</span> the same under <span class="math inline">\(\pi_{\text{ref}}\)</span>, with no gradient</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(u\gets\beta\big[(s_\theta^+-s_\theta^-)-(s_{\text{ref}}^+-s_{\text{ref}}^-)\big]\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets\operatorname{mean}\softplus(-u)\)</span>; gradient step</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement masked sequence log-probabilities and the DPO loss.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(191)
+
+B, T, V = 3, 4, 6
+beta = 0.2
+
+chosen_targets = torch.tensor([
+    [1, 2, 3, 0],
+    [4, 1, 0, 0],
+    [2, 5, 1, 3],
+])
+
+rejected_targets = torch.tensor([
+    [1, 4, 2, 0],
+    [3, 2, 0, 0],
+    [2, 0, 4, 1],
+])
+
+# True means the token belongs to the scored response.
+chosen_mask = torch.tensor([
+    [1, 1, 1, 0],
+    [1, 1, 0, 0],
+    [1, 1, 1, 1],
+], dtype=torch.bool)
+
+rejected_mask = torch.tensor([
+    [1, 1, 1, 0],
+    [1, 1, 0, 0],
+    [1, 1, 1, 1],
+], dtype=torch.bool)
+
+policy_chosen_logits = torch.randn(
+    B, T, V, requires_grad=True
+)
+policy_rejected_logits = torch.randn(
+    B, T, V, requires_grad=True
+)
+
+# Frozen reference outputs
+reference_chosen_logits = torch.randn(B, T, V)
+reference_rejected_logits = torch.randn(B, T, V)
+
+
+def sequence_logp(logits, targets, mask, normalize=False):
+    log_probs = ...                              # TODO 1: [B,T,V]
+
+    target_logp = ...                            # TODO 2: [B,T]
+    masked_logp = ...                            # TODO 3
+
+    sequence_sum = ...                           # TODO 4: [B]
+
+    if normalize:
+        return ...                               # TODO 5: length average
+
+    return sequence_sum
+
+
+policy_chosen_logp = ...                         # TODO 6: [B]
+policy_rejected_logp = ...                       # TODO 7: [B]
+
+reference_chosen_logp = ...                      # TODO 8: [B]
+reference_rejected_logp = ...                    # TODO 9: [B]
+
+policy_margin = ...                              # TODO 10
+reference_margin = ...                           # TODO 11
+
+preference_logit = ...                           # TODO 12: [B]
+
+losses = ...                                     # TODO 13: stable DPO loss
+loss = ...                                       # TODO 14: scalar
+
+d_chosen, d_rejected = torch.autograd.grad(
+    loss,
+    [policy_chosen_logp, policy_rejected_logp],
+    retain_graph=True,
+)
+
+print(&quot;policy margin:   &quot;, policy_margin.detach())
+print(&quot;reference margin:&quot;, reference_margin)
+print(&quot;DPO losses:      &quot;, losses.detach())
+print(&quot;dL/d chosen logp:&quot;, d_chosen)
+print(&quot;dL/d rejected logp:&quot;, d_rejected)
+
+assert torch.all(d_chosen &lt; 0)
+assert torch.all(d_rejected &gt; 0)
+
+loss.backward()
+
+print(
+    &quot;chosen logits gradient norm:&quot;,
+    policy_chosen_logits.grad.norm().item(),
+)
+print(
+    &quot;rejected logits gradient norm:&quot;,
+    policy_rejected_logits.grad.norm().item(),
+)</code></pre>
+<p>Before running, predict the signs of:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial\log\pi_\theta(y^+|x)}
+\quad\text{and}\quad
+\frac{\partial L}{\partial\log\pi_\theta(y^-|x)}\]</span></p>
+<p>Now test a common objective-changing bug:</p>
+<pre class="code python"><code class="language-python">chosen_mean = sequence_logp(
+    policy_chosen_logits,
+    chosen_targets,
+    chosen_mask,
+    normalize=True,
+)
+
+rejected_mean = sequence_logp(
+    policy_rejected_logits,
+    rejected_targets,
+    rejected_mask,
+    normalize=True,
+)
+
+length_normalized_margin = chosen_mean - rejected_mean
+
+print(&quot;\nsummed margin:           &quot;, policy_margin.detach())
+print(&quot;length-normalized margin:&quot;, length_normalized_margin.detach())</code></pre>
+<p>Why is length normalization not merely an implementation optimization?</p>
+<p>Finally, test numerical stability:</p>
+<pre class="code python"><code class="language-python">extreme = torch.tensor([-1000.0, 1000.0])
+
+naive = -torch.log(torch.sigmoid(extreme))
+stable = F.softplus(-extreme)
+
+print(&quot;\nnaive: &quot;, naive)
+print(&quot;stable:&quot;, stable)</code></pre>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>F.log_softmax(logits, dim=-1)</code>.</p></li>
+<li><p>Gather target entries with <code>targets.unsqueeze(-1)</code>.</p></li>
+<li><p>Convert the mask to the log-probability dtype.</p></li>
+<li><p>Sequence likelihood uses a sum over response positions.</p></li>
+<li><p><code>preference_logit = beta * (policy_margin - reference_margin)</code>.</p></li>
+<li><p>Stable negative log-sigmoid is <code>F.softplus(-x)</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does DPO compare policy and reference preference margins rather than only the policy margin?</p></li>
+<li><p>What shapes do token log-probabilities and sequence log-probabilities have?</p></li>
+<li><p>Prediction: if policy and reference margins are identical, what is the per-example DPO loss?</p></li>
+<li><p>Debugging: GPU memory nearly doubles after adding DPO. What reference-model mistake should you check?</p></li>
+<li><p>If <span class="math inline">\(\beta\)</span> becomes very large, what happens to the sharpness and gradient behavior of the preference loss?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def sequence_logp(logits, targets, mask, normalize=False):
+    log_probs = F.log_softmax(logits, dim=-1)
+
+    target_logp = log_probs.gather(
+        dim=-1,
+        index=targets.unsqueeze(-1),
+    ).squeeze(-1)
+
+    masked_logp = target_logp * mask.to(target_logp.dtype)
+    sequence_sum = masked_logp.sum(dim=-1)
+
+    if normalize:
+        return sequence_sum / mask.sum(dim=-1).clamp_min(1)
+
+    return sequence_sum
+
+
+policy_chosen_logp = sequence_logp(
+    policy_chosen_logits,
+    chosen_targets,
+    chosen_mask,
+)
+
+policy_rejected_logp = sequence_logp(
+    policy_rejected_logits,
+    rejected_targets,
+    rejected_mask,
+)
+
+with torch.no_grad():
+    reference_chosen_logp = sequence_logp(
+        reference_chosen_logits,
+        chosen_targets,
+        chosen_mask,
+    )
+
+    reference_rejected_logp = sequence_logp(
+        reference_rejected_logits,
+        rejected_targets,
+        rejected_mask,
+    )
+
+policy_margin = (
+    policy_chosen_logp - policy_rejected_logp
+)
+
+reference_margin = (
+    reference_chosen_logp - reference_rejected_logp
+)
+
+preference_logit = beta * (
+    policy_margin - reference_margin
+)
+
+losses = F.softplus(-preference_logit)
+loss = losses.mean()</code></pre>
+<p>Let:</p>
+<p><span class="math display">\[z=\beta(\Delta_\theta-\Delta_{\text{ref}})\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial\Delta_\theta}
+=
+-\beta\sigma(-z)&lt;0\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\frac{\partial L}
+{\partial\log\pi_\theta(y^+|x)}&lt;0\]</span></p>
+<p><span class="math display">\[\frac{\partial L}
+{\partial\log\pi_\theta(y^-|x)}&gt;0\]</span></p>
+<p>Gradient descent increases the preferred-response log-probability and decreases the rejected-response log-probability.</p>
+<p>Length normalization changes:</p>
+<p><span class="math display">\[\sum_t\log p(y_t)\]</span></p>
+<p>into:</p>
+<p><span class="math display">\[\frac{1}{T}\sum_t\log p(y_t)\]</span></p>
+<p>These represent different objectives. The latter compares average token confidence and reduces the effect of response length; it is not algebraically equivalent to sequence likelihood.</p>
+<p>For <code>extreme=-1000</code>, <code>sigmoid</code> underflows to zero and the naïve expression produces infinity. <code>softplus(1000)</code> remains a finite value near <code>1000</code>.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>The reference establishes how much preference is already present. DPO trains the policy’s relative change while regularizing it implicitly toward the reference.</p></li>
+<li><p>Token log-probabilities are <span><code>[</code></span><code>B,T</code><span><code>]</code></span>; summing valid response tokens produces <span><code>[</code></span><code>B</code><span><code>]</code></span>.</p></li>
+<li><p>The preference logit is zero: <span class="math display">\[-\log\sigma(0)=\log 2\approx0.693\]</span></p></li>
+<li><p>Check whether reference inference was performed with gradients enabled or whether its computation graph is being retained.</p></li>
+<li><p>Larger <span class="math inline">\(\beta\)</span> makes the logistic comparison sharper. Misranked pairs can receive larger gradients, while confidently correct pairs saturate more quickly.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Autoregressive token log-probabilities are added to obtain the log-probability of the complete sequence.</p></li>
+<li><p>Prompt and padding positions are context, not response targets; including them changes both the score and its gradient.</p></li>
+</ul>

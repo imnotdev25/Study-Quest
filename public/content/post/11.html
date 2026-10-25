@@ -1,0 +1,159 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>A <strong>reward model</strong> (RM) is a language model with its output layer replaced by a single number. It’s trained on preference pairs with the Bradley–Terry loss <span class="math inline">\(-\log\sigma(r^+-r^-)\)</span> (<em>LLM Fundamentals</em>, Session 36) and then used three ways: as the reward in PPO-style RLHF, to pick the best of <span class="math inline">\(N\)</span> samples, and to label new preference pairs for DPO.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why TRL adds a centering term</div>
+<p><strong>Step 1.</strong> Bradley–Terry only sees differences: replacing <span class="math inline">\(r(x,y)\)</span> with <span class="math inline">\(r(x,y)+c(x)\)</span> leaves the loss unchanged, so the scores’ offset drifts freely during training.</p>
+<p><strong>Step 2.</strong> A drifting offset is harmless for ranking but harmful for RL, where the absolute scale of the reward sets the effective KL strength (RL book, Topic 127).</p>
+<p><strong>Step 3.</strong> <code>center_rewards_coefficient</code><span class="math inline">\(=\lambda\)</span> adds <span class="math inline">\(\lambda\,\overline{(r^++r^-)^2}\)</span>, which pulls the mean score toward 0 without changing which response wins. TRL recommends <span class="math inline">\(\lambda=0.01\)</span>.</p>
+<p><strong>Step 4.</strong> <strong>Ensembles</strong> (several RMs, use the mean minus a multiple of their spread) reduce reward hacking but don’t eliminate it: members trained on the same data share blind spots (RL book, Topics 130–131).</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: two reward models instead of one</div>
+<p><strong>Step 1.</strong> PKU-SafeRLHF labels each response pair twice: which is more <em>helpful</em> and which is <em>safer</em>. These often disagree: the safer answer is frequently a refusal.</p>
+<p><strong>Step 2.</strong> Training one RM on a mix of both labels forces it to pick one exchange rate between helpfulness and harmlessness, baked into the weights.</p>
+<p><strong>Step 3.</strong> Training two (<span class="math inline">\(R_{\text{help}}\)</span> and <span class="math inline">\(C_{\text{harm}}\)</span>) keeps that exchange rate explicit, so it can be set by a constraint during RL (Safe RLHF, Chapter 21).</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Reward models and unpaired preferences: TRL&#x27;s RewardTrainer and KTOTrainer, plus turning
+PKU-SafeRLHF into separate helpfulness and harmlessness preference sets.
+
+Local smoke tests:  python reward_kto.py
+On Modal:           modal run reward_kto.py::train_rm_remote
+&quot;&quot;&quot;
+import modal
+
+TINY = &quot;trl-internal-testing/tiny-Qwen2ForCausalLM-2.5&quot;
+
+
+def run_reward_model(model, dataset, output_dir, **overrides):
+    from trl import RewardConfig, RewardTrainer
+
+    defaults = dict(
+        output_dir=output_dir,
+        max_length=1024,
+        center_rewards_coefficient=0.01,     # keeps scores near 0: Bradley-Terry can&#x27;t pin the offset
+        learning_rate=1e-5,
+        per_device_train_batch_size=8,
+        num_train_epochs=1,
+        logging_steps=10,
+        save_strategy=&quot;no&quot;,
+        report_to=&quot;none&quot;,
+    )
+    trainer = RewardTrainer(model=model, args=RewardConfig(**{**defaults, **overrides}), train_dataset=dataset)
+    trainer.train()
+    return trainer
+
+
+def run_kto(model, dataset, output_dir, **overrides):
+    from trl import KTOConfig, KTOTrainer
+
+    defaults = dict(
+        output_dir=output_dir,
+        beta=0.1,
+        desirable_weight=1.0,                # raise one weight if your thumbs-up/down counts are unbalanced
+        undesirable_weight=1.0,
+        learning_rate=5e-7,
+        per_device_train_batch_size=8,
+        num_train_epochs=1,
+        logging_steps=10,
+        save_strategy=&quot;no&quot;,
+        report_to=&quot;none&quot;,
+    )
+    trainer = KTOTrainer(model=model, args=KTOConfig(**{**defaults, **overrides}), train_dataset=dataset)
+    trainer.train()
+    return trainer
+
+
+def saferlhf_to_pairs(row, axis):
+    &quot;&quot;&quot;PKU-SafeRLHF labels each response pair twice: which is more helpful, which is safer.
+    Split them into two preference sets so helpfulness and harmlessness get separate reward models.&quot;&quot;&quot;
+    best = row[&quot;better_response_id&quot;] if axis == &quot;helpful&quot; else row[&quot;safer_response_id&quot;]
+    chosen, rejected = row[f&quot;response_{best}&quot;], row[f&quot;response_{1 - best}&quot;]
+    return {&quot;prompt&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: row[&quot;prompt&quot;]}],
+            &quot;chosen&quot;: [{&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: chosen}],
+            &quot;rejected&quot;: [{&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: rejected}]}
+
+
+app = modal.App(&quot;pt-book-reward&quot;)
+image = modal.Image.debian_slim(python_version=&quot;3.12&quot;).uv_pip_install(
+    &quot;torch==2.14.1&quot;, &quot;transformers==5.20.2&quot;, &quot;trl==1.16.0&quot;, &quot;datasets==5.1.0&quot;, &quot;accelerate==1.15.0&quot;
+)
+models = modal.Volume.from_name(&quot;pt-book-models&quot;, create_if_missing=True)
+
+
+@app.function(gpu=&quot;H100&quot;, image=image, volumes={&quot;/models&quot;: models}, timeout=4 * 60 * 60)
+def train_rm_remote(axis: str = &quot;harmless&quot;):
+    from datasets import load_dataset
+
+    ds = load_dataset(&quot;PKU-Alignment/PKU-SafeRLHF&quot;, split=&quot;train&quot;)
+    ds = ds.map(lambda r: saferlhf_to_pairs(r, &quot;safe&quot; if axis == &quot;harmless&quot; else &quot;helpful&quot;),
+                remove_columns=ds.column_names)
+    trainer = run_reward_model(&quot;Qwen/Qwen3-0.6B&quot;, ds, f&quot;/models/rm-{axis}&quot;, bf16=True)
+    trainer.save_model(f&quot;/models/rm-{axis}&quot;)
+    models.commit()
+
+
+if __name__ == &quot;__main__&quot;:
+    from datasets import Dataset
+
+    row = {&quot;prompt&quot;: &quot;How do I pick a strong password?&quot;, &quot;response_0&quot;: &quot;Use &#x27;password123&#x27;.&quot;,
+           &quot;response_1&quot;: &quot;Use a long passphrase from a password manager.&quot;, &quot;better_response_id&quot;: 1, &quot;safer_response_id&quot;: 1}
+    print(&quot;SafeRLHF -&gt; harmless pair, chosen:&quot;, saferlhf_to_pairs(row, &quot;safe&quot;)[&quot;chosen&quot;][0][&quot;content&quot;])
+
+    pairs = [{&quot;prompt&quot;: f&quot;What is {a} + {a}?&quot;, &quot;chosen&quot;: f&quot; {2 * a}&quot;, &quot;rejected&quot;: f&quot; {2 * a + 3}&quot;} for a in range(32)]
+    rm = run_reward_model(TINY, Dataset.from_list(pairs), &quot;/tmp/rm_smoke&quot;, max_length=64, per_device_train_batch_size=4,
+                          max_steps=8, logging_steps=4, learning_rate=1e-3, bf16=False, use_cpu=True)
+    for h in rm.state.log_history:
+        if &quot;loss&quot; in h:
+            print(&quot;RM  &quot;, {k: round(h[k], 3) for k in (&quot;loss&quot;, &quot;accuracy&quot;, &quot;margin&quot;) if k in h})
+
+    unpaired = [{&quot;prompt&quot;: f&quot;What is {a} + {a}?&quot;, &quot;completion&quot;: f&quot; {2 * a + (a % 2) * 3}&quot;, &quot;label&quot;: a % 2 == 0}
+                for a in range(32)]                                   # True = thumbs up, False = thumbs down
+    kto = run_kto(TINY, Dataset.from_list(unpaired), &quot;/tmp/kto_smoke&quot;, per_device_train_batch_size=8,
+                  max_steps=4, logging_steps=2, learning_rate=1e-4, bf16=False, use_cpu=True)
+    for h in kto.state.log_history:
+        if &quot;loss&quot; in h:
+            print(&quot;KTO &quot;, {k: round(h[k], 3) for k in (&quot;loss&quot;, &quot;kl&quot;) if k in h})</code></pre>
+<p>Local smoke test (random test model, so accuracy hovers near 0.5 and the KTO loss near 0.5; it shows the configs and data formats run):</p>
+<pre class="code output"><code class="output">SafeRLHF -&gt; harmless pair, chosen: Use a long passphrase from a password manager.
+RM   {&#x27;loss&#x27;: 0.692, &#x27;accuracy&#x27;: 0.438, &#x27;margin&#x27;: 0.003}
+RM   {&#x27;loss&#x27;: 0.699, &#x27;accuracy&#x27;: 0.375, &#x27;margin&#x27;: -0.01}
+KTO  {&#x27;loss&#x27;: 0.5, &#x27;kl&#x27;: 0.0}
+KTO  {&#x27;loss&#x27;: 0.5, &#x27;kl&#x27;: 0.001}</code></pre>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Dataset (HF id)</th>
+<th style="text-align: left;">size</th>
+<th style="text-align: left;">use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>PKU-Alignment/PKU-SafeRLHF</code></td>
+<td style="text-align: left;">74K pairs</td>
+<td style="text-align: left;">separate helpful and safer labels, harm categories and severity</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>lmarena-ai/arena-human-preference-55k</code></td>
+<td style="text-align: left;">55K</td>
+<td style="text-align: left;">real users’ A/B votes from Chatbot Arena (drop ties)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>openbmb/UltraFeedback</code></td>
+<td style="text-align: left;">64K prompts</td>
+<td style="text-align: left;">four responses each, GPT-4 ratings on four aspects</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>trl-lib/kto-mix-14k</code></td>
+<td style="text-align: left;">14K</td>
+<td style="text-align: left;">unpaired thumbs-up/down examples for KTO</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>allenai/reward-bench-2</code></td>
+<td style="text-align: left;">benchmark</td>
+<td style="text-align: left;">evaluates reward models (accuracy at picking the better response)</td>
+</tr>
+</tbody>
+</table>
+</div>

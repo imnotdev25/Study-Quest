@@ -1,0 +1,475 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>If rewards are multiplied by <span class="math inline">\(c\)</span>, how should PPO’s KL coefficient change to preserve the same KL-regularized optimum?</p></li>
+<li><p>Why is reward clipping an objective change rather than merely numerical stabilization?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="pairwise-labels-reveal-a-winner-not-the-winning-distance">2. Pairwise labels reveal a winner, not the winning distance</h3>
+<p>A reward model assigns scalar scores to two completions:</p>
+<p><span class="math display">\[r_w=r_\phi(x,y_w),
+\qquad
+r_l=r_\phi(x,y_l)\]</span></p>
+<p>The Bradley–Terry preference model uses their margin:</p>
+<p><span class="math display">\[P(y_w\succ y_l)
+=
+\sigma(r_w-r_l)
+=
+\sigma(\Delta r)\]</span></p>
+<p>Its numerically stable loss is:</p>
+<p><span class="math display">\[L_{\mathrm{RM}}
+=
+-\log\sigma(\Delta r)
+=
+\operatorname{softplus}(-\Delta r)\]</span></p>
+<p>Adding the same constant to both rewards changes nothing:</p>
+<p><span class="math display">\[(r_w+c)-(r_l+c)=\Delta r\]</span></p>
+<p>Thus the absolute reward offset is unidentified.</p>
+<p>For perfectly separable preference data:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial\Delta r}
+=
+-\sigma(-\Delta r)&lt;0\]</span></p>
+<p>at every finite margin. Loss keeps decreasing as:</p>
+<p><span class="math display">\[\Delta r\rightarrow\infty\]</span></p>
+<p>Pairwise accuracy may reach <span style="background-color: codeinlinebg"><code> 100%</code></span> almost immediately, while reward magnitudes continue growing. If these raw scores become PPO rewards, later reward-model checkpoints implicitly weaken the same KL coefficient:</p>
+<p><span class="math display">\[\pi^*(y)
+\propto
+\pi_{\mathrm{ref}}(y)
+\exp(r(y)/\beta)\]</span></p>
+<p>A preference label is like knowing which runner crossed first; it does not tell you whether the lead was one centimetre or one kilometre.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>paired token inputs: <span style="background-color: codeinlinebg"><code> [B, 2, T]</code></span></p></li>
+<li><p>winner/loser rewards: <span style="background-color: codeinlinebg"><code> [B, 2]</code></span></p></li>
+<li><p>reward margins and labels: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>pairwise loss: scalar</p></li>
+</ul>
+<p>Useful controls include reward-head regularization, early stopping, fixed normalization statistics and temperature calibration:</p>
+<p><span class="math display">\[P(y_w\succ y_l)
+=
+\sigma\left(\frac{\Delta r}{T}\right)\]</span></p>
+<p>Fit <span class="math inline">\(T\)</span> on untouched human preferences. Pairwise accuracy alone cannot choose it.</p>
+<p>DPO uses a similar logistic preference loss, but its margin is constructed from policy/reference log-probability ratios. It does not train a separate scalar reward model or perform online RL.</p>
+<h3 class="unnumbered" id="pytorch-exercise-accuracy-freezes-while-reward-scale-explodes">3. PyTorch exercise — accuracy freezes while reward scale explodes</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.set_default_dtype(torch.float64)
+
+feature_differences = torch.tensor([
+    0.5,
+    1.0,
+    1.5,
+    2.0,
+])
+
+learning_rate = 0.10
+regularization_strength = 0.20
+ppo_beta = 1.0
+
+checkpoint_steps = [
+    0,
+    1,
+    5,
+    20,
+    100,
+    500,
+    2000,
+]
+
+
+# TODO 1: Verify that a common reward offset
+# has zero pairwise-loss gradient.
+probe_weight = torch.tensor(
+    1.0,
+    requires_grad=True,
+)
+
+common_offset = torch.tensor(
+    7.0,
+    requires_grad=True,
+)
+
+winner_scores = ...
+
+loser_scores = ...
+
+probe_loss = ...
+
+(
+    weight_gradient,
+    offset_gradient,
+) = torch.autograd.grad(
+    probe_loss,
+    (
+        probe_weight,
+        common_offset,
+    ),
+)
+
+
+# TODO 2: Train one scalar reward-model weight.
+def train_reward_model(l2_strength):
+    weight = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    optimizer = torch.optim.SGD(
+        [weight],
+        lr=learning_rate,
+    )
+
+    records = []
+    maximum_step = max(checkpoint_steps)
+
+    for step in range(maximum_step + 1):
+        margins = ...
+
+        data_loss = ...
+
+        total_loss = ...
+
+        if step in checkpoint_steps:
+            with torch.no_grad():
+                accuracy = ...
+
+                mean_confidence = ...
+
+                # Uniform reference and an evaluation pair
+                # whose feature difference is one.
+                induced_ppo_probability = ...
+
+                records.append(
+                    torch.stack([
+                        torch.tensor(float(step)),
+                        weight.detach(),
+                        data_loss.detach(),
+                        total_loss.detach(),
+                        accuracy,
+                        mean_confidence,
+                        induced_ppo_probability,
+                    ])
+                )
+
+        if step == maximum_step:
+            break
+
+        optimizer.zero_grad()
+        total_loss.backward()
+        optimizer.step()
+
+    return (
+        torch.stack(records),
+        weight.detach(),
+    )
+
+
+(
+    unregularized_records,
+    unregularized_weight,
+) = ...
+
+(
+    regularized_records,
+    regularized_weight,
+) = ...
+
+
+# TODO 3: Evaluate probability calibration.
+# Assume held-out human preferences follow scale 1.
+true_preference_probabilities = ...
+
+unregularized_probabilities = ...
+
+regularized_probabilities = ...
+
+unregularized_brier = ...
+
+regularized_brier = ...
+
+
+# TODO 4: Temperature-calibrate the unregularized model.
+# This oracle temperature is instructional; normally it
+# must be fitted using held-out data.
+oracle_temperature = ...
+
+temperature_calibrated_probabilities = ...
+
+temperature_calibrated_brier = ...
+
+brier_scores = torch.stack([
+    unregularized_brier,
+    regularized_brier,
+    temperature_calibrated_brier,
+])
+
+
+torch.set_printoptions(
+    precision=5,
+    sci_mode=False,
+)
+
+print(&quot;Weight gradient:&quot;, weight_gradient.item())
+print(&quot;Offset gradient:&quot;, offset_gradient.item())
+
+print(
+    &quot;\nUnregularized columns: step, weight, data loss, &quot;
+    &quot;total loss, accuracy, confidence, PPO P(preferred)&quot;
+)
+print(unregularized_records)
+
+print(&quot;\nRegularized:&quot;)
+print(regularized_records)
+
+print(
+    &quot;\nFinal weights: unregularized, regularized&quot;
+)
+print(
+    unregularized_weight.item(),
+    regularized_weight.item(),
+)
+
+print(
+    &quot;Brier scores: unregularized, regularized, &quot;
+    &quot;temperature-calibrated&quot;
+)
+print(brier_scores)
+
+print(
+    &quot;Oracle temperature:&quot;,
+    oracle_temperature.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What should the common-offset gradient be?</p></li>
+<li><p>When will pairwise accuracy reach <span style="background-color: codeinlinebg"><code> 100%</code></span>?</p></li>
+<li><p>Does the unregularized weight stop growing once accuracy is perfect?</p></li>
+<li><p>What happens to the PPO preferred-action probability as the weight grows?</p></li>
+<li><p>Can temperature calibration change confidence without changing rankings?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Make the two scores symmetric around the offset:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">offset + 0.5 * weight * difference
+offset - 0.5 * weight * difference</code></pre>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> F.softplus(-margins)</code></span> instead of manually computing <span style="background-color: codeinlinebg"><code> -log(sigmoid(...))</code></span>.</p></li>
+<li><p>Accuracy is the fraction of margins strictly above zero.</p></li>
+<li><p>Add regularization as:</p></li>
+</ul>
+<p><span class="math display">\[\frac{\lambda}{2}w^2\]</span></p>
+<ul>
+<li><p>For a uniform reference and reward difference <span class="math inline">\(w\)</span>:</p></li>
+</ul>
+<p><span class="math display">\[P_{\mathrm{PPO}}(\text{preferred})
+=
+\sigma(w/\beta)\]</span></p>
+<ul>
+<li><p>Brier score is mean squared probability error.</p></li>
+<li><p>Dividing every margin by a positive temperature preserves ranking.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Select a reward-model checkpoint using only pairwise accuracy.</p></li>
+<li><p>Compare reward checkpoints without comparing margin distributions.</p></li>
+<li><p>Interpret sigmoid confidence as calibrated without held-out humans.</p></li>
+<li><p>Change reward-model temperature while leaving PPO <span class="math inline">\(\beta\)</span> fixed.</p></li>
+<li><p>Normalize rewards separately in every PPO minibatch.</p></li>
+<li><p>Let response length predict reward margins.</p></li>
+<li><p>Regularize the shared backbone heavily but leave the reward head unbounded.</p></li>
+<li><p>Use training preferences to fit calibration temperature.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is reward offset unidentifiable from pairwise preferences?</p></li>
+<li><p>Why can separable data produce unbounded reward margins?</p></li>
+<li><p>Does lower pairwise loss necessarily mean a better PPO reward?</p></li>
+<li><p>Which measurements should accompany reward-model accuracy?</p></li>
+<li><p>How does DPO avoid—and not avoid—this issue?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Offset invariance:</p>
+<pre class="code python"><code class="language-python">winner_scores = (
+    common_offset
+    + 0.5
+    * probe_weight
+    * feature_differences
+)
+
+loser_scores = (
+    common_offset
+    - 0.5
+    * probe_weight
+    * feature_differences
+)
+
+probe_loss = F.softplus(
+    -(
+        winner_scores
+        - loser_scores
+    )
+).mean()</code></pre>
+<p>The weight receives a gradient, while the common-offset gradient is exactly zero.</p>
+<p>Reward-model training:</p>
+<pre class="code python"><code class="language-python">def train_reward_model(l2_strength):
+    weight = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    optimizer = torch.optim.SGD(
+        [weight],
+        lr=learning_rate,
+    )
+
+    records = []
+    maximum_step = max(checkpoint_steps)
+
+    for step in range(maximum_step + 1):
+        margins = (
+            weight
+            * feature_differences
+        )
+
+        data_loss = F.softplus(
+            -margins
+        ).mean()
+
+        total_loss = (
+            data_loss
+            + 0.5
+            * l2_strength
+            * weight.square()
+        )
+
+        if step in checkpoint_steps:
+            with torch.no_grad():
+                accuracy = (
+                    margins &gt; 0.0
+                ).to(torch.float64).mean()
+
+                mean_confidence = torch.sigmoid(
+                    margins
+                ).mean()
+
+                induced_ppo_probability = torch.sigmoid(
+                    weight / ppo_beta
+                )
+
+                records.append(
+                    torch.stack([
+                        torch.tensor(float(step)),
+                        weight.detach(),
+                        data_loss.detach(),
+                        total_loss.detach(),
+                        accuracy,
+                        mean_confidence,
+                        induced_ppo_probability,
+                    ])
+                )
+
+        if step == maximum_step:
+            break
+
+        optimizer.zero_grad()
+        total_loss.backward()
+        optimizer.step()
+
+    return (
+        torch.stack(records),
+        weight.detach(),
+    )
+
+
+(
+    unregularized_records,
+    unregularized_weight,
+) = train_reward_model(
+    l2_strength=0.0,
+)
+
+(
+    regularized_records,
+    regularized_weight,
+) = train_reward_model(
+    l2_strength=regularization_strength,
+)</code></pre>
+<p>Calibration:</p>
+<pre class="code python"><code class="language-python">true_preference_probabilities = torch.sigmoid(
+    feature_differences
+)
+
+unregularized_probabilities = torch.sigmoid(
+    unregularized_weight
+    * feature_differences
+)
+
+regularized_probabilities = torch.sigmoid(
+    regularized_weight
+    * feature_differences
+)
+
+unregularized_brier = (
+    unregularized_probabilities
+    - true_preference_probabilities
+).square().mean()
+
+regularized_brier = (
+    regularized_probabilities
+    - true_preference_probabilities
+).square().mean()</code></pre>
+<p>Temperature calibration:</p>
+<pre class="code python"><code class="language-python">oracle_temperature = (
+    unregularized_weight.clamp_min(
+        1e-12
+    )
+)
+
+temperature_calibrated_probabilities = torch.sigmoid(
+    unregularized_weight
+    * feature_differences
+    / oracle_temperature
+)
+
+temperature_calibrated_brier = (
+    temperature_calibrated_probabilities
+    - true_preference_probabilities
+).square().mean()</code></pre>
+<p>At step zero, all margins are tied. After the first positive update, every pair is correctly ordered, so accuracy becomes <span style="background-color: codeinlinebg"><code> 100%</code></span>.</p>
+<p>For the unregularized model, the loss continues falling after accuracy saturates:</p>
+<p><span class="math display">\[w\rightarrow\infty,
+\qquad
+\sigma(wd_i)\rightarrow1\]</span></p>
+<p>Consequently, the induced KL-regularized policy also becomes increasingly extreme:</p>
+<p><span class="math display">\[P_{\mathrm{PPO}}(\text{preferred})
+=
+\sigma(w/\beta)
+\rightarrow1\]</span></p>
+<p>The regularized model reaches a finite compromise:</p>
+<p><span class="math display">\[\frac{\partial L_{\mathrm{data}}}{\partial w}
++\lambda w=0\]</span></p>
+<p>In this constructed example, held-out human probabilities use latent scale <span style="background-color: codeinlinebg"><code> 1</code></span>. The oracle temperature divides the oversized margin back to that scale:</p>
+<p><span class="math display">\[\frac{wd}{T}
+=
+\frac{wd}{w}
+=
+d\]</span></p>
+<p>It restores probability calibration while preserving every ranking.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Pairwise likelihood depends only on <span class="math inline">\(r_w-r_l\)</span>; a shared offset cancels exactly.</p></li>
+<li><p>Every finite positive margin can be increased to reduce logistic loss further when no examples oppose the ordering.</p></li>
+<li><p>No. Lower loss may only mean larger confidence margins, which can make PPO rewards badly scaled.</p></li>
+<li><p>Report held-out log loss, Brier score or calibration error, margin mean/std/quantiles, reward length correlation, subgroup calibration and score drift across checkpoints.</p></li>
+<li><p>DPO removes the separately deployed scalar reward model, but separable preferences can still push policy log-ratio margins outward. Its reference policy and <span class="math inline">\(\beta\)</span> control that pressure; it still does not provide calibrated online utility.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Multiply the KL coefficient by the same factor: <span class="math inline">\(\beta&#39;=c\beta\)</span>, preserving <span class="math inline">\(r/\beta\)</span>.</p></li>
+<li><p>Clipping is nonlinear and changes expected utilities; it can even reverse which action has the higher expected reward.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> perfect preference accuracy does not define a trustworthy reward scale. Before feeding reward-model scores into PPO, validate and freeze their margin distribution—or the same <span class="math inline">\(\beta\)</span> will silently represent a different objective.</p>

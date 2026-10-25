@@ -1,0 +1,318 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: the weather forecast that says “average: light rain”</div>
+<p>A forecast of “average rainfall: 5 mm” could mean a steady drizzle, or a 90% chance of nothing and a 10% chance of a flood. You’d pack very differently. A scalar critic gives you the average. A distributional critic gives you the forecast’s shape.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/5a915ccd04d3.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Two actions with mean return 1. A quantile critic exposes B’s lower tail.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What does upper-tail CVaR measure for costs?</p></li>
+<li><p>Why can selecting every sample greater than or equal to a quantile produce an incorrect tail average?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-mean-critic-hides-the-shape-of-outcomes">2. A mean critic hides the shape of outcomes</h3>
+<p>A standard critic predicts one number:</p>
+<p><span class="math display">\[V(s)=\mathbb E[G\mid s]\]</span></p>
+<p>Two states can have identical expected return while one is reliable and the other alternates between success and catastrophe.</p>
+<p>A distributional critic models the random return:</p>
+<p><span class="math display">\[Z(s)\overset{D}{=}G\]</span></p>
+<p>Quantile critics predict returns at fixed probability levels:</p>
+<p><span class="math display">\[q_i(s)\approx F^{-1}_{Z(s)}(\tau_i)\]</span></p>
+<p>For five evenly spaced quantiles:</p>
+<p><span class="math display">\[\tau=[0.1,0.3,0.5,0.7,0.9]\]</span></p>
+<p>The first output describes a bad lower-tail outcome; the last describes a strong outcome.</p>
+<p>Given target return <span class="math inline">\(y\)</span>, define:</p>
+<p><span class="math display">\[u=y-q_i\]</span></p>
+<p>Quantile Huber loss is:</p>
+<p><span class="math display">\[\rho_{\tau_i}^{\kappa}(u)
+=
+\left|
+\tau_i-\mathbf 1[u&lt;0]
+\right|
+\frac{H_\kappa(u)}{\kappa}\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[H_\kappa(u)=
+\begin{cases}
+\frac12u^2,&amp;|u|\le\kappa\\
+\kappa(|u|-\frac12\kappa),&amp;\text{otherwise}
+\end{cases}\]</span></p>
+<p>The asymmetric weight makes low quantiles react strongly when their prediction is too high.</p>
+<p>For bootstrapped distributional RL, targets look like:</p>
+<p><span class="math display">\[y_j
+=
+r+\gamma(1-d)
+q_j^{\text{target}}(s&#39;,a&#39;)\]</span></p>
+<p>Detach target-network quantiles exactly as with an ordinary TD target.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>predicted quantiles: <span style="background-color: codeinlinebg"><code> [B, N]</code></span></p></li>
+<li><p>target samples or target quantiles: <span style="background-color: codeinlinebg"><code> [B, K]</code></span></p></li>
+<li><p>pairwise errors: <span style="background-color: codeinlinebg"><code> [B, N, K]</code></span></p></li>
+<li><p>reduced loss: scalar</p></li>
+</ul>
+<p>DPO compares fixed response pairs and has no return critic. A distributional critic is useful in online RL when the policy must reason about variability or tail outcomes.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: quantile regression</div>
+<p>Predict <span class="math inline">\(N\)</span> quantiles <span class="math inline">\(\theta_1,\dots,\theta_N\)</span> at levels <span class="math inline">\(\tau_i=\frac{2i-1}{2N}\)</span>. Train each with the pinball loss <span class="math inline">\(\ell_\tau(u)=u\,(\tau-\mathbb 1[u&lt;0])\)</span>, where <span class="math inline">\(u=z-\theta\)</span> and <span class="math inline">\(z\)</span> is a target sample. <strong>Distributional Bellman:</strong> <span class="math inline">\(Z(s,a)\overset{D}{=}R+\gamma Z(s&#39;,a&#39;)\)</span>: the whole <em>distribution</em> is backed up, not just its mean. QR-DQN uses a Huber-smoothed pinball loss (algorithm box below). Its mean recovers the usual critic: <span class="math inline">\(Q=\frac1N\sum_i\theta_i\)</span>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>A scalar critic gives the average, and a quantile critic shows its pieces.</p></li>
+<li><p>Read the lower quantiles for risk-sensitive decisions.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: pinball loss at <span class="math inline">\(\tau=0.9\)</span></div>
+<p>Target <span class="math inline">\(z=5\)</span>. Predict <span class="math inline">\(\theta=4\)</span>: <span class="math inline">\(u=1\)</span>, loss <span class="math inline">\(=1\times0.9=0.9\)</span>. Predict <span class="math inline">\(\theta=6\)</span>: <span class="math inline">\(u=-1\)</span>, loss <span class="math inline">\(=1\times0.1=0.1\)</span>. Under-predicting a high quantile costs 9<span class="math inline">\(\times\)</span> more, which pushes <span class="math inline">\(\theta\)</span> up toward the 90th percentile.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Quantile crossing (<span class="math inline">\(\theta_i&gt;\theta_{i+1}\)</span>): sort the quantiles, or parameterize them as increments.</p></li>
+<li><p>Collapsing to the mean for decisions that are supposed to be risk-aware.</p></li>
+<li><p>Using MSE on quantiles (that predicts the mean every time).</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Quantile-regression distributional TD (QR-DQN)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> network outputting <span class="math inline">\(N\)</span> quantiles <span class="math inline">\(\theta_i(s,a)\)</span>, levels <span class="math inline">\(\tau_i=\frac{2i-1}{2N}\)</span>, target network <span class="math inline">\(\theta^-\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each minibatch <span class="math inline">\((s,a,r,s&#39;,d)\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(a^*\gets\arg\max_{a&#39;}\frac1N\sum_j\theta^-_j(s&#39;,a&#39;)\)</span> <em>▷ act on the mean</em></div>
+<div class="algo-line" style="--d:1">target samples <span class="math inline">\(z_j\gets r+\gamma(1-d)\,\theta^-_j(s&#39;,a^*)\)</span> for <span class="math inline">\(j=1,\dots,N\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(u_{ij}\gets z_j-\theta_i(s,a)\)</span></div>
+<div class="algo-line" style="--d:1">gradient step on <span class="math inline">\(\frac1N\sum_i\sum_j\big|\tau_i-\mathbb 1[u_{ij}&lt;0]\big|\cdot\operatorname{Huber}_\kappa(u_{ij})\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-equal-means-different-return-distributions">3. PyTorch exercise — equal means, different return distributions</h3>
+<p>Both states have mean return <span style="background-color: codeinlinebg"><code> 1</code></span>:</p>
+<ul>
+<li><p>state <span style="background-color: codeinlinebg"><code> 0</code></span>: always returns <span style="background-color: codeinlinebg"><code> 1</code></span>;</p></li>
+<li><p>state <span style="background-color: codeinlinebg"><code> 1</code></span>: returns <span style="background-color: codeinlinebg"><code> 3</code></span> eight times and <span style="background-color: codeinlinebg"><code> -7</code></span> twice.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+target_samples = torch.tensor([
+    [1.0, 1.0, 1.0, 1.0, 1.0,
+     1.0, 1.0, 1.0, 1.0, 1.0],
+
+    [3.0, 3.0, 3.0, 3.0, 3.0,
+     3.0, 3.0, 3.0, -7.0, -7.0],
+])
+
+batch_size = target_samples.shape[0]
+num_quantiles = 5
+kappa = 0.1
+
+# TODO 1: Midpoint quantile levels:
+# [0.1, 0.3, 0.5, 0.7, 0.9]
+taus = ...
+
+predicted_quantiles = torch.nn.Parameter(
+    torch.zeros(
+        batch_size,
+        num_quantiles,
+    )
+)
+
+optimizer = torch.optim.Adam(
+    [predicted_quantiles],
+    lr=0.05,
+)
+
+def quantile_huber_loss(
+    predictions,
+    targets,
+):
+    # TODO 2: Pair every predicted quantile
+    # with every detached target sample.
+    errors = ...
+
+    absolute_errors = ...
+
+    # TODO 3: Huber loss and asymmetric
+    # quantile weights.
+    huber = ...
+
+    quantile_weights = ...
+
+    per_pair_loss = ...
+
+    return per_pair_loss.mean()
+
+initial_loss = quantile_huber_loss(
+    predicted_quantiles,
+    target_samples,
+)
+
+# TODO 4: Optimize the quantile locations.
+for step in range(1_500):
+    loss = ...
+
+    ...
+
+# TODO 5: Distributional diagnostics.
+with torch.no_grad():
+    final_quantiles = ...
+
+    target_means = ...
+    estimated_means = ...
+
+    lower_deciles = ...
+
+    quantile_crossings = ...
+
+print(&quot;Initial loss:&quot;, initial_loss.item())
+print(&quot;Final loss:&quot;, loss.item())
+
+print(&quot;Quantile levels:&quot;, taus)
+
+print(
+    &quot;Learned quantiles:\n&quot;,
+    final_quantiles,
+)
+
+print(&quot;Target means:&quot;, target_means)
+
+print(
+    &quot;Means estimated from quantiles:&quot;,
+    estimated_means,
+)
+
+print(
+    &quot;Estimated lower deciles:&quot;,
+    lower_deciles,
+)
+
+print(
+    &quot;Quantile crossings:&quot;,
+    quantile_crossings,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the mean return for each state?</p></li>
+<li><p>Should their lower-decile estimates be similar?</p></li>
+<li><p>What happens if all target samples are replaced by their mean?</p></li>
+<li><p>Why should bootstrapped target quantiles be detached?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> (torch.arange(N) + 0.5) / N</code></span>.</p></li>
+<li><p>Errors need shape <span style="background-color: codeinlinebg"><code> [B, N, K]</code></span>.</p></li>
+<li><p>Expand predictions with <span style="background-color: codeinlinebg"><code> [:, :, None]</code></span>.</p></li>
+<li><p>Expand targets with <span style="background-color: codeinlinebg"><code> [:, None, :]</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span> for the Huber branches.</p></li>
+<li><p>The indicator is <span style="background-color: codeinlinebg"><code> (errors.detach() &lt; 0)</code></span>.</p></li>
+<li><p>Count crossings where quantile <span style="background-color: codeinlinebg"><code> i+1</code></span> is smaller than quantile <span style="background-color: codeinlinebg"><code> i</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Replace each row of <span style="background-color: codeinlinebg"><code> target_samples</code></span> with ten copies of its mean. Both states become identical to the critic, destroying all tail information.</p>
+<p>Reverse the error definition to <span style="background-color: codeinlinebg"><code> prediction - target</code></span> without changing the indicator. The asymmetric weights now learn the wrong quantiles.</p>
+<p>Set every <span style="background-color: codeinlinebg"><code> tau</code></span> to <span style="background-color: codeinlinebg"><code> 0.5</code></span>. All five outputs learn approximately the median rather than different parts of the distribution.</p>
+<p>Increase return scale by <span style="background-color: codeinlinebg"><code> 1_000</code></span> while retaining <span style="background-color: codeinlinebg"><code> kappa=0.1</code></span>. Almost every error enters the linear Huber region; inspect gradient scale and consider normalizing returns.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What information does a distributional critic retain that a mean critic discards?</p></li>
+<li><p>Why is the loss pairwise over predicted and target quantiles?</p></li>
+<li><p>Does averaging learned quantiles exactly equal the return mean?</p></li>
+<li><p>Which diagnostics reveal a broken quantile critic?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Quantile levels:</p>
+<pre class="code python"><code class="language-python">taus = (
+    torch.arange(
+        num_quantiles,
+        dtype=target_samples.dtype,
+    )
+    + 0.5
+) / num_quantiles</code></pre>
+<p>Pairwise errors:</p>
+<pre class="code python"><code class="language-python">errors = (
+    targets.detach()[:, None, :]
+    - predictions[:, :, None]
+)
+
+absolute_errors = errors.abs()</code></pre>
+<p>Huber loss and quantile weighting:</p>
+<pre class="code python"><code class="language-python">huber = torch.where(
+    absolute_errors &lt;= kappa,
+    0.5 * errors.square(),
+    kappa * (
+        absolute_errors
+        - 0.5 * kappa
+    ),
+)
+
+quantile_weights = (
+    taus[None, :, None]
+    - (
+        errors.detach() &lt; 0
+    ).to(errors.dtype)
+).abs()
+
+per_pair_loss = (
+    quantile_weights
+    * huber
+    / kappa
+)</code></pre>
+<p>Optimization:</p>
+<pre class="code python"><code class="language-python">for step in range(1_500):
+    loss = quantile_huber_loss(
+        predicted_quantiles,
+        target_samples,
+    )
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    final_quantiles = (
+        predicted_quantiles.detach()
+    )
+
+    target_means = target_samples.mean(
+        dim=1
+    )
+
+    estimated_means = (
+        final_quantiles.mean(dim=1)
+    )
+
+    lower_deciles = (
+        final_quantiles[:, 0]
+    )
+
+    quantile_crossings = (
+        final_quantiles[:, 1:]
+        &lt; final_quantiles[:, :-1]
+    ).sum(dim=1)</code></pre>
+<p>Both target means are:</p>
+<p><span class="math display">\[\mathbb E[G_0]=1\]</span></p>
+<p><span class="math display">\[\mathbb E[G_1]
+=
+0.8(3)+0.2(-7)
+=
+1\]</span></p>
+<p>The learned patterns should be approximately:</p>
+<p><span class="math display">\[q(s_0)\approx[1,1,1,1,1]\]</span></p>
+<p><span class="math display">\[q(s_1)\approx[-7,3,3,3,3]\]</span></p>
+<p>Quantile Huber smoothing may move values slightly inward. Averaging five evenly spaced quantiles gives an approximation of the mean:</p>
+<p><span class="math display">\[\frac{-7+3+3+3+3}{5}=1\]</span></p>
+<p>Yet the lower deciles are dramatically different.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It retains spread, skew, multimodality and tail outcomes rather than only their average.</p></li>
+<li><p>Every predicted probability level must be located relative to samples from the complete target distribution.</p></li>
+<li><p>It is a numerical approximation whose accuracy depends on quantile placement, count and training error.</p></li>
+<li><p>Monitor quantile loss, crossings, predicted versus empirical quantiles, estimated mean error, tail calibration and results by return scale.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>For costs, upper-tail CVaR averages outcomes in the worst <span class="math inline">\(1-\alpha\)</span> fraction.</p></li>
+<li><p>Ties at the threshold can include far more samples than the intended tail size; top-<span class="math inline">\(k\)</span> selection fixes the empirical fraction.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> a scalar critic says what happens on average; a quantile critic shows how that average is assembled—including the failures hidden in its lower tail.</p>

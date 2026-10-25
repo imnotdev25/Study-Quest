@@ -1,0 +1,119 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Moving large bytes efficiently and safely: direct-to-object-storage uploads with signed URLs, image CDNs and on-the-fly resizing, an avatar service, multipart and resumable video uploads, the transcoding pipeline, adaptive bitrate and CDN selection, content protection (signed URLs, DRM, watermarking), live streaming and WebRTC, and file sync with content-defined chunking and versioned block lists.</p>
+</div>
+<h1 id="direct-to-object-storage-upload">Direct-to-Object-Storage Upload</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>If you send a parcel to a warehouse, you do not hand it to the receptionist to carry across the building. The receptionist gives you a slip that lets you drop it at the loading dock yourself. App servers should not carry gigabytes of video either: they hand the client a signed permission slip and the client uploads straight to storage.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/c29c6e6def6c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The client uploads directly; the app server only authorizes.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ol>
+<li><p>The client asks the API to upload (file name, size, content type). The API checks authorization and quotas, creates a metadata row with status <code>PENDING</code>, and returns a <strong>presigned URL</strong>: a URL with an expiry time and a signature that grants permission to PUT exactly one object key, optionally with a required content type, maximum size, and checksum (presigned POST policies can enforce size limits).</p></li>
+<li><p>The client uploads to the object store directly.</p></li>
+<li><p>The object store emits an event (S3 Event Notifications) or the client calls <code>complete</code>; a worker validates the file (real type by magic bytes, size, malware scan, content moderation), then marks the row <code>READY</code>.</p></li>
+</ol>
+<p>App servers never touch the bytes, so they need no large buffers or long-lived connections. Generate keys server-side (random or content hash), never from the user’s file name.</p>
+</div>
+<h1 id="image-cdn-and-resizing">Image CDN and Resizing</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Clients need many sizes and formats (thumbnail, feed, full screen; WebP or AVIF for browsers that support them, JPEG otherwise). Two approaches:</p>
+<ul>
+<li><p><strong>Pre-generate</strong> a fixed set of renditions at upload: predictable cost and latency, wasted storage for sizes never requested.</p></li>
+<li><p><strong>Resize on the fly</strong> at the edge: the URL encodes the transform (<code>/img/abc123?w=400&amp;fmt=auto</code>); the CDN caches each variant; on a miss an image service fetches the original (through an <strong>origin shield</strong>, a mid-tier cache that protects storage from many edges missing at once), resizes, and returns it. Restrict allowed sizes to a whitelist so attackers cannot generate unlimited variants (a cache and compute exhaustion attack).</p></li>
+</ul>
+<p>Use <code>Vary: Accept</code> or format-specific URLs for format negotiation, strip EXIF metadata (GPS location) from public images, and set long cache lifetimes because image URLs are immutable.</p>
+</div>
+<h1 id="an-avatar-service">An Avatar Service</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Avatars are read on almost every page and change rarely. Store each upload as an immutable, <strong>content-addressed</strong> object (key = hash of the processed image) and store the current avatar’s hash on the user row. The URL embeds the hash (<code>/avatars/{hash}/96.webp</code>), so it can be cached forever; changing your avatar changes the URL, which is instant cache invalidation without purging. Serve a default avatar (or generated initials) when none exists. Moderate uploads asynchronously and keep the previous avatar until the new one passes.</p>
+</div>
+<h1 id="video-upload-multipart-and-resumable">Video Upload: Multipart and Resumable</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Large files must survive flaky networks. <strong>S3 multipart upload</strong>: initiate an upload (get an upload ID), upload parts in parallel (each part 5 MB to 5 GB except the last; up to 10<span>,</span>000 parts; objects up to 5 TB), each with its own presigned URL and checksum, then <code>complete</code> with the list of part numbers and ETags. Failed parts are retried individually; a lifecycle rule aborts incomplete uploads after a few days so orphaned parts do not accumulate cost. <strong>Resumable uploads</strong> (the tus protocol, Google’s resumable upload API) let the client ask the server “how many bytes do you have?” after a disconnect and continue from there.</p>
+</div>
+<h1 id="video-transcoding-pipeline">Video Transcoding Pipeline</h1>
+<figure class="tikz"><img src="figs/sd/db02a5a1c9d4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A transcoding DAG: segments encode in parallel.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The pipeline is a DAG of jobs in a workflow engine: probe the input (codec, resolution, duration), split into segments at keyframes (GOP boundaries) so segments can be encoded independently and in parallel, encode each segment into every rung of the <strong>bitrate ladder</strong> (several resolution/bitrate pairs; per-title encoding tunes the ladder to each video’s complexity), then concatenate and <strong>package</strong> into HLS and/or DASH: short segments (2–6 seconds) plus manifests listing the variants. Generate thumbnails, run content ID and moderation, extract captions. Each step is idempotent (output keyed by input hash and parameters) so retries and spot-instance interruptions are cheap. The YouTube case study (Part (cases)) describes a production version.</p>
+</div>
+<h1 id="adaptive-bitrate-and-the-cdn-decider">Adaptive Bitrate and the CDN Decider</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The <strong>player</strong> chooses which rung to fetch for each segment: throughput-based algorithms estimate bandwidth from recent downloads; buffer-based algorithms (BOLA) choose by how many seconds are buffered; hybrids are common. Start low for a fast first frame, ramp up, and drop before the buffer empties to avoid stalls.</p>
+<p>A <strong>CDN decider</strong> (steering service) runs at playback start and picks which CDN or edge cluster serves this session, based on real-time quality of experience data (startup time, rebuffering, throughput by ISP and region), cost commitments, capacity, and health. It returns ordered URLs so the player can fail over mid-stream. Netflix’s playback service does this for its own Open Connect appliances; multi-CDN companies do it across vendors.</p>
+</div>
+<h1 id="signed-urls-drm-and-video-security">Signed URLs, DRM, and Video Security</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Signed URLs or cookies</strong> (CloudFront, Cloud CDN) restrict access to paid content for a short time; a signed cookie covers all segments of one stream. They stop link sharing, not screen recording or downloading by the viewer.</p></li>
+<li><p><strong>DRM</strong>: segments are encrypted (Common Encryption, AES-128 CTR or CBCS mode, so one set of files works for several DRM systems); the player obtains a decryption key from a <strong>license server</strong> after the app proves the user is entitled. Widevine (Android, Chrome), FairPlay (Apple), and PlayReady (Windows, many TVs) keep keys inside protected hardware or software modules, and enforce output rules (HD only on secure hardware, no screen capture).</p></li>
+<li><p><strong>Forensic watermarking</strong> embeds an invisible per-session identifier in the video, so leaked copies can be traced (A/B watermarking switches between two pre-watermarked variants per segment at the CDN).</p></li>
+<li><p><strong>Key rotation</strong> for live streams limits the damage of a leaked key.</p></li>
+</ul>
+</div>
+<h1 id="live-streaming-webrtc-and-latency">Live Streaming, WebRTC, and Latency</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Delivery</th>
+<th style="text-align: left;">How</th>
+<th style="text-align: left;">Glass-to-glass latency</th>
+<th style="text-align: left;">Scale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Classic HLS/DASH</td>
+<td style="text-align: left;">4–6 s segments via CDN</td>
+<td style="text-align: left;">15–45 s</td>
+<td style="text-align: left;">millions via CDN</td>
+</tr>
+<tr>
+<td style="text-align: left;">Low-latency HLS / DASH</td>
+<td style="text-align: left;">partial segments, chunked transfer</td>
+<td style="text-align: left;">2–5 s</td>
+<td style="text-align: left;">millions via CDN</td>
+</tr>
+<tr>
+<td style="text-align: left;">WebRTC</td>
+<td style="text-align: left;">real-time media over UDP (SRTP)</td>
+<td style="text-align: left;"><span class="math inline">\(&lt;\)</span> 0.5 s</td>
+<td style="text-align: left;">needs SFU fan-out; costly at huge scale</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Live pipeline</strong>: the broadcaster sends RTMP, SRT, or WebRTC (WHIP) to an ingest server; a live transcoder produces the ladder in real time; a packager writes segments and updates manifests every few seconds; the CDN serves them. Choose by interactivity: sports and concerts accept a few seconds; auctions, betting, and live shopping want sub-second; video calls require WebRTC.</p>
+<p><strong>WebRTC</strong> connects peers with <strong>ICE</strong>: try direct connections, use <strong>STUN</strong> to learn the public address behind NAT, and fall back to a <strong>TURN</strong> relay when direct connection fails (often 10–20% of sessions, and TURN bandwidth is a real cost). For group calls, mesh (everyone sends to everyone) works for 3–4 people; an <strong>SFU</strong> (selective forwarding unit) receives each participant’s stream once and forwards it to others, often with <strong>simulcast</strong> (each sender uploads several qualities and the SFU forwards the right one per receiver); an <strong>MCU</strong> mixes streams into one, costly in CPU. Large webinars combine an SFU for speakers with HLS for the audience.</p>
+</div>
+<h1 id="remote-file-sync">Remote File Sync</h1>
+<figure class="tikz"><img src="figs/sd/826fd9b7b3d0.svg" alt="diagram" loading="lazy"></figure>
+<p><em>File sync: separate metadata (small, transactional) from blocks (large, immutable).</em></p>
+<h2 id="chunking-and-content-addressing">Chunking and Content Addressing</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Split each file into blocks and identify each block by a cryptographic hash (SHA-256): <strong>content addressing</strong>. Identical blocks (in different versions or different users’ copies of the same file) are stored once; an upload sends only blocks the server does not already have.</p>
+<ul>
+<li><p><strong>Fixed-size blocks</strong> (Dropbox used 4 MB): simple; but inserting one byte at the start shifts every boundary, so every block’s hash changes.</p></li>
+<li><p><strong>Content-defined chunking</strong> (Rabin fingerprints, FastCDC): place boundaries where a rolling hash of the last few bytes matches a pattern, so boundaries move with the content; an insertion changes only nearby chunks. Average chunk size is controlled by the pattern’s probability, with min and max limits.</p></li>
+<li><p><strong>rsync’s</strong> rolling weak checksum plus strong hash finds matching blocks at any offset when syncing two versions over a network.</p></li>
+</ul>
+<p>Note the privacy trade-off: cross-user deduplication can reveal that someone else already uploaded a given file (the upload is suspiciously fast); many services deduplicate only within one user’s or team’s namespace, or use convergent encryption with care.</p>
+</div>
+<h2 id="block-list-versioned-file-metadata">Block-List Versioned File Metadata</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A file version is metadata: <code>(namespace, path, version, size, mtime, block_list = [h1, h2, h3])</code>. Each namespace (a user’s root or a shared folder) has an append-only <strong>journal</strong> of changes with a monotonically increasing sequence number. <strong>Upload</strong>: chunk and hash locally; ask the metadata service to commit the new block list; it replies with the hashes it lacks; upload those to the block service; retry the commit, which succeeds once all blocks exist. <strong>Download</strong>: the client keeps a <strong>cursor</strong> (last journal position seen), asks for changes since the cursor (woken by a long-poll or push notification), and fetches only missing blocks. <strong>Conflicts</strong>: a commit includes the version it was based on; if the server has a newer version, the client saves its copy as “file (conflicted copy)” rather than overwriting. Deleted versions and blocks are retained for a recovery window, then garbage-collected by reference counting or mark-and-sweep.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Design Dropbox in an interview</div>
+<p>Separate the metadata service (sharded by namespace, strongly consistent, transactional commits) from the block store (content-addressed, immutable, object storage). Clients chunk, hash, and upload only missing blocks; sync via cursors over a per-namespace journal; notifications by long polling; conflicts become conflicted copies. Mention bandwidth savings from deduplication and delta sync, and the Magic Pocket case (Part (cases)).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Upload bytes directly to object storage with short-lived presigned URLs; process asynchronously.</p></li>
+<li><p>Content-addressed, immutable media URLs can be cached forever; changing content changes the URL.</p></li>
+<li><p>Transcode segments in parallel into a bitrate ladder; let players adapt and a steering service pick CDNs.</p></li>
+<li><p>Choose HLS, low-latency HLS, or WebRTC by required interactivity.</p></li>
+<li><p>File sync = chunking + hashing + block lists in a versioned journal + upload only what is missing.</p></li>
+</ul>
+</div>

@@ -1,0 +1,117 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Pattern matching (KMP, Z-algorithm, Rabin–Karp), multi-pattern matching (Aho–Corasick), suffix arrays, palindromes (Manacher), and the tokenization algorithms every LLM depends on: BPE, WordPiece, and Unigram.</p>
+</div>
+<h1 id="why-naive-matching-is-slow">Why Naive Matching Is Slow</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Checking every alignment of a pattern <span class="math inline">\(P\)</span> (length <span class="math inline">\(m\)</span>) against a text <span class="math inline">\(T\)</span> (length <span class="math inline">\(n\)</span>) costs <span class="math inline">\(O(nm)\)</span> in the worst case (<code>aaaa...ab</code> in <code>aaaa...a</code>). The fast algorithms all avoid re-comparing characters already known to match.</p>
+</div>
+<h1 id="kmp-using-the-patterns-own-structure">KMP: Using the Pattern’s Own Structure</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Searching for “ABABC” you have matched “ABAB” and then see a mismatch. You do not restart from scratch: the last “AB” you read is also the beginning of the pattern, so you already have 2 characters matched. KMP precomputes those overlaps.</p>
+</div>
+<p><em>Prefix function (failure function) and KMP search</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> PrefixFunction(<span class="math inline">\(P\)</span>) <em>▷ <span class="math inline">\(\pi[i]\)</span> = longest proper prefix of <span class="math inline">\(P[0..i]\)</span> that is also a suffix</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\pi[0] \gets 0\)</span>; <span class="math inline">\(k \gets 0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(i \gets 1\)</span> <strong>to</strong> <span class="math inline">\(m-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>while</strong> <span class="math inline">\(k &gt; 0\)</span> <strong>and</strong> <span class="math inline">\(P[i] \ne P[k]\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(k \gets \pi[k-1]\)</span> <em>▷ fall back to a shorter border</em></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(P[i] = P[k]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(k \gets k + 1\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\pi[i] \gets k\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(\pi\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> KMPSearch(<span class="math inline">\(T, P\)</span>)</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\pi \gets\)</span> ; <span class="math inline">\(k \gets 0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(i \gets 0\)</span> <strong>to</strong> <span class="math inline">\(n-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>while</strong> <span class="math inline">\(k &gt; 0\)</span> <strong>and</strong> <span class="math inline">\(T[i] \ne P[k]\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(k \gets \pi[k-1]\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(T[i] = P[k]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(k \gets k + 1\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(k = m\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3">report match at <span class="math inline">\(i - m + 1\)</span>; <span class="math inline">\(k \gets \pi[k-1]\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><span class="math inline">\(k\)</span> is the length of the longest prefix of <span class="math inline">\(P\)</span> that ends at the current text position. On a mismatch, the next candidate prefix must be a border (prefix that is also a suffix) of the matched part, and <span class="math inline">\(\pi\)</span> lists borders from longest down. <strong>Linear time:</strong> <span class="math inline">\(k\)</span> increases by at most 1 per character and every fallback decreases it, so total fallbacks <span class="math inline">\(\le n\)</span>. <strong>Time:</strong> <span class="math inline">\(O(n+m)\)</span> <strong>Space:</strong> <span class="math inline">\(O(m)\)</span>. A neat trick: run the prefix function on <code>P + "#" + T</code>; positions where <span class="math inline">\(\pi = m\)</span> are matches. The prefix function also gives the shortest period of a string (<span class="math inline">\(m - \pi[m-1]\)</span>) and “shortest palindrome” (prefix function of <span class="math inline">\(s + \#+ \text{reverse}(s)\)</span>).</p>
+</div>
+<h1 id="z-algorithm">Z-Algorithm</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><span class="math inline">\(Z[i]\)</span> = length of the longest substring starting at <span class="math inline">\(i\)</span> that matches a prefix of the string. Computed in <span class="math inline">\(O(n)\)</span> by maintaining the rightmost matched window <span class="math inline">\([l, r)\)</span> and reusing <span class="math inline">\(Z[i - l]\)</span> inside it. Pattern matching: compute <span class="math inline">\(Z\)</span> on <span class="math inline">\(P \# T\)</span>; matches where <span class="math inline">\(Z[i] = m\)</span>. Often easier to remember than KMP.</p>
+</div>
+<h1 id="rabinkarp-rolling-hashes">Rabin–Karp: Rolling Hashes</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Treat a window as a number in base <span class="math inline">\(b\)</span> modulo a large prime <span class="math inline">\(q\)</span>: <span class="math inline">\(h = (c_0 b^{m-1} + \dots + c_{m-1}) \bmod q\)</span>. Sliding by one character: <span class="math inline">\(h&#39; = ((h - c_{\text{out}} b^{m-1})\, b + c_{\text{in}}) \bmod q\)</span>, <span class="math inline">\(O(1)\)</span>. Compare hashes first and verify characters only when hashes match. Expected <span class="math inline">\(O(n+m)\)</span>.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Collisions: with modulus <span class="math inline">\(q \approx 10^9\)</span>, false matches among <span class="math inline">\(n\)</span> windows are rare but possible, and adversarial inputs can force them. Use two independent moduli (or 64-bit overflow arithmetic with a random base) and verify on match. Rolling hashes solve “longest duplicate substring” (binary search on the length, then a hash set of windows: <span class="math inline">\(O(n\log n)\)</span>), “repeated DNA sequences,” and substring equality in <span class="math inline">\(O(1)\)</span> after <span class="math inline">\(O(n)\)</span> preprocessing of prefix hashes.</p>
+</div>
+<h1 id="ahocorasick-many-patterns-at-once">Aho–Corasick: Many Patterns at Once</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Build a trie of all patterns, then add <strong>failure links</strong> (by BFS): each node links to the longest proper suffix of its string that is also a trie node, KMP’s prefix function generalized to a trie. Scanning the text walks the automaton, following failure links on mismatch and reporting every pattern that ends at the current node (via output links). <span class="math inline">\(O(n + \sum m + \text{matches})\)</span>.</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<p>Aho–Corasick is how large keyword blocklists, PII detectors (lists of names, known secrets), and profanity filters scan text in one pass. Data pipelines use it to filter training documents containing benchmark questions (contamination checks with known n-grams) or banned terms. Stop sequences in LLM serving (“stop when any of these strings appears”) use the same idea over the decoded text stream.</p>
+</div>
+<h1 id="suffix-arrays-and-lcp">Suffix Arrays and LCP</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A suffix array lists the starting indices of all suffixes of <span class="math inline">\(s\)</span> in sorted order. Built in <span class="math inline">\(O(n\log n)\)</span> by prefix doubling (sort by the first <span class="math inline">\(2^k\)</span> characters using ranks from the previous round) or <span class="math inline">\(O(n)\)</span> with SA-IS. The <strong>LCP array</strong> (Kasai, <span class="math inline">\(O(n)\)</span>) stores the longest common prefix of adjacent suffixes. Then:</p>
+<ul>
+<li><p>Pattern search: binary search the suffix array, <span class="math inline">\(O(m\log n)\)</span>.</p></li>
+<li><p>Longest repeated substring: maximum of the LCP array.</p></li>
+<li><p>Number of distinct substrings: <span class="math inline">\(\frac{n(n+1)}{2} - \sum \text{LCP}\)</span>.</p></li>
+<li><p>Longest common substring of two strings: build on <span class="math inline">\(a\#b\)</span>; maximum LCP between adjacent suffixes from different strings.</p></li>
+</ul>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<p><strong>Exact-substring deduplication</strong> of LLM training data (removing any repeated span longer than, say, 50 tokens across a corpus) is done with suffix arrays over the concatenated, tokenized corpus; this was used in published work on deduplicating large web datasets. Suffix arrays also power n-gram language models over trillions of tokens and memorization checks (“did the model output a span verbatim from training data?”).</p>
+</div>
+<h1 id="palindromes">Palindromes</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Expand around center</strong>: for each of the <span class="math inline">\(2n-1\)</span> centers, expand while both sides match. <span class="math inline">\(O(n^2)\)</span>, <span class="math inline">\(O(1)\)</span> space; usually enough in interviews. <strong>Manacher’s algorithm</strong> finds the longest palindromic substring in <span class="math inline">\(O(n)\)</span>: insert separators so all palindromes have odd length, keep the rightmost palindrome <span class="math inline">\([c - r, c + r]\)</span>, and initialize each new radius from its mirror <span class="math inline">\(2c - i\)</span>, expanding only past the known boundary.</p>
+</div>
+<h1 id="tokenization-how-llms-see-text">Tokenization: How LLMs See Text</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A model cannot read letters directly; it reads numbers. Tokenization chops text into pieces from a fixed vocabulary of about 30K–250K entries. Common words become one token; rare words split into pieces (“unhappiness” <span class="math inline">\(\to\)</span> “un”, “happiness”).</p>
+</div>
+<p><em>Training byte-pair encoding (BPE)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> corpus split into words (with counts); target vocabulary size <span class="math inline">\(V\)</span></div>
+<div class="algo-line" style="--d:0">represent each word as a sequence of bytes (or characters); <span class="math inline">\(vocab \gets\)</span> all bytes</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(merges \gets []\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(|vocab| &lt; V\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">count every adjacent pair of symbols across all words, weighted by word count</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\((a, b) \gets\)</span> the most frequent pair</div>
+<div class="algo-line" style="--d:1">replace every occurrence of <span class="math inline">\(a\,b\)</span> with the new symbol <span class="math inline">\(ab\)</span></div>
+<div class="algo-line" style="--d:1">append <span class="math inline">\((a, b)\)</span> to <span class="math inline">\(merges\)</span>; add <span class="math inline">\(ab\)</span> to <span class="math inline">\(vocab\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(merges\)</span> <em>▷ encoding applies merges in the learned order</em></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Encoding</strong> new text applies the merges in priority order (the earliest learned merge first) until none apply. <strong>Efficient training</strong>: maintain pair counts and an index from pair to positions; update only the neighbors of each merge, with a heap keyed by count, instead of recounting everything. <strong>Byte-level BPE</strong> (GPT-2 onward) starts from 256 bytes, so any input is representable and there is no unknown token. A regex pre-tokenizer first splits on spaces, digits, and punctuation so merges never cross those boundaries.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>WordPiece</strong> (BERT) chooses merges by likelihood gain <span class="math inline">\(\frac{\text{count}(ab)}{\text{count}(a)\,\text{count}(b)}\)</span> instead of raw frequency, and encodes with greedy longest-match from the left (a trie). <strong>Unigram LM</strong> (SentencePiece) starts with a large vocabulary and prunes tokens that least reduce the corpus likelihood; encoding finds the most probable segmentation with Viterbi (Chapter 12) and can <em>sample</em> segmentations for regularization.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Tokenization explains many LLM behaviors: arithmetic errors (numbers split into irregular chunks; some tokenizers split digits individually to help), poor performance on character-level tasks (counting letters in a word the model sees as one token), higher cost for non-English text (more tokens per word), and “glitch tokens” that were in the vocabulary but nearly absent from training. Changing tokenizers requires retraining embeddings. In interviews, you may be asked to implement BPE training on a small corpus: get the pair counting, the merge replacement (scan left to right, do not double-merge overlapping pairs like <code>aaa</code>), and tie-breaking right.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Implement BPE training on a toy corpus</div>
+<p>Corpus: <code>low</code> <span class="math inline">\(\times 5\)</span>, <code>lower</code> <span class="math inline">\(\times 2\)</span>, <code>newest</code> <span class="math inline">\(\times 6\)</span>, <code>widest</code> <span class="math inline">\(\times 3\)</span>. Represent words as character tuples with an end-of-word marker. Round 1: count pairs weighted by frequency; <code>(e, s)</code> appears <span class="math inline">\(6 + 3 = 9\)</span> times, the most frequent; merge to <code>es</code>. Round 2: <code>(es, t)</code> with 9; merge. Continue until the vocabulary size is reached. Discuss: complexity of naive recount per merge, <span class="math inline">\(O(\text{merges} \times \text{corpus})\)</span>; the incremental pair-count update; deterministic tie-breaking; and how encoding uses the merge rank.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>KMP and Z are linear because they never re-read matched characters.</p></li>
+<li><p>Rolling hashes give <span class="math inline">\(O(1)\)</span> substring comparison; guard against collisions.</p></li>
+<li><p>Aho–Corasick for many patterns; suffix arrays for repeats and deduplication.</p></li>
+<li><p>BPE is greedy frequent-pair merging; tokenization shapes cost and model behavior.</p></li>
+</ul>
+</div>

@@ -1,0 +1,127 @@
+
+<h1 id="which-building-block">Which Building Block?</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Problem</th>
+<th style="text-align: left;">Reach for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Too many reads on DB</td>
+<td style="text-align: left;">Cache (cache-aside), read replicas, CDN</td>
+</tr>
+<tr>
+<td style="text-align: left;">Too many writes on DB</td>
+<td style="text-align: left;">Sharding, LSM-based store, write batching via queue</td>
+</tr>
+<tr>
+<td style="text-align: left;">Slow user-facing request</td>
+<td style="text-align: left;">Move work async (queue), cache, parallelize calls</td>
+</tr>
+<tr>
+<td style="text-align: left;">Traffic spikes</td>
+<td style="text-align: left;">Queue for load leveling, autoscaling, rate limiting, load shedding</td>
+</tr>
+<tr>
+<td style="text-align: left;">Abuse / noisy tenant</td>
+<td style="text-align: left;">Rate limits per key/tenant, quotas, bulkheads</td>
+</tr>
+<tr>
+<td style="text-align: left;">Flaky dependency</td>
+<td style="text-align: left;">Timeouts, retries with jittered backoff, circuit breaker, fallback</td>
+</tr>
+<tr>
+<td style="text-align: left;">Duplicate side effects</td>
+<td style="text-align: left;">Idempotency keys, unique constraints, dedup tables</td>
+</tr>
+<tr>
+<td style="text-align: left;">Cross-service consistency</td>
+<td style="text-align: left;">Saga (orchestrated with durable execution), outbox</td>
+</tr>
+<tr>
+<td style="text-align: left;">DB and event bus out of sync</td>
+<td style="text-align: left;">Transactional outbox or CDC</td>
+</tr>
+<tr>
+<td style="text-align: left;">Services finding each other</td>
+<td style="text-align: left;">Service discovery (K8s DNS, Consul), mesh</td>
+</tr>
+<tr>
+<td style="text-align: left;">Global users</td>
+<td style="text-align: left;">GeoDNS/anycast, CDN, multi-region replicas</td>
+</tr>
+<tr>
+<td style="text-align: left;">Search by text</td>
+<td style="text-align: left;">Inverted index (Elasticsearch/OpenSearch)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Search by meaning</td>
+<td style="text-align: left;">Embeddings + vector index, hybrid with BM25</td>
+</tr>
+<tr>
+<td style="text-align: left;">LLM answers from private data</td>
+<td style="text-align: left;">RAG with ACL filtering and reranking</td>
+</tr>
+<tr>
+<td style="text-align: left;">LLM cost too high</td>
+<td style="text-align: left;">Prompt caching, model routing, batch API, shorter context</td>
+</tr>
+<tr>
+<td style="text-align: left;">LLM latency too high</td>
+<td style="text-align: left;">Streaming, smaller model, prefix caching, speculative decoding</td>
+</tr>
+<tr>
+<td style="text-align: left;">GPU throughput too low</td>
+<td style="text-align: left;">Larger batches, continuous batching, quantization, more KV memory</td>
+</tr>
+</tbody>
+</table>
+<h1 id="numbers-to-remember">Numbers to Remember</h1>
+<ul>
+<li><p>1 day <span class="math inline">\(\approx 10^5\)</span> s; 1M/day <span class="math inline">\(\approx\)</span> 12/s; peak <span class="math inline">\(\approx\)</span> 2–5<span class="math inline">\(\times\)</span> average.</p></li>
+<li><p>Memory 100 ns; SSD 20–100 <span class="math inline">\(\mu\)</span>s; same-DC RTT 0.5 ms; cross-continent 80–150 ms.</p></li>
+<li><p>99.9% = 8.8 h/year downtime; 99.99% = 53 min/year.</p></li>
+<li><p>One Redis shard: <span class="math inline">\(\sim\)</span>100K+ simple ops/s. One Postgres primary: thousands to tens of thousands of writes/s depending on workload.</p></li>
+<li><p>One Kafka partition: roughly 10 MB/s comfortable sustained throughput.</p></li>
+<li><p>1 token <span class="math inline">\(\approx\)</span> 4 characters <span class="math inline">\(\approx\)</span> 0.75 words.</p></li>
+<li><p>KV cache (70B-class with GQA, FP16): <span class="math inline">\(\sim\)</span>320 KB/token.</p></li>
+<li><p>Weights: params <span class="math inline">\(\times\)</span> bytes (70B: 140 GB BF16, 70 GB FP8, 35 GB INT4).</p></li>
+<li><p>Decode time per token at batch 1 <span class="math inline">\(\approx\)</span> weight bytes / memory bandwidth.</p></li>
+</ul>
+<h1 id="interview-checklist">Interview Checklist</h1>
+<ol>
+<li><p>Clarify: users, features in scope, scale, read/write ratio, latency, consistency, durability.</p></li>
+<li><p>Estimate QPS (avg and peak), storage, bandwidth, memory/cache size.</p></li>
+<li><p>Define the API and the core data model, including keys and indexes.</p></li>
+<li><p>Draw the high-level design: clients, edge, LB/gateway, services, data stores, async.</p></li>
+<li><p>Deep dive on the two hardest parts the interviewer cares about.</p></li>
+<li><p>Discuss failures: what happens when each box dies or slows down.</p></li>
+<li><p>Cover operations: monitoring, SLOs, deployment, security, cost.</p></li>
+<li><p>State trade-offs and what you would do differently at 10<span class="math inline">\(\times\)</span> scale.</p></li>
+</ol>
+<h1 id="glossary">Glossary</h1>
+<div class="description">
+<p>Atomicity, Consistency, Isolation, Durability: guarantees of a database transaction.</p>
+<p>One IP address announced from many locations; the network routes to the nearest.</p>
+<p>A signal from a consumer telling producers to slow down.</p>
+<p>Isolated resource pool so one failure cannot exhaust everything.</p>
+<p>Change data capture: streaming a database’s changes from its log.</p>
+<p>An action that semantically undoes a completed saga step.</p>
+<p>Key-to-node mapping where adding a node moves about <span class="math inline">\(1/N\)</span> keys.</p>
+<p>Data type whose replicas can be merged automatically without conflicts.</p>
+<p>Throughput counting only requests that met their latency SLOs.</p>
+<p>Repeating the operation has the same effect as doing it once.</p>
+<p>Stored attention keys and values for previous tokens during LLM generation.</p>
+<p>Model Context Protocol: open standard for connecting LLM apps to tools and data.</p>
+<p>Table written in the same transaction as business data, relayed as events.</p>
+<p>Block-based KV cache memory management, as in OS paging.</p>
+<p>Processing the prompt (parallel, compute-bound) vs generating tokens (sequential, memory-bound).</p>
+<p>Minimum number of replicas that must agree on a read or write.</p>
+<p>Retrieval-augmented generation: retrieve relevant documents and give them to the model.</p>
+<p>Sequence of local transactions with compensations, replacing a distributed transaction.</p>
+<p>Service level objective: internal reliability target for an SLI.</p>
+<p>Draft tokens cheaply, verify them in one pass of the large model.</p>
+<p>Time to first token / time per output token.</p>
+</div>

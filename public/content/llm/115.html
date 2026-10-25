@@ -1,0 +1,38 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><code>AGENTS.md</code> is a plain Markdown file at the root of a repository that tells coding agents what a new teammate would need on day one: how to build and test, the conventions, and the traps. It is an open convention read by several agents (Codex, Cursor, and others); Claude Code reads <code>CLAUDE.md</code> and Gemini CLI <code>GEMINI.md</code>, which can simply point to or import <code>AGENTS.md</code>. The harness loads it into the context at the start of every session, so it is the one piece of context you fully control.</p>
+</div>
+<h2 class="unnumbered" id="what-belongs-in-it">What belongs in it</h2>
+<pre class="code output"><code class="output"># AGENTS.md
+
+## Commands
+- Install: `uv sync`            - Test: `make test` (single file: `pytest tests/test_x.py -q`)
+- Lint/format: `make lint`      - Type check: `make typecheck`
+Run test + lint before saying a task is done.
+
+## Layout
+- src/api/      FastAPI routes; one file per resource
+- src/core/     business logic, no I/O
+- db/migrations generated with `make new-migration name=&lt;slug&gt;`, never edited by hand
+
+## Conventions
+- Type hints on public functions; errors are raised as AppError subclasses (src/core/errors.py).
+- New endpoints need a test in tests/api/ using the `client` fixture.
+
+## Gotchas
+- Integration tests need Docker running (they start Postgres).
+- `config/flags.yaml` is read at startup: restart the server after changing it.
+
+## Boundaries
+- Do not modify files under vendor/ or .github/workflows/ without asking.
+- Never commit secrets; .env is local only.</code></pre>
+<h2 class="unnumbered" id="practices">Practices</h2>
+<ul>
+<li><p><strong>Short and specific.</strong> Every line is read on every task and costs context. Exact commands beat descriptions; “use <code>make test</code>” beats “we value testing”.</p></li>
+<li><p><strong>Write what the agent got wrong.</strong> The best entries come from real mistakes: when an agent repeats an error, add one line.</p></li>
+<li><p><strong>Nest in monorepos.</strong> A file per package; the closest one to the file being edited wins, so package rules override root rules.</p></li>
+<li><p><strong>Don’t duplicate the code.</strong> Point to files (“error types: <code>src/core/errors.py</code>”) instead of pasting them; pasted code goes stale.</p></li>
+<li><p><strong>Keep it true.</strong> Review it like code, in pull requests. A wrong instruction is worse than none: the agent will follow it.</p></li>
+<li><p><strong>Personal vs project.</strong> Team conventions go in the repo; your preferences (tone, editor, review style) go in your user-level file.</p></li>
+<li><p><strong>Instructions, not secrets.</strong> It is committed and sent to model providers.</p></li>
+</ul>

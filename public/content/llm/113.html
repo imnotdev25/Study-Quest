@@ -1,0 +1,178 @@
+
+<div class="center">
+<table style="width:91%;">
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 45%" />
+<col style="width: 26%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Benchmark</strong></th>
+<th style="text-align: left;"><strong>What it measures</strong></th>
+<th style="text-align: left;"><strong>Scored by</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">SWE-bench (Full, Lite, Verified)</td>
+<td style="text-align: left;">resolve real GitHub issues in Python repos; Verified is a 500-task subset checked by humans to be solvable</td>
+<td style="text-align: left;">hidden tests pass</td>
+</tr>
+<tr>
+<td style="text-align: left;">SWE-bench Multimodal / Pro</td>
+<td style="text-align: left;">visual front-end issues; harder, more contamination-resistant tasks (Pro)</td>
+<td style="text-align: left;">hidden tests</td>
+</tr>
+<tr>
+<td style="text-align: left;">Terminal-Bench</td>
+<td style="text-align: left;">end-to-end tasks in a container terminal: build, configure, debug, data work</td>
+<td style="text-align: left;">task check scripts</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\tau\)</span>-bench / <span class="math inline">\(\tau^2\)</span>-bench</td>
+<td style="text-align: left;">customer-service agents (retail, airline, telecom) with a simulated user and policies</td>
+<td style="text-align: left;">final database state; pass<span class="math inline">\(^k\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">GAIA</td>
+<td style="text-align: left;">general-assistant questions needing browsing, files and reasoning, three difficulty levels</td>
+<td style="text-align: left;">exact answer</td>
+</tr>
+<tr>
+<td style="text-align: left;">WebArena, OSWorld</td>
+<td style="text-align: left;">tasks in self-hosted websites; tasks in a full desktop OS via screenshots</td>
+<td style="text-align: left;">state checks</td>
+</tr>
+<tr>
+<td style="text-align: left;">BrowseComp</td>
+<td style="text-align: left;">hard-to-find facts that need persistent browsing</td>
+<td style="text-align: left;">exact answer</td>
+</tr>
+<tr>
+<td style="text-align: left;">Humanity’s Last Exam</td>
+<td style="text-align: left;">expert-written questions across fields, at the frontier of knowledge</td>
+<td style="text-align: left;">exact answer</td>
+</tr>
+<tr>
+<td style="text-align: left;">Aider Polyglot</td>
+<td style="text-align: left;">225 hard exercises in six languages, edits through Aider</td>
+<td style="text-align: left;">tests</td>
+</tr>
+<tr>
+<td style="text-align: left;">LiveCodeBench</td>
+<td style="text-align: left;">competitive programming problems collected after a date cutoff</td>
+<td style="text-align: left;">tests</td>
+</tr>
+<tr>
+<td style="text-align: left;">SWE-Lancer, MLE-bench</td>
+<td style="text-align: left;">freelance software tasks with dollar values; Kaggle competitions</td>
+<td style="text-align: left;">tests / medals</td>
+</tr>
+<tr>
+<td style="text-align: left;">METR time horizon</td>
+<td style="text-align: left;">the task length (in human time) at which an agent succeeds 50% of the time</td>
+<td style="text-align: left;">logistic fit</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Leaderboard numbers are left out on purpose: they change every few weeks. Read them on the benchmark’s own site, with the harness and the number of attempts.</p>
+<h2 class="unnumbered" id="the-statistics-behind-the-scores">The statistics behind the scores</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: pass@k, its unbiased estimator, and pass<span class="math inline">\(^k\)</span></div>
+<p><strong>Step 1.</strong> pass@k: the probability that at least one of <span class="math inline">\(k\)</span> attempts succeeds. For a task with solve rate <span class="math inline">\(p\)</span>: <span class="math inline">\(1-(1-p)^k\)</span>.</p>
+<p><strong>Step 2.</strong> Draw <span class="math inline">\(n\ge k\)</span> samples, <span class="math inline">\(c\)</span> correct. The plug-in <span class="math inline">\(1-(1-c/n)^k\)</span> is biased low (the function is concave in <span class="math inline">\(c/n\)</span>, so by Jensen its mean is below its value at the mean).</p>
+<p><strong>Step 3.</strong> Unbiased: pick <span class="math inline">\(k\)</span> of the <span class="math inline">\(n\)</span> samples at random; the chance that all are wrong is <span class="math inline">\(\binom{n-c}k/\binom nk\)</span>. So <span class="math inline">\(\widehat{\text{pass@}k}=1-\binom{n-c}k\big/\binom nk\)</span>.</p>
+<p><strong>Step 4.</strong> pass<span class="math inline">\(^k\)</span> (from <span class="math inline">\(\tau\)</span>-bench): the probability that <em>all</em> <span class="math inline">\(k\)</span> attempts succeed, <span class="math inline">\(p^k\)</span>, estimated by <span class="math inline">\(\binom ck/\binom nk\)</span>. pass@k rises with <span class="math inline">\(k\)</span>; pass<span class="math inline">\(^k\)</span> falls. A product needs pass<span class="math inline">\(^k\)</span>: users notice the one time in four it fails.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: The time-horizon metric</div>
+<p><strong>Step 1.</strong> Each task has a length <span class="math inline">\(t\)</span>: how long a skilled human takes. Model <span class="math inline">\(P(\text{success})=\sigma(\alpha-\beta\log_2t)\)</span>.</p>
+<p><strong>Step 2.</strong> Fit <span class="math inline">\(\alpha,\beta\)</span> by logistic regression (Newton’s method, Part III). The 50% horizon is where <span class="math inline">\(\alpha-\beta\log_2t=0\)</span>: <span class="math inline">\(t_{50}=2^{\alpha/\beta}\)</span>.</p>
+<p><strong>Step 3.</strong> Bootstrap the tasks for an interval. METR reports that this horizon has been doubling roughly every seven months; it turns “score on benchmark X” into “length of task it can do”, which is comparable across benchmarks and years.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Agents ch. &#x27;Benchmarks&#x27;: pass@k and pass^k estimators, compounding errors, benchmark noise,
+a METR-style time-horizon fit, and cost per solved task.&quot;&quot;&quot;
+import math
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# 1. pass@k from n samples per task with c correct. Unbiased: 1 - C(n-c, k)/C(n, k). Plug-in: 1 - (1-c/n)^k.
+tasks, n, k = 2000, 20, 5
+p = rng.beta(0.6, 0.9, tasks)                       # true per-task solve rates vary a lot
+c = rng.binomial(n, p)
+truth = np.mean(1 - (1 - p) ** k)
+unbiased = np.mean([1 - math.comb(n - ci, k) / math.comb(n, k) for ci in c])
+plug = np.mean(1 - (1 - c / n) ** k)
+print(f&quot;[pass@k] k={k}, n={n}: truth {truth:.4f}   unbiased estimator {unbiased:.4f}   plug-in {plug:.4f} (biased low)&quot;)
+
+# 2. pass^k (tau-bench): all k independent tries succeed. Unbiased: C(c, k)/C(n, k).
+print(&quot;[pass^k] k   pass@k   pass^k     (same agent: pass@1 = %.3f)&quot; % p.mean())
+for kk in (1, 2, 4, 8):
+    pa = np.mean([1 - math.comb(n - ci, kk) / math.comb(n, kk) for ci in c])
+    pw = np.mean([math.comb(ci, kk) / math.comb(n, kk) for ci in c])
+    print(f&quot;[pass^k] {kk}   {pa:.3f}    {pw:.3f}&quot;)
+
+# 3. Compounding: a task of s steps, each right with prob 0.95. With a check that catches a wrong step
+#    with prob d and up to 3 attempts, the effective per-step success rises.
+q, d = 0.95, 0.9
+# A step fails if a wrong attempt slips past the check, or all r attempts are wrong and caught.
+miss = lambda r: sum(((1 - q) * d) ** i for i in range(r)) * (1 - q) * (1 - d) + ((1 - q) * d) ** r
+print(&quot;[compound] steps   no checks   check+retry (3 tries, 90% detection)&quot;)
+for s in (10, 30, 100):
+    print(f&quot;[compound] {s:4d}     {q ** s:.3f}       {(1 - miss(3)) ** s:.3f}&quot;)
+
+# 4. Benchmark noise: SWE-bench Verified has 500 tasks.
+for acc in (0.5, 0.7):
+    print(f&quot;[noise] {acc:.0%} on 500 tasks: 95% CI +- {1.96 * math.sqrt(acc * (1 - acc) / 500) * 100:.1f} points&quot;)
+
+# 5. METR-style time horizon: P(success) is logistic in log2(human minutes). Fit and find the 50% point.
+dur = 2 ** rng.uniform(0, math.log2(960), 400)                   # 1 minute to 16 hours
+x = np.log2(dur)
+y = (rng.random(400) &lt; 1 / (1 + np.exp(0.8 * (x - math.log2(120))))).astype(float)
+
+
+def fit(x, y):
+    X = np.c_[np.ones_like(x), x]
+    w = np.zeros(2)
+    for _ in range(25):
+        pr = 1 / (1 + np.exp(-X @ w))
+        w -= np.linalg.solve(X.T @ (X * (pr * (1 - pr))[:, None]) + 1e-9 * np.eye(2), X.T @ (pr - y))
+    return 2 ** (-w[0] / w[1])
+
+
+h = fit(x, y)
+boots = [fit(x[i], y[i]) for i in (rng.integers(0, 400, 400) for _ in range(300))]
+lo, hi = np.percentile(boots, [5, 95])
+print(f&quot;[horizon] true 50% horizon 120 min; fitted {h:.0f} min (90% bootstrap CI {lo:.0f}-{hi:.0f})&quot;)
+
+# 6. Cost per solved task: retry until the harness&#x27;s verifier passes (up to 4 tries).
+for name, cost, sr in ((&quot;large model&quot;, 1.20, 0.70), (&quot;small model&quot;, 0.15, 0.35)):
+    solved = 1 - (1 - sr) ** 4
+    exp_cost = sum(cost * (1 - sr) ** i for i in range(4))
+    print(f&quot;[cost] {name}: ${cost:.2f}/attempt, {sr:.0%} per try -&gt; {solved:.0%} solved within 4 tries, &quot;
+          f&quot;${exp_cost / solved:.2f} per solved task&quot;)</code></pre>
+<pre class="code output"><code class="output">[pass@k] k=5, n=20: truth 0.6984   unbiased estimator 0.6977   plug-in 0.6807 (biased low)
+[pass^k] k   pass@k   pass^k     (same agent: pass@1 = 0.398)
+[pass^k] 1   0.401    0.401
+[pass^k] 2   0.541    0.260
+[pass^k] 4   0.664    0.156
+[pass^k] 8   0.760    0.089
+[compound] steps   no checks   check+retry (3 tries, 90% detection)
+[compound]   10     0.599       0.948
+[compound]   30     0.215       0.852
+[compound]  100     0.006       0.586
+[noise] 50% on 500 tasks: 95% CI +- 4.4 points
+[noise] 70% on 500 tasks: 95% CI +- 4.0 points
+[horizon] true 50% horizon 120 min; fitted 121 min (90% bootstrap CI 96-153)
+[cost] large model: $1.20/attempt, 70% per try -&gt; 99% solved within 4 tries, $1.71 per solved task
+[cost] small model: $0.15/attempt, 35% per try -&gt; 82% solved within 4 tries, $0.43 per solved task</code></pre>
+<h2 class="unnumbered" id="reading-a-leaderboard">Reading a leaderboard</h2>
+<ul>
+<li><p><strong>Harness and budget</strong>: which scaffold, how many attempts, how many tokens or dollars per task, with or without a verifier picking the best attempt.</p></li>
+<li><p><strong>Noise</strong>: on 500 tasks the 95% interval is about <span class="math inline">\(\pm4\)</span> points; gaps of 1–2 points are not differences. Compare paired, per task.</p></li>
+<li><p><strong>Contamination</strong>: public repositories and questions leak into pretraining data. Prefer post-cutoff or held-out sets.</p></li>
+<li><p><strong>Cost per solved task</strong>: a cheaper model with retries can beat a better one per dollar (the output: $0.43 vs $1.71).</p></li>
+<li><p><strong>Your own eval</strong> beats any public one: 50–200 real tasks from your work, scored automatically.</p></li>
+</ul>

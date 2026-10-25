@@ -1,0 +1,278 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: averaging two class averages</div>
+<p>Class A has 2 students averaging 90. Class B has 30 averaging 60. “The average of the two averages” is 75, but the true average student scored about 62. Gradient accumulation makes the same mistake when each microbatch is averaged on its own and the chunks hold different numbers of tokens.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/6af5c83dd54a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Averaging each chunk first gives chunk A’s tokens 4<span class="math inline">\(\times\)</span> the weight of chunk B’s.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can a large critic coefficient reverse the actor’s desired shared-backbone update?</p></li>
+<li><p>Why must padding be excluded from both the loss numerator and denominator?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="gradient-accumulation-is-not-automatically-exact">2. Gradient accumulation is not automatically exact</h3>
+<p>Large LLM rollouts rarely fit in one device batch, so they are divided into microbatches.</p>
+<p>Suppose the intended objective is a global valid-token mean:</p>
+<p><span class="math display">\[L
+=
+\frac{
+\sum_{i,t}M_{i,t}\ell_{i,t}
+}{
+\sum_{i,t}M_{i,t}
+}\]</span></p>
+<p>For microbatch <span class="math inline">\(k\)</span>, define:</p>
+<p><span class="math display">\[N_k=\sum_{(i,t)\in k}M_{i,t}\ell_{i,t},
+\qquad
+D_k=\sum_{(i,t)\in k}M_{i,t}\]</span></p>
+<p>The correct accumulated loss is:</p>
+<p><span class="math display">\[L=\frac{\sum_k N_k}{\sum_k D_k}\]</span></p>
+<p>Therefore, each microbatch may backpropagate:</p>
+<p><span class="math display">\[\frac{N_k}{D_{\text{global}}}\]</span></p>
+<p>A common bug averages independently normalized microbatches:</p>
+<p><span class="math display">\[L_{\text{naive}}
+=
+\frac1K\sum_k\frac{N_k}{D_k}\]</span></p>
+<p>This gives every microbatch equal weight even when one contains two valid tokens and another contains hundreds. It is equivalent only when all <span class="math inline">\(D_k\)</span> are equal.</p>
+<p>The denominator must follow the chosen objective:</p>
+<ul>
+<li><p>token mean: number of valid tokens;</p></li>
+<li><p>sequence mean: number of responses;</p></li>
+<li><p>DPO: usually number of preference pairs, after forming each response’s masked sequence log-probability.</p></li>
+</ul>
+<p>In distributed training, workers must agree on the global numerator and denominator. Averaging rank-local means can overweight workers receiving shorter responses.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>token losses: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>microbatch numerator and denominator: scalar</p></li>
+<li><p>accumulated parameter gradient: <span style="background-color: codeinlinebg"><code> [num_parameters]</code></span></p></li>
+</ul>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: mean of means is not the mean</div>
+<p>Chunks <span class="math inline">\(k=1..K\)</span> with <span class="math inline">\(n_k\)</span> valid tokens and loss sums <span class="math inline">\(S_k\)</span>. The intended objective is <span class="math inline">\(\frac{\sum_kS_k}{\sum_kn_k}\)</span>. The common bug computes <span class="math inline">\(\frac1K\sum_k\frac{S_k}{n_k}\)</span>. They agree only when all <span class="math inline">\(n_k\)</span> are equal.</p>
+<p><strong>Fix:</strong> each chunk backpropagates <span class="math inline">\(S_k/N\)</span>, where <span class="math inline">\(N=\sum_kn_k\)</span> is the global count of valid tokens (or sequences), computed <em>before</em> the accumulation loop. With data parallelism, <span class="math inline">\(N\)</span> must be the count summed over all ranks.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Matching the nominal batch size isn’t enough. Match the objective.</p></li>
+<li><p>Accumulate unnormalized sums and divide by one global count.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: two unequal chunks</div>
+<p>Chunk A: 2 tokens with loss 1 each. Chunk B: 8 tokens with loss 3 each. Correct: <span class="math inline">\(\frac{2+24}{10}=2.6\)</span>. Mean of chunk means: <span class="math inline">\(\frac{1+3}{2}=2.0\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Dividing by <span class="math inline">\(K\)</span> and also by <span class="math inline">\(n_k\)</span>.</p></li>
+<li><p>Different ranks normalizing by their own local token counts.</p></li>
+<li><p>Changing microbatch size and seeing “different results” (the bug shows up exactly then).</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-expose-the-unequal-microbatch-bug">3. PyTorch exercise — expose the unequal-microbatch bug</h3>
+<p>The first microbatch contains two valid action-<span style="background-color: codeinlinebg"><code> 0</code></span> tokens. The second contains six valid action-<span style="background-color: codeinlinebg"><code> 1</code></span> tokens.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.set_default_dtype(torch.float64)
+
+actions = torch.tensor([
+    [0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 1],
+])
+
+lengths = torch.tensor([2, 6])
+advantages = torch.tensor([1.0, 1.0])
+
+positions = torch.arange(
+    actions.shape[1]
+)[None, :]
+
+# TODO 1: Valid-token mask [B, T].
+mask = ...
+
+def compute_gradient(mode):
+    logits = torch.nn.Parameter(
+        torch.zeros(2)
+    )
+
+    policy = Categorical(logits=logits)
+
+    selected_log_probs = policy.log_prob(
+        actions
+    )
+
+    weighted_losses = -(
+        selected_log_probs
+        * advantages[:, None].detach()
+        * mask.to(selected_log_probs.dtype)
+    )
+
+    # One response per microbatch.
+    numerators = [
+        weighted_losses[0].sum(),
+        weighted_losses[1].sum(),
+    ]
+
+    denominators = [
+        mask[0].sum(),
+        mask[1].sum(),
+    ]
+
+    global_denominator = (
+        denominators[0] + denominators[1]
+    )
+
+    if mode == &quot;full_batch&quot;:
+        # TODO 2: Global valid-token mean.
+        loss = ...
+        loss.backward()
+
+    elif mode == &quot;naive_microbatch&quot;:
+        # TODO 3: Incorrectly average two local means.
+        loss = ...
+        loss.backward()
+
+    elif mode == &quot;correct_accumulation&quot;:
+        # TODO 4: Backpropagate each numerator using
+        # the same global denominator.
+        for numerator in numerators:
+            ...
+        loss = None
+
+    else:
+        raise ValueError(mode)
+
+    return logits.grad.detach().clone(), loss
+
+# TODO 5: Calculate all three gradients.
+full_gradient, full_loss = ...
+naive_gradient, naive_loss = ...
+accumulated_gradient, _ = ...
+
+print(&quot;Mask:\n&quot;, mask)
+print(&quot;Valid tokens per microbatch:&quot;,
+      mask.sum(dim=-1))
+
+print(&quot;Full-batch gradient:&quot;,
+      full_gradient)
+
+print(&quot;Naive microbatch gradient:&quot;,
+      naive_gradient)
+
+print(&quot;Correct accumulated gradient:&quot;,
+      accumulated_gradient)
+
+print(
+    &quot;Correct accumulation error:&quot;,
+    (
+        accumulated_gradient
+        - full_gradient
+    ).abs().max().item(),
+)
+
+print(
+    &quot;Naive accumulation error:&quot;,
+    (
+        naive_gradient
+        - full_gradient
+    ).abs().max().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action should the global token-mean objective favor?</p></li>
+<li><p>Will independently averaging the two microbatch means favor either action?</p></li>
+<li><p>Which accumulated gradient should exactly match the full-batch gradient?</p></li>
+<li><p>Would the naive calculation become correct if both microbatches had equal valid-token counts?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>The mask is <span style="background-color: codeinlinebg"><code> positions &lt; lengths[:, None]</code></span>.</p></li>
+<li><p>The global loss divides the sum of both numerators by the sum of both denominators.</p></li>
+<li><p>The naive loss averages <span style="background-color: codeinlinebg"><code> numerator / denominator</code></span> across microbatches.</p></li>
+<li><p>For exact accumulation, divide every numerator by the same global denominator before <span style="background-color: codeinlinebg"><code> .backward()</code></span>.</p></li>
+<li><p>PyTorch adds gradients across repeated backward calls unless they are zeroed.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Replace the global denominator with the padded tensor size:</p>
+<pre class="code python"><code class="language-python">global_denominator = actions.numel()</code></pre>
+<p>The gradient direction remains unchanged here, but its scale is too small because four nonexistent tokens enter the denominator.</p>
+<p>Next, split the long response into several microbatches while leaving the short response alone. Naively averaging local means changes the gradient again—even though the underlying rollout data is identical.</p>
+<p>Finally, combine actor and value losses with different normalization rules. Their effective relative weight can change with response lengths, padding rate and microbatch construction even when <span class="math inline">\(c_V\)</span> remains fixed.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does averaging microbatch means overweight small microbatches?</p></li>
+<li><p>When is dividing every microbatch loss by the number of microbatches correct?</p></li>
+<li><p>Why can changing gradient accumulation steps alter training despite an unchanged nominal batch size?</p></li>
+<li><p>What quantities should be logged to diagnose normalization errors?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Mask:</p>
+<pre class="code python"><code class="language-python">mask = (
+    positions &lt; lengths[:, None]
+)</code></pre>
+<p>Full-batch loss:</p>
+<pre class="code python"><code class="language-python">loss = (
+    numerators[0] + numerators[1]
+) / global_denominator</code></pre>
+<p>Naive microbatch loss:</p>
+<pre class="code python"><code class="language-python">loss = 0.5 * (
+    numerators[0] / denominators[0]
+    + numerators[1] / denominators[1]
+)</code></pre>
+<p>Correct accumulation:</p>
+<pre class="code python"><code class="language-python">for numerator in numerators:
+    (
+        numerator / global_denominator
+    ).backward()</code></pre>
+<p>Calculate the gradients:</p>
+<pre class="code python"><code class="language-python">full_gradient, full_loss = (
+    compute_gradient(&quot;full_batch&quot;)
+)
+
+naive_gradient, naive_loss = (
+    compute_gradient(&quot;naive_microbatch&quot;)
+)
+
+accumulated_gradient, _ = (
+    compute_gradient(
+        &quot;correct_accumulation&quot;
+    )
+)</code></pre>
+<p>At uniform probabilities, an action-<span style="background-color: codeinlinebg"><code> 0</code></span> token contributes loss gradient:</p>
+<p><span class="math display">\[[-0.5,\;0.5]\]</span></p>
+<p>while an action-<span style="background-color: codeinlinebg"><code> 1</code></span> token contributes:</p>
+<p><span class="math display">\[[0.5,\;-0.5]\]</span></p>
+<p>The global token mean contains two action-<span style="background-color: codeinlinebg"><code> 0</code></span> tokens and six action-<span style="background-color: codeinlinebg"><code> 1</code></span> tokens:</p>
+<p><span class="math display">\[g_{\text{global}}
+=
+\frac{
+2[-0.5,0.5]
++
+6[0.5,-0.5]
+}{8}
+=
+[0.25,-0.25]\]</span></p>
+<p>Gradient descent therefore increases the action-<span style="background-color: codeinlinebg"><code> 1</code></span> logit.</p>
+<p>The naive calculation first averages within each response. Each response then contributes equally, so the opposing gradients cancel:</p>
+<p><span class="math display">\[g_{\text{naive}}=[0,0]\]</span></p>
+<p>Correct accumulation matches the full-batch gradient because differentiation is linear:</p>
+<p><span class="math display">\[\nabla
+\frac{\sum_kN_k}{D_{\text{global}}}
+=
+\sum_k
+\nabla\frac{N_k}{D_{\text{global}}}\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Its locally normalized gradient receives the same outer weight as a much larger microbatch.</p></li>
+<li><p>When microbatches have equal objective weight—such as identical valid counts—or their losses have already been scaled by their proper global weights.</p></li>
+<li><p>Different splits can change local denominators, padding composition or optimizer-step frequency, making naive accumulation optimize a different weighted objective.</p></li>
+<li><p>Log valid tokens and responses per microbatch/rank, loss numerators, denominators, accumulated gradient norm and results across alternative batch partitions.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Shared parameters receive <span class="math inline">\(g_\pi+c_Vg_V\)</span>. If the weighted critic gradient dominates and conflicts with the actor gradient, the combined update can move against the actor.</p></li>
+<li><p>Padding represents no executed action. Including it creates fictitious loss terms or dilutes real gradients through an inflated denominator.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> matching the nominal batch size is insufficient. To reproduce the intended objective, accumulate unnormalized loss contributions and divide by the correct global count.</p>

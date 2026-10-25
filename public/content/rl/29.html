@@ -1,0 +1,277 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: grade the essay, not the question</div>
+<p>When a teacher grades your essay, they don’t grade the exam question you copied at the top. You didn’t write it. PPO for LLMs applies the same rule: the prompt and any padding are masked out, and only the tokens the policy generated get ratios, advantages and gradients.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/7a2b3f80555a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Only <span class="math inline">\(m=1\)</span> tokens enter the PPO loss.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What is the difference between PPO’s old policy and RLHF’s reference policy?</p></li>
+<li><p>Why should rewards and advantages be detached from the policy loss?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="ppo-on-generated-tokens">2. PPO on generated tokens</h3>
+<p>An LLM rollout policy <span class="math inline">\(\pi_{\text{old}}\)</span> generates responses. For every generated token, store its old log-probability:</p>
+<p><span class="math display">\[\log\pi_{\text{old}}(y_{b,t}\mid s_{b,t})\]</span></p>
+<p>During several optimization epochs, the current policy reevaluates those same tokens. Their probability ratio is:</p>
+<p><span class="math display">\[r_{b,t}
+=
+\exp\left(
+\log\pi_\theta(y_{b,t}\mid s_{b,t})
+-
+\log\pi_{\text{old}}(y_{b,t}\mid s_{b,t})
+\right)\]</span></p>
+<ul>
+<li><p><span class="math inline">\(r=1\)</span>: unchanged probability.</p></li>
+<li><p><span class="math inline">\(r&gt;1\)</span>: sampled token became more likely.</p></li>
+<li><p><span class="math inline">\(r&lt;1\)</span>: sampled token became less likely.</p></li>
+</ul>
+<p>PPO uses the token-level clipped objective:</p>
+<p><span class="math display">\[J_{\text{clip}}
+=
+\frac{
+\sum_{b,t}M_{b,t}
+\min\left(
+r_{b,t}\hat A_{b,t},
+\operatorname{clip}(r_{b,t},1-\epsilon,1+\epsilon)
+\hat A_{b,t}
+\right)
+}{
+\sum_{b,t}M_{b,t}
+}\]</span></p>
+<p>The optimizer minimizes:</p>
+<p><span class="math display">\[L_{\text{policy}}=-J_{\text{clip}}\]</span></p>
+<p>The minimum removes the incentive for an excessively large beneficial change:</p>
+<ul>
+<li><p>positive advantage: increasing <span class="math inline">\(r\)</span> beyond <span class="math inline">\(1+\epsilon\)</span> stops helping;</p></li>
+<li><p>negative advantage: decreasing <span class="math inline">\(r\)</span> below <span class="math inline">\(1-\epsilon\)</span> stops helping;</p></li>
+<li><p>harmful changes remain visible even outside the interval.</p></li>
+</ul>
+<p>Use token ratios rather than multiplying ratios across an entire response. A long product can become extremely large or small and gives poor control over individual token changes.</p>
+<p>For batch size <span class="math inline">\(B\)</span> and generated length <span class="math inline">\(T\)</span>:</p>
+<ul>
+<li><p>old and current selected log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>advantages: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>response mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>ratios and surrogate terms: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>masked objective: scalar</p></li>
+</ul>
+<h3 class="unnumbered" id="two-different-policy-anchors">Two different policy anchors</h3>
+<ul>
+<li><p><span class="math inline">\(\pi_{\text{old}}\)</span>: frozen snapshot that generated the current rollout; used for PPO ratios.</p></li>
+<li><p><span class="math inline">\(\pi_{\text{ref}}\)</span>: frozen SFT model; used for behavioural KL regularization.</p></li>
+</ul>
+<p>The old policy changes after collecting each new rollout batch. The reference usually remains fixed.</p>
+<p>Full LLM PPO combines this policy loss with a critic loss, GAE advantages, reference-KL control, entropy diagnostics and fresh rollout collection.</p>
+<p>DPO does not run this rollout-and-update loop. It optimizes fixed chosen/rejected pairs directly.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the masked token-level loss</div>
+<p>Per-token ratio: <span class="math inline">\(\rho_t=\exp\big(\log\pi_\theta(y_t|\cdot)-\log\pi_{\text{old}}(y_t|\cdot)\big)\)</span>. Always compute it from log-probs, in this direction. <span class="math display">\[\mathcal L^{\text{CLIP}}=-\frac{\sum_tm_t\min\big(\rho_t\hat A_t,\ \operatorname{clip}(\rho_t,1\pm\epsilon)\hat A_t\big)}{\sum_tm_t}.\]</span> <strong>Checklist:</strong> <span class="math inline">\(\pi_{\text{old}}\)</span> log-probs are recorded once at rollout time and never updated. <span class="math inline">\(\hat A_t\)</span> is detached (it’s a label). GAE runs only over response tokens. The KL shaping <span class="math inline">\(-\beta(\log\pi_\theta-\log\pi_{\text{ref}})\)</span> goes into each <span class="math inline">\(r_t\)</span>, and the reward-model score goes on the last real token.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Same clipped surrogate as before, now applied per generated token.</p></li>
+<li><p>Most LLM-PPO bugs are snapshot, direction, detach or mask errors.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: three tokens, one clipped</div>
+<p><span class="math inline">\(A=+1\)</span>, <span class="math inline">\(\epsilon=0.2\)</span>. Log-ratios <span class="math inline">\((0.1,-0.3,0.25)\)</span>, so <span class="math inline">\(\rho=(1.105,0.741,1.284)\)</span>. Clipped terms: <span class="math inline">\((1.105,\ 0.741,\ 1.2)\)</span>. Token 3 is clipped and gives no gradient. Clip fraction <span class="math inline">\(=1/3\)</span>. Objective <span class="math inline">\(=1.015\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Recomputing old log-probs with dropout on (or after updates).</p></li>
+<li><p>The ratio direction flipped to <span class="math inline">\(\pi_{\text{old}}/\pi_\theta\)</span>.</p></li>
+<li><p>Clip fraction near 0.5 or more, which means too many epochs or a learning rate that’s too high.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: PPO update for an LLM (one rollout batch)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> rollouts with tokens, response mask <span class="math inline">\(m_t\)</span>, recorded <span class="math inline">\(\log\pi_{\text{old}}\)</span>, <span class="math inline">\(\log\pi_{\text{ref}}\)</span>, scores, values</div>
+<div class="algo-line" style="--d:0">build KL-shaped rewards <span class="math inline">\(r_t\)</span> (Topic 28); compute <span class="math inline">\(\hat A_t,\hat R_t\)</span> by GAE over <span class="math inline">\(m_t=1\)</span> tokens; detach both</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> epoch <span class="math inline">\(=1,\dots,K\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each minibatch <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\log\pi_\theta(y_t|\cdot)\)</span> from shifted logits; <span class="math inline">\(\rho_t\gets\exp(\log\pi_\theta-\log\pi_{\text{old}})\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(L_\pi\gets-\sum_tm_t\min\big(\rho_t\hat A_t,\operatorname{clip}(\rho_t,1\pm\epsilon)\hat A_t\big)\big/\sum_tm_t\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(L_V\gets\sum_tm_t\big(V_\psi(s_t)-\hat R_t\big)^2\big/\sum_tm_t\)</span></div>
+<div class="algo-line" style="--d:2">gradient step on <span class="math inline">\(L_\pi+c_1L_V\)</span>; log the clip fraction and approx-KL</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-inspect-masked-token-clipping">3. PyTorch exercise — inspect masked token clipping</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+
+clip_epsilon = 0.2
+
+# Log-probabilities saved when the rollout was generated.
+old_log_probs = torch.tensor([
+    [-1.2, -1.0, -0.8, -0.7, -9.0],
+    [-1.1, -0.9, -0.6, -9.0, -9.0],
+])  # [B=2, T=5]
+
+response_mask = torch.tensor([
+    [1.0, 1.0, 1.0, 1.0, 0.0],
+    [1.0, 1.0, 1.0, 0.0, 0.0],
+])
+
+advantages = torch.tensor([
+    [ 1.00, 0.50, -0.50, 1.00, 99.0],
+    [-1.00, 0.25,  0.75, 99.0, 99.0],
+])
+
+# Deliberately place several ratios outside [0.8, 1.2].
+log_ratio_offsets = torch.tensor([
+    [ 0.0,  0.4, -0.4, -0.3, 2.0],
+    [-0.3,  0.3,  0.0,  2.0, 2.0],
+])
+
+new_log_probs = torch.nn.Parameter(
+    old_log_probs + log_ratio_offsets
+)
+
+# TODO 1: Stable current-to-old ratios.
+log_ratios = ...
+ratios = ...
+
+# TODO 2: Unclipped and clipped surrogate terms.
+unclipped_terms = ...
+clipped_ratios = ...
+clipped_terms = ...
+
+# TODO 3: Pessimistic objective, averaged over valid tokens only.
+surrogate_terms = ...
+objective = ...
+policy_loss = ...
+
+policy_loss.backward()
+
+with torch.no_grad():
+    # TODO 4: Standard ratio-based clipping fraction.
+    outside_clip = ...
+    clip_fraction = ...
+
+    # Positive sampled approximation to old-to-current KL.
+    approximate_kl = ...
+
+    padding_gradient_max = (
+        new_log_probs.grad
+        * (1.0 - response_mask)
+    ).abs().max()
+
+print(&quot;Ratios:\n&quot;, ratios.detach())
+print(&quot;Unclipped terms:\n&quot;, unclipped_terms.detach())
+print(&quot;Clipped terms:\n&quot;, clipped_terms.detach())
+print(&quot;Selected surrogate:\n&quot;, surrogate_terms.detach())
+print(&quot;Log-probability gradients:\n&quot;, new_log_probs.grad)
+print(&quot;Policy loss:&quot;, policy_loss.item())
+print(&quot;Clip fraction:&quot;, clip_fraction.item())
+print(&quot;Approximate KL:&quot;, approximate_kl.item())
+print(&quot;Maximum padding gradient:&quot;, padding_gradient_max.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What ratio results from a log-ratio offset of zero?</p></li>
+<li><p>Which excessive, beneficial changes should receive zero gradient?</p></li>
+<li><p>Does every ratio outside <span style="background-color: codeinlinebg"><code> [0.8, 1.2]</code></span> necessarily receive zero gradient?</p></li>
+<li><p>Should the <span style="background-color: codeinlinebg"><code> 99</code></span> padding advantages affect the loss?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Compute ratios as <span style="background-color: codeinlinebg"><code> exp(new - old)</code></span>.</p></li>
+<li><p>Clamp ratios, not log-ratios.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.minimum</code></span> elementwise.</p></li>
+<li><p>Multiply by the mask before summing.</p></li>
+<li><p>Divide by <span style="background-color: codeinlinebg"><code> response_mask.sum()</code></span>.</p></li>
+<li><p>Optimizers minimize, so negate the objective.</p></li>
+<li><p>A common sampled KL approximation is <span class="math inline">\(r-1-\log r\)</span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Reverse the ratio:</p>
+<pre class="code python"><code class="language-python">log_ratios = old_log_probs - new_log_probs</code></pre>
+<p>The update is now interpreted backward: increasing a sampled token’s probability looks like a decrease.</p>
+<p>Then remove the response mask. The artificial padding advantages dominate the objective and produce padding gradients, even though those positions were never generated actions.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does PPO use token-level ratios for an LLM?</p></li>
+<li><p>Why can a harmful change remain active beyond the clipping interval?</p></li>
+<li><p>What does a clip fraction near one suggest?</p></li>
+<li><p>Does PPO clipping guarantee a small KL to either the old or reference policy?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Ratios:</p>
+<pre class="code python"><code class="language-python">log_ratios = (
+    new_log_probs
+    - old_log_probs.detach()
+)
+
+ratios = log_ratios.exp()</code></pre>
+<p>Surrogate terms:</p>
+<pre class="code python"><code class="language-python">unclipped_terms = (
+    ratios * advantages.detach()
+)
+
+clipped_ratios = ratios.clamp(
+    1.0 - clip_epsilon,
+    1.0 + clip_epsilon,
+)
+
+clipped_terms = (
+    clipped_ratios * advantages.detach()
+)</code></pre>
+<p>Masked objective and loss:</p>
+<pre class="code python"><code class="language-python">surrogate_terms = torch.minimum(
+    unclipped_terms,
+    clipped_terms,
+)
+
+objective = (
+    surrogate_terms * response_mask
+).sum() / response_mask.sum()
+
+policy_loss = -objective</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">outside_clip = (
+    (ratios - 1.0).abs()
+    &gt; clip_epsilon
+).float()
+
+clip_fraction = (
+    outside_clip * response_mask
+).sum() / response_mask.sum()
+
+approximate_kl = (
+    (
+        ratios - 1.0 - log_ratios
+    ) * response_mask
+).sum() / response_mask.sum()</code></pre>
+<p>The valid ratios are approximately:</p>
+<pre class="code text"><code class="language-plaintext">row 1: [1.000, 1.492, 0.670, 0.741]
+row 2: [0.741, 1.350, 1.000]</code></pre>
+<p>Zero-gradient, beneficially clipped positions include:</p>
+<ul>
+<li><p>positive advantage with ratio <span style="background-color: codeinlinebg"><code> 1.492</code></span>;</p></li>
+<li><p>negative advantage with ratio <span style="background-color: codeinlinebg"><code> 0.670</code></span>;</p></li>
+<li><p>negative advantage with ratio <span style="background-color: codeinlinebg"><code> 0.741</code></span>;</p></li>
+<li><p>positive advantage with ratio <span style="background-color: codeinlinebg"><code> 1.350</code></span>.</p></li>
+</ul>
+<p>The first row’s final valid token has positive advantage and ratio <span style="background-color: codeinlinebg"><code> 0.741</code></span>. That is a harmful probability decrease, so its unclipped term remains active. PPO must retain pressure to reverse it.</p>
+<p>Five of seven valid ratios are outside the interval, giving:</p>
+<p><span class="math display">\[\text{clip fraction}=\frac57\approx0.714\]</span></p>
+<p>This diagnostic counts all outside ratios—even harmful changes whose gradients remain active. It does not mean exactly 71.4% of gradients were removed.</p>
+<p>The padding gradient should be exactly zero despite the padding advantages of <span style="background-color: codeinlinebg"><code> 99</code></span>.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Token-level ratios control changes at each generated decision and avoid unstable sequence-level probability products.</p></li>
+<li><p>Clipping removes incentives for excessive improvement; it does not hide changes that worsen the surrogate.</p></li>
+<li><p>Most rollout tokens have moved substantially from their generating policy. Reduce epochs, learning rate, or update size and inspect KL.</p></li>
+<li><p>No. Clipping modifies the sampled objective; it is not a hard distribution constraint. Old-policy KL and reference-policy KL must be monitored separately.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The old policy generated the current rollout and defines PPO ratios; the reference policy is the longer-lived SFT anchor used for KL control.</p></li>
+<li><p>They are fixed credit signals. Allowing gradients into them can make the target move instead of updating only the policy.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> LLM PPO applies the familiar clipped surrogate to generated tokens. Correct old-policy snapshots, log-ratio direction, detached advantages and response masks are what make the equation correspond to the intended training loop.</p>

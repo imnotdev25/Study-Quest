@@ -1,0 +1,279 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>All three are decoder-only transformers with RMSNorm, SwiGLU, RoPE and grouped-query or latent attention (the LLaMA recipe from the Architectures part). What makes each one distinct fits in a few dozen lines each, and the script below builds those pieces at toy size and tests them.</p>
+</div>
+<div class="center">
+<table style="width:89%;">
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"></th>
+<th style="text-align: left;"><strong>Llama 4</strong></th>
+<th style="text-align: left;"><strong>DeepSeek-V3</strong></th>
+<th style="text-align: left;"><strong>Qwen3</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Sizes</td>
+<td style="text-align: left;">Scout 109B (17B active, 16 experts); Maverick 400B (17B active, 128 experts)</td>
+<td style="text-align: left;">671B total, 37B active</td>
+<td style="text-align: left;">dense 0.6B–32B; MoE 30B-A3B, 235B-A22B</td>
+</tr>
+<tr>
+<td style="text-align: left;">Attention</td>
+<td style="text-align: left;">GQA; iRoPE: RoPE layers with chunked local attention, every 4th layer NoPE with global attention</td>
+<td style="text-align: left;">MLA: cache a 512-d latent + 64-d decoupled RoPE key</td>
+<td style="text-align: left;">GQA with QK-norm, no QKV bias</td>
+</tr>
+<tr>
+<td style="text-align: left;">MoE</td>
+<td style="text-align: left;">1 shared + top-1 routed</td>
+<td style="text-align: left;">1 shared + 256 routed, top-8, sigmoid gates</td>
+<td style="text-align: left;">128 experts, top-8, no shared expert</td>
+</tr>
+<tr>
+<td style="text-align: left;">Balancing</td>
+<td style="text-align: left;">auxiliary loss</td>
+<td style="text-align: left;">bias-based, aux-loss-free</td>
+<td style="text-align: left;">global-batch balancing loss</td>
+</tr>
+<tr>
+<td style="text-align: left;">Other</td>
+<td style="text-align: left;">early-fusion multimodal</td>
+<td style="text-align: left;">multi-token prediction, FP8 training</td>
+<td style="text-align: left;">thinking / non-thinking modes; GSPO RL</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 class="unnumbered" id="rope-depends-only-on-relative-position">RoPE depends only on relative position</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: <span class="math inline">\(\langle R_mq,R_nk\rangle=\langle q,R_{n-m}k\rangle\)</span></div>
+<p><strong>Step 1.</strong> RoPE rotates each pair <span class="math inline">\((x_{2i},x_{2i+1})\)</span> by angle <span class="math inline">\(m\omega_i\)</span> at position <span class="math inline">\(m\)</span>: <span class="math inline">\(R_m\)</span> is block-diagonal with <span class="math inline">\(2\times2\)</span> rotations.</p>
+<p><strong>Step 2.</strong> Rotations are orthogonal and compose by adding angles: <span class="math inline">\(R_m^\top R_n=R_{-m}R_n=R_{n-m}\)</span>.</p>
+<p><strong>Step 3.</strong> So <span class="math inline">\((R_mq)^\top(R_nk)=q^\top R_{n-m}k\)</span>: the score sees only <span class="math inline">\(n-m\)</span>. The code checks it: positions (5,2) and (105,102) give the same score.</p>
+</div>
+<p>Llama 4’s <strong>NoPE</strong> layers skip the rotation entirely. Causal masking already leaks position information, and global layers without RoPE avoid the long-range decay of rotated scores, which helps length generalisation.</p>
+<h2 class="unnumbered" id="mla-a-small-cache-and-the-absorption-trick">MLA: a small cache and the absorption trick</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Why MLA never needs to rebuild <span class="math inline">\(K\)</span></div>
+<p><strong>Step 1.</strong> Cache <span class="math inline">\(c_t=W_{\downarrow}x_t\in\mathbb R^{d_c}\)</span> per token instead of <span class="math inline">\(k_t,v_t\in\mathbb R^{n_hd_h}\)</span> each.</p>
+<p><strong>Step 2.</strong> Keys are <span class="math inline">\(k_t=W_{\uparrow K}c_t\)</span>, so a score is <span class="math inline">\(q^\top k_t=q^\top W_{\uparrow K}c_t=(W_{\uparrow K}^\top q)^\top c_t\)</span>.</p>
+<p><strong>Step 3.</strong> Compute <span class="math inline">\(\tilde q=W_{\uparrow K}^\top q\)</span> once per query and dot it with the cached latents directly. The same trick folds <span class="math inline">\(W_{\uparrow V}\)</span> into the output projection.</p>
+<p><strong>Step 4.</strong> RoPE would sit between <span class="math inline">\(W_{\uparrow K}\)</span> and <span class="math inline">\(c_t\)</span> and break step 2, because the rotation depends on position. DeepSeek therefore adds a separate small RoPE key (64 dims) shared across heads, and caches it next to the latent: <span class="math inline">\(512+64\)</span> numbers per token per layer.</p>
+</div>
+<h2 class="unnumbered" id="qk-norm-bounds-the-logits">QK-norm bounds the logits</h2>
+<p>Qwen3 applies RMSNorm to each head’s <span class="math inline">\(q\)</span> and <span class="math inline">\(k\)</span>. With unit norm weights, <span class="math inline">\(\lVert\hat q\rVert=\lVert\hat k\rVert=\sqrt{d_h}\)</span>, so by Cauchy–Schwarz <span class="math inline">\(|\hat q\cdot\hat k|/\sqrt{d_h}\le\sqrt{d_h}\)</span> (times the learned gains), however large <span class="math inline">\(W_Q,W_K\)</span> grow. In the output, scaling the weights 20<span class="math inline">\(\times\)</span> sends logits to 630 without QK-norm and keeps them at 2.1 with it (the bound for <span class="math inline">\(d_h=8\)</span> is 2.83). Exploding attention logits are a classic cause of loss spikes.</p>
+<h2 class="unnumbered" id="aux-loss-free-load-balancing">Aux-loss-free load balancing</h2>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: DeepSeek-V3 routing with a balancing bias</div>
+<div class="algo">
+<div class="algo-line" style="--d:0">scores <span class="math inline">\(s_{t,e}=\sigma(u_t\cdot e_e)\)</span> for every expert</div>
+<div class="algo-line" style="--d:0">choose <span class="math inline">\(\operatorname{TopK}_e(s_{t,e}+b_e)\)</span> <em>▷ bias only changes <em>which</em> experts</em></div>
+<div class="algo-line" style="--d:0">gates <span class="math inline">\(g_{t,e}=s_{t,e}/\sum_{e&#39;\in\text{top}}s_{t,e&#39;}\)</span> <em>▷ weights ignore the bias</em></div>
+<div class="algo-line" style="--d:0">after each step: <span class="math inline">\(b_e\gets b_e+\gamma\operatorname{sign}(\bar\ell-\ell_e)\)</span> <em>▷ raise under-loaded experts</em></div>
+</div>
+</div>
+<p>Because the bias never enters the gate values, balancing doesn’t pull on the language-modelling gradient, which an auxiliary loss does. In the output, a router skewed toward experts 0 and 1 (15 and 17 tokens vs 3) is close to even after 100 updates.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Toolkit ch. 6: the distinctive blocks of Llama 4, DeepSeek-V3 and Qwen3, at toy size.&quot;&quot;&quot;
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, d, eps=1e-6):
+        super().__init__()
+        self.w, self.eps = nn.Parameter(torch.ones(d)), eps
+
+    def forward(self, x):
+        return self.w * x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+
+def rope(x, pos, base=10000.0):
+    &quot;&quot;&quot;x: (..., T, d) with d even. Rotate pairs (x_2i, x_2i+1) by angle pos * base^(-2i/d).&quot;&quot;&quot;
+    d = x.shape[-1]
+    ang = pos[:, None].float() * base ** (-torch.arange(0, d, 2).float() / d)
+    cos, sin = ang.cos(), ang.sin()
+    x1, x2 = x[..., 0::2], x[..., 1::2]
+    return torch.stack([x1 * cos - x2 * sin, x1 * sin + x2 * cos], -1).flatten(-2)
+
+
+class GQA(nn.Module):
+    &quot;&quot;&quot;Grouped-query attention with optional QK-norm (Qwen3) and optional NoPE (Llama 4).&quot;&quot;&quot;
+
+    def __init__(self, d, n_heads, n_kv, qk_norm=False, use_rope=True):
+        super().__init__()
+        self.h, self.kv, self.hd, self.use_rope = n_heads, n_kv, d // n_heads, use_rope
+        self.q = nn.Linear(d, n_heads * self.hd, bias=False)
+        self.k = nn.Linear(d, n_kv * self.hd, bias=False)
+        self.v = nn.Linear(d, n_kv * self.hd, bias=False)
+        self.o = nn.Linear(n_heads * self.hd, d, bias=False)
+        self.qn = RMSNorm(self.hd) if qk_norm else nn.Identity()
+        self.kn = RMSNorm(self.hd) if qk_norm else nn.Identity()
+
+    def forward(self, x, cache=None, start=0):
+        B, T, _ = x.shape
+        q = self.qn(self.q(x).view(B, T, self.h, self.hd)).transpose(1, 2)
+        k = self.kn(self.k(x).view(B, T, self.kv, self.hd)).transpose(1, 2)
+        v = self.v(x).view(B, T, self.kv, self.hd).transpose(1, 2)
+        if self.use_rope:
+            pos = torch.arange(start, start + T)
+            q, k = rope(q, pos), rope(k, pos)
+        if cache is not None:
+            if &quot;k&quot; in cache:
+                k, v = torch.cat([cache[&quot;k&quot;], k], 2), torch.cat([cache[&quot;v&quot;], v], 2)
+            cache[&quot;k&quot;], cache[&quot;v&quot;] = k, v
+        k = k.repeat_interleave(self.h // self.kv, 1)
+        v = v.repeat_interleave(self.h // self.kv, 1)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=cache is None or T &gt; 1)
+        return self.o(y.transpose(1, 2).reshape(B, T, -1))
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, d, f):
+        super().__init__()
+        self.g, self.u, self.dn = (nn.Linear(d, f, bias=False), nn.Linear(d, f, bias=False),
+                                   nn.Linear(f, d, bias=False))
+
+    def forward(self, x):
+        return self.dn(F.silu(self.g(x)) * self.u(x))
+
+
+class MoE(nn.Module):
+    &quot;&quot;&quot;Shared expert + routed experts. DeepSeek-V3 style: sigmoid scores, top-k chosen on
+    score + bias, the bias is nudged toward balance instead of using an auxiliary loss.&quot;&quot;&quot;
+
+    def __init__(self, d, f, n_exp, top_k):
+        super().__init__()
+        self.shared = SwiGLU(d, f)
+        self.experts = nn.ModuleList(SwiGLU(d, f) for _ in range(n_exp))
+        self.router = nn.Linear(d, n_exp, bias=False)
+        self.register_buffer(&quot;bias&quot;, torch.zeros(n_exp))
+        self.k = top_k
+
+    def forward(self, x):
+        flat = x.reshape(-1, x.shape[-1])
+        s = torch.sigmoid(self.router(flat))
+        idx = (s + self.bias).topk(self.k, -1).indices            # bias only affects *which* experts
+        w = s.gather(1, idx)
+        w = w / w.sum(-1, keepdim=True)                           # gate weights come from s alone
+        out = self.shared(flat)
+        for e, expert in enumerate(self.experts):
+            rows, slot = (idx == e).nonzero(as_tuple=True)
+            if len(rows):
+                out = out.index_add(0, rows, w[rows, slot, None] * expert(flat[rows]))
+        self.load = torch.bincount(idx.flatten(), minlength=len(self.experts)).float()
+        return out.view_as(x)
+
+    @torch.no_grad()
+    def update_bias(self, gamma=0.01):
+        self.bias += gamma * torch.sign(self.load.mean() - self.load)
+
+
+class MLA(nn.Module):
+    &quot;&quot;&quot;DeepSeek multi-head latent attention: cache a small latent c instead of full K and V.&quot;&quot;&quot;
+
+    def __init__(self, d, n_heads, d_latent):
+        super().__init__()
+        self.h, self.hd = n_heads, d // n_heads
+        self.q = nn.Linear(d, d, bias=False)
+        self.down = nn.Linear(d, d_latent, bias=False)            # c = W_down x   (this is cached)
+        self.up_k = nn.Linear(d_latent, d, bias=False)
+        self.up_v = nn.Linear(d_latent, d, bias=False)
+        self.o = nn.Linear(d, d, bias=False)
+
+    def forward(self, x):
+        B, T, D = x.shape
+        c = self.down(x)
+        q = self.q(x).view(B, T, self.h, self.hd).transpose(1, 2)
+        k = self.up_k(c).view(B, T, self.h, self.hd).transpose(1, 2)
+        v = self.up_v(c).view(B, T, self.h, self.hd).transpose(1, 2)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        return self.o(y.transpose(1, 2).reshape(B, T, D)), c
+
+
+d = 64
+x = torch.randn(2, 16, d)
+
+# 1. GQA cache: decoding token by token equals the full causal pass.
+att = GQA(d, n_heads=8, n_kv=2, qk_norm=True)
+full = att(x)
+cache, steps = {}, []
+for t in range(16):
+    steps.append(att(x[:, t:t + 1], cache=cache, start=t))
+print(f&quot;[gqa] cached decode == full pass: {torch.allclose(full, torch.cat(steps, 1), atol=1e-5)}&quot;
+      f&quot;  cache k {tuple(cache[&#x27;k&#x27;].shape)}&quot;)
+
+# 2. QK-norm bounds the attention logits when weights grow.
+for qk in (False, True):
+    a = GQA(d, 8, 2, qk_norm=qk)
+    with torch.no_grad():
+        a.q.weight.mul_(20); a.k.weight.mul_(20)
+        B, T = x.shape[:2]
+        q = a.qn(a.q(x).view(B, T, 8, 8)); k = a.kn(a.k(x).view(B, T, 2, 8))
+        logit = (q[:, :, :2] * k).sum(-1).abs().max() / 8**0.5
+    print(f&quot;[qk-norm] {&#x27;on &#x27; if qk else &#x27;off&#x27;}  max |logit| with 20x weights: {logit:.1f}&quot;)
+
+# 3. RoPE: the score depends only on the distance between positions.
+qv, kv = torch.randn(1, 1, 8), torch.randn(1, 1, 8)
+s = lambda i, j: (rope(qv, torch.tensor([i])) * rope(kv, torch.tensor([j]))).sum().item()
+print(f&quot;[rope] score(5,2)={s(5, 2):.4f}  score(105,102)={s(105, 102):.4f}&quot;)
+
+# 4. MLA: latent cache is far smaller than K+V; the K up-projection can be absorbed into the query.
+mla = MLA(d, n_heads=8, d_latent=16)
+y, c = mla(x)
+print(f&quot;[mla] cache per token: latent {c.shape[-1]} floats vs K+V {2 * d} floats&quot;)
+q = mla.q(x[:, -1:])
+Wk = mla.up_k.weight                                              # (d, d_latent)
+score_naive = q @ mla.up_k(c).transpose(1, 2)
+score_absorbed = (q @ Wk) @ c.transpose(1, 2)                     # never materialise K
+print(f&quot;[mla] absorbed scores == naive scores: {torch.allclose(score_naive, score_absorbed, atol=1e-4)}&quot;)
+
+# 5. Aux-loss-free balancing: a skewed router evens out as the bias updates.
+moe = MoE(d, 32, n_exp=8, top_k=2)
+with torch.no_grad():
+    moe.router.weight[0] += 0.5 * x.reshape(-1, d).mean(0) / x.reshape(-1, d).mean(0).norm()
+    moe.router.weight[1] += 0.5 * x.reshape(-1, d).mean(0) / x.reshape(-1, d).mean(0).norm()
+for it in range(301):
+    moe(x)
+    if it in (0, 100, 300):
+        print(f&quot;[moe] iter {it:3d}  tokens per expert {moe.load.int().tolist()}&quot;)
+    moe.update_bias(0.01)
+
+# 6. Llama 4 interleaves NoPE layers (no position encoding) between RoPE layers.
+pattern = [&quot;NoPE&quot; if (i + 1) % 4 == 0 else &quot;RoPE&quot; for i in range(8)]
+print(f&quot;[llama4] layer pattern: {&#x27; &#x27;.join(pattern)}&quot;)
+
+# 7. KV cache per token (bf16) at published configurations.
+configs = {&quot;Llama-3-70B   GQA 64q/8kv  hd128 L80&quot;: 2 * 8 * 128 * 80,
+           &quot;Qwen3-32B     GQA 64q/8kv  hd128 L64&quot;: 2 * 8 * 128 * 64,
+           &quot;DeepSeek-V3   MLA 512+64       L61&quot;: (512 + 64) * 61,
+           &quot;MHA baseline  64 heads hd128   L80&quot;: 2 * 64 * 128 * 80}
+for k, n in configs.items():
+    print(f&quot;[kv] {k}: {n * 2 / 1024:7.1f} KiB/token&quot;)</code></pre>
+<pre class="code output"><code class="output">[gqa] cached decode == full pass: True  cache k (2, 2, 16, 8)
+[qk-norm] off  max |logit| with 20x weights: 629.8
+[qk-norm] on   max |logit| with 20x weights: 2.1
+[rope] score(5,2)=-2.7723  score(105,102)=-2.7723
+[mla] cache per token: latent 16 floats vs K+V 128 floats
+[mla] absorbed scores == naive scores: True
+[moe] iter   0  tokens per expert [15, 17, 4, 3, 7, 3, 8, 7]
+[moe] iter 100  tokens per expert [8, 9, 7, 9, 6, 10, 8, 7]
+[moe] iter 300  tokens per expert [8, 9, 7, 9, 6, 10, 8, 7]
+[llama4] layer pattern: RoPE RoPE RoPE NoPE RoPE RoPE RoPE NoPE
+[kv] Llama-3-70B   GQA 64q/8kv  hd128 L80:   320.0 KiB/token
+[kv] Qwen3-32B     GQA 64q/8kv  hd128 L64:   256.0 KiB/token
+[kv] DeepSeek-V3   MLA 512+64       L61:    68.6 KiB/token
+[kv] MHA baseline  64 heads hd128   L80:  2560.0 KiB/token</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>The cached decode test is the most important test for any LLM you write from scratch: token-by-token generation must equal the full causal pass.</p></li>
+<li><p>KV cache per token: MHA 2.5 MiB, GQA (Llama-3-70B) 320 KiB, MLA (DeepSeek-V3) 69 KiB. Cache size sets how many users and how much context fit on a GPU.</p></li>
+</ul>
+</div>

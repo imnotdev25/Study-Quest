@@ -1,0 +1,86 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> Generating one token runs the whole network: embed, then per layer RMSNorm <span class="math inline">\(\to\)</span> Q, K, V <span class="math inline">\(\to\)</span> causal attention <span class="math inline">\(\to\)</span> MLP, then a final norm, the logits <span class="math inline">\(z=W_{\text{out}}h\)</span>, and a sample from <span class="math inline">\(\operatorname{softmax}(z/T)\)</span>. The output token is appended and the loop repeats. That loop is why LLM inference is <em>autoregressive</em>: token <span class="math inline">\(t+1\)</span> cannot start before token <span class="math inline">\(t\)</span> exists.</p>
+</div>
+<h2 class="unnumbered" id="prefill-and-decode-are-different-workloads">Prefill and decode are different workloads</h2>
+<ul>
+<li><p><strong>Prefill</strong> processes the whole prompt in one pass. Thousands of tokens share every weight read: big matrix–matrix products, <em>compute-bound</em>. It sets the time to first token.</p></li>
+<li><p><strong>Decode</strong> produces one token per sequence per step. Each step reads every weight to do a matrix–vector product per sequence: <em>memory-bound</em>. It sets the time per output token.</p></li>
+</ul>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: What the KV cache saves</div>
+<p><strong>Step 1.</strong> At step <span class="math inline">\(t\)</span>, attention for the new token needs <span class="math inline">\(k_s,v_s\)</span> for every <span class="math inline">\(s\le t\)</span>. They depend only on tokens <span class="math inline">\(\le s\)</span>, so they never change once computed.</p>
+<p><strong>Step 2.</strong> Without a cache, step <span class="math inline">\(t\)</span> recomputes all <span class="math inline">\(t\)</span> positions: total work <span class="math inline">\(\sum_{t=1}^n t=O(n^2)\)</span> token-passes through the network.</p>
+<p><strong>Step 3.</strong> With a cache, step <span class="math inline">\(t\)</span> runs the network on one token and reads <span class="math inline">\(t\)</span> cached K/V vectors: <span class="math inline">\(O(n)\)</span> network passes, plus attention reads that grow linearly.</p>
+<p><strong>Step 4.</strong> The cost is memory: <span class="math inline">\(\text{KV bytes per token}=2\cdot L\cdot n_{kv}\cdot d_h\cdot\text{bytes}\)</span>. For Llama-3.1-8B (<span class="math inline">\(L=32,n_{kv}=8,d_h=128\)</span>, bf16): <span class="math inline">\(2\cdot32\cdot8\cdot128\cdot2=131{,}072\)</span> B <span class="math inline">\(=128\)</span> KiB per token, so 1 GiB per 8k-token request.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Decode is memory-bound: the roofline</div>
+<p><strong>Step 1.</strong> A decode step at batch <span class="math inline">\(B\)</span> does about <span class="math inline">\(2PB\)</span> FLOPs (one multiply-add per parameter per sequence) and reads <span class="math inline">\(2P\)</span> bytes of bf16 weights.</p>
+<p><strong>Step 2.</strong> Arithmetic intensity <span class="math inline">\(I=2PB/2P=B\)</span> FLOP/byte.</p>
+<p><strong>Step 3.</strong> H100: <span class="math inline">\(989\)</span> TFLOP/s over <span class="math inline">\(3.35\)</span> TB/s gives a ridge at <span class="math inline">\(\approx295\)</span> FLOP/byte. Below it, the step time is <span class="math inline">\(2P/\text{bandwidth}\)</span> whatever <span class="math inline">\(B\)</span> is: <span class="math inline">\(16\,\text{GB}/3.35\,\text{TB/s}\approx4.8\)</span> ms for an 8B model.</p>
+<p><strong>Step 4.</strong> So batching is nearly free until <span class="math inline">\(B\approx300\)</span>: throughput grows linearly with batch while latency stays flat. Every engine trick in this part exists to keep <span class="math inline">\(B\)</span> large without running out of KV memory.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference ch. &#x27;Prefill, Decode, KV Cache and Memory&#x27;: memory math, the roofline, and timing a cache.&quot;&quot;&quot;
+import time
+
+import torch
+
+from tiny_gpt import Cfg, TinyGPT, generate_cached, generate_naive
+
+GiB = 2**30
+# name: (params, layers, kv_heads, head_dim) ; MLA stores (latent + rope) per layer instead of 2*kv*hd
+MODELS = {&quot;Llama-3.1-8B&quot;: (8.0e9, 32, 8, 128), &quot;Qwen3-32B&quot;: (32.8e9, 64, 8, 128),
+          &quot;Llama-3.1-70B&quot;: (70.6e9, 80, 8, 128), &quot;DeepSeek-V3 (MLA)&quot;: (671e9, 61, None, 512 + 64)}
+
+
+def kv_bytes_per_token(layers, kv, hd, bytes_=2):
+    return layers * (hd if kv is None else 2 * kv * hd) * bytes_
+
+
+print(&quot;[mem] model               weights bf16   KV/token   KV tokens on 1xH100 (80 GB, 90%, 2 GiB act.)&quot;)
+for name, (P, L, kv, hd) in MODELS.items():
+    w = P * 2
+    per = kv_bytes_per_token(L, kv, hd)
+    free = 0.9 * 80e9 - w - 2 * GiB
+    fit = f&quot;{int(free / per):,} tokens = {int(free / per / 4096)} x 4k requests&quot; if free &gt; 0 else &quot;weights do not fit&quot;
+    print(f&quot;[mem] {name:19s} {w / GiB:8.1f} GiB  {per / 1024:6.0f} KiB   {fit}&quot;)
+
+# Roofline: H100 SXM, dense bf16 ~989 TFLOP/s, HBM3 ~3.35 TB/s -&gt; ridge at ~295 FLOP/byte.
+peak, bw = 989e12, 3.35e12
+print(f&quot;[roof] ridge point {peak / bw:.0f} FLOP/byte&quot;)
+print(&quot;[roof] decode batch   FLOP/byte (weights only)   bound      ideal step, 8B bf16&quot;)
+P = 8.0e9
+for B in (1, 8, 64, 256, 1024):
+    intensity = 2 * P * B / (2 * P)                      # 2PB FLOPs over 2P bytes of weights
+    t = max(2 * P * B / peak, 2 * P / bw)
+    print(f&quot;[roof] {B:5d}        {intensity:8.0f}                  {&#x27;compute&#x27; if intensity &gt; peak / bw else &#x27;memory &#x27;:8s}  &quot;
+          f&quot;{t * 1e3:6.2f} ms -&gt; {B / t:9,.0f} tok/s&quot;)
+
+# Prefill vs decode on a tiny CPU model, and what the KV cache buys.
+m = TinyGPT(Cfg(vocab=256, d=256, n_layers=4, n_heads=8, n_kv=2, dtype=torch.float32))
+prompt = list(range(200))
+t0 = time.perf_counter(); m.full(prompt); t_pre = time.perf_counter() - t0
+t0 = time.perf_counter(); a = generate_cached(m, prompt, 64); t_c = time.perf_counter() - t0
+t0 = time.perf_counter(); b = generate_naive(m, prompt, 64); t_n = time.perf_counter() - t0
+print(f&quot;[time] prefill 200 tokens in one pass: {t_pre * 1e3:.1f} ms ({t_pre / 200 * 1e3:.2f} ms/token)&quot;)
+print(f&quot;[time] decode 64 tokens with KV cache: {t_c * 1e3:.0f} ms   without cache: {t_n * 1e3:.0f} ms   &quot;
+      f&quot;same tokens: {a == b}&quot;)</code></pre>
+<pre class="code output"><code class="output">[mem] model               weights bf16   KV/token   KV tokens on 1xH100 (80 GB, 90%, 2 GiB act.)
+[mem] Llama-3.1-8B            14.9 GiB     128 KiB   410,862 tokens = 100 x 4k requests
+[mem] Qwen3-32B               61.1 GiB     256 KiB   16,222 tokens = 3 x 4k requests
+[mem] Llama-3.1-70B          131.5 GiB     320 KiB   weights do not fit
+[mem] DeepSeek-V3 (MLA)     1249.8 GiB      69 KiB   weights do not fit
+[roof] ridge point 295 FLOP/byte
+[roof] decode batch   FLOP/byte (weights only)   bound      ideal step, 8B bf16
+[roof]     1               1                  memory      4.78 ms -&gt;       209 tok/s
+[roof]     8               8                  memory      4.78 ms -&gt;     1,675 tok/s
+[roof]    64              64                  memory      4.78 ms -&gt;    13,400 tok/s
+[roof]   256             256                  memory      4.78 ms -&gt;    53,600 tok/s
+[roof]  1024            1024                  compute    16.57 ms -&gt;    61,812 tok/s
+[time] prefill 200 tokens in one pass: 34.2 ms (0.17 ms/token)
+[time] decode 64 tokens with KV cache: 65 ms   without cache: 361 ms   same tokens: True</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>On the tiny CPU model, prefill costs 0.04 ms per token, and cached decode is several times faster than recomputing; both produce the same tokens.</p></li>
+<li><p>Capacity is a subtraction: GPU memory <span class="math inline">\(\times\)</span> utilisation <span class="math inline">\(-\)</span> weights <span class="math inline">\(-\)</span> activations, divided by KV bytes per token. A 32B model in bf16 leaves room for only about three 4k requests on one H100.</p></li>
+</ul>
+</div>

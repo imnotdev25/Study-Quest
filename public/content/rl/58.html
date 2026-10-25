@@ -1,0 +1,247 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: studying only the past papers</div>
+<p>A student practises only on past exam papers. Their score on those papers keeps climbing, while their real understanding peaks and then slowly falls as they memorize patterns instead of ideas. Training reward is the past paper. Held-out quality is the real exam.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/498325f3ea87.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Illustrative. Save the checkpoint at the held-out peak (3), not the training peak (6).</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why does best-of-<span class="math inline">\(N\)</span> produce positive reward-model optimism?</p></li>
+<li><p>Why should the model used for selection differ from the evaluator?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="optimizing-a-proxy-changes-its-error-distribution">2. Optimizing a proxy changes its error distribution</h3>
+<p>Let <span class="math inline">\(U(y)\)</span> be the behavior we actually want and <span class="math inline">\(R(y)\)</span> the available reward:</p>
+<p><span class="math display">\[R(y)=U(y)+e(y)\]</span></p>
+<p>Ordinary evaluation samples outputs and measures their errors. RL does something stronger:</p>
+<p><span class="math display">\[\theta_{k+1}
+=
+\theta_k
++
+\alpha\nabla_\theta
+\mathbb E_{y\sim\pi_\theta}[R(y)]\]</span></p>
+<p>The policy actively searches for outputs with high <span class="math inline">\(R\)</span>. If some behaviors receive positive reward-model error <span class="math inline">\(e(y)\)</span>, optimization can concentrate probability on them.</p>
+<p>Consequently, training may show:</p>
+<p><span class="math display">\[R(\pi_{\theta_k})\uparrow
+\qquad\text{while}\qquad
+U(\pi_{\theta_k})\downarrow\]</span></p>
+<p>This is reward overoptimization. It resembles repeatedly studying the exact answer key: answer-key performance keeps improving, while general understanding may peak and then decline.</p>
+<p>Practical responses include:</p>
+<ul>
+<li><p>checkpoint using an independent validation signal;</p></li>
+<li><p>stop when proxy and held-out evaluation diverge;</p></li>
+<li><p>constrain movement using KL regularization;</p></li>
+<li><p>diversify rewards and adversarially test high-reward outputs;</p></li>
+<li><p>inspect reward components rather than only their sum.</p></li>
+</ul>
+<p>KL regularization can reduce search pressure, but it cannot make an incorrect reward correct.</p>
+<p>DPO can similarly overfit fixed preferences, although it does not perform online reward search. Use held-out preference data and independent capability and safety evaluations.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>policy parameter: <span style="background-color: codeinlinebg"><code> [1]</code></span></p></li>
+<li><p>behavior, proxy reward and true utility: scalar</p></li>
+<li><p>training histories: <span style="background-color: codeinlinebg"><code> [steps]</code></span></p></li>
+<li><p>real LLM rollout rewards: usually <span style="background-color: codeinlinebg"><code> [B]</code></span> or <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+</ul>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the shape of overoptimization</div>
+<p>Gao et al. (2022) fit true (gold) reward as a function of <span class="math inline">\(d=\sqrt{\mathrm{KL}(\pi\|\pi_{\text{ref}})}\)</span>: best-of-<span class="math inline">\(N\)</span>: <span class="math inline">\(R(d)=d(\alpha-\beta d)\)</span>. RL: <span class="math inline">\(R(d)=d(\alpha-\beta\log d)\)</span>. Both rise, peak and fall, while the proxy keeps rising. <strong>Selection is also optimization:</strong> choosing the best of 20 checkpoints on one held-out set overstates the winner (Topic 102). Use one set to <em>select</em> and a fresh set to <em>confirm</em>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Save checkpoints by independent quality, not training reward.</p></li>
+<li><p>Proxy up with held-out flat or down is a failure signal.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: choose a checkpoint</div>
+<p>Proxy <span class="math inline">\((0.60,0.75,0.85)\)</span>, held-out <span class="math inline">\((0.55,0.62,0.58)\)</span>. Pick checkpoint 2 by held-out. Then confirm on a fresh set: say <span class="math inline">\(0.60\)</span>, a bit lower, which is the winner’s curse at work.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Early stopping on training reward.</p></li>
+<li><p>A held-out “judge” that’s the same reward model.</p></li>
+<li><p>Reporting the selection-set score as final.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-optimize-past-the-true-optimum">3. PyTorch exercise — optimize past the true optimum</h3>
+<p>The policy controls a behavior between <span style="background-color: codeinlinebg"><code> 0</code></span> and <span style="background-color: codeinlinebg"><code> 6</code></span>. True utility is best at behavior <span style="background-color: codeinlinebg"><code> 2</code></span>, but the proxy incorrectly rewards an exploitable cubic feature.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+raw_parameter = torch.nn.Parameter(
+    torch.tensor([-2.0])
+)
+
+optimizer = torch.optim.Adam(
+    [raw_parameter],
+    lr=0.15,
+)
+
+def calculate_scores(raw_parameter):
+    # TODO 1: Map the unconstrained parameter
+    # into behavior range [0, 6].
+    behavior = ...
+
+    true_utility = -(
+        behavior - 2.0
+    ).square()
+
+    # Misspecified reward gives an additional
+    # bonus for an exploitable feature.
+    proxy_reward = (
+        true_utility
+        + 0.12 * behavior.pow(3)
+    )
+
+    return behavior, true_utility, proxy_reward
+
+history = []
+
+best_true_utility = float(&quot;-inf&quot;)
+best_true_step = None
+best_true_behavior = None
+
+for step in range(81):
+    (
+        behavior,
+        true_utility,
+        proxy_reward,
+    ) = calculate_scores(raw_parameter)
+
+    # TODO 2: Convert reward maximization into
+    # a loss for a minimizing optimizer.
+    loss = ...
+
+    # TODO 3: Perform one stable update.
+    ...
+
+    # TODO 4: Retain the checkpoint with
+    # the highest true utility.
+    if ...:
+        ...
+
+    if step % 10 == 0:
+        history.append({
+            &quot;step&quot;: step,
+            &quot;behavior&quot;: behavior.item(),
+            &quot;proxy&quot;: proxy_reward.item(),
+            &quot;true&quot;: true_utility.item(),
+        })
+
+for row in history:
+    print(row)
+
+final_behavior, final_true, final_proxy = (
+    calculate_scores(raw_parameter)
+)
+
+# TODO 5: Compare the final model with the
+# best independently selected checkpoint.
+print(&quot;\nBest true checkpoint:&quot;)
+print({
+    &quot;step&quot;: best_true_step,
+    &quot;behavior&quot;: best_true_behavior,
+    &quot;true&quot;: best_true_utility,
+})
+
+print(&quot;\nFinal proxy-optimized policy:&quot;)
+print({
+    &quot;behavior&quot;: final_behavior.item(),
+    &quot;proxy&quot;: final_proxy.item(),
+    &quot;true&quot;: final_true.item(),
+})</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Around which behavior is true utility maximized?</p></li>
+<li><p>Will proxy optimization stop there?</p></li>
+<li><p>Can proxy reward rise while true utility falls?</p></li>
+<li><p>Which checkpoint should independent evaluation select?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> 6.0 * torch.sigmoid(raw_parameter)</code></span>.</p></li>
+<li><p>Maximizing reward means minimizing its negative.</p></li>
+<li><p>Call <span style="background-color: codeinlinebg"><code> zero_grad()</code></span>, <span style="background-color: codeinlinebg"><code> backward()</code></span>, gradient clipping and <span style="background-color: codeinlinebg"><code> step()</code></span>.</p></li>
+<li><p>Compare Python scalars using <span style="background-color: codeinlinebg"><code> .item()</code></span>.</p></li>
+<li><p>Clone the behavior value when retaining a checkpoint.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Use <span style="background-color: codeinlinebg"><code> loss = proxy_reward</code></span>. Gradient descent now minimizes reward—the classic policy-gradient sign error.</p>
+<p>Remove the sigmoid constraint. Because the exploitable cubic term eventually dominates, optimization may run toward enormous values or numerical overflow.</p>
+<p>Add a reference penalty:</p>
+<pre class="code python"><code class="language-python">reference_behavior = 1.0
+kl_like_penalty = 0.5 * (
+    behavior - reference_behavior
+).square()
+
+regularized_reward = (
+    proxy_reward
+    - beta * kl_like_penalty
+)</code></pre>
+<p>Try several <span style="background-color: codeinlinebg"><code> beta</code></span> values. Stronger regularization slows drift, but an excessive value can also prevent genuine improvement.</p>
+<p>Finally, select the checkpoint using proxy reward. It will favor the most exploited model, demonstrating why the training signal cannot serve as an independent stopping criterion.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can reward-model test accuracy remain high while RL exploits it?</p></li>
+<li><p>Does a monotonically increasing training reward imply stable learning?</p></li>
+<li><p>What pattern indicates reward overoptimization?</p></li>
+<li><p>Why doesn’t KL regularization completely solve reward hacking?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Behavior mapping:</p>
+<pre class="code python"><code class="language-python">behavior = (
+    6.0 * torch.sigmoid(
+        raw_parameter
+    )
+)</code></pre>
+<p>Loss sign:</p>
+<pre class="code python"><code class="language-python">loss = -proxy_reward</code></pre>
+<p>Optimizer update:</p>
+<pre class="code python"><code class="language-python">optimizer.zero_grad()
+loss.backward()
+
+torch.nn.utils.clip_grad_norm_(
+    [raw_parameter],
+    max_norm=1.0,
+)
+
+optimizer.step()</code></pre>
+<p>Checkpoint selection:</p>
+<pre class="code python"><code class="language-python">if true_utility.item() &gt; best_true_utility:
+    best_true_utility = (
+        true_utility.item()
+    )
+
+    best_true_step = step
+
+    best_true_behavior = (
+        behavior.detach().item()
+    )</code></pre>
+<p>The true utility is:</p>
+<p><span class="math display">\[U(x)=-(x-2)^2\]</span></p>
+<p>so its maximum occurs at:</p>
+<p><span class="math display">\[x=2\]</span></p>
+<p>The proxy is:</p>
+<p><span class="math display">\[R(x)=-(x-2)^2+0.12x^3\]</span></p>
+<p>Its derivative is:</p>
+<p><span class="math display">\[R&#39;(x)
+=
+-2(x-2)+0.36x^2\]</span></p>
+<p>This derivative is positive throughout the allowed interval, so proxy optimization keeps pushing behavior toward <span style="background-color: codeinlinebg"><code> 6</code></span>. After passing <span style="background-color: codeinlinebg"><code> 2</code></span>, true utility declines even though proxy reward continues improving.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Aggregate reward-model accuracy measures typical fixed-distribution examples; optimization searches specifically for rare, systematically over-scored outputs.</p></li>
+<li><p>No. It may indicate real improvement, reward-scale drift, evaluator exploitation or a masking and normalization bug.</p></li>
+<li><p>Training reward continues rising while independent evaluation peaks, plateaus or declines; reward-model disagreement and unusual high-reward behaviors may also increase.</p></li>
+<li><p>KL limits distance from the reference, not error in the reward. Within the permitted region, the policy can still exploit misspecification.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Selection favors candidates combining genuine quality with unusually positive reward noise; the selected noise is therefore no longer zero-mean.</p></li>
+<li><p>Reusing the selection model preserves its optimistic errors. An independent evaluator supplies a less selection-biased estimate.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> save checkpoints by independent quality, not only training reward. When proxy reward rises faster than held-out performance—or moves in the opposite direction—treat it as a training failure signal, not progress.</p>

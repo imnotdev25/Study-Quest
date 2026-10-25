@@ -1,0 +1,319 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: manager and worker reviews</div>
+<p>A manager picks which project the team works on. A worker decides how to do each task. Judging the manager once per project and the worker once per task is fair. Judging the manager <em>every hour</em> the project runs would mean long projects count far more in the manager’s review, just for being long.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does positive option advantage discourage termination?</p></li>
+<li><p>How does deliberation cost change the termination threshold?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="two-policies-made-two-different-decisions">2. Two policies made two different decisions</h3>
+<p>Think of a manager choosing “research the topic” and a worker choosing each search, page and extraction step.</p>
+<p>The manager selects an option once:</p>
+<p><span class="math display">\[o_t\sim\mu_\theta(o\mid s_t)\]</span></p>
+<p>After <span class="math inline">\(k\)</span> primitive steps, its advantage is:</p>
+<p><span class="math display">\[\hat A_t^{H}
+=
+\left(
+\sum_{j=0}^{k-1}\gamma^j r_{t+j}
++
+\gamma^k V_H(s_{t+k})
+\right)
+-
+V_H(s_t)\]</span></p>
+<p>Its loss contains one log-probability:</p>
+<p><span class="math display">\[L_H
+=
+-\log\mu_\theta(o_t\mid s_t)
+\hat A_t^{H}\]</span></p>
+<p>The worker chooses each internal action:</p>
+<p><span class="math display">\[a_{t+j}\sim\pi_\phi(a\mid s_{t+j},o_t)\]</span></p>
+<p>Each action receives its own option-conditioned advantage:</p>
+<p><span class="math display">\[\hat A_{t+j}^{L}
+=
+G_{t+j}-V_L(s_{t+j},o_t)\]</span></p>
+<p><span class="math display">\[L_L
+=
+-\frac{
+\sum_j M_j
+\log\pi_\phi(a_{t+j}\mid s_{t+j},o_t)
+\hat A_{t+j}^{L}
+}{
+\sum_j M_j
+}\]</span></p>
+<p>Repeating the manager’s log-probability at every worker step accidentally gives long options greater weight. Duration should enter through <span class="math inline">\(\gamma^k\)</span>, latency costs or an explicit time-based objective—not through duplicated log-probabilities.</p>
+<p>Detach both advantages in actor losses. Otherwise, actors can change the critic computation used to grade them.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>manager logits: <span style="background-color: codeinlinebg"><code> [B, O]</code></span></p></li>
+<li><p>selected options and manager advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>worker logits: <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span></p></li>
+<li><p>worker actions, advantages and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>both reduced losses: scalar</p></li>
+</ul>
+<p>DPO can rank complete hierarchical traces, but it learns from fixed comparisons. Online hierarchical RL separately explores which option to select and how to execute it.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: two levels, two losses</div>
+<p>Manager (policy over options): <span class="math inline">\(\mathcal L_{\text{mgr}}=-\sum_{\text{option starts }j}\log\mu(o_j|s_j)\,A^{\Omega}_j\)</span>, one term per <em>selection</em>. Worker (intra-option policy): <span class="math inline">\(\mathcal L_{\text{wkr}}=-\sum_t\log\pi_{o_t}(a_t|s_t)\,A^U_t\)</span>, one term per primitive step. <strong>The bug:</strong> writing <span class="math inline">\(\log\mu(o|s)\)</span> at every primitive step multiplies each manager decision’s gradient by its duration <span class="math inline">\(k\)</span>. Long options get more say for no good reason.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Credit each decision once, at the level where it was made.</p></li>
+<li><p>Use a manager mask that is 1 only at option starts.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: duration-weighted gradients</div>
+<p>Two options, both with <span class="math inline">\(A^\Omega=+1\)</span>: one lasted 1 step, the other 9. Correct manager gradient weight: <span class="math inline">\(1:1\)</span>. With the per-step bug: <span class="math inline">\(1:9\)</span>, so the long option is reinforced 9<span class="math inline">\(\times\)</span> more.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>One mask shared by manager and worker.</p></li>
+<li><p>Computing <span class="math inline">\(A^\Omega\)</span> from primitive-step values.</p></li>
+<li><p>Bootstrapping the manager with <span class="math inline">\(\gamma\)</span> instead of <span class="math inline">\(\gamma^k\)</span>.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-expose-duration-weighted-manager-gradients">3. PyTorch exercise — expose duration-weighted manager gradients</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.set_default_dtype(torch.float64)
+
+# Three option executions, two choices at each level.
+manager_logits = torch.nn.Parameter(
+    torch.zeros(3, 2)
+)
+
+worker_logits = torch.nn.Parameter(
+    torch.zeros(3, 4, 2)
+)
+
+selected_options = torch.tensor([
+    0, 1, 0
+])
+
+# Padded actions are arbitrary.
+selected_actions = torch.tensor([
+    [0, 1, 0, 0],  # duration 2
+    [1, 0, 1, 0],  # duration 4
+    [0, 0, 0, 0],  # duration 1
+])
+
+worker_mask = torch.tensor([
+    [True,  True,  False, False],
+    [True,  True,  True,  True ],
+    [True,  False, False, False],
+])
+
+manager_advantages = torch.tensor([
+     1.0,
+    -1.0,
+     0.5,
+])
+
+# Extreme padding values must not train.
+worker_advantages = torch.tensor([
+    [ 1.0, -0.5, 99.0, 99.0],
+    [-1.0,  0.5,  1.0, -0.5],
+    [ 0.2, 99.0, 99.0, 99.0],
+])
+
+mask_float = worker_mask.to(
+    worker_logits.dtype
+)
+
+# TODO 1: Selected log-probabilities at both levels.
+manager_log_probs = ...
+worker_log_probs = ...
+
+# TODO 2: Replace padded advantages with zero,
+# then construct separate actor losses.
+safe_worker_advantages = ...
+
+manager_loss = ...
+worker_loss = ...
+
+# TODO 3: Correct gradients.
+correct_manager_gradient = ...
+correct_worker_gradient = ...
+
+# TODO 4: Bug—repeat each manager decision once
+# per internal worker step.
+repeated_manager_log_probs = ...
+
+repeated_manager_loss = ...
+
+repeated_manager_gradient = ...
+
+# TODO 5: Diagnostics.
+durations = ...
+correct_manager_norms = ...
+repeated_manager_norms = ...
+relative_manager_weights = ...
+
+padding_gradient_max = ...
+
+rows = torch.arange(
+    selected_options.shape[0]
+)
+
+chosen_manager_gradients = (
+    correct_manager_gradient[
+        rows, selected_options
+    ]
+)
+
+print(&quot;Durations:&quot;, durations)
+
+print(
+    &quot;Chosen manager-logit gradients:&quot;,
+    chosen_manager_gradients,
+)
+
+print(
+    &quot;Correct manager gradient norms:&quot;,
+    correct_manager_norms,
+)
+
+print(
+    &quot;Repeated manager gradient norms:&quot;,
+    repeated_manager_norms,
+)
+
+print(
+    &quot;Repeated/correct relative weights:&quot;,
+    relative_manager_weights,
+)
+
+print(
+    &quot;Maximum worker padding gradient:&quot;,
+    padding_gradient_max.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should the correct manager gradient depend directly on option duration?</p></li>
+<li><p>Which execution receives the greatest relative weight under the repeated-manager bug?</p></li>
+<li><p>What sign should the chosen-logit gradient have for positive advantage?</p></li>
+<li><p>What gradient should padded worker logits receive?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> Categorical(logits=...).log_prob(...)</code></span>.</p></li>
+<li><p>Average manager loss over option selections.</p></li>
+<li><p>Average worker loss over valid primitive decisions.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span> to zero padded advantages.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.autograd.grad</code></span>.</p></li>
+<li><p>The buggy loss broadcasts <span style="background-color: codeinlinebg"><code> [B]</code></span> manager log-probabilities to <span style="background-color: codeinlinebg"><code> [B, T]</code></span>.</p></li>
+<li><p>Compare gradient norms along the final dimension.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Broadcast <span style="background-color: codeinlinebg"><code> manager_advantages[:, None]</code></span> into the worker loss. Every internal action then receives credit for whether the manager chose a good routine, not whether that action executed it well.</p>
+<p>Remove <span style="background-color: codeinlinebg"><code> .detach()</code></span> from advantages produced by trainable critics. Check whether actor losses now alter critic parameters.</p>
+<p>Compare global worker-step normalization with normalizing each option separately and then averaging. The first weights primitive decisions equally; the second weights option executions equally. Neither is universally correct—document the intended objective.</p>
+<p>Finally, monitor manager and worker gradient norms separately. One loss can otherwise dominate shared network parameters.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What separate questions do manager and worker advantages answer?</p></li>
+<li><p>Why is repeating a manager log-probability over internal steps incorrect?</p></li>
+<li><p>When might a deterministic worker need no policy-gradient loss?</p></li>
+<li><p>Which diagnostics reveal confused hierarchical credit?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Selected log-probabilities:</p>
+<pre class="code python"><code class="language-python">manager_log_probs = Categorical(
+    logits=manager_logits
+).log_prob(selected_options)
+
+worker_log_probs = Categorical(
+    logits=worker_logits
+).log_prob(selected_actions)</code></pre>
+<p>Separate losses:</p>
+<pre class="code python"><code class="language-python">safe_worker_advantages = torch.where(
+    worker_mask,
+    worker_advantages,
+    torch.zeros_like(worker_advantages),
+)
+
+manager_loss = -(
+    manager_log_probs
+    * manager_advantages.detach()
+).mean()
+
+worker_loss = -(
+    worker_log_probs
+    * safe_worker_advantages.detach()
+    * mask_float
+).sum() / mask_float.sum()</code></pre>
+<p>Correct gradients:</p>
+<pre class="code python"><code class="language-python">correct_manager_gradient = (
+    torch.autograd.grad(
+        manager_loss,
+        manager_logits,
+    )[0]
+)
+
+correct_worker_gradient = (
+    torch.autograd.grad(
+        worker_loss,
+        worker_logits,
+    )[0]
+)</code></pre>
+<p>Repeated-manager bug:</p>
+<pre class="code python"><code class="language-python">repeated_manager_log_probs = Categorical(
+    logits=manager_logits
+).log_prob(selected_options)
+
+repeated_manager_loss = -(
+    repeated_manager_log_probs[:, None]
+    * manager_advantages.detach()[:, None]
+    * mask_float
+).sum() / mask_float.sum()
+
+repeated_manager_gradient = (
+    torch.autograd.grad(
+        repeated_manager_loss,
+        manager_logits,
+    )[0]
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">durations = worker_mask.sum(dim=1)
+
+correct_manager_norms = (
+    correct_manager_gradient.norm(dim=-1)
+)
+
+repeated_manager_norms = (
+    repeated_manager_gradient.norm(dim=-1)
+)
+
+relative_manager_weights = (
+    repeated_manager_norms
+    / correct_manager_norms.clamp_min(1e-12)
+)
+
+padding_gradient_max = (
+    correct_worker_gradient[~worker_mask]
+    .abs()
+    .max()
+)</code></pre>
+<p>With three manager decisions and seven valid worker steps, the repeated-loss relative weights are:</p>
+<p><span class="math display">\[\frac{3k_i}{7}
+=
+[0.857,\;1.714,\;0.429]\]</span></p>
+<p>Thus the four-step option is overweighted, while the one-step option is underweighted.</p>
+<p>At uniform logits, the chosen manager-logit gradients are approximately:</p>
+<p><span class="math display">\[[-0.167,\;0.167,\;-0.083]\]</span></p>
+<p>Gradient descent subtracts these values. Positive advantages therefore raise selected logits; negative advantages lower them. Padded worker gradients are exactly zero.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The manager asks whether the selected option was better than alternative options. The worker asks whether each primitive action was good within that option.</p></li>
+<li><p>The manager sampled the option once; repetition changes its weight according to option duration.</p></li>
+<li><p>When its behavior is fixed, scripted or differentiably optimized through another objective rather than sampled.</p></li>
+<li><p>Log losses and gradient norms by level, option durations, return by option, worker advantages by position, padding gradients and performance under alternative loss normalizations.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Positive option advantage means continuing is better than switching, so gradient descent lowers termination probability.</p></li>
+<li><p>With cost <span class="math inline">\(\eta\)</span>, termination is encouraged only when <span class="math inline">\(A_\Omega&lt;-\eta\)</span>, discouraging unnecessary switching.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> credit each sampled decision at the level where it occurred—once for option selection and once per valid primitive action.</p>

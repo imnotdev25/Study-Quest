@@ -1,0 +1,249 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: judging a decision: tomorrow vs next year</div>
+<p>Was taking that new job a good decision? Judge it by tomorrow’s mood and you get a quick, steady, but short-sighted answer. Judge it a year later and you get the true answer, but mixed with a lot of unrelated luck. GAE blends every horizon in between with a dial <span class="math inline">\(\lambda\)</span>: <span class="math inline">\(\lambda=0\)</span> means “judge by tomorrow,” and <span class="math inline">\(\lambda=1\)</span> means “wait for the full outcome.”</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/94062e6fa770.svg" alt="diagram" loading="lazy"></figure>
+<p><em>How far a TD surprise travels backward, with <span class="math inline">\(\gamma=0.99\)</span>.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Write the one-step TD advantage used by actor-critic.</p></li>
+<li><p>Why are both the TD target and the actor’s advantage weight detached?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="why-one-step-advantage-can-be-too-short-sighted">2. Why one-step advantage can be too short-sighted</h3>
+<p>One-step actor-critic uses:</p>
+<p><span class="math display">\[\delta_t
+=
+R_{t+1}
++\gamma(1-D_t)V(S_{t+1})
+-V(S_t)\]</span></p>
+<p>This TD error reacts quickly, but an early action only receives information through the critic’s next-state estimate.</p>
+<p>Monte Carlo returns propagate the complete outcome backward, but can be noisy. <strong>Generalized Advantage Estimation</strong>, or GAE, blends these extremes:</p>
+<p><span class="math display">\[\hat A_t^{\text{GAE}(\gamma,\lambda)}
+=
+\delta_t+
+\gamma\lambda(1-D_t)
+\hat A_{t+1}^{\text{GAE}}\]</span></p>
+<p>Think of <span class="math inline">\(\lambda\)</span> as controlling how far later TD surprises echo backward:</p>
+<ul>
+<li><p><span class="math inline">\(\lambda=0\)</span>: <span class="math inline">\(\hat A_t=\delta_t\)</span>, purely one-step.</p></li>
+<li><p>Larger <span class="math inline">\(\lambda\)</span>: more later TD errors influence the current action.</p></li>
+<li><p><span class="math inline">\(\lambda\approx1\)</span>: more Monte Carlo-like, with lower bias but typically higher variance.</p></li>
+</ul>
+<p>The critic’s return target is then commonly:</p>
+<p><span class="math display">\[\hat R_t=\hat A_t+V(S_t)\]</span></p>
+<h3 class="unnumbered" id="termination-truncation-and-padding">Termination, truncation and padding</h3>
+<p>These masks mean different things:</p>
+<ul>
+<li><p><strong>True termination:</strong> future return is zero, so stop bootstrapping and GAE recursion.</p></li>
+<li><p><strong>Time-limit truncation:</strong> the environment could continue, so bootstrap from the final value estimate.</p></li>
+<li><p><strong>Padding:</strong> nonexistent data; it must contribute neither targets nor gradients.</p></li>
+</ul>
+<p>For trajectory batches:</p>
+<ul>
+<li><p>rewards, dones, valid mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>values: <span style="background-color: codeinlinebg"><code> [B, T+1]</code></span></p></li>
+<li><p>TD errors and advantages: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>actor log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="practical-normalization">Practical normalization</h3>
+<p>Advantages are often normalized over valid tokens or timesteps:</p>
+<p><span class="math display">\[\tilde A
+=
+\frac{A-\mu_A}{\sigma_A+\epsilon}\]</span></p>
+<p>This controls gradient scale, but does not repair a badly trained critic. Padding must be excluded from the mean and variance.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>For an LLM rollout, each generated token is one action. GAE can propagate a later reward or critic surprise backward across earlier tokens. Response masks are essential: prompt and padding tokens must not enter policy or value losses.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: GAE from n-step advantages</div>
+<p><span class="math inline">\(n\)</span>-step advantage: <span class="math inline">\(\hat A^{(n)}_t=\sum_{l=0}^{n-1}\gamma^l\delta_{t+l}\)</span>. This telescopes to <span class="math inline">\(\sum_{l&lt;n}\gamma^lr_{t+l+1}+\gamma^nV(s_{t+n})-V(s_t)\)</span>.</p>
+<p>GAE is an exponentially weighted average of all of them: <span class="math display">\[\hat A^{\text{GAE}}_t=(1-\lambda)\sum_{n\ge1}\lambda^{n-1}\hat A^{(n)}_t=\sum_{l\ge0}(\gamma\lambda)^l\delta_{t+l}.\]</span> <span class="math inline">\(\lambda=0\)</span> gives <span class="math inline">\(\delta_t\)</span> (one-step TD). <span class="math inline">\(\lambda=1\)</span> gives <span class="math inline">\(G_t-V(s_t)\)</span> (Monte Carlo).</p>
+<p><strong>Compute it backward</strong> in one pass: <span class="math inline">\(\hat A_t=\delta_t+\gamma\lambda(1-d_{t+1})\hat A_{t+1}\)</span>. The effective horizon is about <span class="math inline">\(1/(1-\gamma\lambda)\)</span>: roughly 17 steps for <span class="math inline">\(\gamma=0.99,\lambda=0.95\)</span>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p><span class="math inline">\(\lambda\)</span> is a bias-variance dial between TD and MC.</p></li>
+<li><p>The masks matter: a surprise must never travel across an episode boundary.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: GAE by hand</div>
+<p><span class="math inline">\(\gamma=0.9,\lambda=0.8\)</span>. Rewards <span class="math inline">\(r_1=0,r_2=1\)</span>; values <span class="math inline">\(V(s_0)=0.5,V(s_1)=0.4\)</span>; <span class="math inline">\(s_2\)</span> terminal. <span class="math inline">\(\delta_1=1-0.4=0.6\)</span>, <span class="math inline">\(\delta_0=0+0.9(0.4)-0.5=-0.14\)</span>. <span class="math inline">\(\hat A_1=0.6\)</span>, <span class="math inline">\(\hat A_0=-0.14+0.72(0.6)=0.292\)</span>. Targets: <span class="math inline">\(\hat R_0=0.792\)</span>, <span class="math inline">\(\hat R_1=1.0\)</span>. Check: the <span class="math inline">\(\lambda\)</span>-return <span class="math inline">\(=(1-\lambda)G^{(1)}+\lambda G^{(2)}=0.2(0.36)+0.8(0.9)=0.792\)</span>. It matches.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Using done flags at <span class="math inline">\(t\)</span> instead of <span class="math inline">\(t+1\)</span> (off-by-one masks).</p></li>
+<li><p>Normalizing advantages before computing the value targets <span class="math inline">\(\hat A+V\)</span>.</p></li>
+<li><p>Letting padding steps feed values into real ones.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Generalized Advantage Estimation (GAE)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> rewards <span class="math inline">\(r_{1:T}\)</span>, values <span class="math inline">\(V(s_0),\dots,V(s_T)\)</span>, done flags <span class="math inline">\(d_{1:T}\)</span>, <span class="math inline">\(\gamma\)</span>, <span class="math inline">\(\lambda\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(A\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t=T-1\)</span> <strong>down to</strong> <span class="math inline">\(0\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\delta_t\gets r_{t+1}+\gamma(1-d_{t+1})V(s_{t+1})-V(s_t)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(A\gets\delta_t+\gamma\lambda(1-d_{t+1})\,A\)</span> <em>▷ surprises never cross an episode boundary</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\hat A_t\gets A\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> advantages <span class="math inline">\(\hat A_t\)</span> and value targets <span class="math inline">\(\hat R_t=\hat A_t+V(s_t)\)</span></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-masked-gae">3. PyTorch exercise — masked GAE</h3>
+<p>The first trajectory terminates after three steps. The second reaches a time limit, so its final value must be used for bootstrapping.</p>
+<pre class="code python"><code class="language-python">import torch
+
+gamma = 0.9
+gae_lambda = 0.8
+
+rewards = torch.tensor([
+    [0.0, 0.0, 1.0, 99.0],  # 99 is padding
+    [0.0, 0.0, 0.0,  0.0],
+])  # [B=2, T=4]
+
+dones = torch.tensor([
+    [0.0, 0.0, 1.0, 0.0],  # genuine termination at t=2
+    [0.0, 0.0, 0.0, 0.0],  # final step is only truncated
+])  # [B, T]
+
+valid = torch.tensor([
+    [1.0, 1.0, 1.0, 0.0],
+    [1.0, 1.0, 1.0, 1.0],
+])  # [B, T]
+
+values = torch.tensor([
+    [0.20, 0.40, 0.70, 0.00, 0.00],
+    [0.10, 0.20, 0.30, 0.40, 0.50],
+])  # [B, T+1]
+
+# Pretend these came from the actor.
+log_probs = torch.tensor([
+    [-0.7, -0.6, -0.4, -9.0],
+    [-0.8, -0.7, -0.6, -0.5],
+], requires_grad=True)  # [B, T]
+
+
+# TODO 1: One-step TD errors.
+deltas = ...
+
+advantages = torch.zeros_like(rewards)
+running_gae = torch.zeros(rewards.shape[0])  # [B]
+
+# TODO 2: Compute GAE backward.
+for t in reversed(range(rewards.shape[1])):
+    running_gae = ...
+    running_gae = ...
+    advantages[:, t] = ...
+
+# TODO 3: Targets for fitting the critic.
+value_targets = ...
+
+# Normalize only valid advantages.
+valid_positions = valid.bool()
+valid_advantages = advantages[valid_positions]
+
+# TODO 4: Numerically stable normalization.
+normalized = torch.zeros_like(advantages)
+normalized[valid_positions] = ...
+
+# TODO 5: Masked actor loss.
+actor_loss = ...
+
+actor_loss.backward()
+
+print(&quot;TD errors:\n&quot;, deltas)
+print(&quot;GAE advantages:\n&quot;, advantages)
+print(&quot;Value targets:\n&quot;, value_targets)
+print(&quot;Normalized mean:&quot;, normalized[valid_positions].mean())
+print(&quot;Normalized std:&quot;, normalized[valid_positions].std(unbiased=False))
+print(&quot;Log-prob gradients:\n&quot;, log_probs.grad)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which trajectory bootstraps from its final value?</p></li>
+<li><p>Should the padded reward <span style="background-color: codeinlinebg"><code> 99</code></span> affect any advantage?</p></li>
+<li><p>With <span class="math inline">\(\lambda=0\)</span>, what will the advantages equal?</p></li>
+<li><p>Should the padded log-probability receive a gradient?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Consecutive values are <span style="background-color: codeinlinebg"><code> values[:, :-1]</code></span> and <span style="background-color: codeinlinebg"><code> values[:, 1:]</code></span>.</p></li>
+<li><p>Continuation mask: <span style="background-color: codeinlinebg"><code> 1.0 - dones</code></span>.</p></li>
+<li><p>GAE recursion uses <span style="background-color: codeinlinebg"><code> gamma * gae_lambda</code></span>.</p></li>
+<li><p>Apply <span style="background-color: codeinlinebg"><code> valid[:, t]</code></span> during the reverse recursion.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> std(unbiased=False)</code></span> and add approximately <span style="background-color: codeinlinebg"><code> 1e-8</code></span>.</p></li>
+<li><p>Divide the masked policy-loss sum by <span style="background-color: codeinlinebg"><code> valid.sum()</code></span>.</p></li>
+<li><p>Detach normalized advantages in the actor loss.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Remove the validity mask from <span style="background-color: codeinlinebg"><code> deltas</code></span>. The padded reward <span style="background-color: codeinlinebg"><code> 99</code></span> enters the reverse recursion and can contaminate earlier advantages.</p>
+<p>Then normalize across the entire <span style="background-color: codeinlinebg"><code> [B,T]</code></span> tensor instead of only valid positions. Padding zeros alter the mean and variance even if the final policy loss is masked.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What does increasing <span class="math inline">\(\lambda\)</span> change?</p></li>
+<li><p>Why does true termination stop the GAE recursion?</p></li>
+<li><p>Why should truncation not automatically set <span style="background-color: codeinlinebg"><code> done=1</code></span>?</p></li>
+<li><p>Does advantage normalization change which samples are above or below the batch mean?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>TD errors:</p>
+<pre class="code python"><code class="language-python">deltas = (
+    rewards
+    + gamma * (1.0 - dones) * values[:, 1:]
+    - values[:, :-1]
+) * valid</code></pre>
+<p>GAE recursion:</p>
+<pre class="code python"><code class="language-python">for t in reversed(range(rewards.shape[1])):
+    running_gae = (
+        deltas[:, t]
+        + gamma
+        * gae_lambda
+        * (1.0 - dones[:, t])
+        * running_gae
+    )
+
+    running_gae = running_gae * valid[:, t]
+    advantages[:, t] = running_gae</code></pre>
+<p>Critic targets:</p>
+<pre class="code python"><code class="language-python">value_targets = (
+    advantages + values[:, :-1]
+) * valid</code></pre>
+<p>Normalization:</p>
+<pre class="code python"><code class="language-python">mean = valid_advantages.mean()
+std = valid_advantages.std(unbiased=False)
+
+normalized[valid_positions] = (
+    valid_advantages - mean
+) / (std + 1e-8)</code></pre>
+<p>Masked actor loss:</p>
+<pre class="code python"><code class="language-python">actor_loss = -(
+    log_probs
+    * normalized.detach()
+    * valid
+).sum() / valid.sum()</code></pre>
+<p>Expected unnormalized advantages are approximately:</p>
+<pre class="code python"><code class="language-python">tensor([
+    [0.4811, 0.4460, 0.3000, 0.0000],
+    [0.1802, 0.1391, 0.0960, 0.0500]
+])</code></pre>
+<p>For trajectory two, the final TD error is:</p>
+<p><span class="math display">\[0+\gamma V(S_4)-V(S_3)
+=
+0+0.9(0.5)-0.4
+=
+0.05\]</span></p>
+<p>That value remains because the final boundary is a truncation, not a true termination.</p>
+<p>The padded log-probability’s gradient should be exactly zero.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Larger <span class="math inline">\(\lambda\)</span> lets later TD errors influence earlier actions more strongly, usually lowering bias while raising variance.</p></li>
+<li><p>Nothing after a genuine terminal state belongs to the episode’s future return.</p></li>
+<li><p>A truncated process could have continued; discarding its final value creates a systematically shortened target.</p></li>
+<li><p>No. Subtracting one mean and dividing by a positive standard deviation preserves whether a value lies above or below that mean.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(\delta_t=R_{t+1}+\gamma(1-D_t)V(S_{t+1})-V(S_t)\)</span>.</p></li>
+<li><p>The target must remain fixed for the critic update, and the actor loss must not optimize the critic through its advantage weight.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> GAE decides how far TD surprises travel backward. <span class="math inline">\(\lambda\)</span> controls the bias–variance trade-off; correct termination and padding masks control whether the calculation is valid at all.</p>

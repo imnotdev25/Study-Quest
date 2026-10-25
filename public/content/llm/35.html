@@ -1,0 +1,192 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Gradient accumulation</strong> splits a batch that doesn’t fit in memory into <span class="math inline">\(K\)</span> microbatches, runs backward on each, and lets PyTorch <em>add</em> the gradients into <code>.grad</code>. It reproduces the full batch exactly only if each microbatch’s loss is scaled so that the scaled losses sum to the full-batch loss.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="concept-refresh-5-minutes">1. Concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why can changing <code>.mean()</code> to <code>.sum()</code> destabilize optimization?</p></li>
+<li><p>In LoRA, why does initializing <span class="math inline">\(B=0\)</span> preserve the pretrained function?</p></li>
+</ol>
+<p>Suppose a batch contains <span class="math inline">\(N\)</span> loss elements:</p>
+<p><span class="math display">\[L=\frac{1}{N}\sum_{i=1}^{N}\ell_i\]</span></p>
+<p>Split it into <span class="math inline">\(K\)</span> microbatches. Exact gradient accumulation computes:</p>
+<p><span class="math display">\[\nabla_\theta L
+=
+\sum_{k=1}^{K}
+\nabla_\theta
+\left(
+\frac{\sum_{i\in\mathcal M_k}\ell_i}{N}
+\right)\]</span></p>
+<p>Because PyTorch accumulates into <code>.grad</code>, calling <code>backward()</code> once per microbatch produces the full-batch gradient—provided the scaling is correct.</p>
+<p>A common approximation is:</p>
+<p><span class="math display">\[\frac{1}{K}\sum_{k=1}^{K}\operatorname{mean}_{i\in\mathcal M_k}\ell_i\]</span></p>
+<p>This is exact only when every microbatch has the same number of contributing elements. For language modeling, sequences may contain different numbers of unmasked tokens, so averaging per-microbatch means can incorrectly give short examples more weight.</p>
+<p>Practical sequence:</p>
+<pre class="code text"><code class="language-plaintext">zero gradients → backward each scaled microbatch
+→ clip accumulated gradients → optimizer step → scheduler step</code></pre>
+<p>Gradient accumulation reduces activation memory by processing fewer examples at once. It does not reduce parameter or optimizer-state memory.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: exact accumulation, and when the shortcut is wrong</div>
+<p><strong>Step 1.</strong> Full-batch loss <span class="math inline">\(L=\frac1N\sum_{i=1}^N\ell_i\)</span>. Gradients are linear: <span class="math inline">\(\nabla L=\frac1N\sum_i\nabla\ell_i\)</span>.</p>
+<p><strong>Step 2.</strong> Group the sum by microbatch <span class="math inline">\(\mathcal M_k\)</span>: <span class="math inline">\(\nabla L=\sum_k\nabla\Big(\frac{1}{N}\sum_{i\in\mathcal M_k}\ell_i\Big)\)</span>. So microbatch <span class="math inline">\(k\)</span> should backpropagate <span class="math inline">\(\frac{S_k}{N}\)</span>, with <span class="math inline">\(S_k\)</span> its loss <em>sum</em> and <span class="math inline">\(N\)</span> the <em>global</em> count.</p>
+<p><strong>Step 3.</strong> The common shortcut backpropagates <span class="math inline">\(\frac{1}{K}\cdot\frac{S_k}{n_k}\)</span> (its own mean, divided by <span class="math inline">\(K\)</span>). Comparing coefficients, element <span class="math inline">\(i\in\mathcal M_k\)</span> gets weight <span class="math inline">\(\frac{1}{Kn_k}\)</span> instead of <span class="math inline">\(\frac1N\)</span>.</p>
+<p><strong>Step 4.</strong> They agree iff <span class="math inline">\(Kn_k=N\)</span> for all <span class="math inline">\(k\)</span>, i.e. every microbatch has the same size. With masks (variable valid tokens), they almost never do.</p>
+<p><strong>Step 5.</strong> <strong>Example:</strong> <span class="math inline">\(n=(2,8)\)</span>, losses 1 and 3 per element. Correct: <span class="math inline">\(\frac{2+24}{10}=2.6\)</span>. Shortcut: <span class="math inline">\(\frac12(1+3)=2.0\)</span>.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: exact gradient accumulation</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> microbatches <span class="math inline">\(\mathcal M_1..\mathcal M_K\)</span> with per-element losses and masks</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(N\gets\)</span> total valid elements over all microbatches (and all ranks)</div>
+<div class="algo-line" style="--d:0">zero gradients</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(k=1,\dots,K\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(S_k\gets\sum_{i\in\mathcal M_k}m_i\ell_i\)</span>; backward on <span class="math inline">\(S_k/N\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">one optimizer step</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Compare one full-batch gradient with accumulation over uneven microbatches.</p>
+<pre class="code python"><code class="language-python">import copy
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(71)
+
+B, D, C = 7, 5, 3
+X = torch.randn(B, D)
+target = torch.randn(B, C)
+
+base = nn.Linear(D, C, bias=False)
+initial_state = copy.deepcopy(base.state_dict())
+
+microbatches = [
+    (X[:2], target[:2]),   # 2 examples
+    (X[2:], target[2:]),   # 5 examples
+]
+
+
+def fresh_model():
+    model = nn.Linear(D, C, bias=False)
+    model.load_state_dict(initial_state)
+    return model
+
+
+# Reference: one full batch
+full = fresh_model()
+full_loss = ...                              # TODO 1: global mean MSE
+full_loss.backward()
+full_grad = full.weight.grad.clone()          # [C, D]
+
+
+# Correct accumulation
+accum = fresh_model()
+accum.zero_grad(set_to_none=True)
+
+for xb, yb in microbatches:
+    micro_loss_sum = ...                      # TODO 2: summed MSE
+    scaled_loss = ...                         # TODO 3: divide by global count
+    ...                                       # TODO 4: accumulate backward
+
+accum_grad = accum.weight.grad.clone()
+
+
+# Common bug: equally average unequal microbatch means
+wrong = fresh_model()
+wrong.zero_grad(set_to_none=True)
+
+for xb, yb in microbatches:
+    wrong_loss = ...                          # TODO 5
+    wrong_loss.backward()
+
+wrong_grad = wrong.weight.grad.clone()
+
+print(&quot;full vs exact:&quot;,
+      (full_grad - accum_grad).abs().max().item())
+print(&quot;full vs wrong:&quot;,
+      (full_grad - wrong_grad).abs().max().item())
+
+assert torch.allclose(full_grad, accum_grad, atol=1e-6)
+assert not torch.allclose(full_grad, wrong_grad, atol=1e-6)</code></pre>
+<p>Prediction/debugging extension:</p>
+<p>Move <code>accum.zero_grad(set_to_none=True)</code> inside the microbatch loop. What happens to the first microbatch’s contribution?</p>
+<p>Then imagine these are language-model batches. Replace <code>target.numel()</code> conceptually with the total number of non-ignored target tokens. Explain why dividing by <code>B</code> would then be incorrect.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Full loss: <code>F.mse_loss(..., reduction="mean")</code>.</p></li>
+<li><p>Summed loss: <code>reduction="sum"</code>.</p></li>
+<li><p>The global denominator is <code>target.numel()</code>.</p></li>
+<li><p>The intentionally wrong calculation averages each microbatch mean equally.</p></li>
+<li><p><code>.backward()</code> adds to existing parameter gradients.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>With four equal-sized microbatches, how can each mean-reduced loss be scaled to reproduce the full-batch mean gradient?</p></li>
+<li><p>Why is that rule insufficient when microbatches contain different numbers of valid tokens?</p></li>
+<li><p>Debugging: accumulated gradients are exactly four times larger than expected. What scaling step was probably omitted?</p></li>
+<li><p>Should gradient clipping happen after every microbatch or after the complete accumulation window? Why?</p></li>
+<li><p>If one optimizer update covers eight microbatches, how often should a per-update learning-rate scheduler normally advance?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python"># Reference
+full = fresh_model()
+full_loss = F.mse_loss(full(X), target, reduction=&quot;mean&quot;)
+full_loss.backward()
+full_grad = full.weight.grad.clone()
+
+
+# Exact accumulation
+accum = fresh_model()
+accum.zero_grad(set_to_none=True)
+
+for xb, yb in microbatches:
+    micro_loss_sum = F.mse_loss(
+        accum(xb), yb, reduction=&quot;sum&quot;
+    )
+    scaled_loss = micro_loss_sum / target.numel()
+    scaled_loss.backward()
+
+accum_grad = accum.weight.grad.clone()
+
+
+# Incorrect weighting
+wrong = fresh_model()
+wrong.zero_grad(set_to_none=True)
+
+for xb, yb in microbatches:
+    wrong_loss = (
+        F.mse_loss(wrong(xb), yb, reduction=&quot;mean&quot;)
+        / len(microbatches)
+    )
+    wrong_loss.backward()
+
+wrong_grad = wrong.weight.grad.clone()</code></pre>
+<p>Putting <code>zero_grad()</code> inside the loop erases earlier contributions, leaving only the final microbatch’s gradient.</p>
+<p>For token-level training, the exact denominator is usually:</p>
+<p><span class="math display">\[N_{\text{valid}}
+=
+\sum_{b,t}\mathbf 1[y_{b,t}\neq\text{ignore\_index}]\]</span></p>
+<p>Each microbatch should contribute its summed valid-token loss divided by the total valid-token count across the accumulation window.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Divide every microbatch’s mean loss by four before <code>backward()</code>.</p></li>
+<li><p>Equal averaging weights microbatches equally rather than weighting every valid token equally.</p></li>
+<li><p>The loss was probably not divided by the number of accumulation steps or the appropriate global element count.</p></li>
+<li><p>Clip after all microbatches; clipping each one separately changes their vector sum and therefore the update direction.</p></li>
+<li><p>Once per optimizer update, not once per microbatch.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p><code>.sum()</code> multiplies gradient scale by the number of contributing elements relative to <code>.mean()</code>.</p></li>
+<li><p>With <span class="math inline">\(B=0\)</span>, the initial LoRA update <span class="math inline">\(BA\)</span> is zero, so the layer initially matches its frozen base model.</p></li>
+</ul>

@@ -1,0 +1,322 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<p><strong>Curriculum position:</strong> LLM × RL → evaluation after reward hacking</p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What curve pattern suggests reward hacking?</p></li>
+<li><p>Why does a small reference KL not prove that behavior is correct?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="training-reward-is-not-the-final-judge">2. Training reward is not the final judge</h3>
+<p>Suppose checkpoint <span class="math inline">\(k\)</span> scores well under the optimized proxy:</p>
+<p><span class="math display">\[\widehat R_k^{\text{train}}
+=
+\underbrace{
+\frac1N\sum_{i=1}^N R_{\text{proxy}}(x_i,y_{ik})
+}_{\text{score directly pressured by training}}\]</span></p>
+<p>We also need an independent audit <span class="math inline">\(M\)</span>: held-out tests, human review, an adversarial verifier or deployment outcomes.</p>
+<p>Evaluate each checkpoint and a baseline on the <strong>same prompts</strong>. For a binary audit:</p>
+<p><span class="math display">\[d_i^{(k)}
+=
+\underbrace{
+M(x_i,\pi_k)-M(x_i,\pi_0)
+}_{\text{checkpoint improvement on prompt }i}\]</span></p>
+<p>The estimated improvement is:</p>
+<p><span class="math display">\[\widehat\Delta_k
+=
+\underbrace{
+\frac1N\sum_i d_i^{(k)}
+}_{\text{mean paired audit difference}}\]</span></p>
+<p>Its standard error is:</p>
+<p><span class="math display">\[SE_k
+=
+\underbrace{
+\frac{s(d^{(k)})}{\sqrt N}
+}_{\text{uncertainty from finite prompts}}\]</span></p>
+<p>A conservative promotion diagnostic is:</p>
+<p><span class="math display">\[LCB_k
+=
+\underbrace{
+\widehat\Delta_k-1.96SE_k
+}_{\text{lower edge of a normal-approximation 95\% interval}}\]</span></p>
+<p>Pairing generally reduces variance because prompt difficulty affects both policies:</p>
+<p><span class="math display">\[\operatorname{Var}(M_k-M_0)
+=
+\underbrace{
+\operatorname{Var}(M_k)+\operatorname{Var}(M_0)
+-2\operatorname{Cov}(M_k,M_0)
+}_{\text{positive covariance lowers paired variance}}\]</span></p>
+<p>Reward overoptimization often looks like:</p>
+<p><span class="math display">\[\underbrace{
+R_{\text{train}}\uparrow
+}_{\text{proxy keeps improving}}
+\qquad
+\underbrace{
+R_{\text{audit}}\uparrow\ \text{then}\ \downarrow
+}_{\text{real performance peaks earlier}}\]</span></p>
+<p>Select checkpoints on a development audit, lock the choice, then evaluate it once on an untouched confirmation set. Repeatedly tuning against the “held-out” set turns it into another training signal.</p>
+<p>Do not subtract proxy and audit scores to form a “gap” unless their units are genuinely comparable. Plot them separately.</p>
+<p>DPO needs the same protection: falling preference loss or rising held-out pair accuracy does not guarantee deployment utility. DPO is offline preference optimization, while online RL can actively discover new proxy exploits.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>proxy scores and checkpoint metrics: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+<li><p>audit outcomes: <span style="background-color: codeinlinebg"><code> [N, K]</code></span></p></li>
+<li><p>paired differences: <span style="background-color: codeinlinebg"><code> [N, K]</code></span></p></li>
+<li><p>standard errors and confidence bounds: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-the-proxy-winner-loses-the-audit">3. PyTorch exercise — the proxy winner loses the audit</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+torch.set_printoptions(precision=4, sci_mode=False)
+
+num_checkpoints = 7
+development_size = 2_000
+confirmation_size = 10_000
+
+# The optimized proxy rises at every checkpoint.
+proxy_scores = torch.tensor([
+    0.00, 0.20, 0.45, 0.70,
+    0.95, 1.20, 1.45,
+])
+
+# Hidden simulator parameter: audit quality peaks
+# at checkpoint 3, then deteriorates.
+latent_audit_skills = torch.tensor([
+    0.00, 0.30, 0.55, 0.75,
+    0.60, 0.25, -0.15,
+])
+
+
+def simulate_audit(num_prompts):
+    # The same prompt difficulty is shared across
+    # checkpoints, enabling paired comparisons.
+    prompt_difficulty = torch.randn(
+        num_prompts, 1
+    )
+
+    # TODO 1: Construct [N, K] success probabilities.
+    success_probabilities = ...
+
+    # Independent stochastic outcomes conditioned
+    # on the shared prompt.
+    outcomes = ...
+
+    return outcomes
+
+
+def paired_summary(outcomes):
+    # TODO 2: Compare every checkpoint with baseline 0.
+    baseline_outcomes = ...
+    paired_differences = ...
+
+    audit_rates = ...
+    mean_differences = ...
+
+    standard_errors = ...
+
+    lower_bounds = ...
+
+    return (
+        audit_rates,
+        mean_differences,
+        standard_errors,
+        lower_bounds,
+    )
+
+
+development_outcomes = simulate_audit(
+    development_size
+)
+
+(
+    development_rates,
+    development_deltas,
+    development_standard_errors,
+    development_lower_bounds,
+) = paired_summary(development_outcomes)
+
+# TODO 3: Select once by proxy and once by audit.
+proxy_selected_checkpoint = ...
+audit_selected_checkpoint = ...
+
+# Fresh data: do not choose another checkpoint here.
+confirmation_outcomes = simulate_audit(
+    confirmation_size
+)
+
+(
+    confirmation_rates,
+    confirmation_deltas,
+    confirmation_standard_errors,
+    confirmation_lower_bounds,
+) = paired_summary(confirmation_outcomes)
+
+# TODO 4: Find steps where proxy rises but audit falls.
+proxy_step_changes = ...
+audit_step_changes = ...
+
+divergence_checkpoints = ...
+
+# TODO 5: Confirmation diagnostics for both choices.
+proxy_selected_confirmation_lcb = ...
+audit_selected_confirmation_lcb = ...
+
+results = torch.stack([
+    proxy_scores,
+    development_rates,
+    development_deltas,
+    development_lower_bounds,
+    confirmation_rates,
+    confirmation_deltas,
+    confirmation_lower_bounds,
+], dim=1)
+
+print(
+    &quot;Columns: proxy, dev rate, dev delta, dev LCB, &quot;
+    &quot;confirmation rate, confirmation delta, &quot;
+    &quot;confirmation LCB&quot;
+)
+print(results)
+
+print(
+    &quot;\nProxy-selected checkpoint:&quot;,
+    proxy_selected_checkpoint.item(),
+)
+print(
+    &quot;Audit-selected checkpoint:&quot;,
+    audit_selected_checkpoint.item(),
+)
+print(
+    &quot;Proxy-up/audit-down checkpoints:&quot;,
+    divergence_checkpoints,
+)
+print(
+    &quot;Confirmation LCB: proxy selection, audit selection&quot;,
+    proxy_selected_confirmation_lcb.item(),
+    audit_selected_confirmation_lcb.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which checkpoint will the proxy select?</p></li>
+<li><p>Around which checkpoint should audit performance peak?</p></li>
+<li><p>Should the proxy-selected final checkpoint beat the baseline audit?</p></li>
+<li><p>Why might development and confirmation rates differ slightly?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.sigmoid(skill - difficulty)</code></span>.</p></li>
+<li><p>Outcomes are <span style="background-color: codeinlinebg"><code> torch.rand_like(probabilities) &lt; probabilities</code></span>.</p></li>
+<li><p>Preserve the baseline column with <span style="background-color: codeinlinebg"><code> outcomes[:, [0]]</code></span>.</p></li>
+<li><p>Standard error is sample standard deviation divided by <span style="background-color: codeinlinebg"><code> sqrt(N)</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> torch.argmax</code></span> returns a scalar tensor.</p></li>
+<li><p>Divergence means positive proxy change and negative audit change.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Evaluate checkpoints on different prompt samples, losing the paired comparison.</p></li>
+<li><p>Select and report performance on the same small audit set without confirmation.</p></li>
+<li><p>Repeatedly modify training after inspecting the confirmation set.</p></li>
+<li><p>Report only the average and hide subgroup or safety regressions.</p></li>
+<li><p>Treat KL, entropy or training reward as substitutes for independent quality.</p></li>
+<li><p>Ignore multiple-checkpoint selection: the maximum noisy score is usually optimistic.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does using the same prompts usually improve comparison precision?</p></li>
+<li><p>What does proxy-up/audit-down indicate?</p></li>
+<li><p>Why is an untouched confirmation set necessary?</p></li>
+<li><p>Does a positive audit mean alone prove an improvement?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Audit simulation:</p>
+<pre class="code python"><code class="language-python">success_probabilities = torch.sigmoid(
+    latent_audit_skills[None, :]
+    - prompt_difficulty
+)
+
+outcomes = (
+    torch.rand_like(success_probabilities)
+    &lt; success_probabilities
+).to(torch.float64)</code></pre>
+<p>Paired estimates:</p>
+<pre class="code python"><code class="language-python">baseline_outcomes = outcomes[:, [0]]
+
+paired_differences = (
+    outcomes - baseline_outcomes
+)
+
+audit_rates = outcomes.mean(dim=0)
+
+mean_differences = (
+    paired_differences.mean(dim=0)
+)
+
+standard_errors = (
+    paired_differences.std(
+        dim=0,
+        unbiased=True,
+    )
+    / outcomes.shape[0] ** 0.5
+)
+
+lower_bounds = (
+    mean_differences
+    - 1.96 * standard_errors
+)</code></pre>
+<p>Checkpoint selection:</p>
+<pre class="code python"><code class="language-python">proxy_selected_checkpoint = (
+    proxy_scores.argmax()
+)
+
+audit_selected_checkpoint = (
+    development_rates.argmax()
+)</code></pre>
+<p>Divergence detection:</p>
+<pre class="code python"><code class="language-python">proxy_step_changes = (
+    proxy_scores[1:]
+    - proxy_scores[:-1]
+)
+
+audit_step_changes = (
+    development_rates[1:]
+    - development_rates[:-1]
+)
+
+divergence_checkpoints = torch.nonzero(
+    (proxy_step_changes &gt; 0)
+    &amp; (audit_step_changes &lt; 0)
+).flatten() + 1</code></pre>
+<p>Confirmation diagnostics:</p>
+<pre class="code python"><code class="language-python">proxy_selected_confirmation_lcb = (
+    confirmation_lower_bounds[
+        proxy_selected_checkpoint
+    ]
+)
+
+audit_selected_confirmation_lcb = (
+    confirmation_lower_bounds[
+        audit_selected_checkpoint
+    ]
+)</code></pre>
+<p>The proxy selects checkpoint <span style="background-color: codeinlinebg"><code> 6</code></span>, because its proxy score is highest. Audit performance should select checkpoint <span style="background-color: codeinlinebg"><code> 3</code></span>, where latent audit quality peaks.</p>
+<p>The final proxy-selected checkpoint is actually worse than the baseline:</p>
+<p><span class="math display">\[\underbrace{
+\widehat\Delta_6&lt;0
+}_{\text{optimization continued past useful improvement}}\]</span></p>
+<p>Checkpoint <span style="background-color: codeinlinebg"><code> 3</code></span> should retain a positive confirmation difference and lower confidence bound. Exact sampled values are reproducible but finite-sample dependent.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Shared prompt difficulty creates positive covariance between checkpoint outcomes; pairing subtracts much of that nuisance variation.</p></li>
+<li><p>The policy is learning features rewarded by the proxy but unsupported—or penalized—by the independent objective.</p></li>
+<li><p>Selecting the largest development estimate introduces winner’s-curse optimism. Fresh data tests the locked decision.</p></li>
+<li><p>No. Examine its uncertainty, safety constraints, subgroups and confirmation result.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Training reward continues rising while an independent audit stagnates or declines, often with growing evaluator disagreement.</p></li>
+<li><p>KL measures policy drift, not correctness. A nearby policy can still exploit the proxy, and a distant policy can still be useful.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> choose where independent quality peaks, not where the optimized score peaks. Use paired prompts for precision, a development audit for checkpoint selection, and an untouched confirmation set for the final claim.</p>

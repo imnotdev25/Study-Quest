@@ -1,0 +1,268 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 4 · PyTorch 9 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: your Friday-night food order</div>
+<p>You can order your usual pizza (known to be decent) or try the new Thai place (might be amazing, might be bad). Always ordering pizza is <strong>exploitation</strong>. Trying Thai sometimes is <strong>exploration</strong>. Never exploring means you may live your whole life without discovering your favourite food.</p>
+<p>Fun fact: the recommendation feed on your phone runs a bandit algorithm <em>on you</em>, testing which video to show next.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/2a2007e01f65.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The exercise’s three arms. The distributions overlap heavily, so one lucky pull can easily make a worse arm look best.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<p>Before reading further:</p>
+<ol>
+<li><p>What is the difference between a reward and a return?</p></li>
+<li><p>If a policy assigns probabilities <span style="background-color: codeinlinebg"><code> [0.2, 0.8]</code></span>, is its action deterministic?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-bandit-problem">2. The bandit problem</h3>
+<p>Imagine three unfamiliar restaurants. Each produces a different but noisy level of satisfaction:</p>
+<ul>
+<li><p>Restaurant A is usually average.</p></li>
+<li><p>Restaurant B is usually good.</p></li>
+<li><p>Restaurant C varies considerably.</p></li>
+</ul>
+<p>You do not know these properties initially.</p>
+<p>Every evening, you must choose one restaurant and observe only the reward from that choice. You never see what the other restaurants would have produced.</p>
+<p>This is a <strong>multi-armed bandit</strong>:</p>
+<ul>
+<li><p>One state: choosing again.</p></li>
+<li><p>Actions: the available arms.</p></li>
+<li><p>Reward: noisy feedback from the chosen arm.</p></li>
+<li><p>Objective: maximize total reward over repeated choices.</p></li>
+</ul>
+<p>There are no meaningful state transitions, so this is simpler than a full MDP.</p>
+<h4 class="unnumbered" id="estimated-action-value">Estimated action value</h4>
+<p>For action <span class="math inline">\(a\)</span>, maintain the average reward observed so far:</p>
+<p><span class="math display">\[Q(a)=\frac{\text{sum of rewards from }a}
+           {\text{number of times }a\text{ was selected}}\]</span></p>
+<p>This can be updated without storing every old reward:</p>
+<p><span class="math display">\[Q_{n+1}(a)
+=
+Q_n(a)+\frac{1}{N(a)}
+\left(R_n-Q_n(a)\right)\]</span></p>
+<p>The term</p>
+<p><span class="math display">\[R_n-Q_n(a)\]</span></p>
+<p>is the <strong>estimation error</strong>:</p>
+<ul>
+<li><p>Positive error: the result was better than expected.</p></li>
+<li><p>Negative error: it was worse than expected.</p></li>
+<li><p><span class="math inline">\(1/N(a)\)</span>: how much one new observation should influence the running average.</p></li>
+</ul>
+<p>This resembles taking a small step toward a target:</p>
+<p><span class="math display">\[\text{new estimate}
+=
+\text{old estimate}
++
+\text{step size}\times\text{error}\]</span></p>
+<p>But this is not gradient descent. Here, the formula directly updates a sample average; no loss is differentiated.</p>
+<h4 class="unnumbered" id="exploration-versus-exploitation">Exploration versus exploitation</h4>
+<p>A greedy policy always chooses:</p>
+<p><span class="math display">\[a_t=\arg\max_a Q(a)\]</span></p>
+<p>That exploits current knowledge, but an early lucky reward can make it commit to the wrong action.</p>
+<p>An <span class="math inline">\(\epsilon\)</span>-greedy policy chooses:</p>
+<p><span class="math display">\[a_t =
+\begin{cases}
+\text{random action} &amp; \text{with probability }\epsilon\\
+\arg\max_a Q(a) &amp; \text{otherwise}
+\end{cases}\]</span></p>
+<p>With <span class="math inline">\(\epsilon=0.1\)</span>:</p>
+<ul>
+<li><p>roughly 10% of choices explore;</p></li>
+<li><p>roughly 90% exploit.</p></li>
+</ul>
+<p>The realized fraction will not be exactly 10%.</p>
+<p><strong>LLM connection:</strong> Suppose an agent chooses among search, calculator, Python, or answering directly. Always selecting the tool with the best early score can trap the agent in a locally good but inferior tool-use policy.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: incremental means, recency, and the exploration ceiling</div>
+<p><strong>Incremental mean.</strong> <span class="math inline">\(Q_{n+1}=\frac1n\sum_{i=1}^n R_i=\frac1n\big(R_n+(n-1)Q_n\big)=Q_n+\frac1n(R_n-Q_n)\)</span>.</p>
+<p><strong>Constant step size.</strong> With fixed <span class="math inline">\(\alpha\)</span>, unrolling gives <span class="math inline">\(Q_{n+1}=(1-\alpha)^nQ_1+\sum_{i=1}^n\alpha(1-\alpha)^{n-i}R_i\)</span>: an exponentially weighted average where recent rewards count most. That’s what you want when the arms drift.</p>
+<p><strong>Exploration ceiling.</strong> With <span class="math inline">\(k\)</span> arms, once the best arm is greedy, <span class="math inline">\(P(\text{best})=(1-\epsilon)+\epsilon/k\)</span>. For <span class="math inline">\(\epsilon=0.5,\ k=3\)</span>: <span class="math inline">\(0.667\)</span>, so the long-run average reward is at most <span class="math inline">\(0.5\cdot 1.0+0.5\cdot\frac{0.2+1.0+0.7}{3}\approx 0.82\)</span>.</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/ae21660bf749.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Simulated on the exercise’s bandit (2000 seeds). Greedy gets stuck, too much exploration hits the 0.82 ceiling, and <span class="math inline">\(\epsilon=0.1\)</span> approaches the best possible 1.0 (dashed).</em></p>
+</div>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>New estimate = old + step <span class="math inline">\(\times\)</span> (target <span class="math inline">\(-\)</span> old). You’ll see this shape in every topic.</p></li>
+<li><p>Too little exploration: you get stuck. Too much: you waste pulls. A small <span class="math inline">\(\epsilon\)</span> usually wins.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: greedy gets stuck in four steps</div>
+<p>True means <span class="math inline">\((0.2,1.0,0.7)\)</span>, <span class="math inline">\(\epsilon=0\)</span>, all <span class="math inline">\(Q=0\)</span>, ties go to arm 0.</p>
+<ul>
+<li><p>Step 1: pull arm 0, reward <span class="math inline">\(+0.9\)</span> (lucky). <span class="math inline">\(N=(1,0,0)\)</span>, <span class="math inline">\(Q=(0.9,0,0)\)</span>.</p></li>
+<li><p>Step 2: arm 0 again, reward <span class="math inline">\(-0.4\)</span>. <span class="math inline">\(Q_0=0.9+\frac12(-0.4-0.9)=0.25\)</span>. Still the largest.</p></li>
+<li><p>Steps 3+: arm 0 keeps winning while <span class="math inline">\(Q_0&gt;0\)</span>. Arms 1 and 2 are <em>never</em> tried, so the best arm (<span class="math inline">\(\mu=1.0\)</span>) is never discovered.</p></li>
+</ul>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Updating <span class="math inline">\(Q\)</span> before incrementing <span class="math inline">\(N\)</span> (divide-by-zero, or a wrong first average).</p></li>
+<li><p>Not resetting <span class="math inline">\(Q,N\)</span> between <span class="math inline">\(\epsilon\)</span> settings or seeds.</p></li>
+<li><p>Judging <span class="math inline">\(\epsilon\)</span> from one seed instead of an average over many.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: <span class="math inline">\(\epsilon\)</span>-greedy bandit with sample-average estimates</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(k\)</span> arms, exploration rate <span class="math inline">\(\epsilon\)</span>, number of steps <span class="math inline">\(T\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Q(a)\gets0,\ N(a)\gets0\)</span> for every arm <span class="math inline">\(a\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t=1,\dots,T\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(u&lt;\epsilon\)</span> where <span class="math inline">\(u\sim\mathcal U(0,1)\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(a\gets\)</span> uniformly random arm <em>▷ explore</em></div>
+<div class="algo-line" style="--d:1"><strong>else</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(a\gets\arg\max_aQ(a)\)</span>, ties broken randomly <em>▷ exploit</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">pull <span class="math inline">\(a\)</span> and observe reward <span class="math inline">\(R\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(N(a)\gets N(a)+1\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(Q(a)\gets Q(a)+\frac{1}{N(a)}\big(R-Q(a)\big)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-train-an-epsilon-greedy-bandit">3. PyTorch exercise — train an <span class="math inline">\(\epsilon\)</span>-greedy bandit</h3>
+<p>The hidden means are known to the environment but not to the agent.</p>
+<p>Complete the TODOs:</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+
+true_means = torch.tensor([0.2, 1.0, 0.7])  # [arms=3]
+num_steps = 1000
+epsilon = 0.1
+
+q_estimates = torch.zeros(3)          # [arms]
+counts = torch.zeros(3, dtype=torch.long)
+total_reward = 0.0
+
+for step in range(num_steps):
+    explore = torch.rand(()) &lt; epsilon
+
+    # TODO 1:
+    # During exploration choose a random arm.
+    # Otherwise choose the arm with the largest estimate.
+    if explore:
+        action = ...
+    else:
+        action = ...
+
+    # Environment returns mean reward plus Gaussian noise.
+    reward = true_means[action] + torch.randn(())
+
+    counts[action] += 1
+
+    # TODO 2: incremental sample-average update
+    error = ...
+    q_estimates[action] += ...
+
+    total_reward += reward.item()
+
+print(&quot;Estimates:&quot;, q_estimates)
+print(&quot;Counts:&quot;, counts)
+print(&quot;Best estimated arm:&quot;, q_estimates.argmax().item())
+print(&quot;Average reward:&quot;, total_reward / num_steps)</code></pre>
+<p>Then compare:</p>
+<pre class="code python"><code class="language-python">for epsilon in [0.0, 0.01, 0.1, 0.5]:
+    # Reset estimates and counts, then repeat the experiment.
+    ...</code></pre>
+<p>Record for each value:</p>
+<ul>
+<li><p>learned best arm;</p></li>
+<li><p>average reward;</p></li>
+<li><p>number of times each arm was selected.</p></li>
+</ul>
+<h4 class="unnumbered" id="prediction-before-running">Prediction before running</h4>
+<p>Which setting do you expect to perform best?</p>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> epsilon = 0.0</code></span></p></li>
+<li><p><span style="background-color: codeinlinebg"><code> epsilon = 0.1</code></span></p></li>
+<li><p><span style="background-color: codeinlinebg"><code> epsilon = 0.5</code></span></p></li>
+</ul>
+<p>Do not expect a single run to establish the answer reliably. Bandit results should usually be averaged across many independent seeds.</p>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Random action: <span style="background-color: codeinlinebg"><code> torch.randint(3, ())</code></span></p></li>
+<li><p>Greedy action: <span style="background-color: codeinlinebg"><code> q_estimates.argmax()</code></span></p></li>
+<li><p>Error: observed reward minus current estimate.</p></li>
+<li><p>The step size is <span style="background-color: codeinlinebg"><code> 1 / counts[action]</code></span>.</p></li>
+<li><p>Reset all learned variables between epsilon settings.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can a purely greedy agent permanently favor a suboptimal arm?</p></li>
+<li><p>Why should <span style="background-color: codeinlinebg"><code> counts[action]</code></span> be incremented before calculating <span class="math inline">\(1/N(a)\)</span>?</p></li>
+<li><p>If <span class="math inline">\(\epsilon=0.1\)</span>, does the optimal arm have exactly 90% selection probability?</p></li>
+<li><p>What bug occurs if estimates are not reset when comparing epsilon values?</p></li>
+<li><p>In a changing environment, why might <span class="math inline">\(1/N(a)\)</span> become undesirable?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">if explore:
+    action = torch.randint(3, ())
+else:
+    action = q_estimates.argmax()
+
+reward = true_means[action] + torch.randn(())
+
+counts[action] += 1
+
+error = reward - q_estimates[action]
+q_estimates[action] += error / counts[action]</code></pre>
+<p>One clean way to compare epsilon settings:</p>
+<pre class="code python"><code class="language-python">import torch
+
+def run_bandit(epsilon, seed, num_steps=1000):
+    torch.manual_seed(seed)
+
+    true_means = torch.tensor([0.2, 1.0, 0.7])
+    q_estimates = torch.zeros(3)
+    counts = torch.zeros(3, dtype=torch.long)
+    total_reward = 0.0
+
+    for _ in range(num_steps):
+        if torch.rand(()) &lt; epsilon:
+            action = torch.randint(3, ())
+        else:
+            action = q_estimates.argmax()
+
+        reward = true_means[action] + torch.randn(())
+
+        counts[action] += 1
+        error = reward - q_estimates[action]
+        q_estimates[action] += error / counts[action]
+
+        total_reward += reward.item()
+
+    return q_estimates, counts, total_reward / num_steps
+
+
+for epsilon in [0.0, 0.01, 0.1, 0.5]:
+    estimates, counts, mean_reward = run_bandit(
+        epsilon=epsilon,
+        seed=7,
+    )
+    print(
+        epsilon,
+        estimates,
+        counts,
+        round(mean_reward, 3),
+    )</code></pre>
+<p>For a fair experiment, repeat over many seeds and average the results.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Early noise can make a bad arm look best; greedy selection may never gather evidence from the others.</p></li>
+<li><p>The first observation should use <span class="math inline">\(N(a)=1\)</span>. Updating before incrementing would divide by zero.</p></li>
+<li><p>No. During exploration, the random choice can also select the optimal arm:</p></li>
+</ol>
+<p><span class="math display">\[P(\text{optimal})
+=
+(1-\epsilon)+\frac{\epsilon}{3}\]</span></p>
+<p>assuming it is the unique greedy arm.</p>
+<ol>
+<li><p>Later epsilon settings inherit knowledge learned during earlier experiments, making the comparison invalid.</p></li>
+<li><p><span class="math inline">\(1/N(a)\)</span> approaches zero, so the estimate adapts extremely slowly when reward distributions change. A constant step size can track recent conditions better.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A reward evaluates one transition; a return accumulates rewards over future transitions.</p></li>
+<li><p>Stochastic: it samples actions according to those probabilities.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> exploitation uses what the agent currently believes; exploration improves those beliefs. Learning requires spending some actions on information rather than immediate reward.</p>

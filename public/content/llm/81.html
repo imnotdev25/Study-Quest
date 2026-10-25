@@ -1,0 +1,286 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Selective prediction</strong> lets a model abstain. With confidence <span class="math inline">\(s_i=\max_cp_{ic}\)</span> and threshold <span class="math inline">\(\tau\)</span>, it answers when <span class="math inline">\(s_i\ge\tau\)</span>. <strong>Coverage</strong> is the fraction answered, and <strong>selective risk</strong> is the error rate <em>among answered</em> items. Raising <span class="math inline">\(\tau\)</span> trades coverage for lower risk.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>How can a model improve within every group but lose under micro averaging?</p></li>
+<li><p>Why should failed requests not be silently removed from an evaluation denominator?</p></li>
+</ol>
+<p>A selective predictor may answer or abstain based on confidence. Given logits:</p>
+<p><span class="math display">\[Z\in\mathbb{R}^{N\times C}\]</span></p>
+<p>compute:</p>
+<p><span class="math display">\[p_{ic}=\operatorname{softmax}(Z_i)_c\]</span></p>
+<p><span class="math display">\[\hat y_i=\arg\max_c p_{ic},
+\qquad
+s_i=\max_c p_{ic}\]</span></p>
+<p>For threshold <span class="math inline">\(\tau\)</span>, answer only when:</p>
+<p><span class="math display">\[A_i(\tau)=\mathbf 1[s_i\ge\tau]\]</span></p>
+<p>Coverage is the fraction answered:</p>
+<p><span class="math display">\[\operatorname{Coverage}(\tau)
+=
+\frac1N\sum_iA_i(\tau)\]</span></p>
+<p>Selective risk is error conditional on answering:</p>
+<p><span class="math display">\[\operatorname{Risk}(\tau)
+=
+\frac{
+\sum_i A_i(\tau)\mathbf1[\hat y_i\ne y_i]
+}{
+\sum_iA_i(\tau)
+}\]</span></p>
+<p>Increasing <span class="math inline">\(\tau\)</span> normally lowers both coverage and risk—but only if confidence ranks examples usefully.</p>
+<p>Risk must always be interpreted with coverage. A system can obtain zero observed risk by refusing everything.</p>
+<p>Confidence thresholds are also calibration-dependent. Temperature scaling changes:</p>
+<p><span class="math display">\[p_i(T)=\operatorname{softmax}\left(\frac{Z_i}{T}\right)\]</span></p>
+<p>without changing the predicted class. Thus two models with identical predictions can have different coverage at the same confidence threshold.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the risk–coverage trade-off</div>
+<p><strong>Step 1.</strong> Sort items by confidence, highest first. Answering the top <span class="math inline">\(k\)</span> gives coverage <span class="math inline">\(k/N\)</span> and risk <span class="math inline">\(\frac1k\sum_{i\le k}\mathbb 1[\text{wrong}_i]\)</span>.</p>
+<p><strong>Step 2.</strong> If confidence ranks correctness well (wrong answers tend to have low <span class="math inline">\(s\)</span>), risk rises as <span class="math inline">\(k\)</span> grows. It’s a curve, not one number.</p>
+<p><strong>Step 3.</strong> <strong>Choosing <span class="math inline">\(\tau\)</span>:</strong> the largest coverage with risk <span class="math inline">\(\le r^*\)</span> on a validation set. Using the test set to pick <span class="math inline">\(\tau\)</span> makes the reported risk optimistic.</p>
+<p><strong>Step 4.</strong> <strong>AURC</strong> (area under the risk–coverage curve) summarizes the whole trade-off. Lower is better.</p>
+<p><strong>Step 5.</strong> Risk is a ratio of counts. When few items are answered (<span class="math inline">\(k\)</span> small), it’s very noisy: report <span class="math inline">\(k\)</span> with it.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: pick a confidence threshold for a risk target</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> validation confidences <span class="math inline">\(s_i\)</span>, correctness <span class="math inline">\(c_i\)</span>, target risk <span class="math inline">\(r^*\)</span></div>
+<div class="algo-line" style="--d:0">sort by <span class="math inline">\(s\)</span> descending</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(k=1,\dots,N\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\text{risk}_k\gets\frac1k\sum_{i\le k}(1-c_i)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(k^*\gets\max\{k:\text{risk}_k\le r^*\}\)</span>; <span class="math inline">\(\tau\gets s_{(k^*)}\)</span></div>
+<div class="algo-line" style="--d:0">report coverage <span class="math inline">\(k^*/N\)</span> and risk on a separate test set</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Construct a risk–coverage curve and reproduce an overconfidence failure.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(341)
+
+N, C = 5_000, 3
+
+# Latent evidence determines the true class with some noise.
+latent_logits = (
+    1.2 * torch.randn(N, C)
+)                                                   # [N,C]
+
+labels = (
+    latent_logits
+    + 0.8 * torch.randn(N, C)
+).argmax(dim=-1)                                    # [N]
+
+# Imperfect model observations.
+model_logits = (
+    latent_logits
+    + 0.4 * torch.randn(N, C)
+)                                                   # [N,C]
+
+probabilities = ...                                 # TODO 1: [N,C]
+confidence, predictions = ...                       # TODO 2: each [N]
+correct = ...                                       # TODO 3: [N] bool
+
+print(&quot;ordinary accuracy:&quot;,
+      correct.float().mean().item())</code></pre>
+<p>Compute selective metrics:</p>
+<pre class="code python"><code class="language-python">def selective_metrics(confidence, correct, threshold):
+    accepted = ...                                  # TODO 4: [N]
+
+    coverage = ...                                  # TODO 5: scalar
+    risk = ...                                      # TODO 6: scalar
+
+    return torch.stack([
+        threshold,
+        coverage,
+        risk,
+    ])
+
+
+thresholds = torch.tensor([
+    0.0,
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    0.9,
+])
+
+results = torch.stack([
+    selective_metrics(confidence, correct, threshold)
+    for threshold in thresholds
+])                                                   # [T,3]
+
+print(&quot;\nthreshold | coverage | selective risk&quot;)
+
+for threshold, coverage, risk in results:
+    print(
+        f&quot;{threshold.item():&gt;9.2f} |&quot;
+        f&quot; {coverage.item():&gt;8.3f} |&quot;
+        f&quot; {risk.item():&gt;14.3f}&quot;
+    )
+
+assert results[-1, 1] &lt; results[0, 1]
+assert results[-1, 2] &lt; results[0, 2]</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>What is coverage at threshold zero?</p></li>
+<li><p>Does raising the threshold necessarily improve ordinary accuracy?</p></li>
+<li><p>Can selective risk fall while the number of answered mistakes remains operationally important?</p></li>
+</ul>
+<p>Now make the model overconfident without changing its decisions:</p>
+<pre class="code python"><code class="language-python">overconfident_logits = ...                          # TODO 7
+
+overconfident_probabilities = ...                   # TODO 8
+overconfidence, over_predictions = ...              # TODO 9
+
+threshold = torch.tensor(0.9)
+
+base_metrics = selective_metrics(
+    confidence,
+    correct,
+    threshold,
+)
+
+over_correct = ...                                  # TODO 10
+
+over_metrics = selective_metrics(
+    overconfidence,
+    over_correct,
+    threshold,
+)
+
+print(&quot;\nbase @ 0.9:&quot;, base_metrics)
+print(&quot;overconfident @ 0.9:&quot;, over_metrics)
+
+print(
+    &quot;predictions unchanged:&quot;,
+    torch.equal(predictions, over_predictions),
+)
+
+print(
+    &quot;ordinary accuracy unchanged:&quot;,
+    torch.equal(correct, over_correct),
+)
+
+assert torch.equal(predictions, over_predictions)
+assert over_metrics[1] &gt; base_metrics[1]</code></pre>
+<p>Count accepted errors:</p>
+<pre class="code python"><code class="language-python">base_accepted = ...                                 # TODO 11
+over_accepted = ...                                 # TODO 12
+
+base_answered_errors = ...                          # TODO 13
+over_answered_errors = ...                          # TODO 14
+
+print(&quot;\nbase answered errors:&quot;,
+      base_answered_errors.item())
+
+print(&quot;overconfident answered errors:&quot;,
+      over_answered_errors.item())</code></pre>
+<p>Why can the fixed threshold become unsafe even though classification accuracy and predictions are identical?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>F.softmax(..., dim=-1)</code>.</p></li>
+<li><p><code>.max(dim=-1)</code> returns values and indices.</p></li>
+<li><p>Risk is <code>1 - accuracy among accepted examples</code>.</p></li>
+<li><p>Multiply logits by <code>3.0</code> to create overconfidence.</p></li>
+<li><p>Accepted errors are <code>accepted &amp; ~correct</code>.</p></li>
+<li><p>Threshold selection and temperature fitting belong on validation data, not the final test set.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why must selective risk always be reported with coverage?</p></li>
+<li><p>Prediction: what happens to coverage as <span class="math inline">\(\tau\to1\)</span>?</p></li>
+<li><p>Can temperature scaling change top-1 accuracy? Can it change threshold-based behavior?</p></li>
+<li><p>Debugging: after switching model providers, refusal rate collapses although top-1 accuracy is unchanged. What confidence-calibration issue should you inspect?</p></li>
+<li><p>Why is choosing the threshold that minimizes risk directly on the final benchmark statistically invalid?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">probabilities = F.softmax(
+    model_logits,
+    dim=-1,
+)
+
+confidence, predictions = probabilities.max(
+    dim=-1
+)
+
+correct = predictions.eq(labels)</code></pre>
+<p>Selective metrics:</p>
+<pre class="code python"><code class="language-python">def selective_metrics(confidence, correct, threshold):
+    accepted = confidence &gt;= threshold
+
+    coverage = accepted.float().mean()
+
+    risk = (
+        1.0
+        - correct[accepted].float().mean()
+    )
+
+    return torch.stack([
+        threshold,
+        coverage,
+        risk,
+    ])</code></pre>
+<p>Overconfidence experiment:</p>
+<pre class="code python"><code class="language-python">overconfident_logits = (
+    3.0 * model_logits
+)
+
+overconfident_probabilities = F.softmax(
+    overconfident_logits,
+    dim=-1,
+)
+
+overconfidence, over_predictions = (
+    overconfident_probabilities.max(dim=-1)
+)
+
+over_correct = over_predictions.eq(labels)</code></pre>
+<p>Accepted errors:</p>
+<pre class="code python"><code class="language-python">base_accepted = confidence &gt;= threshold
+over_accepted = overconfidence &gt;= threshold
+
+base_answered_errors = (
+    base_accepted &amp; ~correct
+).sum()
+
+over_answered_errors = (
+    over_accepted &amp; ~over_correct
+).sum()</code></pre>
+<p>Positive scaling does not change the largest logit:</p>
+<p><span class="math display">\[\arg\max_c z_c
+=
+\arg\max_c 3z_c\]</span></p>
+<p>so predictions and ordinary accuracy remain identical. But softmax probabilities become sharper, moving more examples above <span class="math inline">\(0.9\)</span>. This increases coverage and can expose more users to confidently answered errors.</p>
+<p>A risk–coverage curve evaluates ranking quality: useful confidence should place correct predictions above incorrect ones. Calibration instead asks whether a stated confidence such as <span class="math inline">\(0.9\)</span> corresponds to roughly 90% correctness. A model can rank examples well while still being overconfident.</p>
+<p>Thresholds should be selected on a validation set under a constraint such as:</p>
+<p><span class="math display">\[\min_\tau \operatorname{Risk}(\tau)
+\quad
+\text{subject to}
+\quad
+\operatorname{Coverage}(\tau)\ge c_{\min}\]</span></p>
+<p>Then both risk and coverage are reported once on untouched test data.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Risk can be reduced trivially by answering fewer examples; coverage reveals this trade-off.</p></li>
+<li><p>Coverage usually approaches zero, unless some predictions have confidence exactly one.</p></li>
+<li><p>Positive temperature scaling does not change top-1 decisions, but it can substantially change which examples cross a confidence threshold.</p></li>
+<li><p>Inspect confidence calibration, logit scale, temperature, and whether provider scores have comparable semantics.</p></li>
+<li><p>Searching thresholds on the test set overfits sampling noise and makes the reported test risk optimistically biased.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Simpson’s paradox arises when different group mixtures overwhelm consistent within-group improvements.</p></li>
+<li><p>Removing failures changes the evaluated population and can reward unreliable systems by excluding their hardest cases.</p></li>
+</ul>

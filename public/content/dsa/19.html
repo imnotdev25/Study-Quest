@@ -1,0 +1,71 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>A nine-step framework for ML and GenAI system design rounds, three worked designs (video recommendations, harmful content detection, an enterprise RAG assistant), how research and project deep-dive rounds are evaluated, and how to prepare behavioral stories, including Amazon’s Leadership Principles format.</p>
+</div>
+<h1 id="the-framework">The Framework</h1>
+<figure class="tikz"><img src="figs/dsa/0b3902ab1cf0.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Nine steps; spend time where the interviewer pulls you.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ol>
+<li><p><strong>Problem framing</strong>: business goal, users, scale, latency, constraints; translate to an ML task (classification, ranking, generation, retrieval) and define inputs and outputs. Ask whether ML is needed at all.</p></li>
+<li><p><strong>Metrics</strong>: offline (AUC, NDCG@k, recall@k, calibration) and online (watch time, conversion, retention, reports), plus guardrails (latency, cost, integrity). Explain why offline gains may not move online metrics.</p></li>
+<li><p><strong>Architecture</strong>: usually candidate generation <span class="math inline">\(\to\)</span> ranking <span class="math inline">\(\to\)</span> re-ranking/filters for recommendation and search; draw the non-ML parts too.</p></li>
+<li><p><strong>Data and labels</strong>: sources, natural vs human labels, delayed labels, sampling, negatives, biases (position, selection), splits by time (Chapter 16).</p></li>
+<li><p><strong>Features</strong>: user, item, context, cross features; embeddings; point-in-time correctness; online vs batch features.</p></li>
+<li><p><strong>Model</strong>: start with a simple baseline (logistic regression or GBDT), then a deep model (two-tower for retrieval, multi-task ranker for ranking); loss choice; offline evaluation with the right slices.</p></li>
+<li><p><strong>Serving</strong>: latency budget per stage, ANN retrieval, caching, batch vs online prediction, feature fetching, fallback when the model is down.</p></li>
+<li><p><strong>Online testing</strong>: A/B test design, ramp-up, shadow mode, interleaving for ranking.</p></li>
+<li><p><strong>Monitoring</strong>: drift, data quality, prediction distribution, delayed label metrics, retraining cadence, feedback loops.</p></li>
+</ol>
+</div>
+<h1 id="worked-design-video-recommendations">Worked Design: Video Recommendations</h1>
+<figure class="tikz"><img src="figs/dsa/791c737f25a4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The standard funnel.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Framing</strong>: maximize long-term satisfaction, proxied by watch time with guardrails on reports and “not interested.” <strong>Candidate generation</strong>: a two-tower model (user tower from history and context, item tower from content and metadata) trained with in-batch negatives and log-Q correction; item embeddings indexed with HNSW; plus heuristic sources (subscriptions, trending, fresh uploads) to cover cold start. <strong>Ranking</strong>: a multi-task network predicting click, watch time, like, share, and dislike; final score is a tuned weighted combination. <strong>Labels and bias</strong>: impressions are the training universe; position bias is corrected with a position feature set to a constant at serving time, or with propensity weighting. <strong>Serving</strong>: retrieval about 20 ms, ranking about 50 ms with precomputed item features cached and user features fetched from a feature store. <strong>Evaluation</strong>: offline recall@k for retrieval, NDCG and calibration for ranking; online A/B on watch time per user over at least two weeks to account for novelty effects. <strong>Risks</strong>: feedback loops and filter bubbles (exploration traffic, diversity constraints), cold start for new users (popular by region, onboarding interests) and new videos (content embeddings, exploration boosts).</p>
+</div>
+<h1 id="worked-design-harmful-content-detection">Worked Design: Harmful Content Detection</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Framing</strong>: classify posts (text, image, video) for several policy categories at upload and on report; precision matters for automatic removal, recall for routing to human review. <strong>Data</strong>: human-labeled reviews (expensive, policy changes shift labels), user reports (noisy, biased), and active learning to pick what to label. <strong>Model</strong>: a multimodal encoder fine-tuned with one head per policy; an LLM-based classifier with policy text in the prompt can handle new policies quickly at higher cost, often used as a second stage. <strong>Thresholds</strong>: per category, auto-action above a high-precision threshold, human review in a middle band, allow below. <strong>Metrics</strong>: precision/recall per category at operating points, prevalence (how much harmful content is viewed), and reviewer workload. <strong>Adversarial drift</strong>: attackers change spelling, images, and formats; monitor and retrain frequently; hash-match known bad content (perceptual hashing) as a fast first pass.</p>
+</div>
+<h1 id="worked-design-enterprise-rag-assistant">Worked Design: Enterprise RAG Assistant</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Framing</strong>: employees ask questions over internal documents and must get correct, cited answers they are allowed to see. <strong>Pipeline</strong>: connectors with change capture <span class="math inline">\(\to\)</span> parsing and structure-aware chunking <span class="math inline">\(\to\)</span> embeddings + BM25 index with ACL metadata <span class="math inline">\(\to\)</span> query rewriting <span class="math inline">\(\to\)</span> hybrid search filtered by the user’s groups <span class="math inline">\(\to\)</span> cross-encoder reranking <span class="math inline">\(\to\)</span> an LLM answer with citations, or “I don’t know.” <strong>Evaluation</strong> (the core of the answer): a golden set of real questions with labeled source documents; retrieval recall@k measured separately from answer faithfulness and correctness (LLM judge calibrated to human labels); slices by department and document type; regression gates in CI for prompt, model, and chunking changes. <strong>Online</strong>: thumbs up/down, escalation rate, citation click-through. <strong>Cost and latency</strong>: prompt caching for the system prompt, a small model for query rewriting, streaming responses, a response cache for repeated questions. <strong>Safety</strong>: treat retrieved text as untrusted (prompt injection), never let the model see documents the user cannot access, redact PII in logs.</p>
+</div>
+<h1 id="research-and-project-deep-dive-rounds">Research and Project Deep-Dive Rounds</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>What interviewers evaluate</strong>: depth (can you go three “why” levels down on your own work?), rigor (baselines, ablations, statistical significance, honest negative results), taste (choosing important problems and simple methods), and communication (explaining to a non-specialist and to an expert).</p>
+<p><strong>Preparing a project deep dive</strong>: for your two strongest projects, write down the problem and why it mattered; the baseline and its numbers; what you tried that failed and why; the final design and every choice’s alternative; the evaluation and its limitations; your personal contribution versus the team’s; and what you would do next. Expect questions like “why not approach X?”, “how do you know the gain is not from Y?”, and “what would break at 100<span class="math inline">\(\times\)</span> scale?”</p>
+<p><strong>Paper discussions</strong>: be ready to summarize a recent paper in your area in two minutes, state its key assumption, and critique its evaluation. <strong>Research talk</strong> (research scientist loops): 30–45 minutes on your work, with the motivation and one key insight clear in the first five minutes.</p>
+</div>
+<h1 id="behavioral-rounds">Behavioral Rounds</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Use <strong>STAR</strong>: Situation (one or two sentences), Task (your responsibility), Action (most of the answer, in the first person: what <em>you</em> did and why), Result (quantified, plus what you learned). Prepare 8–10 stories that each cover several themes:</p>
+<ul>
+<li><p>A project with large impact (and how you measured it).</p></li>
+<li><p>A disagreement with a colleague or manager and how it resolved.</p></li>
+<li><p>A failure or mistake and what you changed afterward.</p></li>
+<li><p>Ambiguous requirements you had to clarify or define.</p></li>
+<li><p>Influencing without authority; mentoring someone.</p></li>
+<li><p>A trade-off between speed and quality, or a hard prioritization.</p></li>
+<li><p>Going deep to debug something others had given up on.</p></li>
+<li><p>Delivering under a tight deadline.</p></li>
+</ul>
+<p><strong>Amazon</strong> interviews ask two or three Leadership Principle questions in every round and expect specific, data-backed STAR answers (“Tell me about a time you disagreed and committed,” “…dove deep,” “…earned trust”). Map each of your stories to the principles it demonstrates. <strong>AI labs</strong> often add questions on motivation and views about AI safety and the company’s mission; answer honestly and specifically.</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Jumping to a model architecture before metrics and data.</p></li>
+<li><p>Ignoring serving constraints: a 2-second ranking model in a 100 ms budget.</p></li>
+<li><p>Saying “we” throughout behavioral answers so your contribution is invisible.</p></li>
+<li><p>Stories without numbers, or failures that are secretly successes.</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Framing and metrics first; the funnel (retrieve, rank, re-rank) for most recommendation and search designs.</p></li>
+<li><p>In GenAI designs, evaluation methodology, cost, latency, and guardrails carry the answer.</p></li>
+<li><p>Deep dives reward depth, rigor, and honest trade-offs.</p></li>
+<li><p>Prepare STAR stories with numbers and map them to the company’s values.</p></li>
+</ul>
+</div>

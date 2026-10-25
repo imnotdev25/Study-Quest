@@ -1,0 +1,23 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Profile before you optimise. A profile tells you which of three things the GPU is waiting on: math (compute-bound), memory (bandwidth-bound) or the CPU (launch-bound: kernels are so small that launching them takes longer than running them).</p>
+</div>
+<h2 class="unnumbered" id="a-profiling-workflow">A profiling workflow</h2>
+<ol>
+<li><p><strong>Timeline first</strong>: PyTorch profiler or Nsight Systems (<code>nsys profile -t cuda,nvtx python serve.py</code>). Look for gaps between kernels (CPU or launch overhead) and for which kernels dominate.</p></li>
+<li><p><strong>One kernel deep</strong>: Nsight Compute (<code>ncu --set full</code>) gives achieved FLOP/s and bandwidth as fractions of peak. Compare against the roofline.</p></li>
+<li><p><strong>Prefill vs decode</strong>: prefill should be GEMM-dominated near peak FLOP/s; decode should be near peak bandwidth. Decode at small batch often shows launch gaps, which is what CUDA graphs fix (next part).</p></li>
+</ol>
+<pre class="code output"><code class="output">from torch.profiler import profile, ProfilerActivity
+with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+    model.generate(**inputs, max_new_tokens=64)
+print(prof.key_averages().table(sort_by=&quot;cuda_time_total&quot;, row_limit=15))
+prof.export_chrome_trace(&quot;trace.json&quot;)          # open in https://ui.perfetto.dev</code></pre>
+<h2 class="unnumbered" id="tuning-one-gpu-to-an-slo">Tuning one GPU to an SLO</h2>
+<ol>
+<li><p>Baseline with defaults at a fixed workload and rate.</p></li>
+<li><p><code>--gpu-memory-utilization</code>: higher leaves more KV blocks; too high risks out-of-memory from other allocations.</p></li>
+<li><p><code>--max-num-seqs</code> and <code>--max-num-batched-tokens</code>: the batch limit and the token budget. Raise until TPOT nears its SLO.</p></li>
+<li><p><code>--enable-chunked-prefill</code>, <code>--enable-prefix-caching</code> (on by default in recent vLLM), FP8 weights and KV (<code>--quantization fp8 --kv-cache-dtype fp8</code>).</p></li>
+<li><p>Sweep the request rate and report the largest rate whose p99 TTFT and TPOT stay inside the SLO: that is the GPU’s SLO-safe capacity.</p></li>
+</ol>

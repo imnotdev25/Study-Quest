@@ -1,0 +1,288 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a phone plan with adaptive overage pricing</div>
+<p>Imagine a data plan where, if you go over your limit this month, next month’s per-GB price rises, and if you stay well under, it falls. You’d naturally settle near your limit. A Lagrange multiplier is that adaptive price for tool calls: instead of guessing a fixed penalty, let measured violations set it.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/40559ef1ba68.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Stylized: calls overshoot the budget (2), <span class="math inline">\(\lambda\)</span> rises, and calls settle at the budget.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can a fixed reward for every tool call produce wasteful behavior?</p></li>
+<li><p>Under what condition does potential-based shaping preserve trajectory ordering?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="success-and-resource-limits-are-different-objectives">2. Success and resource limits are different objectives</h3>
+<p>A tool agent may need to maximize task reward while respecting a limit:</p>
+<p><span class="math display">\[\max_\pi \mathbb E_\pi[R]\]</span></p>
+<p>subject to:</p>
+<p><span class="math display">\[\mathbb E_\pi[C]\le B\]</span></p>
+<p>Here, <span class="math inline">\(C\)</span> might represent tool calls, latency, money or risk, and <span class="math inline">\(B\)</span> is the allowed budget.</p>
+<p>A manually chosen objective such as:</p>
+<p><span class="math display">\[R-\beta C\]</span></p>
+<p>requires guessing <span class="math inline">\(\beta\)</span>. A Lagrangian approach adapts the penalty:</p>
+<p><span class="math display">\[\mathcal L(\pi,\lambda)
+=
+\mathbb E_\pi[R]
+-
+\lambda
+\left(
+\mathbb E_\pi[C]-B
+\right)\]</span></p>
+<p>with:</p>
+<p><span class="math display">\[\lambda\ge0\]</span></p>
+<p>The policy maximizes <span class="math inline">\(\mathcal L\)</span>. The multiplier follows dual ascent:</p>
+<p><span class="math display">\[\lambda
+\leftarrow
+\max\left(
+0,\;
+\lambda+\eta_\lambda
+(\mathbb E[C]-B)
+\right)\]</span></p>
+<p>Therefore:</p>
+<ul>
+<li><p>cost above budget increases <span class="math inline">\(\lambda\)</span>;</p></li>
+<li><p>cost below budget decreases <span class="math inline">\(\lambda\)</span>;</p></li>
+<li><p><span class="math inline">\(\lambda=0\)</span> when the constraint is comfortably satisfied.</p></li>
+</ul>
+<p>This separates the real reward from operational constraints. It also makes the trade-off observable rather than hiding it inside one shaped score.</p>
+<p>Practical cautions:</p>
+<ul>
+<li><p>measure cost from the environment, not model claims;</p></li>
+<li><p>use comparable units and stable averaging windows;</p></li>
+<li><p>dual updates that are too fast can oscillate;</p></li>
+<li><p>per-batch constraints can be noisy;</p></li>
+<li><p>evaluate hard safety constraints outside this expected-cost formulation.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>strategy logits, probabilities, rewards and costs: <span style="background-color: codeinlinebg"><code> [A]</code></span></p></li>
+<li><p>expected reward, cost and entropy: scalar</p></li>
+<li><p>multiplier <span class="math inline">\(\lambda\)</span>: nonnegative scalar</p></li>
+</ul>
+<p>DPO preferences may indirectly encode a preference for cheaper traces, but ordinary DPO cannot adapt a multiplier from live deployment costs.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: dual ascent</div>
+<p>Goal: <span class="math inline">\(\max_\pi\mathbb E[R]\)</span> subject to <span class="math inline">\(\mathbb E[C]\le d\)</span>. Lagrangian: <span class="math inline">\(\mathcal L(\pi,\lambda)=\mathbb E[R]-\lambda(\mathbb E[C]-d)\)</span>, with <span class="math inline">\(\lambda\ge0\)</span>. Alternate: (1) improve <span class="math inline">\(\pi\)</span> on <span class="math inline">\(R-\lambda C\)</span>; (2) <span class="math inline">\(\lambda\gets\max(0,\lambda+\eta_\lambda(\hat C-d))\)</span>. At a solution, <span class="math inline">\(\lambda\)</span> is the <em>shadow price</em>: how much reward one extra unit of budget would buy. The full algorithm is in Topic 151.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Treat success and cost as separate signals.</p></li>
+<li><p>Let violations tune the price, and monitor reward, cost and <span class="math inline">\(\lambda\)</span> separately.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: three <span class="math inline">\(\lambda\)</span> updates</div>
+<p>Budget <span class="math inline">\(d=2\)</span>, <span class="math inline">\(\eta_\lambda=0.1\)</span>, <span class="math inline">\(\lambda_0=0\)</span>. Measured calls <span class="math inline">\(3.5,2.4,1.8\)</span>: <span class="math inline">\(\lambda=0+0.1(1.5)=0.15\)</span>, then <span class="math inline">\(0.15+0.04=0.19\)</span>, then <span class="math inline">\(0.19-0.02=0.17\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Backpropagating into <span class="math inline">\(\lambda\)</span> through the policy loss.</p></li>
+<li><p>Letting <span class="math inline">\(\lambda\)</span> go negative (that rewards spending).</p></li>
+<li><p>Estimating cost from a handful of rollouts (noisy <span class="math inline">\(\lambda\)</span>).</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-meet-a-tool-call-budget">3. PyTorch exercise — meet a tool-call budget</h3>
+<p>Three strategies are available:</p>
+<ul>
+<li><p>direct answer: moderate success, no tool cost;</p></li>
+<li><p>one tool: high success, cost <span style="background-color: codeinlinebg"><code> 1</code></span>;</p></li>
+<li><p>many tools: highest success, cost <span style="background-color: codeinlinebg"><code> 3</code></span>.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+rewards = torch.tensor([
+    0.60,  # direct
+    0.90,  # one tool
+    1.00,  # many tools
+])
+
+costs = torch.tensor([
+    0.0,
+    1.0,
+    3.0,
+])
+
+budget = 1.2
+dual_lr = 0.05
+entropy_coefficient = 0.02
+
+logits = torch.nn.Parameter(
+    torch.zeros(3)
+)
+
+optimizer = torch.optim.Adam(
+    [logits],
+    lr=0.05,
+)
+
+lambda_value = torch.tensor(0.0)
+
+history = []
+
+for step in range(301):
+    # TODO 1: Strategy probabilities.
+    probabilities = ...
+
+    # TODO 2: Expected reward, expected cost
+    # and categorical entropy.
+    expected_reward = ...
+    expected_cost = ...
+    entropy = ...
+
+    constraint_violation = (
+        expected_cost - budget
+    )
+
+    # TODO 3: Policy loss. The policy maximizes
+    # reward, respects the lambda-weighted constraint
+    # and retains a small amount of entropy.
+    policy_objective = ...
+    policy_loss = ...
+
+    # TODO 4: Update the policy.
+    ...
+
+    # TODO 5: Dual ascent followed by projection
+    # onto lambda &gt;= 0. Detach measured cost.
+    with torch.no_grad():
+        lambda_value = ...
+
+    if step % 50 == 0:
+        history.append({
+            &quot;step&quot;: step,
+            &quot;probabilities&quot;:
+                probabilities.detach().tolist(),
+            &quot;reward&quot;:
+                expected_reward.item(),
+            &quot;cost&quot;:
+                expected_cost.item(),
+            &quot;violation&quot;:
+                constraint_violation.item(),
+            &quot;lambda&quot;:
+                lambda_value.item(),
+        })
+
+for row in history:
+    print(row)
+
+with torch.no_grad():
+    final_probabilities = logits.softmax(
+        dim=-1
+    )
+
+    final_reward = (
+        final_probabilities * rewards
+    ).sum()
+
+    final_cost = (
+        final_probabilities * costs
+    ).sum()
+
+print(&quot;\nFinal probabilities:&quot;,
+      final_probabilities)
+
+print(&quot;Final expected reward:&quot;,
+      final_reward.item())
+
+print(&quot;Final expected cost:&quot;,
+      final_cost.item())
+
+print(
+    &quot;Unconstrained best action:&quot;,
+    rewards.argmax().item(),
+)
+
+print(
+    &quot;Its cost:&quot;,
+    costs[rewards.argmax()].item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action does unconstrained reward maximization select?</p></li>
+<li><p>Is that action within the budget?</p></li>
+<li><p>What happens to <span class="math inline">\(\lambda\)</span> when expected cost exceeds <span style="background-color: codeinlinebg"><code> 1.2</code></span>?</p></li>
+<li><p>Must the final policy assign zero probability to the many-tool strategy?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> logits.softmax(dim=-1)</code></span>.</p></li>
+<li><p>Expectations are probability-weighted sums.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> Categorical(probs=probabilities).entropy()</code></span> is scalar.</p></li>
+<li><p>Maximize reward minus <span style="background-color: codeinlinebg"><code> lambda * violation</code></span> plus entropy.</p></li>
+<li><p>PyTorch optimizers minimize, so negate the objective.</p></li>
+<li><p>Project the multiplier using <span style="background-color: codeinlinebg"><code> .clamp_min(0.0)</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Use gradient descent for <span class="math inline">\(\lambda\)</span>. When cost exceeds budget, the penalty decreases—the opposite of the desired controller.</p>
+<p>Remove <span style="background-color: codeinlinebg"><code> .detach()</code></span> from the dual measurement while implementing <span class="math inline">\(\lambda\)</span> as a differentiable parameter. Actor and dual gradients can become accidentally coupled.</p>
+<p>Increase <span style="background-color: codeinlinebg"><code> dual_lr</code></span> to <span style="background-color: codeinlinebg"><code> 1.0</code></span>. The multiplier may overshoot, causing the policy to alternate between expensive and overly conservative behavior.</p>
+<p>Finally, evaluate only the combined Lagrangian. A stable combined number can hide declining reward, rising cost or cancellation between them.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is <span class="math inline">\(\lambda\)</span> updated in the opposite direction from policy-loss minimization?</p></li>
+<li><p>What does a persistently increasing <span class="math inline">\(\lambda\)</span> indicate?</p></li>
+<li><p>Why might an expected-cost constraint be insufficient for dangerous tools?</p></li>
+<li><p>Which quantities should be logged separately?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Strategy probabilities:</p>
+<pre class="code python"><code class="language-python">probabilities = logits.softmax(
+    dim=-1
+)</code></pre>
+<p>Expected quantities:</p>
+<pre class="code python"><code class="language-python">expected_reward = (
+    probabilities * rewards
+).sum()
+
+expected_cost = (
+    probabilities * costs
+).sum()
+
+entropy = Categorical(
+    probs=probabilities
+).entropy()</code></pre>
+<p>Policy objective:</p>
+<pre class="code python"><code class="language-python">policy_objective = (
+    expected_reward
+    - lambda_value.detach()
+    * constraint_violation
+    + entropy_coefficient
+    * entropy
+)
+
+policy_loss = -policy_objective</code></pre>
+<p>Policy update:</p>
+<pre class="code python"><code class="language-python">optimizer.zero_grad()
+policy_loss.backward()
+optimizer.step()</code></pre>
+<p>Dual update:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    lambda_value = (
+        lambda_value
+        + dual_lr
+        * constraint_violation.detach()
+    ).clamp_min(0.0)</code></pre>
+<p>Unconstrained optimization selects action <span style="background-color: codeinlinebg"><code> 2</code></span>:</p>
+<p><span class="math display">\[R_2=1.0,\qquad C_2=3\]</span></p>
+<p>which violates:</p>
+<p><span class="math display">\[B=1.2\]</span></p>
+<p>The constrained policy can mix strategies. It may retain some probability on action <span style="background-color: codeinlinebg"><code> 2</code></span>, provided cheaper choices keep average cost near the budget:</p>
+<p><span class="math display">\[\sum_a\pi(a)C(a)\lesssim1.2\]</span></p>
+<p>Entropy regularization and finite optimization mean the final cost may not equal <span style="background-color: codeinlinebg"><code> 1.2</code></span> exactly.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The multiplier solves a maximization problem: increase the penalty when the constraint is violated. The actor separately maximizes its penalized objective.</p></li>
+<li><p>The policy continues violating the constraint, the dual learning rate is too slow, or the constraint may be infeasible.</p></li>
+<li><p>A low average can hide rare catastrophic calls. Hard permissions, per-episode limits and tail-risk constraints may also be required.</p></li>
+<li><p>Log raw task reward, each cost component, constraint violation, multiplier, policy entropy, tool frequencies and cost percentiles—not only their weighted sum.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>It changes the optimized return, so extra calls can become profitable even when they do not improve task success.</p></li>
+<li><p>Intermediate potential terms cancel when shaping and return calculations use matching discount factors and consistent endpoint potentials.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> treat success and tool cost as separate signals. Let the multiplier respond to measured constraint violations, and monitor reward, cost and <span class="math inline">\(\lambda\)</span> independently.</p>

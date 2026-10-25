@@ -1,0 +1,254 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: tonight’s choice changes tomorrow’s state</div>
+<p>Staying up scrolling until 2 am feels rewarding now, but it moves you into the state “tired tomorrow,” where every action pays less. That is the jump from bandits to MDPs: actions change <em>where you’ll be</em>, not just what you get.</p>
+<p>The discount <span class="math inline">\(\gamma\)</span> is your patience. <span class="math inline">\(\gamma=0\)</span> is “I want it now.” <span class="math inline">\(\gamma=0.99\)</span> is “I’ll invest for the future.” Humans tend to discount the near future too steeply, which is a big part of why procrastination feels so natural.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/29e0118510bd.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A tiny MDP. Scrolling pays the most right now but moves you into a worse state.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<p>Try these before continuing:</p>
+<ol>
+<li><p>Why does a bandit not need a meaningful state?</p></li>
+<li><p>What is the exploration–exploitation trade-off?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="from-bandits-to-mdps">2. From bandits to MDPs</h3>
+<p>A bandit repeatedly presents essentially the same situation. In a full RL problem, your current action changes the next situation.</p>
+<p>Think of chess:</p>
+<ul>
+<li><p>The board position is the <strong>state</strong>.</p></li>
+<li><p>Moving a piece is the <strong>action</strong>.</p></li>
+<li><p>Your move changes the board.</p></li>
+<li><p>That new board affects which moves become possible later.</p></li>
+</ul>
+<p>This is modeled as a <strong>Markov Decision Process</strong>, commonly written:</p>
+<p><span class="math display">\[\mathcal{M}=(\mathcal{S},\mathcal{A},P,R,\gamma)\]</span></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Component</strong></th>
+<th style="text-align: left;"><strong>Meaning</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Component</strong></td>
+<td style="text-align: left;"><strong>Meaning</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\mathcal S\)</span></td>
+<td style="text-align: left;">Possible states</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\mathcal A\)</span></td>
+<td style="text-align: left;">Possible actions</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(P(s&#39;\mid s,a)\)</span></td>
+<td style="text-align: left;">Distribution over the next state</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(R(s,a,s&#39;)\)</span></td>
+<td style="text-align: left;">Reward produced by the transition</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\gamma\)</span></td>
+<td style="text-align: left;">Discount factor</td>
+</tr>
+</tbody>
+</table>
+<p>The <strong>Markov property</strong> says that the current state contains the information needed to predict the next state:</p>
+<p><span class="math display">\[P(S_{t+1}\mid S_t,A_t,\text{history})
+=
+P(S_{t+1}\mid S_t,A_t)\]</span></p>
+<p>This does not mean the past is irrelevant. It means its relevant information must already be represented in <span class="math inline">\(S_t\)</span>.</p>
+<h3 class="unnumbered" id="trajectories">Trajectories</h3>
+<p>Interaction produces a trajectory:</p>
+<p><span class="math display">\[\tau=(S_0,A_0,R_1,S_1,A_1,R_2,\ldots)\]</span></p>
+<p>A policy generates actions, while the environment generates subsequent states and rewards:</p>
+<p><span class="math display">\[A_t\sim\pi(\cdot\mid S_t)\]</span></p>
+<p><span class="math display">\[S_{t+1}\sim P(\cdot\mid S_t,A_t)\]</span></p>
+<h3 class="unnumbered" id="discounted-return">Discounted return</h3>
+<p>The return from time <span class="math inline">\(t\)</span> is:</p>
+<p><span class="math display">\[G_t
+=
+R_{t+1}
++\gamma R_{t+2}
++\gamma^2R_{t+3}
++\cdots\]</span></p>
+<p>Equivalently:</p>
+<p><span class="math display">\[G_t=R_{t+1}+\gamma G_{t+1}\]</span></p>
+<p>This recursive form is fundamental. Bellman equations and temporal-difference learning will reuse the same structure.</p>
+<p>For rewards <span style="background-color: codeinlinebg"><code> [1, 0, 2]</code></span> and <span class="math inline">\(\gamma=0.9\)</span>:</p>
+<p><span class="math display">\[G_0=1+0.9(0)+0.9^2(2)=2.62\]</span></p>
+<p>A useful analogy is the present value of future money: receiving something later may count less than receiving it now. But in RL, discounting can also:</p>
+<ul>
+<li><p>make infinite reward sums finite;</p></li>
+<li><p>prioritize near-term consequences;</p></li>
+<li><p>represent uncertainty about whether interaction continues.</p></li>
+</ul>
+<p>With <span class="math inline">\(\gamma=0\)</span>, only the next reward matters. As <span class="math inline">\(\gamma\to1\)</span>, distant rewards matter increasingly.</p>
+<h3 class="unnumbered" id="realized-versus-expected-return">Realized versus expected return</h3>
+<p><span class="math inline">\(G_t\)</span> is the return from one sampled trajectory. The policy objective averages across possible trajectories:</p>
+<p><span class="math display">\[J(\pi)=\mathbb{E}_{\tau\sim\pi}[G_0]\]</span></p>
+<p>One successful episode does not prove that a policy is good, just as one lucky bandit pull does not prove an arm is best.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>For an autoregressive LLM:</p>
+<ul>
+<li><p>state: prompt plus tokens generated so far;</p></li>
+<li><p>action: next token;</p></li>
+<li><p>policy: next-token probability distribution;</p></li>
+<li><p>trajectory: completed token sequence;</p></li>
+<li><p>reward: often assigned to the completed answer.</p></li>
+</ul>
+<p>A token changes the prefix seen at the next step, so generation is sequential—not a bandit. A poor early token can place the model in a bad region of future possible sequences.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: discounting as a geometric series</div>
+<p><span class="math inline">\(G_t=\sum_{k=0}^{\infty}\gamma^k r_{t+k+1}\)</span>. Three facts follow:</p>
+<ol>
+<li><p><strong>Recursion:</strong> <span class="math inline">\(G_t=r_{t+1}+\gamma G_{t+1}\)</span>. This is why the exercise computes returns <em>backward</em>.</p></li>
+<li><p><strong>Bounded:</strong> if <span class="math inline">\(|r|\le R_{\max}\)</span>, then <span class="math inline">\(|G_t|\le R_{\max}\sum_k\gamma^k=\dfrac{R_{\max}}{1-\gamma}\)</span>.</p></li>
+<li><p><strong>Effective horizon:</strong> the weights <span class="math inline">\(\gamma^k\)</span> sum to <span class="math inline">\(1/(1-\gamma)\)</span>, so the agent “sees” about that many steps: 10 steps for <span class="math inline">\(\gamma=0.9\)</span>, 100 for <span class="math inline">\(\gamma=0.99\)</span>.</p></li>
+</ol>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/206131956645.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<p><strong>Markov property:</strong> <span class="math inline">\(P(s_{t+1}\mid s_t,a_t)=P(s_{t+1}\mid s_0,a_0,\dots,s_t,a_t)\)</span>. The state must contain everything needed to predict the future. For an LLM, the state is the whole prompt plus every token generated so far.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>MDP = states + actions + transitions + rewards + <span class="math inline">\(\gamma\)</span>.</p></li>
+<li><p><span class="math inline">\(G_t=r_{t+1}+\gamma G_{t+1}\)</span>, and the horizon is roughly <span class="math inline">\(1/(1-\gamma)\)</span> steps.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: batched returns with an episode boundary</div>
+<p><span class="math inline">\(\gamma=0.9\)</span>. Rewards <span class="math inline">\([1,0,2\,|\,1,1]\)</span> with done after step 3. Go backward: <span class="math inline">\(G_5=1\)</span>; <span class="math inline">\(G_4=1+0.9(1)=1.9\)</span>; at step 3 the episode ended, so reset: <span class="math inline">\(G_3=2\)</span>; <span class="math inline">\(G_2=0+0.9(2)=1.8\)</span>; <span class="math inline">\(G_1=1+0.9(1.8)=2.62\)</span>. Result: <span class="math inline">\([2.62,1.8,2,1.9,1]\)</span>. Without the reset, <span class="math inline">\(G_3\)</span> would wrongly become <span class="math inline">\(2+0.9(1.9)=3.71\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Looping forward (each step would need all future rewards).</p></li>
+<li><p>Forgetting <span class="math inline">\((1-d)\)</span>, so returns leak across episodes.</p></li>
+<li><p>Discounting the first reward: <span class="math inline">\(G_t\)</span> starts with <span class="math inline">\(r_{t+1}\)</span>, not <span class="math inline">\(\gamma r_{t+1}\)</span>.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Discounted returns, computed backward</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> rewards <span class="math inline">\(r_1,\dots,r_T\)</span>, discount <span class="math inline">\(\gamma\)</span>, done flags <span class="math inline">\(d_1,\dots,d_T\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(G\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t=T-1\)</span> <strong>down to</strong> <span class="math inline">\(0\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(G\gets r_{t+1}+\gamma(1-d_{t+1})\,G\)</span> <em>▷ reset the sum at episode boundaries</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(G_t\gets G\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(G_0,\dots,G_{T-1}\)</span></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-compute-batched-returns-backward">3. PyTorch exercise — compute batched returns backward</h3>
+<p>Two episodes are stored in a padded batch:</p>
+<pre class="code python"><code class="language-python">import torch
+
+rewards = torch.tensor([
+    [1.0, 0.0, 2.0, 99.0],  # 99 is padding, not a real reward
+    [0.0, 1.0, 1.0,  3.0],
+])  # [batch=2, time=4]
+
+valid = torch.tensor([
+    [1.0, 1.0, 1.0, 0.0],
+    [1.0, 1.0, 1.0, 1.0],
+])  # [batch=2, time=4]
+
+gamma = 0.9
+returns = torch.zeros_like(rewards)
+running_return = torch.zeros(rewards.shape[0])  # [batch]
+
+# Work backward because G_t depends on G_{t+1}.
+for t in reversed(range(rewards.shape[1])):
+    # TODO 1: Apply the recursive return equation.
+    running_return = ...
+
+    # TODO 2: Remove padded positions.
+    running_return = ...
+
+    # TODO 3: Store one return per episode at time t.
+    returns[:, t] = ...
+
+print(returns)</code></pre>
+<p>Expected shape:</p>
+<pre class="code text"><code class="language-plaintext">[batch=2, time=4]</code></pre>
+<p>Then compute each episode’s total valid reward:</p>
+<pre class="code python"><code class="language-python"># TODO 4
+undiscounted_total = ...
+print(undiscounted_total)</code></pre>
+<p>Finally, predict before running:</p>
+<ul>
+<li><p>What changes when <span style="background-color: codeinlinebg"><code> gamma = 0.0</code></span>?</p></li>
+<li><p>What changes when <span style="background-color: codeinlinebg"><code> gamma = 1.0</code></span>?</p></li>
+</ul>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Recursive update: <span style="background-color: codeinlinebg"><code> reward now + gamma * return later</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> valid[:, t]</code></span> has shape <span style="background-color: codeinlinebg"><code> [batch]</code></span>.</p></li>
+<li><p>Multiplying by the validity mask resets padded positions.</p></li>
+<li><p>For totals, multiply rewards by the mask before summing over time.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is the current URL insufficient as a Markov state for a browser agent?</p></li>
+<li><p>Is <span class="math inline">\(\gamma=0.9\)</span> saying that later rewards are physically smaller?</p></li>
+<li><p>Why must returns be computed backward in this implementation?</p></li>
+<li><p>What happens if the mask is applied to <span style="background-color: codeinlinebg"><code> rewards</code></span> only after summing over time?</p></li>
+<li><p>An LLM receives reward only after its final token. Which earlier actions receive nonzero return when <span class="math inline">\(\gamma=1\)</span>?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">import torch
+
+rewards = torch.tensor([
+    [1.0, 0.0, 2.0, 99.0],
+    [0.0, 1.0, 1.0,  3.0],
+])
+
+valid = torch.tensor([
+    [1.0, 1.0, 1.0, 0.0],
+    [1.0, 1.0, 1.0, 1.0],
+])
+
+gamma = 0.9
+returns = torch.zeros_like(rewards)
+running_return = torch.zeros(rewards.shape[0])
+
+for t in reversed(range(rewards.shape[1])):
+    running_return = rewards[:, t] + gamma * running_return
+    running_return = running_return * valid[:, t]
+    returns[:, t] = running_return
+
+undiscounted_total = (rewards * valid).sum(dim=1)
+
+print(returns)
+print(undiscounted_total)</code></pre>
+<p>Approximate output:</p>
+<pre class="code python"><code class="language-python">tensor([
+    [2.6200, 1.8000, 2.0000, 0.0000],
+    [3.8970, 4.3300, 3.7000, 3.0000]
+])
+
+tensor([3., 5.])</code></pre>
+<p>When <span style="background-color: codeinlinebg"><code> gamma = 0.0</code></span>, every valid return equals its immediate reward:</p>
+<pre class="code python"><code class="language-python">[1, 0, 2] and [0, 1, 1, 3]</code></pre>
+<p>When <span style="background-color: codeinlinebg"><code> gamma = 1.0</code></span>, each return becomes the undiscounted sum of all subsequent rewards:</p>
+<pre class="code python"><code class="language-python">[3, 2, 2] and [5, 5, 4, 3]</code></pre>
+<p>This masking approach assumes padding follows the terminal transition. More general replay data usually carries an explicit <span style="background-color: codeinlinebg"><code> done</code></span> or continuation mask for every transition.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The next browser state may also depend on page content, authentication, open dialogs, previous actions and other information absent from the URL.</p></li>
+<li><p>No. Discounting changes how the objective weights rewards; it does not alter the observed reward itself.</p></li>
+<li><p><span class="math inline">\(G_t\)</span> depends on <span class="math inline">\(G_{t+1}\)</span>, so the later value must already be available.</p></li>
+<li><p>The padding reward contaminates the sum before masking can remove it. Mask elementwise first.</p></li>
+<li><p>Every earlier token action receives the final reward in its return when there are no intermediate rewards and <span class="math inline">\(\gamma=1\)</span>.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A stationary bandit presents the same decision repeatedly; actions produce rewards but do not create meaningful next states.</p></li>
+<li><p>Exploitation selects the currently best-known action, while exploration gathers information that may correct the current estimates.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> In an MDP, an action matters twice: it can produce an immediate reward and it can move the agent into a better or worse future state.</p>

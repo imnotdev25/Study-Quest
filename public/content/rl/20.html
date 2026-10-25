@@ -1,0 +1,281 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: don’t eat the same meal every day</div>
+<p>Even if pizza is your favourite, eating only pizza means you’ll never notice if your tastes change or a better option opens nearby. Investors call it diversification. Entropy regularization pays the agent a small bonus for keeping options open, so it doesn’t commit to one action too early.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/992a06bc93b5.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>In PPO, what happens to a positive-advantage sample when its ratio rises above <span class="math inline">\(1+\epsilon\)</span>?</p></li>
+<li><p>Why must PPO still monitor KL despite clipping?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="reward-alone-can-collapse-a-policy">2. Reward alone can collapse a policy</h3>
+<p>Suppose several routes reach the gym, but one currently looks slightly faster. A reward-only policy may commit to it immediately and stop learning about the alternatives.</p>
+<p>Entropy measures how spread out a categorical policy is:</p>
+<p><span class="math display">\[\mathcal H(\pi(\cdot\mid s))
+=
+-\sum_a
+\pi(a\mid s)\log\pi(a\mid s)\]</span></p>
+<ul>
+<li><p>High entropy: probabilities are spread across actions.</p></li>
+<li><p>Low entropy: one action dominates.</p></li>
+<li><p>Deterministic policy: entropy approaches zero.</p></li>
+</ul>
+<p>Entropy-regularized RL maximizes:</p>
+<p><span class="math display">\[J(\pi)
+=
+\mathbb E_\pi[R]
++
+\alpha\mathcal H(\pi)\]</span></p>
+<p>where <span class="math inline">\(\alpha\geq0\)</span> controls the reward–exploration trade-off.</p>
+<p>Because:</p>
+<p><span class="math display">\[\mathcal H(\pi)
+=
+\mathbb E_{a\sim\pi}
+[-\log\pi(a\mid s)]\]</span></p>
+<p>we can interpret the objective as maximizing a modified reward:</p>
+<p><span class="math display">\[R_{\text{soft}}
+=
+R-\alpha\log\pi(a\mid s)\]</span></p>
+<p>A surprising action has low probability and therefore large <span class="math inline">\(-\log\pi\)</span>, giving it an exploration bonus.</p>
+<h3 class="unnumbered" id="the-soft-optimal-policy">The soft optimal policy</h3>
+<p>For known action values <span class="math inline">\(Q(s,a)\)</span>, the entropy-regularized optimum is:</p>
+<p><span class="math display">\[\pi^*(a\mid s)
+=
+\frac{\exp(Q(s,a)/\alpha)}
+{\sum_j\exp(Q(s,j)/\alpha)}\]</span></p>
+<p>This is a Boltzmann or softmax policy.</p>
+<ul>
+<li><p>Small <span class="math inline">\(\alpha\)</span>: sharply prefers the best action.</p></li>
+<li><p>Large <span class="math inline">\(\alpha\)</span>: more uniform.</p></li>
+<li><p>As <span class="math inline">\(\alpha\to0\)</span>: approaches greedy selection.</p></li>
+</ul>
+<p>The corresponding soft value is:</p>
+<p><span class="math display">\[V_{\text{soft}}(s)
+=
+\alpha\log
+\sum_a\exp\left(\frac{Q(s,a)}{\alpha}\right)\]</span></p>
+<p>Use <span style="background-color: codeinlinebg"><code> softmax</code></span> and <span style="background-color: codeinlinebg"><code> logsumexp</code></span> rather than manually exponentiating large logits.</p>
+<p>For a batch:</p>
+<ul>
+<li><p>logits and action probabilities: <span style="background-color: codeinlinebg"><code> [B, actions]</code></span></p></li>
+<li><p>selected log-probabilities: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>entropy per state: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>objective: scalar</p></li>
+</ul>
+<h3 class="unnumbered" id="what-entropy-does-not-guarantee">What entropy does not guarantee</h3>
+<p>Entropy creates diverse actions, but not necessarily useful exploration. A policy can repeatedly sample irrelevant or unsafe actions while remaining highly entropic.</p>
+<p>A large <span class="math inline">\(\alpha\)</span> can also prevent convergence to a task’s best deterministic behaviour.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>A token-level entropy bonus discourages an LLM from becoming prematurely deterministic. But excessive entropy can increase incoherent or low-quality tokens. Prompt and padding tokens must be excluded when averaging token entropy.</p>
+<p>SAC, coming next, builds entropy directly into its actor and critic targets.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the soft-optimal policy is a softmax</div>
+<p>At one state, maximize <span class="math inline">\(\sum_a\pi(a)Q(a)+\alpha\mathcal H(\pi)\)</span> subject to <span class="math inline">\(\sum_a\pi(a)=1\)</span>. Setting the derivative of the Lagrangian to zero: <span class="math display">\[Q(a)-\alpha(\log\pi(a)+1)-\lambda=0\ \Rightarrow\ \pi^*(a)=\frac{\exp(Q(a)/\alpha)}{\sum_b\exp(Q(b)/\alpha)} .\]</span> The optimal value is the <strong>soft max</strong>: <span class="math inline">\(V=\alpha\log\sum_a e^{Q(a)/\alpha}\)</span>. As <span class="math inline">\(\alpha\to0\)</span> this becomes <span class="math inline">\(\max_aQ(a)\)</span> (greedy), and as <span class="math inline">\(\alpha\to\infty\)</span> the policy becomes uniform.</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/8df7276ee0b7.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Low temperature: almost greedy. High temperature: heading toward uniform (1/3 each).</em></p>
+</div>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Objective <span class="math inline">\(=\)</span> reward <span class="math inline">\(+\ \alpha\cdot\)</span>entropy, and its optimum is a Boltzmann (softmax) policy.</p></li>
+<li><p><span class="math inline">\(\alpha\)</span> is the exchange rate between reward and curiosity.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: temperature in numbers</div>
+<p><span class="math inline">\(Q=(2,1,0)\)</span>.</p>
+<ul>
+<li><p><span class="math inline">\(\alpha=1\)</span>: <span class="math inline">\(\pi=(0.665,0.245,0.090)\)</span>, soft value <span class="math inline">\(V=\log(e^2+e+1)=2.408\)</span>.</p></li>
+<li><p><span class="math inline">\(\alpha=0.5\)</span>: <span class="math inline">\(\pi=(0.867,0.117,0.016)\)</span>. Closer to greedy.</p></li>
+</ul>
+<p><span class="math inline">\(V\)</span> exceeds <span class="math inline">\(\max Q=2\)</span>: the soft max adds a bonus for having options.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Adding <span class="math inline">\(-\alpha\mathcal H\)</span> instead of <span class="math inline">\(+\alpha\mathcal H\)</span> to the objective.</p></li>
+<li><p>Forgetting <span class="math inline">\(\alpha\)</span> inside the exponent.</p></li>
+<li><p>Computing <span class="math inline">\(\log\sum e^{x}\)</span> naively (overflow), instead of with <code>logsumexp</code>.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Soft value iteration (entropy-regularized)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> transitions <span class="math inline">\(P\)</span>, rewards <span class="math inline">\(r\)</span>, discount <span class="math inline">\(\gamma\)</span>, temperature <span class="math inline">\(\alpha\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(V(s)\gets0\)</span> for every state</div>
+<div class="algo-line" style="--d:0"><strong>repeat</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(Q(s,a)\gets r(s,a)+\gamma\sum_{s&#39;}P(s&#39;|s,a)V(s&#39;)\)</span> for all <span class="math inline">\(s,a\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(V(s)\gets\alpha\log\sum_a\exp\big(Q(s,a)/\alpha\big)\)</span> <em>▷ soft max replaces max</em></div>
+<div class="algo-line" style="--d:0"><strong>until</strong> <span class="math inline">\(V\)</span> stops changing</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\pi(a|s)\gets\exp\big((Q(s,a)-V(s))/\alpha\big)\)</span> <em>▷ a softmax policy</em></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-recover-the-soft-optimal-policy">3. PyTorch exercise — recover the soft-optimal policy</h3>
+<p>Three actions have known rewards. Train categorical logits to maximize expected reward plus entropy.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+rewards = torch.tensor([
+    0.0, 1.0, 2.0
+])  # [actions=3]
+
+alpha = 0.5
+
+logits = torch.nn.Parameter(
+    torch.zeros(3)
+)  # [actions=3]
+
+optimizer = torch.optim.Adam([logits], lr=0.08)
+
+history = []
+
+for step in range(300):
+    policy = Categorical(logits=logits)
+
+    # TODO 1: Obtain normalized action probabilities.
+    probabilities = ...
+
+    # TODO 2: Exact expected environmental reward.
+    expected_reward = ...
+
+    # TODO 3: Categorical entropy.
+    entropy = ...
+
+    # TODO 4: Entropy-regularized objective and minimization loss.
+    objective = ...
+    loss = ...
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    history.append((
+        expected_reward.item(),
+        entropy.item(),
+    ))
+
+    if step in [0, 1, 9, 49, 299]:
+        print(
+            f&quot;step={step:3d}&quot;,
+            f&quot;reward={expected_reward.item():.4f}&quot;,
+            f&quot;entropy={entropy.item():.4f}&quot;,
+            f&quot;probs={probabilities.detach().tolist()}&quot;,
+        )
+
+with torch.no_grad():
+    learned_probabilities = logits.softmax(dim=0)
+
+    # TODO 5: Closed-form soft-optimal distribution.
+    theoretical_probabilities = ...
+
+    # TODO 6: Closed-form soft value using logsumexp.
+    soft_value = ...
+
+print(&quot;Learned probabilities:&quot;, learned_probabilities)
+print(&quot;Theoretical probabilities:&quot;, theoretical_probabilities)
+print(&quot;Soft value:&quot;, soft_value)
+print(
+    &quot;Maximum probability error:&quot;,
+    (
+        learned_probabilities
+        - theoretical_probabilities
+    ).abs().max(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action receives the highest probability?</p></li>
+<li><p>Should its probability reach exactly one?</p></li>
+<li><p>What is the initial entropy?</p></li>
+<li><p>Can the regularized objective exceed the maximum environmental reward of <span style="background-color: codeinlinebg"><code> 2</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> policy.probs</code></span> is already normalized.</p></li>
+<li><p>Expected reward is a probability-weighted sum.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> policy.entropy()</code></span> uses stable internal calculations.</p></li>
+<li><p>Maximize reward plus <span style="background-color: codeinlinebg"><code> alpha * entropy</code></span>.</p></li>
+<li><p>Theoretical policy: <span style="background-color: codeinlinebg"><code> softmax(rewards / alpha)</code></span>.</p></li>
+<li><p>Soft value: <span style="background-color: codeinlinebg"><code> alpha * logsumexp(rewards / alpha)</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Use the wrong entropy sign:</p>
+<pre class="code python"><code class="language-python">objective = expected_reward - alpha * entropy</code></pre>
+<p>This penalizes uncertainty. The policy collapses toward the best action faster instead of retaining controlled exploration.</p>
+<p>Then try:</p>
+<pre class="code python"><code class="language-python">alpha = 5.0</code></pre>
+<p>The policy becomes much closer to uniform. It explores more, but sacrifices expected environmental reward.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is <span class="math inline">\(-\log\pi(a\mid s)\)</span> an exploration bonus?</p></li>
+<li><p>What happens as <span class="math inline">\(\alpha\rightarrow0\)</span>?</p></li>
+<li><p>Why might a high-entropy policy still explore poorly?</p></li>
+<li><p>Why should entropy be tracked separately from task reward?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Probabilities and expected reward:</p>
+<pre class="code python"><code class="language-python">probabilities = policy.probs
+
+expected_reward = (
+    probabilities * rewards
+).sum()</code></pre>
+<p>Entropy:</p>
+<pre class="code python"><code class="language-python">entropy = policy.entropy()</code></pre>
+<p>Objective and loss:</p>
+<pre class="code python"><code class="language-python">objective = (
+    expected_reward
+    + alpha * entropy
+)
+
+loss = -objective</code></pre>
+<p>Closed-form solution:</p>
+<pre class="code python"><code class="language-python">theoretical_probabilities = torch.softmax(
+    rewards / alpha,
+    dim=0,
+)</code></pre>
+<p>Soft value:</p>
+<pre class="code python"><code class="language-python">soft_value = alpha * torch.logsumexp(
+    rewards / alpha,
+    dim=0,
+)</code></pre>
+<p>With <span class="math inline">\(\alpha=0.5\)</span>:</p>
+<p><span class="math display">\[\pi^*
+=
+\operatorname{softmax}([0,2,4])\]</span></p>
+<p>Approximately:</p>
+<pre class="code text"><code class="language-plaintext">action 0: 0.016
+action 1: 0.117
+action 2: 0.867</code></pre>
+<p>The best action dominates, but its probability remains below one because entropy is part of the objective.</p>
+<p>Initially, the policy is uniform, so:</p>
+<p><span class="math display">\[\mathcal H(\pi)
+=
+-\sum_{a=1}^{3}\frac13\log\frac13
+=
+\log3
+\approx1.099\]</span></p>
+<p>The soft value is:</p>
+<p><span class="math display">\[V_{\text{soft}}
+=
+0.5\log
+\left(
+e^0+e^2+e^4
+\right)
+\approx2.071\]</span></p>
+<p>It exceeds the maximum environmental reward because it includes the entropy bonus. This does not mean the agent receives more than reward <span style="background-color: codeinlinebg"><code> 2</code></span> from the environment.</p>
+<p>The learned probabilities should closely match the theoretical probabilities. Small differences can remain due to finite optimization steps.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Rare actions have more negative log-probabilities, so <span class="math inline">\(-\log\pi\)</span> is larger and rewards sampling them.</p></li>
+<li><p>The entropy term disappears and the soft policy approaches a greedy policy.</p></li>
+<li><p>Entropy rewards diversity, not relevance, safety or information gain.</p></li>
+<li><p>The combined objective can improve because entropy rises even while actual task performance falls.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>PPO stops rewarding further probability increases through the clipped surrogate term.</p></li>
+<li><p>Clipping limits individual objective incentives but does not impose a hard constraint on the complete policy distribution.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> ordinary RL asks for high reward. Entropy-regularized RL asks for high reward while retaining useful uncertainty. The temperature <span class="math inline">\(\alpha\)</span> determines how much reward the policy will trade for continued exploration.</p>

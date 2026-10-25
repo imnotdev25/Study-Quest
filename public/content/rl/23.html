@@ -1,0 +1,307 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: rehearsing a conversation in your head</div>
+<p>Before a tough talk, you rehearse it mentally: “if I say this, they’ll probably say that.” That’s planning inside a learned model of the other person. It’s cheap and can help a lot, but each imagined exchange rests on the previous one, so a small misjudgment early can lead to a wildly wrong imagined ending.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/48445d48d818.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can an offline critic assign high values to unseen actions?</p></li>
+<li><p>Why does a terminal Bellman target exclude the next-state value?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="replace-trial-and-error-with-prediction">2. Replace trial-and-error with prediction</h3>
+<p>A model-free agent learns values or a policy directly. A <strong>model-based</strong> agent also learns how the environment changes:</p>
+<p><span class="math display">\[\hat S_{t+1}=f_\phi(S_t,A_t)\]</span></p>
+<p>It may additionally learn rewards:</p>
+<p><span class="math display">\[\hat R_{t+1}=r_\psi(S_t,A_t)\]</span></p>
+<p>Think of the model as a flight simulator. The agent can test action sequences cheaply inside the simulator before performing one in the real environment.</p>
+<p>Fit the dynamics model from transitions:</p>
+<p><span class="math display">\[L_{\text{model}}
+=
+\frac1N\sum_i
+\left\|
+f_\phi(s_i,a_i)-s&#39;_i
+\right\|^2\]</span></p>
+<p>Then search for the sequence with maximum predicted return:</p>
+<p><span class="math display">\[(a_0^*,\ldots,a_{H-1}^*)
+=
+\arg\max_{a_{0:H-1}}
+\sum_{t=0}^{H-1}
+\gamma^t\hat R_{t+1}\]</span></p>
+<p>where imagined states are generated recursively:</p>
+<p><span class="math display">\[\hat S_{t+1}
+=
+f_\phi(\hat S_t,A_t)\]</span></p>
+<p>This reuse is the attraction: one learned model can evaluate many hypothetical trajectories.</p>
+<h3 class="unnumbered" id="the-danger-compounding-model-error">The danger: compounding model error</h3>
+<p>Each predicted state becomes the input for the next prediction. Small errors can accumulate:</p>
+<p><span class="math display">\[\hat S_1
+\rightarrow
+\hat S_2
+\rightarrow
+\hat S_3
+\rightarrow\cdots\]</span></p>
+<p>The planner may also deliberately find regions where the model is wrong but predicts excellent rewards. This resembles offline Q-learning selecting an erroneously optimistic unseen action.</p>
+<p>Common defenses include:</p>
+<ul>
+<li><p>short planning horizons;</p></li>
+<li><p>frequent replanning from real observations;</p></li>
+<li><p>model ensembles and uncertainty penalties;</p></li>
+<li><p>collecting data where the model is uncertain;</p></li>
+<li><p>comparing imagined and real rollout outcomes.</p></li>
+</ul>
+<p><strong>Model predictive control</strong> plans several steps but executes only the first action. After observing the real next state, it plans again. This prevents yesterday’s prediction error from controlling the entire trajectory.</p>
+<p>Tensor shapes for today:</p>
+<ul>
+<li><p>model inputs: <span style="background-color: codeinlinebg"><code> [N, 2]</code></span> for scalar state and action;</p></li>
+<li><p>predicted next states: <span style="background-color: codeinlinebg"><code> [N, 1]</code></span>;</p></li>
+<li><p>candidate sequences: <span style="background-color: codeinlinebg"><code> [plans, horizon]</code></span>;</p></li>
+<li><p>imagined state and return: <span style="background-color: codeinlinebg"><code> [plans]</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>An agentic LLM may predict what a tool call will return and plan around that prediction. But imagined search results, code execution or database responses are not substitutes for actual tool outputs. Replanning after each real tool result is the model-predictive-control pattern.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: compounding model error</div>
+<p>If the model’s next-state distribution is off by <span class="math inline">\(\varepsilon\)</span> (in total variation) per step, then after <span class="math inline">\(H\)</span> steps the imagined state distribution can be off by up to <span class="math inline">\(H\varepsilon\)</span>. The value error then scales, up to constants, like <span class="math inline">\(\varepsilon\,R_{\max}/(1-\gamma)^2\)</span> (the “simulation lemma”). With deterministic models and sensitive dynamics, errors can grow <em>exponentially</em>:</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/e7c243cab88d.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Why methods like MBPO only imagine short rollouts that branch from real states.</em></p>
+</div>
+<p><strong>The planner is an adversary:</strong> optimizing actions inside <span class="math inline">\(\hat P\)</span> will find wherever the model is wrong in your favour. Use ensembles and treat their disagreement as uncertainty.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Learn a simulator and plan in it to save real interaction.</p></li>
+<li><p>Short rollouts plus uncertainty penalties keep the planner honest.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: random shooting</div>
+<p>Three candidate plans, scored in the model: <span class="math inline">\(4.0,6.5,5.1\)</span>. Execute the first action of plan 2 only, observe the real result, then replan. If plan 2’s real reward is far below the model’s prediction, add that transition to the data, because that is where the model is wrong.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Executing the whole plan open-loop.</p></li>
+<li><p>Evaluating the model on its own training data only.</p></li>
+<li><p>Using long horizons with a single (non-ensemble) model.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Model-based control: learned model + random-shooting MPC</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> real environment, dataset <span class="math inline">\(\mathcal D\)</span>, horizon <span class="math inline">\(H\)</span>, number of candidate plans <span class="math inline">\(K\)</span></div>
+<div class="algo-line" style="--d:0"><strong>loop</strong></div>
+<div class="algo-line" style="--d:1">fit model <span class="math inline">\(f_\psi(s,a)\to(\hat s&#39;,\hat r)\)</span> on <span class="math inline">\(\mathcal D\)</span> by supervised regression</div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each real step from state <span class="math inline">\(s\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2">sample <span class="math inline">\(K\)</span> action sequences <span class="math inline">\(a^{(k)}_{0:H-1}\)</span></div>
+<div class="algo-line" style="--d:2">roll each one out inside <span class="math inline">\(f_\psi\)</span> from <span class="math inline">\(s\)</span>; score <span class="math inline">\(\sum_h\gamma^h\hat r_h\)</span></div>
+<div class="algo-line" style="--d:2">execute only the <strong>first</strong> action of the best sequence <em>▷ replan every step</em></div>
+<div class="algo-line" style="--d:2">add the real transition to <span class="math inline">\(\mathcal D\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-learn-dynamics-and-search-action-sequences">3. PyTorch exercise — learn dynamics and search action sequences</h3>
+<p>The environment has scalar dynamics:</p>
+<p><span class="math display">\[S_{t+1}=S_t+A_t,\qquad A_t\in\{-1,+1\}\]</span></p>
+<p>The goal is state <span style="background-color: codeinlinebg"><code> 2</code></span>. Reward is the negative squared distance after each transition:</p>
+<p><span class="math display">\[R_{t+1}=-(S_{t+1}-2)^2\]</span></p>
+<p>Learn the dynamics, then evaluate all eight three-action plans.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+
+gamma = 0.9
+horizon = 3
+start_state = -1.0
+goal_state = 2.0
+
+# Collect one-step transitions.
+base_states = torch.linspace(-2.0, 2.0, 21)
+
+train_states = base_states.repeat_interleave(2)  # [N=42]
+train_actions = torch.tensor([-1.0, 1.0]).repeat(21)
+train_next_states = train_states + train_actions
+
+# Linear model: [state, action] -&gt; predicted next state.
+model = torch.nn.Linear(2, 1)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.03)
+
+for step in range(500):
+    # TODO 1: Construct [N, 2] model inputs.
+    model_inputs = ...
+
+    predictions = model(model_inputs).squeeze(-1)  # [N]
+
+    # TODO 2: Supervised one-step dynamics loss.
+    model_loss = ...
+
+    optimizer.zero_grad()
+    model_loss.backward()
+    optimizer.step()
+
+# Every length-three sequence over {-1, +1}.
+action_values = torch.tensor([-1.0, 1.0])
+
+candidate_sequences = torch.cartesian_prod(
+    action_values,
+    action_values,
+    action_values,
+)  # [plans=8, horizon=3]
+
+num_plans = candidate_sequences.shape[0]
+
+with torch.no_grad():
+    imagined_states = torch.full(
+        (num_plans,),
+        start_state,
+    )  # [plans]
+
+    predicted_returns = torch.zeros(num_plans)
+
+    for t in range(horizon):
+        actions_t = candidate_sequences[:, t]
+
+        # TODO 3: Predict every plan&#x27;s next state.
+        planning_inputs = ...
+        imagined_states = ...
+
+        # Reward function is known in this example.
+        predicted_rewards = ...
+
+        # TODO 4: Accumulate discounted predicted return.
+        predicted_returns = ...
+
+    # TODO 5: Select the highest-return plan.
+    best_index = ...
+    best_sequence = ...
+    best_predicted_return = ...
+
+# Validate the selected plan in the real dynamics.
+true_state = torch.tensor(start_state)
+true_return = torch.tensor(0.0)
+
+for t, action in enumerate(best_sequence):
+    true_state = true_state + action
+    true_reward = -(true_state - goal_state).pow(2)
+    true_return += gamma**t * true_reward
+
+print(&quot;Model weight:&quot;, model.weight.detach())
+print(&quot;Model bias:&quot;, model.bias.detach())
+print(&quot;Model loss:&quot;, model_loss.item())
+print(&quot;Candidate plans:\n&quot;, candidate_sequences)
+print(&quot;Predicted returns:\n&quot;, predicted_returns)
+print(&quot;Best plan:&quot;, best_sequence)
+print(&quot;Predicted return:&quot;, best_predicted_return.item())
+print(&quot;True final state:&quot;, true_state.item())
+print(&quot;True return:&quot;, true_return.item())
+print(
+    &quot;Planning error:&quot;,
+    (best_predicted_return - true_return).abs().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What weights and bias represent the true dynamics?</p></li>
+<li><p>Which three-action sequence should the planner choose?</p></li>
+<li><p>Does planning require gradients through the dynamics model here?</p></li>
+<li><p>Should predicted and true return match exactly after finite training?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Stack state and action along the final dimension.</p></li>
+<li><p>Use MSE between predicted and observed next states.</p></li>
+<li><p>Planning input shape must be <span style="background-color: codeinlinebg"><code> [plans, 2]</code></span>.</p></li>
+<li><p>Reward uses the predicted next state.</p></li>
+<li><p>Discount for step <span style="background-color: codeinlinebg"><code> t</code></span> is <span style="background-color: codeinlinebg"><code> gamma**t</code></span>.</p></li>
+<li><p>Planning uses enumeration, so place it inside <span style="background-color: codeinlinebg"><code> torch.no_grad()</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Train only on action <span style="background-color: codeinlinebg"><code> -1</code></span>:</p>
+<pre class="code python"><code class="language-python">keep = train_actions == -1.0
+
+train_states = train_states[keep]
+train_actions = train_actions[keep]
+train_next_states = train_next_states[keep]</code></pre>
+<p>The training loss may still become tiny, but predictions for action <span style="background-color: codeinlinebg"><code> +1</code></span> are underdetermined. Compare:</p>
+<pre class="code python"><code class="language-python">test = torch.tensor([
+    [0.0, -1.0],
+    [0.0,  1.0],
+])
+
+print(model(test))</code></pre>
+<p>This is model-based distribution shift: low one-step training loss does not guarantee reliable planning over novel actions.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can a planner exploit model errors?</p></li>
+<li><p>Why do long imagined rollouts amplify small prediction errors?</p></li>
+<li><p>How does replanning after every real transition help?</p></li>
+<li><p>What diagnostic matters in addition to model training loss?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Construct the training inputs and loss:</p>
+<pre class="code python"><code class="language-python">model_inputs = torch.stack(
+    [train_states, train_actions],
+    dim=-1,
+)
+
+model_loss = F.mse_loss(
+    predictions,
+    train_next_states,
+)</code></pre>
+<p>Predict each next state:</p>
+<pre class="code python"><code class="language-python">planning_inputs = torch.stack(
+    [imagined_states, actions_t],
+    dim=-1,
+)
+
+imagined_states = model(
+    planning_inputs
+).squeeze(-1)</code></pre>
+<p>Calculate rewards and returns:</p>
+<pre class="code python"><code class="language-python">predicted_rewards = -(
+    imagined_states - goal_state
+).pow(2)
+
+predicted_returns = (
+    predicted_returns
+    + gamma**t * predicted_rewards
+)</code></pre>
+<p>Select the plan:</p>
+<pre class="code python"><code class="language-python">best_index = predicted_returns.argmax()
+best_sequence = candidate_sequences[best_index]
+
+best_predicted_return = predicted_returns[
+    best_index
+]</code></pre>
+<p>The true dynamics are:</p>
+<p><span class="math display">\[S_{t+1}=1\cdot S_t+1\cdot A_t+0\]</span></p>
+<p>so the learned layer should approach:</p>
+<pre class="code text"><code class="language-plaintext">weight ≈ [[1.0, 1.0]]
+bias   ≈ [0.0]</code></pre>
+<p>The best sequence is:</p>
+<pre class="code python"><code class="language-python">[+1, +1, +1]</code></pre>
+<p>It produces states:</p>
+<pre class="code text"><code class="language-plaintext">start: -1
+step 1: 0
+step 2: 1
+step 3: 2</code></pre>
+<p>Its true discounted return is:</p>
+<p><span class="math display">\[-4 + 0.9(-1) + 0.9^2(0)
+=
+-4.9\]</span></p>
+<p>Planning does not require gradients here because all eight discrete sequences are enumerated. Continuous-action planners may optimize actions through a differentiable dynamics model.</p>
+<p>The predicted and true return should be extremely close, but finite optimization can leave a small difference.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Optimization searches for the highest predicted return, so it preferentially discovers optimistic model mistakes.</p></li>
+<li><p>Every prediction changes the input to the following prediction, allowing errors to accumulate or move the rollout out of distribution.</p></li>
+<li><p>Real observations replace accumulated imagined states, limiting how long errors propagate unchecked.</p></li>
+<li><p>Measure multi-step rollout error and predicted-versus-real return, ideally on held-out states and actions—not only one-step training MSE.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Unseen actions receive no direct corrective targets, yet maximization may select their arbitrary estimates.</p></li>
+<li><p>After genuine termination there is no future trajectory, so the target equals immediate reward.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> model-based RL learns a simulator and plans within it. Planning can reduce real interaction, but optimization will exploit the simulator’s inaccuracies unless coverage, uncertainty and rollout error are carefully controlled.</p>

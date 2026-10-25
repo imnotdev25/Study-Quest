@@ -1,0 +1,88 @@
+
+<h2 class="unnumbered" id="model-lifecycle">Model lifecycle</h2>
+<ul>
+<li><p><strong>Package</strong>: a container with a pinned engine version; weights pulled from object storage or a volume at start (not baked into the image), verified by checksum.</p></li>
+<li><p><strong>Warm-up</strong>: load weights, capture CUDA graphs, run a few requests; only then report ready. Separate <em>liveness</em> (process alive) from <em>readiness</em> (can serve within SLO).</p></li>
+<li><p><strong>Versioning and canaries</strong>: every response carries the model version; send 1–5% of traffic to a new version, compare error rate, latency and an online quality signal, then ramp or roll back.</p></li>
+<li><p><strong>Multi-model</strong>: many LoRA adapters over one base (next chapter), or separate replicas per model with a router in front.</p></li>
+</ul>
+<h2 class="unnumbered" id="routing-and-autoscaling">Routing and autoscaling</h2>
+<p>A load balancer that ignores the cache throws away prefix hits: consecutive turns of one conversation land on different replicas and re-prefill. <strong>Prefix-aware routing</strong> sends a request to the replica that holds its prefix (hash of the conversation or the longest cached prefix), with a load guard that falls back to the least-loaded replica when the preferred one is backed up. <strong>Queue-aware</strong> routing uses each replica’s waiting count and KV usage, not just open connections. Autoscale on queue depth or KV usage, not GPU utilisation (which reads near 100% at any load), and keep warm capacity because a cold start (pull weights, load, capture graphs) takes minutes. Ray Serve and Kubernetes (with KServe or llm-d) provide the machinery.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference chs. &#x27;Routing and Autoscaling&#x27;, &#x27;Economics&#x27;: prefix-aware routing simulation and cost math.&quot;&quot;&quot;
+from collections import OrderedDict
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# Routing: 8 replicas, each with an LRU prefix cache. Requests continue Zipf-popular conversations.
+R, N_CONV, N_REQ, CACHE = 8, 400, 6000, 25
+ranks = np.arange(1, N_CONV + 1)
+popularity = 1 / ranks**1.1 / (1 / ranks**1.1).sum()
+conv_len = np.zeros(N_CONV)
+arrivals = np.cumsum(rng.exponential(1 / 40, N_REQ))     # 40 req/s
+convs = rng.choice(N_CONV, N_REQ, p=popularity)
+
+
+def simulate(policy):
+    caches = [OrderedDict() for _ in range(R)]
+    free_at = np.zeros(R)
+    clen = np.zeros(N_CONV)
+    ttft, hits, total, rr = [], 0, 0, 0
+    for t, c in zip(arrivals, convs):
+        prompt = clen[c] + rng.integers(100, 400)
+        backlog = np.maximum(free_at - t, 0)
+        if policy == &quot;round robin&quot;:
+            r = rr % R; rr += 1
+        elif policy == &quot;least loaded&quot;:
+            r = int(backlog.argmin())
+        else:                                               # prefix-aware with a load guard
+            r = c % R
+            if backlog[r] &gt; backlog.min() + 0.5:
+                r = int(backlog.argmin())
+        cached = caches[r].get(c, 0)                       # prefix this replica holds for c
+        hits += cached; total += prompt
+        service = (prompt - cached) * 25e-6 + 0.02          # prefill only what is not cached
+        start = max(t, free_at[r])
+        free_at[r] = start + service
+        ttft.append(free_at[r] - t)
+        caches[r][c] = prompt; caches[r].move_to_end(c)
+        if len(caches[r]) &gt; CACHE:
+            caches[r].popitem(last=False)
+        clen[c] = prompt + rng.integers(100, 300)
+    ttft = np.array(ttft)
+    return hits / total, np.median(ttft), np.percentile(ttft, 99)
+
+
+for pol in (&quot;round robin&quot;, &quot;least loaded&quot;, &quot;prefix-aware&quot;):
+    h, p50, p99 = simulate(pol)
+    print(f&quot;[route] {pol:13s}  prefix hit rate {h:5.1%}  TTFT p50 {p50 * 1e3:6.1f} ms  p99 {p99 * 1e3:7.1f} ms&quot;)
+
+# Economics. GPU prices are illustrative on-demand $/hour; replace with your quotes.
+print(&quot;[cost] GPU      $/h   out tok/s   $ per 1M output tokens&quot;)
+for gpu, price, tps in ((&quot;H100&quot;, 3.0, 3750), (&quot;H200&quot;, 3.8, 5200), (&quot;L40S&quot;, 1.1, 1100)):
+    print(f&quot;[cost] {gpu:6s} {price:5.2f}  {tps:9,d}   {price / (tps * 3600) * 1e6:6.3f}&quot;)
+peak_rps, good_rps, headroom = 120, 11.7, 1.3
+n = int(np.ceil(peak_rps / good_rps * headroom))
+print(f&quot;[plan] peak {peak_rps} req/s, {good_rps} SLO-good req/s per replica, {headroom}x headroom -&gt; {n} replicas&quot;)
+print(f&quot;[plan] daily cost at $3/h: ${n * 3 * 24:,.0f} if always on; with autoscaling to a 30% night trough &quot;
+      f&quot;~${(n * 12 + 0.3 * n * 12) * 3:,.0f}&quot;)</code></pre>
+<pre class="code output"><code class="output">[route] round robin    prefix hit rate 91.9%  TTFT p50  592.7 ms  p99 26351.4 ms
+[route] least loaded   prefix hit rate 91.8%  TTFT p50  269.8 ms  p99 13516.1 ms
+[route] prefix-aware   prefix hit rate 99.3%  TTFT p50   32.2 ms  p99   111.3 ms
+[cost] GPU      $/h   out tok/s   $ per 1M output tokens
+[cost] H100    3.00      3,750    0.222
+[cost] H200    3.80      5,200    0.203
+[cost] L40S    1.10      1,100    0.278
+[plan] peak 120 req/s, 11.7 SLO-good req/s per replica, 1.3x headroom -&gt; 14 replicas
+[plan] daily cost at $3/h: $1,008 if always on; with autoscaling to a 30% night trough ~$655</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>In the simulation, round robin and least-loaded both miss the right replica often enough that uncached prefills build queues: p99 TTFT of 13–26 s. Prefix-aware routing keeps p99 near 110 ms on the same 8 replicas.</p></li>
+<li><p>Cost per token is GPU price divided by goodput. The prices in the code are placeholders; the method is the point.</p></li>
+</ul>
+</div>
+<h2 class="unnumbered" id="observability-reliability-and-security">Observability, reliability and security</h2>
+<p>Track request metrics (TTFT, ITL, E2E percentiles, goodput, error rate), engine metrics (running, waiting, KV usage, preemptions, prefix hit rate) and GPU metrics (DCGM: memory, SM activity, temperature, XID errors). Trace a request across router, engine and tokenizer with one trace id. Protect the service with <strong>admission control</strong> (reject early with 429 when the queue would break the SLO, rather than accepting work you will time out), per-request timeouts and max-token limits, and retries only for idempotent failures. Chaos-test by killing a replica under load and checking that the router drains it. Security: authenticate every request, rate-limit per key, cap prompt and output length, never log raw prompts that may hold user data without a retention policy, and treat model output fed to tools as untrusted input.</p>
+<h2 class="unnumbered" id="inference-economics">Inference economics</h2>
+<p><span class="math display">\[\text{\$ per 1M tokens}=\frac{\text{\$/GPU-hour}}{\text{goodput tokens/s}\times3600}\times10^6,\]</span> <span class="math display">\[\text{replicas}=\Big\lceil\frac{\text{peak rate}}{\text{SLO-good rate per replica}}\times\text{headroom}\Big\rceil.\]</span> Epoch AI’s <em>Inference economics of language models</em> makes the deeper point: there is a frontier between speed per user and cost per token, set by batch size, and serving at very low latency costs much more per token because it forfeits batching.</p>

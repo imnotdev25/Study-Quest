@@ -1,0 +1,487 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a better average, a worse ward</div>
+<p>A hospital’s average waiting time drops, but in the children’s ward it doubles. The average is a mixture, and a big win in a large group can hide a loss in a small one. Always ask “who pays for this improvement?”</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/4f0ee442b5c0.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What are AIPW’s two routes to consistency?</p></li>
+<li><p>Does double robustness repair missing policy overlap?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-average-is-a-weighted-mixture">2. The average is a weighted mixture</h3>
+<p>Suppose prompt group <span class="math inline">\(g\)</span> has policy effect:</p>
+<p><span class="math display">\[\tau_g
+=
+E[Y(1)-Y(0)\mid G=g]\]</span></p>
+<p>The deployment-wide average effect is:</p>
+<p><span class="math display">\[\tau_{\text{micro}}
+=
+\sum_g P(G=g)\tau_g\]</span></p>
+<p>A common group can dominate this average. Consequently:</p>
+<p><span class="math display">\[\tau_{\text{micro}}&gt;0\]</span></p>
+<p>does not imply:</p>
+<p><span class="math display">\[\tau_g&gt;0\quad\text{for every }g\]</span></p>
+<p>An equal-group summary answers a different question:</p>
+<p><span class="math display">\[\tau_{\text{macro}}
+=
+\frac1K\sum_{g=1}^{K}\tau_g\]</span></p>
+<ul>
+<li><p>Micro weighting describes expected change under the deployment traffic mixture.</p></li>
+<li><p>Macro weighting gives every specified group equal influence.</p></li>
+<li><p>Neither replaces reporting the individual effects.</p></li>
+</ul>
+<p>A conservative deployment gate might require:</p>
+<p><span class="math display">\[\operatorname{LCB}_{\text{overall}}&gt;0\]</span></p>
+<p>and, for every prespecified group,</p>
+<p><span class="math display">\[\operatorname{LCB}_g &gt; \Delta_{g,\min}\]</span></p>
+<p>The group floor can be zero or a justified noninferiority margin. Because checking several groups creates several chances for a false claim, use simultaneous bounds—for example:</p>
+<p><span class="math display">\[z=
+\Phi^{-1}\left(1-\frac{\delta}{K}\right)\]</span></p>
+<p><span class="math display">\[\operatorname{LCB}_g
+=
+\hat\tau_g-z\,\operatorname{SE}(\hat\tau_g)\]</span></p>
+<p>Small groups have wider bounds. “Insufficient evidence” is different from “evidence of harm,” although either may block deployment under a strict gate.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>group, assignment and reward: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>one-hot group membership: <span style="background-color: codeinlinebg"><code> [N, K]</code></span></p></li>
+<li><p>group counts, effects and bounds: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+</ul>
+<p>Prespecify meaningful groups such as language, prompt family, tool type or difficulty band. Mining hundreds of groups after observing outcomes requires additional correction and independent confirmation.</p>
+<p>Under adaptive routing, replace raw subgroup differences with propensity-aware estimators such as subgroup AIPW, and audit overlap inside every group.</p>
+<p>DPO can improve aggregate preference accuracy while degrading one prompt group’s actual task success. Preference optimization neither identifies nor prevents heterogeneous online harm.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the average is a weighted mixture</div>
+<p><span class="math inline">\(\tau=\sum_gw_g\tau_g\)</span>. A positive <span class="math inline">\(\tau\)</span> is compatible with <span class="math inline">\(\tau_g&lt;0\)</span> for small-<span class="math inline">\(w_g\)</span> groups. <strong>Do:</strong> prespecify the important slices, report each <span class="math inline">\(\tau_g\)</span> with its own CI, and correct for many slices if you search for regressions. Small groups have wide intervals, so “not significantly worse” there usually means “we don’t know” (Topic 97).</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Averages answer “better on average?”; subgroup effects answer “who pays?”</p></li>
+<li><p>Prespecify slices and never let an aggregate authorize a concentrated regression.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the mixture</div>
+<p><span class="math inline">\(0.9\times0.05+0.1\times(-0.10)=0.045-0.010=0.035\)</span>. Overall up 3.5 points, and group B down 10.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Slices defined after looking at the results.</p></li>
+<li><p>Slices based on post-treatment behaviour.</p></li>
+<li><p>Reading a wide CI in a small group as “no effect.”</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-overall-success-rare-group-regression">3. PyTorch exercise — overall success, rare-group regression</h3>
+<p>The candidate helps two groups but severely harms the rare third group.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 30_000
+num_groups = 3
+
+group_probabilities = torch.tensor([
+    0.70, 0.20, 0.10
+])
+
+control_success_probabilities = torch.tensor([
+    0.60, 0.50, 0.40
+])
+
+candidate_success_probabilities = torch.tensor([
+    0.66, 0.56, 0.22
+])
+
+groups = torch.multinomial(
+    group_probabilities,
+    num_samples=num_episodes,
+    replacement=True,
+)
+
+# Randomize complete episodes.
+candidate_assigned = (
+    torch.rand(num_episodes) &lt; 0.50
+)
+
+success_probabilities = torch.where(
+    candidate_assigned,
+    candidate_success_probabilities[groups],
+    control_success_probabilities[groups],
+)
+
+rewards = (
+    torch.rand(num_episodes)
+    &lt; success_probabilities
+).to(torch.float64)
+
+candidate_mask = candidate_assigned
+control_mask = ~candidate_mask
+
+# TODO 1: Overall effect and fixed-horizon LCB.
+candidate_rewards = ...
+control_rewards = ...
+
+candidate_count = ...
+control_count = ...
+
+overall_candidate_mean = ...
+overall_control_mean = ...
+overall_effect = ...
+
+overall_standard_error = ...
+overall_z = 1.645
+overall_lcb = ...
+
+# TODO 2: Per-group counts and effects.
+group_one_hot = ...
+
+candidate_membership = ...
+control_membership = ...
+
+candidate_group_counts = ...
+control_group_counts = ...
+
+candidate_group_means = ...
+control_group_means = ...
+
+group_effects = ...
+
+# TODO 3: Per-group standard errors.
+# For binary outcomes, this reconstructs each arm&#x27;s
+# unbiased sample variance from its mean.
+candidate_group_variances = ...
+control_group_variances = ...
+
+group_standard_errors = ...
+
+# TODO 4: Simultaneous one-sided group LCBs.
+family_delta = 0.05
+
+standard_normal = torch.distributions.Normal(
+    torch.tensor(0.0),
+    torch.tensor(1.0),
+)
+
+simultaneous_z = ...
+
+group_lcbs = ...
+
+# TODO 5: Micro/macro summaries and deployment gate.
+observed_group_frequencies = ...
+
+standardized_micro_effect = ...
+macro_effect = ...
+
+minimum_group_effect = 0.0
+
+overall_gate_passes = ...
+group_gate_passes = ...
+promote_candidate = ...
+
+exact_group_effects = ...
+exact_control_value = ...
+exact_candidate_value = ...
+exact_micro_effect = ...
+exact_macro_effect = ...
+
+results = torch.stack([
+    candidate_group_counts,
+    control_group_counts,
+    candidate_group_means,
+    control_group_means,
+    group_effects,
+    group_lcbs,
+    exact_group_effects,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: candidate N, control N, &quot;
+    &quot;candidate mean, control mean, &quot;
+    &quot;effect, simultaneous LCB, exact effect&quot;
+)
+print(results)
+
+print(&quot;Overall estimate:&quot;, overall_effect.item())
+print(&quot;Overall LCB:&quot;, overall_lcb.item())
+print(
+    &quot;Standardized micro effect:&quot;,
+    standardized_micro_effect.item(),
+)
+print(&quot;Macro effect:&quot;, macro_effect.item())
+
+print(&quot;Exact control value:&quot;, exact_control_value.item())
+print(
+    &quot;Exact candidate value:&quot;,
+    exact_candidate_value.item(),
+)
+print(&quot;Exact micro effect:&quot;, exact_micro_effect.item())
+print(&quot;Exact macro effect:&quot;, exact_macro_effect.item())
+
+print(
+    &quot;Overall gate passes:&quot;,
+    overall_gate_passes.item(),
+)
+print(
+    &quot;Every-group gate passes:&quot;,
+    group_gate_passes.item(),
+)
+print(
+    &quot;Promote candidate:&quot;,
+    promote_candidate.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the exact deployment-wide effect positive or negative?</p></li>
+<li><p>Is the equal-group macro effect positive or negative?</p></li>
+<li><p>Which group is harmed, and by how much?</p></li>
+<li><p>Which group should have the widest confidence bound?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Overall effect is candidate mean minus control mean.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> F.one_hot(groups, num_groups).to(torch.float64)</code></span> has shape <span style="background-color: codeinlinebg"><code> [N, K]</code></span>.</p></li>
+<li><p>Multiply one-hot membership by each assignment mask.</p></li>
+<li><p>A Bernoulli sample variance is <span class="math inline">\(\hat p(1-\hat p)n/(n-1)\)</span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> 1 - family_delta / num_groups</code></span> in the normal quantile.</p></li>
+<li><p>The deployment gate requires both the overall and every-group conditions.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Inspect only the overall mean and miss the rare-group regression.</p></li>
+<li><p>Discover groups after seeing their effects but report uncorrected intervals.</p></li>
+<li><p>Define groups using response length or tool usage produced after assignment.</p></li>
+<li><p>Treat tokens from one episode as independent observations.</p></li>
+<li><p>Oversample a rare group, then forget to restore deployment weights for the micro effect.</p></li>
+<li><p>Drop episodes with unknown group labels instead of reporting their rate and sensitivity.</p></li>
+<li><p>Misalign group IDs and reward masks during batch filtering.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can a positive average coexist with a negative subgroup effect?</p></li>
+<li><p>What different questions do micro and macro effects answer?</p></li>
+<li><p>Why are simultaneous bounds useful?</p></li>
+<li><p>How should evaluation change under context-dependent routing?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Overall estimate:</p>
+<pre class="code python"><code class="language-python">candidate_rewards = rewards[
+    candidate_mask
+]
+
+control_rewards = rewards[
+    control_mask
+]
+
+candidate_count = candidate_mask.sum().to(
+    torch.float64
+)
+
+control_count = control_mask.sum().to(
+    torch.float64
+)
+
+overall_candidate_mean = (
+    candidate_rewards.mean()
+)
+
+overall_control_mean = (
+    control_rewards.mean()
+)
+
+overall_effect = (
+    overall_candidate_mean
+    - overall_control_mean
+)
+
+overall_standard_error = torch.sqrt(
+    candidate_rewards.var(
+        correction=1
+    ) / candidate_count
+    +
+    control_rewards.var(
+        correction=1
+    ) / control_count
+)
+
+overall_lcb = (
+    overall_effect
+    - overall_z * overall_standard_error
+)</code></pre>
+<p>Group effects:</p>
+<pre class="code python"><code class="language-python">group_one_hot = F.one_hot(
+    groups,
+    num_classes=num_groups,
+).to(torch.float64)
+
+candidate_membership = (
+    group_one_hot
+    * candidate_mask[:, None]
+)
+
+control_membership = (
+    group_one_hot
+    * control_mask[:, None]
+)
+
+candidate_group_counts = (
+    candidate_membership.sum(dim=0)
+)
+
+control_group_counts = (
+    control_membership.sum(dim=0)
+)
+
+candidate_group_means = (
+    (
+        candidate_membership
+        * rewards[:, None]
+    ).sum(dim=0)
+    / candidate_group_counts
+)
+
+control_group_means = (
+    (
+        control_membership
+        * rewards[:, None]
+    ).sum(dim=0)
+    / control_group_counts
+)
+
+group_effects = (
+    candidate_group_means
+    - control_group_means
+)</code></pre>
+<p>Group uncertainty:</p>
+<pre class="code python"><code class="language-python">candidate_group_variances = (
+    candidate_group_means
+    * (1.0 - candidate_group_means)
+    * candidate_group_counts
+    / (candidate_group_counts - 1.0)
+)
+
+control_group_variances = (
+    control_group_means
+    * (1.0 - control_group_means)
+    * control_group_counts
+    / (control_group_counts - 1.0)
+)
+
+group_standard_errors = torch.sqrt(
+    candidate_group_variances
+    / candidate_group_counts
+    +
+    control_group_variances
+    / control_group_counts
+)</code></pre>
+<p>Simultaneous bounds:</p>
+<pre class="code python"><code class="language-python">simultaneous_z = standard_normal.icdf(
+    torch.tensor(
+        1.0
+        - family_delta / num_groups
+    )
+)
+
+group_lcbs = (
+    group_effects
+    - simultaneous_z
+    * group_standard_errors
+)</code></pre>
+<p>Summaries and gates:</p>
+<pre class="code python"><code class="language-python">observed_group_frequencies = (
+    group_one_hot.mean(dim=0)
+)
+
+standardized_micro_effect = (
+    observed_group_frequencies
+    * group_effects
+).sum()
+
+macro_effect = group_effects.mean()
+
+overall_gate_passes = (
+    overall_lcb &gt; 0.0
+)
+
+group_gate_passes = (
+    group_lcbs
+    &gt;= minimum_group_effect
+).all()
+
+promote_candidate = (
+    overall_gate_passes
+    &amp; group_gate_passes
+)
+
+exact_group_effects = (
+    candidate_success_probabilities
+    - control_success_probabilities
+)
+
+exact_control_value = (
+    group_probabilities
+    * control_success_probabilities
+).sum()
+
+exact_candidate_value = (
+    group_probabilities
+    * candidate_success_probabilities
+).sum()
+
+exact_micro_effect = (
+    exact_candidate_value
+    - exact_control_value
+)
+
+exact_macro_effect = (
+    exact_group_effects.mean()
+)</code></pre>
+<p>The group effects are:</p>
+<p><span class="math display">\[[0.66-0.60,\;0.56-0.50,\;0.22-0.40]
+=
+[0.06,\;0.06,\;-0.18]\]</span></p>
+<p>The deployment-weighted values are:</p>
+<p><span class="math display">\[J_0
+=
+0.7(0.60)+0.2(0.50)+0.1(0.40)
+=
+0.56\]</span></p>
+<p><span class="math display">\[J_1
+=
+0.7(0.66)+0.2(0.56)+0.1(0.22)
+=
+0.596\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\tau_{\text{micro}}
+=
+0.596-0.56
+=
+0.036\]</span></p>
+<p>The equal-group effect is:</p>
+<p><span class="math display">\[\tau_{\text{macro}}
+=
+\frac{0.06+0.06-0.18}{3}
+=
+-0.02\]</span></p>
+<p>The overall lower bound should be positive, but the rare group’s bound will be decisively negative. The candidate therefore fails the every-group gate despite improving average deployment reward.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The average weights effects by traffic frequency. Large positive groups can outweigh a serious loss in a smaller group.</p></li>
+<li><p>Micro effect predicts the change for the deployment traffic mixture; macro effect gives each specified group equal influence.</p></li>
+<li><p>They control false claims across a prespecified family of subgroup comparisons. They do not legitimize unlimited post-hoc subgroup searching.</p></li>
+<li><p>Use logged conditional propensities—often subgroup AIPW—and verify overlap, ESS and policy support separately inside each group.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>AIPW is consistent when either the logged propensity model is correct or the conditional outcome models are correct, under the remaining identification assumptions.</p></li>
+<li><p>No. Neither predictions nor weighting recover a counterfactual policy outcome where that policy had zero probability.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> deployment averages answer “Does traffic improve on average?” Subgroup effects answer “Who pays for that improvement?” Report both, prespecify the important slices, and never let a strong aggregate metric silently authorize a concentrated regression.</p>

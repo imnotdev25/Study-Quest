@@ -1,0 +1,284 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: reading page 50 without pages 1–49</div>
+<p>Hand someone page 50 of a mystery novel and ask what a character’s line means. They’ll guess wrong, not because they read badly but because they lack the story so far. A recurrent policy evaluated on shuffled timesteps is in the same position: same weights, wrong memory, so the PPO ratios are already wrong before any update.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What is observation aliasing?</p></li>
+<li><p>When must a recurrent policy’s hidden state reset?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="ppo-ratios-depend-on-the-policys-memory">2. PPO ratios depend on the policy’s memory</h3>
+<p>PPO uses the importance ratio:</p>
+<p><span class="math display">\[r_t(\theta)=
+\exp\left(
+\log\pi_\theta(a_t\mid o_t,h_t)
+-
+\log\pi_{\text{old}}(a_t\mid o_t,h_t^{\text{old}})
+\right)\]</span></p>
+<p>If the current and rollout policies are identical and both reconstruct the same history, then:</p>
+<p><span class="math display">\[r_t=1\]</span></p>
+<p>A common recurrent-PPO bug is shuffling individual timesteps and resetting the hidden state for every sample. The numerator then uses:</p>
+<p><span class="math display">\[\pi_\theta(a_t\mid o_t,h=0)\]</span></p>
+<p>while the stored denominator came from:</p>
+<p><span class="math display">\[\pi_{\text{old}}(a_t\mid o_t,h_t^{\text{old}})\]</span></p>
+<p>Ratios can move away from one even though no parameters changed. PPO may report false clipping and false KL drift.</p>
+<p>Train recurrent policies using sequence chunks:</p>
+<ol>
+<li><p>Start at an episode boundary with zero hidden state, or reconstruct the chunk’s initial state.</p></li>
+<li><p>Use a short <strong>burn-in prefix</strong> to rebuild memory.</p></li>
+<li><p>Compute loss only on the learning portion.</p></li>
+<li><p>Keep timestep order intact.</p></li>
+<li><p>Reset state at terminal boundaries and mask padding.</p></li>
+</ol>
+<p>For a burn-in length <span class="math inline">\(L\)</span>:</p>
+<p><span class="math display">\[h_c=f_\theta(o_{c-L:c},h_{c-L})\]</span></p>
+<p>The prefix creates <span class="math inline">\(h_c\)</span>, but its tokens do not contribute directly to the PPO loss. The hidden state can be detached at the truncated-BPTT boundary while advantages and old log-probabilities remain detached everywhere.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>observations: <span style="background-color: codeinlinebg"><code> [B, T, D]</code></span>;</p></li>
+<li><p>recurrent states: <span style="background-color: codeinlinebg"><code> [B, T, H]</code></span>;</p></li>
+<li><p>initial hidden state: <span style="background-color: codeinlinebg"><code> [layers, B, H]</code></span>;</p></li>
+<li><p>actions, log-probabilities, advantages and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>;</p></li>
+<li><p>logits: <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span>.</p></li>
+</ul>
+<p>For transformer policies, the same problem appears when response chunks are evaluated without their prompt or preceding tokens.</p>
+<p>DPO also needs the complete conditioning context when computing chosen and rejected log-probabilities. It does not use PPO rollout ratios, burn-in advantages or online environment interaction.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: ratios need the same history</div>
+<p>The ratio <span class="math inline">\(\rho_t=\pi_\theta(a_t|h_t)/\pi_{\text{old}}(a_t|h_t)\)</span> requires recomputing <span class="math inline">\(h_t\)</span> under <span class="math inline">\(\theta\)</span> from the <em>same</em> sequence of past inputs. <strong>Practical recipe:</strong> split trajectories into chunks of length <span class="math inline">\(L\)</span>, store the rollout hidden state at the chunk’s start, and shuffle <em>chunks</em>, not timesteps. Optionally add a burn-in prefix to refresh stale stored states. Reset the hidden state only at true episode starts. <strong>Sanity check:</strong> before the first gradient step, every <span class="math inline">\(\rho_t\)</span> must be exactly 1.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Recurrent PPO minibatches are sequences, not bags of steps.</p></li>
+<li><p>At step 0 of an update, ratios must equal 1.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: unchanged weights, wrong ratio</div>
+<p>At rollout: <span class="math inline">\(h_1\)</span> from the cue gives <span class="math inline">\(\pi_{\text{old}}(\text{L}|h_1)=0.9\)</span>. In training, timestep 1 is evaluated alone with <span class="math inline">\(h=0\)</span>: <span class="math inline">\(\pi_\theta(\text{L}|0)=0.5\)</span>. So <span class="math inline">\(\rho=0.56\)</span> with <span class="math inline">\(\theta=\theta_{\text{old}}\)</span>. PPO now “thinks” the policy changed a lot, clips it, and computes garbage gradients.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Shuffling timesteps across sequences.</p></li>
+<li><p>Using a zero hidden state at chunk starts.</p></li>
+<li><p>Not checking <span class="math inline">\(\rho\equiv1\)</span> at the start of each update.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-unchanged-weights-incorrect-ratios">3. PyTorch exercise — unchanged weights, incorrect ratios</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn as nn
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 4
+time_steps = 5
+observation_dim = 3
+hidden_dim = 8
+num_actions = 3
+
+lengths = torch.tensor([
+    5, 4, 3, 2
+])
+
+observations = torch.randn(
+    batch_size,
+    time_steps,
+    observation_dim,
+)
+
+# TODO 1: Valid-timestep mask [B, T].
+mask = ...
+
+encoder = nn.GRU(
+    input_size=observation_dim,
+    hidden_size=hidden_dim,
+    batch_first=True,
+)
+
+policy_head = nn.Linear(
+    hidden_dim,
+    num_actions,
+)
+
+with torch.no_grad():
+    # TODO 2: Generate rollout actions and stored
+    # log-probabilities using complete sequences.
+    rollout_states, _ = ...
+    rollout_logits = ...
+
+    rollout_policy = ...
+    actions = ...
+    old_log_probs = ...
+
+    # TODO 3: Correct recomputation. Parameters are
+    # unchanged and complete histories are preserved.
+    correct_states, _ = ...
+    correct_logits = ...
+    correct_log_probs = ...
+
+    # TODO 4: Incorrect recomputation. Flatten every
+    # timestep into an independent length-one sequence.
+    isolated_observations = ...
+
+    isolated_states, _ = ...
+    isolated_logits = ...
+    isolated_log_probs = ...
+
+    # TODO 5: Ratios and masked diagnostics.
+    correct_ratios = ...
+    incorrect_ratios = ...
+
+    maximum_correct_error = ...
+    mean_incorrect_error = ...
+
+    incorrect_clip_fraction = ...
+
+print(
+    &quot;Maximum correct |ratio - 1|:&quot;,
+    maximum_correct_error.item(),
+)
+
+print(
+    &quot;Mean incorrect |ratio - 1|:&quot;,
+    mean_incorrect_error.item(),
+)
+
+print(
+    &quot;Incorrect apparent clip fraction:&quot;,
+    incorrect_clip_fraction.item(),
+)
+
+print(&quot;Correct ratios:\n&quot;, correct_ratios)
+print(&quot;Incorrect ratios:\n&quot;, incorrect_ratios)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What should every valid correctly recomputed ratio equal?</p></li>
+<li><p>Can isolated-timestep ratios differ from one despite unchanged weights?</p></li>
+<li><p>Which timesteps should show the largest differences: early or later ones?</p></li>
+<li><p>Should padded ratios enter the KL or clip-fraction statistics?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Create the mask with <span style="background-color: codeinlinebg"><code> torch.arange(time_steps) &lt; lengths[:, None]</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> Categorical(logits=logits)</code></span> accepts <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span>.</p></li>
+<li><p>Flatten observations to <span style="background-color: codeinlinebg"><code> [B*T, 1, D]</code></span>.</p></li>
+<li><p>Restore isolated logits to <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span>.</p></li>
+<li><p>Ratio is <span style="background-color: codeinlinebg"><code> exp(current_log_prob - old_log_prob)</code></span>.</p></li>
+<li><p>Apply <span style="background-color: codeinlinebg"><code> mask</code></span> before reducing diagnostics.</p></li>
+<li><p>A typical PPO clipping interval is <span style="background-color: codeinlinebg"><code> [0.8, 1.2]</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Shuffle timesteps before passing them through the GRU. Tensor shapes remain valid, but hidden states no longer represent the rollout histories.</p>
+<p>Process only <span style="background-color: codeinlinebg"><code> observations[:, 2:]</code></span> with zero initial state. This resembles starting a PPO chunk midway through an episode without burn-in.</p>
+<p>Carry the final hidden state from one batch into a batch of unrelated prompts. This leaks information between episodes and makes results depend on batch ordering.</p>
+<p>Finally, calculate clip fraction without <span style="background-color: codeinlinebg"><code> mask</code></span>. Arbitrary padded actions and recurrent outputs can dominate the diagnostic.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is an unchanged model not sufficient to guarantee ratios of one?</p></li>
+<li><p>What purpose does burn-in serve?</p></li>
+<li><p>Which values should remain detached during recurrent PPO?</p></li>
+<li><p>What diagnostics reveal incorrect sequence handling?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Valid mask:</p>
+<pre class="code python"><code class="language-python">mask = (
+    torch.arange(time_steps)[None, :]
+    &lt; lengths[:, None]
+)</code></pre>
+<p>Rollout quantities:</p>
+<pre class="code python"><code class="language-python">rollout_states, _ = encoder(
+    observations
+)
+
+rollout_logits = policy_head(
+    rollout_states
+)
+
+rollout_policy = Categorical(
+    logits=rollout_logits
+)
+
+actions = rollout_policy.sample()
+
+old_log_probs = (
+    rollout_policy.log_prob(actions)
+    .detach()
+)</code></pre>
+<p>Correct recomputation:</p>
+<pre class="code python"><code class="language-python">correct_states, _ = encoder(
+    observations
+)
+
+correct_logits = policy_head(
+    correct_states
+)
+
+correct_log_probs = Categorical(
+    logits=correct_logits
+).log_prob(actions)</code></pre>
+<p>Incorrect isolated recomputation:</p>
+<pre class="code python"><code class="language-python">isolated_observations = (
+    observations.reshape(
+        batch_size * time_steps,
+        1,
+        observation_dim,
+    )
+)
+
+isolated_states, _ = encoder(
+    isolated_observations
+)
+
+isolated_logits = policy_head(
+    isolated_states[:, 0]
+).reshape(
+    batch_size,
+    time_steps,
+    num_actions,
+)
+
+isolated_log_probs = Categorical(
+    logits=isolated_logits
+).log_prob(actions)</code></pre>
+<p>Ratios and diagnostics:</p>
+<pre class="code python"><code class="language-python">correct_ratios = torch.exp(
+    correct_log_probs - old_log_probs
+)
+
+incorrect_ratios = torch.exp(
+    isolated_log_probs - old_log_probs
+)
+
+maximum_correct_error = (
+    correct_ratios[mask] - 1.0
+).abs().max()
+
+mean_incorrect_error = (
+    incorrect_ratios[mask] - 1.0
+).abs().mean()
+
+incorrect_clip_fraction = (
+    (
+        (incorrect_ratios[mask] &lt; 0.8)
+        | (incorrect_ratios[mask] &gt; 1.2)
+    )
+    .to(torch.float64)
+    .mean()
+)</code></pre>
+<p>Correct ratios equal one because both evaluations use identical parameters and identical histories.</p>
+<p>Isolated evaluation resets memory at every timestep. Later actions were originally conditioned on longer histories, so their incorrect ratios will generally deviate more.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The model must also receive the same history, reset boundaries, action mask and recurrent initialization.</p></li>
+<li><p>Burn-in reconstructs memory before the portion used for optimization.</p></li>
+<li><p>Detach stored old log-probabilities, returns and advantages. Detach recurrent state only at chosen truncated-BPTT boundaries.</p></li>
+<li><p>Check ratio error before any optimizer step, initial KL, clip fraction, results by trajectory position and sensitivity to chunk length or burn-in length.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Observation aliasing occurs when different hidden states produce the same observation but require different actions.</p></li>
+<li><p>Reset at episode termination, padding boundaries and boundaries between unrelated prompts.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> recurrent PPO minibatches are sequences, not bags of timesteps. If history reconstruction is wrong, ratios, clipping and KL diagnostics are already invalid before the first update.</p>

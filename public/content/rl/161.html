@@ -1,0 +1,445 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can pass@<span class="math inline">\(K\)</span> increase while the underlying pass@1 policy remains unchanged?</p></li>
+<li><p>Why do all-failure and all-success verifier groups provide no within-group learning signal?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="compare-completions-answering-the-same-prompt">2. Compare completions answering the same prompt</h3>
+<p>GRPO samples <span class="math inline">\(G\)</span> completions for each prompt and compares their rewards:</p>
+<p><span class="math display">\[y_{qj}\sim
+\underbrace{\pi_{\text{old}}(\cdot\mid x_q)}
+_{\text{rollout policy}},
+\qquad j=1,\ldots,G\]</span></p>
+<p>Instead of training a value critic, it constructs a prompt-specific baseline:</p>
+<p><span class="math display">\[\mu_q
+=
+\underbrace{
+\frac1G\sum_{j=1}^{G}R_{qj}
+}_{\text{mean reward for this prompt}}\]</span></p>
+<p><span class="math display">\[\sigma_q^2
+=
+\underbrace{
+\frac1G\sum_j(R_{qj}-\mu_q)^2
+}_{\text{within-prompt reward variance}}\]</span></p>
+<p><span class="math display">\[\widehat A_{qj}
+=
+\underbrace{
+\frac{R_{qj}-\mu_q}
+{\sqrt{\sigma_q^2+\epsilon}}
+}_{\text{completion quality relative to its peers}}\]</span></p>
+<p>A reward of <span style="background-color: codeinlinebg"><code> 0.6</code></span> may be good for a difficult prompt but poor for an easy one. Group normalization adjusts for prompt difficulty without learning <span class="math inline">\(V_\phi(x)\)</span>.</p>
+<p>GRPO still uses an old-policy importance ratio:</p>
+<p><span class="math display">\[\rho_{qjt}(\theta)
+=
+\underbrace{
+\exp\left[
+\log\pi_\theta(a_{qjt}\mid s_{qjt})
+-
+\operatorname{stopgrad}
+\log\pi_{\text{old}}(a_{qjt}\mid s_{qjt})
+\right]
+}_{\text{current probability relative to rollout probability}}\]</span></p>
+<p>A common clipped objective is:</p>
+<p><span class="math display">\[L_{\text{GRPO}}
+=
+E\left[
+\frac1{|y_{qj}|}
+\sum_t
+\min\left(
+\underbrace{\rho_{qjt}\widehat A_{qj}}_{\text{ordinary surrogate}},
+\underbrace{
+\operatorname{clip}(\rho_{qjt},1-\varepsilon,1+\varepsilon)
+\widehat A_{qj}
+}_{\text{limited improvement}}
+\right)
+\right]\]</span></p>
+<p>The same sequence advantage is broadcast across completion tokens, just as in the previous policy-gradient session.</p>
+<p>GRPO removes the learned value network, not the baseline. Its baseline is the sampled group. Consequences:</p>
+<ul>
+<li><p>small groups give noisy comparisons;</p></li>
+<li><p>equal-reward groups have zero reward gradient;</p></li>
+<li><p>every prompt requires multiple generations;</p></li>
+<li><p>reward quality still determines what is learned;</p></li>
+<li><p>token credit remains coarse.</p></li>
+</ul>
+<p>A leave-one-out baseline is:</p>
+<p><span class="math display">\[b_{q,-j}
+=
+\underbrace{
+\frac1{G-1}\sum_{k\ne j}R_{qk}
+}_{\text{other completions only}}\]</span></p>
+<p>It avoids using completion <span class="math inline">\(j\)</span>’s own reward in its baseline. For simple mean-centering:</p>
+<p><span class="math display">\[R_{qj}-b_{q,-j}
+=
+\underbrace{
+\frac{G}{G-1}(R_{qj}-\mu_q)
+}_{\text{same direction, different scale}}\]</span></p>
+<p>GRPO implementations commonly also add reference-KL regularization. Remember:</p>
+<ul>
+<li><p><span class="math inline">\(\pi_{\text{old}}\)</span> defines PPO/GRPO ratios;</p></li>
+<li><p><span class="math inline">\(\pi_{\text{ref}}\)</span> limits cumulative SFT drift.</p></li>
+</ul>
+<p>DPO has neither online completion groups nor an old-policy ratio. It optimizes frozen preference pairs directly.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>group rewards and advantages: <span style="background-color: codeinlinebg"><code> [P, G]</code></span></p></li>
+<li><p>actions, ratios and masks: <span style="background-color: codeinlinebg"><code> [P, G, T]</code></span></p></li>
+<li><p>logits: <span style="background-color: codeinlinebg"><code> [P, G, T, V]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-implement-the-grpo-reward-objective">3. PyTorch exercise — implement the GRPO reward objective</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_prompts = 3
+group_size = 4
+max_tokens = 4
+vocabulary_size = 3
+
+clip_epsilon = 0.20
+normalization_epsilon = 1e-8
+
+lengths = torch.tensor([
+    [2, 4, 3, 4],
+    [3, 2, 4, 3],
+    [4, 3, 2, 4],
+])
+
+valid_mask = (
+    torch.arange(max_tokens)[None, None, :]
+    &lt; lengths[..., None]
+).to(torch.float64)
+
+# Prompt 0: uniform failures.
+# Prompt 1: binary verifier with mixed outcomes.
+# Prompt 2: graded verifier.
+rewards = torch.tensor([
+    [0.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 1.0],
+    [0.2, 0.5, 0.8, 0.5],
+])
+
+# TODO 1: Group-relative advantages.
+group_means = ...
+
+centered_rewards = ...
+
+group_variances = ...
+
+group_advantages = ...
+
+# Compare against a leave-one-out baseline.
+leave_one_out_baselines = ...
+
+leave_one_out_advantages = ...
+
+leave_one_out_identity_error = ...
+
+old_logits = (
+    0.30
+    * torch.randn(
+        num_prompts,
+        group_size,
+        max_tokens,
+        vocabulary_size,
+    )
+)
+
+old_distribution = torch.distributions.Categorical(
+    logits=old_logits
+)
+
+# TODO 2: Freeze rollout actions and probabilities.
+with torch.no_grad():
+    actions = ...
+
+    old_log_probabilities = ...
+
+chosen_one_hot = F.one_hot(
+    actions,
+    num_classes=vocabulary_size,
+).to(torch.float64)
+
+# Move probabilities of chosen actions in both directions.
+chosen_action_shifts = (
+    0.60
+    * torch.randn(
+        num_prompts,
+        group_size,
+        max_tokens,
+    )
+)
+
+new_logits = torch.nn.Parameter(
+    (
+        old_logits
+        + chosen_one_hot
+        * chosen_action_shifts[..., None]
+    ).detach()
+)
+
+new_distribution = torch.distributions.Categorical(
+    logits=new_logits
+)
+
+new_log_probabilities = (
+    new_distribution.log_prob(actions)
+)
+
+# TODO 3: Importance ratios.
+log_ratios = ...
+
+ratios = ...
+
+token_advantages = ...
+
+# TODO 4: Clipped GRPO surrogate.
+unclipped_surrogate = ...
+
+clipped_surrogate = ...
+
+token_surrogate = ...
+
+# Deliberately give each completion equal weight.
+completion_objectives = ...
+
+reward_objective = ...
+
+actor_loss = ...
+
+actor_loss.backward()
+
+# TODO 5: Diagnostics.
+outside_clip = ...
+
+clip_fraction = ...
+
+per_prompt_gradient_norms = (
+    new_logits.grad
+    .flatten(start_dim=1)
+    .norm(dim=1)
+)
+
+uniform_prompt_gradient = ...
+
+padded_gradient_max = ...
+
+advantage_mean_error = ...
+
+print(&quot;Rewards:\n&quot;, rewards)
+print(&quot;Group means:\n&quot;, group_means)
+print(&quot;Group advantages:\n&quot;, group_advantages)
+
+print(
+    &quot;Leave-one-out identity error:&quot;,
+    leave_one_out_identity_error.item(),
+)
+print(&quot;Ratios:\n&quot;, ratios.detach())
+print(&quot;Clip fraction:&quot;, clip_fraction.item())
+
+print(
+    &quot;Per-prompt reward-gradient norms:&quot;,
+    per_prompt_gradient_norms,
+)
+print(
+    &quot;Uniform-prompt gradient:&quot;,
+    uniform_prompt_gradient.item(),
+)
+print(
+    &quot;Largest padded gradient:&quot;,
+    padded_gradient_max.item(),
+)
+print(
+    &quot;Largest group-advantage mean error:&quot;,
+    advantage_mean_error.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What advantages should prompt <span style="background-color: codeinlinebg"><code> 0</code></span> receive?</p></li>
+<li><p>For prompt <span style="background-color: codeinlinebg"><code> 1</code></span>, which completions receive positive advantages?</p></li>
+<li><p>If <span style="background-color: codeinlinebg"><code> new_logits == old_logits</code></span>, what is every importance ratio?</p></li>
+<li><p>Should the uniform prompt receive a reward-objective gradient?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Compute statistics along <span style="background-color: codeinlinebg"><code> dim=1</code></span> while retaining that dimension.</p></li>
+<li><p>Use population variance: mean squared centered reward.</p></li>
+<li><p>Leave-one-out sum: total group reward minus the current reward.</p></li>
+<li><p>Sample actions from <span style="background-color: codeinlinebg"><code> old_distribution</code></span> inside <span style="background-color: codeinlinebg"><code> no_grad()</code></span>.</p></li>
+<li><p>Broadcast advantages with <span style="background-color: codeinlinebg"><code> [..., None]</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.minimum</code></span>, not only the clipped term.</p></li>
+<li><p>Divide each completion’s token sum by its own valid-token count.</p></li>
+<li><p>Mask diagnostics as well as the loss.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Normalize rewards across unrelated prompts instead of within prompt.</p></li>
+<li><p>Recompute old log-probabilities from the changing policy.</p></li>
+<li><p>Forget to detach group advantages.</p></li>
+<li><p>Let padding tokens enter the denominator.</p></li>
+<li><p>Use the reference policy as the importance-ratio denominator.</p></li>
+<li><p>Expect group normalization to create signal in an all-failure group.</p></li>
+<li><p>Compare GRPO runs without logging group reward variance and uniform-group frequency.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What replaces PPO’s learned value critic in GRPO?</p></li>
+<li><p>Why can a larger group improve the baseline?</p></li>
+<li><p>Does GRPO solve token-level credit assignment?</p></li>
+<li><p>If reference KL is added, can a uniform-reward prompt still receive a total gradient?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Group-relative advantages:</p>
+<pre class="code python"><code class="language-python">group_means = rewards.mean(
+    dim=1,
+    keepdim=True,
+)
+
+centered_rewards = (
+    rewards - group_means
+)
+
+group_variances = (
+    centered_rewards.square().mean(
+        dim=1,
+        keepdim=True,
+    )
+)
+
+group_advantages = (
+    centered_rewards
+    / torch.sqrt(
+        group_variances
+        + normalization_epsilon
+    )
+).detach()</code></pre>
+<p>Leave-one-out comparison:</p>
+<pre class="code python"><code class="language-python">leave_one_out_baselines = (
+    rewards.sum(dim=1, keepdim=True)
+    - rewards
+) / (group_size - 1)
+
+leave_one_out_advantages = (
+    rewards
+    - leave_one_out_baselines
+)
+
+leave_one_out_identity_error = (
+    leave_one_out_advantages
+    - (
+        group_size
+        / (group_size - 1)
+    )
+    * centered_rewards
+).abs().max()</code></pre>
+<p>Frozen rollouts:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    actions = old_distribution.sample()
+
+    old_log_probabilities = (
+        old_distribution.log_prob(actions)
+    )</code></pre>
+<p>Importance ratios:</p>
+<pre class="code python"><code class="language-python">log_ratios = (
+    new_log_probabilities
+    - old_log_probabilities
+)
+
+ratios = torch.exp(log_ratios)
+
+token_advantages = (
+    group_advantages[..., None]
+)</code></pre>
+<p>Clipped objective:</p>
+<pre class="code python"><code class="language-python">unclipped_surrogate = (
+    ratios * token_advantages
+)
+
+clipped_surrogate = (
+    ratios.clamp(
+        1.0 - clip_epsilon,
+        1.0 + clip_epsilon,
+    )
+    * token_advantages
+)
+
+token_surrogate = torch.minimum(
+    unclipped_surrogate,
+    clipped_surrogate,
+)
+
+completion_objectives = (
+    (
+        token_surrogate
+        * valid_mask
+    ).sum(dim=-1)
+    / valid_mask.sum(dim=-1)
+)
+
+reward_objective = (
+    completion_objectives.mean()
+)
+
+actor_loss = -reward_objective</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">outside_clip = (
+    (
+        ratios &lt; 1.0 - clip_epsilon
+    )
+    | (
+        ratios &gt; 1.0 + clip_epsilon
+    )
+) &amp; valid_mask.bool()
+
+clip_fraction = (
+    outside_clip
+    .to(torch.float64)
+    .sum()
+    / valid_mask.sum()
+)
+
+uniform_prompt_gradient = (
+    per_prompt_gradient_norms[0]
+)
+
+padded_gradient_max = (
+    new_logits.grad
+    * (
+        1.0 - valid_mask
+    )[..., None]
+).abs().max()
+
+advantage_mean_error = (
+    group_advantages.mean(dim=1)
+).abs().max()</code></pre>
+<p>Prompt <span style="background-color: codeinlinebg"><code> 1</code></span> has rewards <span style="background-color: codeinlinebg"><code> [0, 1, 0, 1]</code></span>, so:</p>
+<p><span class="math display">\[\mu_1=0.5,
+\qquad
+\sigma_1=0.5\]</span></p>
+<p><span class="math display">\[\widehat A_1
+=
+\underbrace{[-1,\ 1,\ -1,\ 1]}_{\text{failures discouraged; successes reinforced}}\]</span></p>
+<p>Prompt <span style="background-color: codeinlinebg"><code> 2</code></span> has mean <span style="background-color: codeinlinebg"><code> 0.5</code></span>:</p>
+<p><span class="math display">\[\widehat A_2
+\approx
+[-1.414,\ 0,\ 1.414,\ 0]\]</span></p>
+<p>Prompt <span style="background-color: codeinlinebg"><code> 0</code></span> has no reward variation, so all its advantages and its reward-objective gradient are zero.</p>
+<p>If a reference-KL penalty were included, that prompt could still receive a KL gradient pulling it toward the reference. Therefore “zero GRPO reward gradient” does not necessarily mean “zero total training gradient.”</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The sampled mean and standard deviation of completions answering the same prompt replace the learned value baseline.</p></li>
+<li><p>More samples usually estimate relative prompt difficulty more reliably and increase the chance of observing diverse outcomes, at greater generation cost.</p></li>
+<li><p>No. A sequence-level group advantage is normally broadcast across tokens; it does not determine which token caused the outcome.</p></li>
+<li><p>Yes. The reward component is zero, but reference-KL regularization can still move the policy toward its anchor.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Pass@<span class="math inline">\(K\)</span> benefits from additional search: <span class="math inline">\(1-(1-p)^K\)</span>. The per-sample success probability <span class="math inline">\(p\)</span> need not change.</p></li>
+<li><p>Every reward equals the group mean, so every centered advantage is zero.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> GRPO removes the value model, not variance or baselines. It compares several completions for the same prompt, broadcasts their detached relative advantages across tokens, and applies a PPO-style clipped update against the frozen rollout policy.</p>

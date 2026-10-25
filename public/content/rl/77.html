@@ -1,0 +1,274 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a quiz contestant who passes</div>
+<p>On a quiz show where wrong answers cost points, the best contestants pass on questions they’re unsure of. They answer fewer questions, but their accuracy on the ones they do answer is much higher. Selective prediction is the same: choose when to answer, when to use a tool, and when to abstain.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/edd763c613f8.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Stylized risk–coverage curve. Pick the largest coverage that stays under the target.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What does <span class="math inline">\(T&gt;1\)</span> do during temperature scaling?</p></li>
+<li><p>Why is a policy’s action probability not automatically its probability of success?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="confidence-decides-where-the-model-acts">2. Confidence decides where the model acts</h3>
+<p>A calibrated outcome model might estimate:</p>
+<p><span class="math display">\[c(x)=P(\text{direct answer is correct}\mid x)\]</span></p>
+<p>A selective agent answers only when confidence exceeds threshold <span class="math inline">\(\tau\)</span>:</p>
+<p><span class="math display">\[g_\tau(x)=\mathbf 1[c(x)\ge\tau]\]</span></p>
+<p>Otherwise it uses a tool, asks for clarification or abstains.</p>
+<p>Two quantities describe this router:</p>
+<p><span class="math display">\[\operatorname{coverage}(\tau)
+=
+\frac1N\sum_i g_\tau(x_i)\]</span></p>
+<p><span class="math display">\[\operatorname{risk}(\tau)
+=
+\frac{
+\sum_i g_\tau(x_i)\ell_i
+}{
+\sum_i g_\tau(x_i)
+}\]</span></p>
+<p>For zero-one loss, selective risk is the error rate among answered examples—not among all examples.</p>
+<p>Sorting by confidence produces a risk–coverage curve. For the top <span class="math inline">\(k\)</span> examples:</p>
+<p><span class="math display">\[C_k=\frac{k}{N},
+\qquad
+R_k=\frac{\sum_{i=1}^{k}\ell_{(i)}}{k}\]</span></p>
+<p>Higher thresholds usually reduce coverage and should reduce population risk if confidence is informative. Empirical risk need not decrease monotonically: one confident mistake can create a temporary spike.</p>
+<p>Abstention is not free. If fallback calls a slow tool, the actual objective may be:</p>
+<p><span class="math display">\[J(\tau)
+=
+\mathbb E[
+g_\tau r_{\text{direct}}
++
+(1-g_\tau)r_{\text{fallback}}
+]\]</span></p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>confidence and correctness: <span style="background-color: codeinlinebg"><code> [B]</code></span>;</p></li>
+<li><p>answer mask: <span style="background-color: codeinlinebg"><code> [B]</code></span>;</p></li>
+<li><p>prefix coverage and risk: <span style="background-color: codeinlinebg"><code> [B]</code></span>;</p></li>
+<li><p>selected threshold: scalar.</p></li>
+</ul>
+<p>For LLM agents, sequence likelihood is not necessarily correctness confidence. Use a calibrated verifier, reward model or outcome predictor.</p>
+<p>DPO can teach refusal preferences from fixed comparisons, but does not guarantee a particular risk at a chosen coverage or adapt to live fallback costs.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: risk and coverage</div>
+<p>With confidence score <span class="math inline">\(c(x)\)</span> and threshold <span class="math inline">\(t\)</span>: coverage <span class="math inline">\(\kappa(t)=P(c\ge t)\)</span>, selective risk <span class="math inline">\(R(t)=P(\text{error}\mid c\ge t)\)</span>. Choose <span class="math inline">\(t^*=\arg\max_t\kappa(t)\)</span> s.t. <span class="math inline">\(R(t)\le r^*\)</span> on a <em>validation</em> set (with a finite-sample margin, Topic 79). <strong>Three actions</strong> (answer / tool / abstain) generalize this with costs: choose the action minimizing expected cost <span class="math inline">\(=P(\text{error})\cdot c_{\text{err}}+c_{\text{action}}\)</span>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Abstention changes which requests the model handles, not what it knows.</p></li>
+<li><p>Measure error among answered requests, on separate validation data.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: pick the threshold</div>
+<p>10 validation items sorted by confidence. Correctness from most to least confident: <span class="math inline">\(1,1,1,1,0,1,0,1,0,0\)</span>. Answer the top 4: error 0%. Top 5: 1/5 <span class="math inline">\(=20\%\)</span>. Top 6: 1/6 <span class="math inline">\(=17\%\)</span>. Top 7: 2/7 <span class="math inline">\(=29\%\)</span>. With a 20% target, answer the top 6 (60% coverage).</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Reporting overall error instead of error among answered.</p></li>
+<li><p>Tuning the threshold on test data.</p></li>
+<li><p>Ignoring that abstained requests still need handling (cost, user experience).</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-choose-maximum-coverage-under-20-risk">3. PyTorch exercise — choose maximum coverage under 20% risk</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+# Confidence estimates in the original request order.
+confidences = torch.tensor([
+    0.95, 0.62, 0.88, 0.51, 0.91,
+    0.73, 0.84, 0.58, 0.79, 0.69,
+    0.97, 0.76, 0.55, 0.82, 0.66,
+])
+
+# Whether the direct answer was actually correct.
+is_correct = torch.tensor([
+    True,  True,  False, False, True,
+    True,  True,  True,  True,  True,
+    True,  False, True,  True,  False,
+])
+
+maximum_risk = 0.20
+num_examples = confidences.numel()
+
+# TODO 1: Sort from highest to lowest confidence,
+# carrying correctness along with each example.
+sorted_confidences, order = ...
+sorted_correct = ...
+
+# TODO 2: Construct every top-k point on the
+# risk-coverage curve.
+sorted_errors = ...
+
+answered_counts = torch.arange(
+    1,
+    num_examples + 1,
+    dtype=confidences.dtype,
+)
+
+prefix_errors = ...
+prefix_risks = ...
+coverages = ...
+
+# TODO 3: Choose the largest coverage whose
+# empirical risk is at most 20%.
+feasible = ...
+
+assert bool(feasible.any())
+
+chosen_index = ...
+chosen_count = ...
+threshold = ...
+
+# TODO 4: Apply the threshold in the original order.
+answer_mask = ...
+
+realized_coverage = ...
+realized_risk = ...
+
+# TODO 5: Common denominator bug: errors among
+# answered requests divided by every request.
+buggy_risk = ...
+
+print(
+    &quot;Sorted confidence:\n&quot;,
+    sorted_confidences,
+)
+
+print(
+    &quot;Risk-coverage points [coverage, risk]:\n&quot;,
+    torch.stack(
+        [coverages, prefix_risks],
+        dim=1,
+    ),
+)
+
+print(&quot;Chosen threshold:&quot;, threshold.item())
+print(&quot;Answered requests:&quot;, chosen_count.item())
+print(&quot;Realized coverage:&quot;, realized_coverage.item())
+print(&quot;Realized selective risk:&quot;, realized_risk.item())
+print(&quot;Buggy reported risk:&quot;, buggy_risk.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What happens to prefix risk when the incorrect <span style="background-color: codeinlinebg"><code> 0.88</code></span> example enters?</p></li>
+<li><p>Which threshold gives the largest coverage satisfying 20% risk?</p></li>
+<li><p>Will dividing selected errors by all requests overstate or understate selective risk?</p></li>
+<li><p>Must empirical risk always decrease when the threshold increases?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.sort(..., descending=True)</code></span>.</p></li>
+<li><p>Convert Boolean errors to the confidence dtype.</p></li>
+<li><p>Prefix errors are a cumulative sum.</p></li>
+<li><p>Choose the final index where <span style="background-color: codeinlinebg"><code> prefix_risks &lt;= maximum_risk</code></span>.</p></li>
+<li><p>The correct denominator is <span style="background-color: codeinlinebg"><code> answer_mask.sum()</code></span>.</p></li>
+<li><p>Threshold ties can select more examples than the chosen prefix.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Sort confidence ascending. The curve now answers the least confident requests first.</p></li>
+<li><p>Divide selected errors by <span style="background-color: codeinlinebg"><code> num_examples</code></span>; abstentions incorrectly dilute the reported risk.</p></li>
+<li><p>Clamp an empty selection’s denominator to one. This silently reports zero risk at zero coverage.</p></li>
+<li><p>Tune and report the threshold on the same dataset. The selected risk becomes optimistically biased.</p></li>
+<li><p>Apply the threshold after a distribution shift without recalibration. The original risk target may no longer hold.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>How do calibration and selective prediction differ?</p></li>
+<li><p>Why can a risk–coverage curve be non-monotonic on finite data?</p></li>
+<li><p>When should fallback cost enter the RL state or reward?</p></li>
+<li><p>Which deployment diagnostics should be reported?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Sort confidence and correctness together:</p>
+<pre class="code python"><code class="language-python">sorted_confidences, order = torch.sort(
+    confidences,
+    descending=True,
+)
+
+sorted_correct = is_correct[order]</code></pre>
+<p>Construct the curve:</p>
+<pre class="code python"><code class="language-python">sorted_errors = (
+    ~sorted_correct
+).to(confidences.dtype)
+
+prefix_errors = sorted_errors.cumsum(
+    dim=0
+)
+
+prefix_risks = (
+    prefix_errors / answered_counts
+)
+
+coverages = (
+    answered_counts / num_examples
+)</code></pre>
+<p>Choose the largest feasible prefix:</p>
+<pre class="code python"><code class="language-python">feasible = (
+    prefix_risks
+    &lt;= maximum_risk + 1e-12
+)
+
+chosen_index = torch.where(
+    feasible
+)[0][-1]
+
+chosen_count = chosen_index + 1
+
+threshold = sorted_confidences[
+    chosen_index
+]</code></pre>
+<p>Apply it to the original ordering:</p>
+<pre class="code python"><code class="language-python">answer_mask = (
+    confidences &gt;= threshold
+)
+
+realized_coverage = (
+    answer_mask.to(
+        confidences.dtype
+    ).mean()
+)
+
+realized_risk = (
+    (
+        (~is_correct)
+        &amp; answer_mask
+    )
+    .to(confidences.dtype)
+    .sum()
+    / answer_mask.sum()
+)</code></pre>
+<p>The denominator bug:</p>
+<pre class="code python"><code class="language-python">buggy_risk = (
+    (
+        (~is_correct)
+        &amp; answer_mask
+    )
+    .to(confidences.dtype)
+    .mean()
+)</code></pre>
+<p>The selected operating point is:</p>
+<p><span class="math display">\[\tau=0.69\]</span></p>
+<p>It answers 10 of 15 requests:</p>
+<p><span class="math display">\[\text{coverage}=\frac{10}{15}\approx0.667\]</span></p>
+<p>Two selected answers are incorrect:</p>
+<p><span class="math display">\[\text{selective risk}=\frac{2}{10}=0.20\]</span></p>
+<p>The buggy calculation reports:</p>
+<p><span class="math display">\[\frac{2}{15}\approx0.133\]</span></p>
+<p>because it incorrectly allows five abstentions to dilute the error rate.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Calibration makes confidence match observed frequencies; selective prediction uses that confidence to decide where the model acts.</p></li>
+<li><p>Individual mistakes enter discrete prefixes, so observed risk can rise and later fall.</p></li>
+<li><p>When tool latency, monetary cost, failure probability or remaining budget affects the value of routing.</p></li>
+<li><p>Report coverage, selective risk, fallback rate, risk–coverage curves, subgroup results, confidence drift, fallback cost and zero-coverage cases.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(T&gt;1\)</span> softens probabilities while preserving their argmax.</p></li>
+<li><p>Policy probability describes action-selection frequency. Success probability requires an outcome model calibrated against observed results.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> abstention changes which requests the model handles, not what the model knows. Measure errors among answered requests, validate thresholds on separate data and monitor the full risk–coverage trade-off.</p>

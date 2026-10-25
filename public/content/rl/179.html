@@ -1,0 +1,90 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a driving instructor in the passenger seat</div>
+<p>Watching videos of an expert driving (SFT on teacher outputs) never shows you how to recover from <em>your own</em> mistakes. An instructor in the passenger seat comments on every move <em>you</em> make, as you make it. On-policy distillation is the instructor: the student drives, and the teacher grades each token.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Write the per-token KL penalty used in RLHF. (Topic 28)</p></li>
+<li><p>Why is reverse KL “mode seeking”?</p></li>
+</ol>
+<h3 class="unnumbered" id="the-idea-thinking-machines-lab-oct-2025-building-on-gkd-agarwal-et-al.-2024">2. The idea (Thinking Machines Lab, Oct 2025, building on GKD, Agarwal et al., 2024)</h3>
+<p>Sample from the <em>student</em>, score each sampled token with the <em>teacher</em>, and minimize the per-token reverse KL: <span class="math display">\[\mathrm{KL}(\pi_\theta\|\pi_T)=\mathbb E_{y\sim\pi_\theta}\Big[\sum_t\log\pi_\theta(y_t|y_{&lt;t})-\log\pi_T(y_t|y_{&lt;t})\Big].\]</span> In RL terms, the per-token advantage is <span class="math inline">\(-\big(\log\pi_\theta(y_t)-\log\pi_T(y_t)\big)\)</span> with discount 0, so an existing RL loop with a KL term becomes distillation by swapping the reference model for a teacher. <strong>Why it’s attractive:</strong> feedback is dense (every token, not one bit per episode), it trains on states the student actually visits, and the reward can’t be hacked: low KL simply means teacher-like behaviour. The authors report reaching an RL-trained teacher’s performance at a small fraction of RL’s compute. <strong>Caveat:</strong> reverse KL only sharpens what the student can already sample, so do SFT or mid-training first to get the teacher’s behaviour within reach.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Student samples, teacher grades every token, and the advantage is minus the log-ratio.</p></li>
+<li><p>Dense, on-policy and hard to hack, but it needs a teacher and a reasonable starting student.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: one token</div>
+<p>The student samples a token with <span class="math inline">\(\log\pi_\theta=-0.5\)</span>. The teacher gives it <span class="math inline">\(\log\pi_T=-2.0\)</span>. Advantage <span class="math inline">\(=-(-0.5+2.0)=-1.5\)</span>: the teacher thinks this token is far less likely, so push it down. Another token with <span class="math inline">\(\log\pi_\theta=-3.0\)</span>, <span class="math inline">\(\log\pi_T=-1.0\)</span>: advantage <span class="math inline">\(+2.0\)</span>, push it up.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Sampling from the teacher (that’s ordinary SFT distillation, with exposure bias).</p></li>
+<li><p>Forgetting to detach the advantage.</p></li>
+<li><p>A tokenizer mismatch between student and teacher (the log-probs are for different tokens).</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-distill-a-tiny-teacher">3. PyTorch exercise — distill a tiny teacher</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(0)
+contexts, vocab = 3, 5
+teacher_logits = torch.randn(contexts, vocab) * 2
+student_logits = torch.zeros(contexts, vocab, requires_grad=True)
+opt = torch.optim.Adam([student_logits], lr=0.05)
+for step in range(301):
+    ctx = torch.randint(0, contexts, (256,))
+    # TODO 1: sample tokens from the STUDENT for each context
+    tok = ...
+    # TODO 2: advantage = -(student logp - teacher logp), detached; REINFORCE loss
+    ...</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does sampling from the student fix exposure bias?</p></li>
+<li><p>Why is the reward “unhackable” in a way a learned reward model isn’t?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(0)
+contexts, vocab = 3, 5
+teacher_logits = torch.randn(contexts, vocab) * 2
+student_logits = torch.zeros(contexts, vocab, requires_grad=True)
+opt = torch.optim.Adam([student_logits], lr=0.05)
+
+
+def reverse_kl():
+    s = student_logits.log_softmax(-1)
+    t = teacher_logits.log_softmax(-1)
+    return (s.exp() * (s - t)).sum(-1).mean().item()
+
+
+print(f&quot;start reverse KL {reverse_kl():.3f}&quot;)
+for step in range(301):
+    ctx = torch.randint(0, contexts, (256,))
+    with torch.no_grad():
+        tok = torch.multinomial(student_logits.softmax(-1)[ctx], 1).squeeze(1)   # student samples
+    logp_s = student_logits.log_softmax(-1)[ctx, tok]
+    logp_t = teacher_logits.log_softmax(-1)[ctx, tok]                           # teacher scores them
+    advantage = -(logp_s - logp_t).detach()                                       # dense per-token reward
+    loss = -(advantage * logp_s).mean()
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+    if step % 100 == 0:
+        print(f&quot;step {step}: reverse KL {reverse_kl():.3f}&quot;)</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">start reverse KL 1.509
+step 0: reverse KL 1.426
+step 100: reverse KL 0.008
+step 200: reverse KL 0.003
+step 300: reverse KL 0.001</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>The student is corrected in the states its own mistakes lead to, which offline teacher data never covers.</p></li>
+<li><p>The objective is closeness to the teacher’s distribution itself. There’s no separate proxy whose errors could be exploited.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) <span class="math inline">\(-\beta(\log\pi_\theta-\log\pi_{\text{ref}})\)</span>. (2) It heavily penalizes putting mass where the target has little, so the student concentrates on the target’s main modes.</p>
+<p><strong>Takeaway:</strong> when a stronger model exists, on-policy distillation gives RL-style training with dense, trustworthy per-token feedback.</p>

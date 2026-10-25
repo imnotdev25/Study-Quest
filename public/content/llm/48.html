@@ -1,0 +1,36 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>BERT</strong> (Devlin et al., 2018) is an encoder-only Transformer with <em>no</em> causal mask. Next-token prediction is impossible when every token can see the answer, so it’s trained by <strong>masked language modeling (MLM)</strong>: hide 15% of tokens and predict them from both sides. BERT-base: 12 layers, <span class="math inline">\(D=768\)</span>, 12 heads, 110M parameters. BERT-large: 24 layers, <span class="math inline">\(D=1024\)</span>, 340M.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/f24badaa920a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Masked language modeling: predict hidden tokens from context on both sides.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the MLM loss and the 80/10/10 rule</div>
+<p><strong>Step 1.</strong> Choose a random set <span class="math inline">\(\mathcal M\)</span> of about 15% of positions. Corrupt the input to <span class="math inline">\(\tilde x\)</span>, run the encoder, and get logits <span class="math inline">\(Z_t\)</span> at every position.</p>
+<p><strong>Step 2.</strong> Loss = categorical NLL (Part 0), <em>only</em> over masked positions: <span class="math inline">\(L_{\text{MLM}}=-\frac{1}{|\mathcal M|}\sum_{t\in\mathcal M}\log p_\theta(x_t\mid\tilde x)\)</span>.</p>
+<p><strong>Step 3.</strong> If every chosen token became <code>[MASK]</code>, the model would learn features only for <code>[MASK]</code> positions, yet <code>[MASK]</code> never appears at fine-tuning time. So of the chosen tokens: 80% become <code>[MASK]</code>, 10% a random token, 10% stay unchanged.</p>
+<p><strong>Step 4.</strong> Because unchanged and random tokens are also predicted, the model can’t trust <em>any</em> visible token blindly, so it must build a good representation of every position.</p>
+<p><strong>Step 5.</strong> <strong>Signal per sequence:</strong> only 15% of positions produce a loss, versus 100% for next-token prediction. That’s MLM’s main inefficiency.</p>
+<p><strong>Step 6.</strong> BERT also used <strong>next-sentence prediction</strong>, a binary loss on <code>[CLS]</code>. RoBERTa (2019) showed removing it, training longer on 10<span class="math inline">\(\times\)</span> more data, and re-sampling the mask every epoch (<em>dynamic masking</em>) works better.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: ELECTRA: a loss on every token</div>
+<p><strong>Step 1.</strong> A small generator <span class="math inline">\(G\)</span> fills masked positions with plausible samples, giving <span class="math inline">\(\hat x\)</span>.</p>
+<p><strong>Step 2.</strong> The discriminator <span class="math inline">\(D\)</span> predicts, for <em>every</em> position, whether the token was replaced: a Bernoulli output <span class="math inline">\(D(\hat x,t)=\sigma(z_t)\)</span>.</p>
+<p><strong>Step 3.</strong> Loss: binary cross-entropy (Part 0) summed over all <span class="math inline">\(T\)</span> positions: <span class="math inline">\(L_D=\sum_t\big[\softplus(z_t)-y_tz_t\big]\)</span>, with <span class="math inline">\(y_t=\mathbb 1[\hat x_t\ne x_t]\)</span>.</p>
+<p><strong>Step 4.</strong> Total <span class="math inline">\(L=L_{\text{MLM}}(G)+\lambda L_D\)</span> with <span class="math inline">\(\lambda=50\)</span> in the paper. All <span class="math inline">\(T\)</span> positions now give signal, which is why ELECTRA matches RoBERTa with a fraction of the compute.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/ae0047074fa8.svg" alt="diagram" loading="lazy"></figure>
+<p><em>ELECTRA: the discriminator gets a binary label at every position, not just the 15% that were masked.</em></p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: MLM masking</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> token ids <span class="math inline">\(x_{1:T}\)</span>, mask rate <span class="math inline">\(0.15\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\mathcal M\gets\)</span> random 15% of positions (excluding special tokens)</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t\in\mathcal M\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">with prob. 0.8: <span class="math inline">\(\tilde x_t\gets\texttt{[MASK]}\)</span>; with prob. 0.1: <span class="math inline">\(\tilde x_t\gets\)</span> random token; else <span class="math inline">\(\tilde x_t\gets x_t\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">labels <span class="math inline">\(\gets x_t\)</span> for <span class="math inline">\(t\in\mathcal M\)</span>, <span class="math inline">\(-100\)</span> elsewhere; loss <span class="math inline">\(=\)</span> cross-entropy on labels</div>
+</div>
+</div>

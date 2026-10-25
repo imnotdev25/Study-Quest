@@ -1,0 +1,332 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: seatbelt plus airbag</div>
+<p>A seatbelt alone helps. An airbag alone helps. Together you’re protected if <em>either</em> one works. Doubly robust evaluation combines a reward model (biased, but smooth) with importance sampling (unbiased, but noisy). The IS part corrects the model’s mistakes, and the model keeps the IS noise small.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/f89e767600b8.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why does per-decision importance sampling usually have lower variance than trajectory IS?</p></li>
+<li><p>What happens when the target selects actions absent from the logging policy?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="two-imperfect-ways-to-evaluate-a-policy">2. Two imperfect ways to evaluate a policy</h3>
+<p>Consider a one-step contextual bandit:</p>
+<ul>
+<li><p>observe context <span class="math inline">\(x\)</span>;</p></li>
+<li><p>choose action <span class="math inline">\(a\)</span>;</p></li>
+<li><p>receive reward <span class="math inline">\(r\)</span>.</p></li>
+</ul>
+<p>A direct-method evaluator learns a reward model:</p>
+<p><span class="math display">\[\hat Q(x,a)\approx\mathbb E[R\mid x,a]\]</span></p>
+<p>It estimates the target policy’s value as:</p>
+<p><span class="math display">\[\hat V_{\text{DM}}
+=
+\frac1N
+\sum_i
+\sum_a
+\pi(a\mid x_i)\hat Q(x_i,a)\]</span></p>
+<p>This has low variance but inherits reward-model bias.</p>
+<p>Importance sampling instead uses logged rewards:</p>
+<p><span class="math display">\[\rho_i
+=
+\frac{\pi(a_i\mid x_i)}
+{\mu(a_i\mid x_i)}\]</span></p>
+<p><span class="math display">\[\hat V_{\text{IS}}
+=
+\frac1N\sum_i\rho_i r_i\]</span></p>
+<p>It avoids a reward-model assumption, but rare actions can produce large, noisy ratios.</p>
+<p>The doubly robust estimator combines them:</p>
+<p><span class="math display">\[\hat V_{\text{DR}}
+=
+\frac1N\sum_i
+\left[
+\underbrace{
+\sum_a\pi(a\mid x_i)\hat Q(x_i,a)
+}_{\text{reward-model prediction}}
++
+\underbrace{
+\rho_i
+\left(
+r_i-\hat Q(x_i,a_i)
+\right)
+}_{\text{logged correction}}
+\right]\]</span></p>
+<p>Think of <span class="math inline">\(\hat Q\)</span> as an invoice estimate. Importance sampling corrects only the prediction error observed in the logged action.</p>
+<p>Under standard assumptions, DR remains consistent if either:</p>
+<ul>
+<li><p>the reward model is correct, or</p></li>
+<li><p>the logged behavior propensities are correct and have target-policy support.</p></li>
+</ul>
+<p>It is not magic: if both are wrong, the result can be biased. Extreme importance ratios also remain dangerous.</p>
+<p>Tensor shapes for <span class="math inline">\(R\)</span> repeated experiments, batch <span class="math inline">\(B\)</span>, actions <span class="math inline">\(A\)</span>:</p>
+<ul>
+<li><p>contexts and logged actions: <span style="background-color: codeinlinebg"><code> [R, B]</code></span></p></li>
+<li><p>policy probabilities: <span style="background-color: codeinlinebg"><code> [R, B, A]</code></span></p></li>
+<li><p>rewards, ratios and DR terms: <span style="background-color: codeinlinebg"><code> [R, B]</code></span></p></li>
+<li><p>estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>DPO trains a policy from chosen/rejected response pairs. Doubly robust estimation evaluates a policy using logged actions, rewards and logging probabilities.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: double robustness</div>
+<p>One-step (bandit) form: <span class="math display">\[\hat V_{\text{DR}}=\frac1N\sum_i\Big[\underbrace{\textstyle\sum_a\pi(a|x_i)\hat r(x_i,a)}_{\text{model}}+\underbrace{\rho_i\big(r_i-\hat r(x_i,a_i)\big)}_{\text{correction}}\Big].\]</span></p>
+<ul>
+<li><p><strong>If <span class="math inline">\(\rho\)</span> is correct:</strong> <span class="math inline">\(\mathbb E_b[\rho(r-\hat r)]=\mathbb E_\pi[r]-\mathbb E_\pi[\hat r]\)</span>, so the model terms cancel and you get the truth.</p></li>
+<li><p><strong>If <span class="math inline">\(\hat r\)</span> is correct:</strong> the residual <span class="math inline">\(r-\hat r\)</span> has mean 0, so the correction vanishes on average whatever <span class="math inline">\(\rho\)</span> is.</p></li>
+</ul>
+<p>The bias is roughly (propensity error) <span class="math inline">\(\times\)</span> (model error), so two decent components give a small bias. The variance comes from <span class="math inline">\(\rho\cdot\)</span>residual, which is small when <span class="math inline">\(\hat r\)</span> is good.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>DR is unbiased if either the propensities or the reward model are right.</p></li>
+<li><p>A good reward model shrinks IS variance, and IS fixes the model’s bias.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: one DR term</div>
+<p>Model prediction for <span class="math inline">\(\pi\)</span>: <span class="math inline">\(\text{dm}=0.6\)</span>. Logged action: <span class="math inline">\(\hat r=0.5\)</span>, <span class="math inline">\(\rho=1.5\)</span>, observed <span class="math inline">\(r=1\)</span>. <span class="math inline">\(\text{dr}=0.6+1.5(1-0.5)=1.35\)</span>. Plain IS would give <span class="math inline">\(1.5\cdot1=1.5\)</span>. DR’s correction is smaller because the model explains part of the reward.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Fitting <span class="math inline">\(\hat r\)</span> on the same logs you evaluate (residuals look like 0, see Topic 86).</p></li>
+<li><p>Computing <span class="math inline">\(\text{dm}\)</span> under the logging policy instead of the target <span class="math inline">\(\pi\)</span>.</p></li>
+<li><p>Clipping <span class="math inline">\(\rho\)</span> without reporting the added bias.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Doubly robust evaluation (one-step)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logs <span class="math inline">\((x_i,a_i,r_i,b(a_i|x_i))\)</span>, reward model <span class="math inline">\(\hat r\)</span> (fit on <em>separate</em> data), target <span class="math inline">\(\pi\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i=1,\dots,N\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\text{dm}_i\gets\sum_a\pi(a|x_i)\,\hat r(x_i,a)\)</span> <em>▷ model’s prediction for <span class="math inline">\(\pi\)</span></em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\rho_i\gets\pi(a_i|x_i)/b(a_i|x_i)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\text{dr}_i\gets\text{dm}_i+\rho_i\big(r_i-\hat r(x_i,a_i)\big)\)</span> <em>▷ correct the model’s error</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\frac1N\sum_i\text{dr}_i\)</span> (and use the <span class="math inline">\(\text{dr}_i\)</span> values for a bootstrap interval)</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-repair-a-biased-reward-model">3. PyTorch exercise — repair a biased reward model</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+num_trials = 200
+batch_size = 512
+num_contexts = 2
+num_actions = 2
+
+# True mean reward: [contexts, actions].
+true_reward_means = torch.tensor([
+    [0.2, 0.8],  # context 0 prefers action 1
+    [0.7, 0.3],  # context 1 prefers action 0
+])
+
+# Logging policy poorly covers the better action.
+behavior_probs = torch.tensor([
+    [0.8, 0.2],
+    [0.2, 0.8],
+])
+
+# Target policy usually chooses the better action.
+target_probs = torch.tensor([
+    [0.1, 0.9],
+    [0.9, 0.1],
+])
+
+# Deliberately biased reward model.
+estimated_q = torch.tensor([
+    [0.35, 0.70],
+    [0.55, 0.40],
+])
+
+# Independent logged datasets: [trials, batch].
+contexts = torch.randint(
+    0,
+    num_contexts,
+    (num_trials, batch_size),
+)
+
+# TODO 1: Behavior distributions for each logged context.
+behavior_for_context = ...
+
+logging_policy = Categorical(
+    probs=behavior_for_context
+)
+
+logged_actions = logging_policy.sample()
+
+# Sample noisy binary rewards from the true environment.
+chosen_true_means = true_reward_means[
+    contexts,
+    logged_actions,
+]
+
+logged_rewards = torch.bernoulli(
+    chosen_true_means
+)
+
+# TODO 2: Logged-action behavior and target probabilities.
+chosen_behavior_probs = ...
+chosen_target_probs = ...
+
+# TODO 3: Target-to-behavior importance ratios.
+ratios = ...
+
+# Direct-method value for every context.
+target_for_context = target_probs[contexts]
+estimated_q_for_context = estimated_q[contexts]
+
+# TODO 4: Expected Q under the target policy.
+direct_terms = ...
+
+direct_estimates = direct_terms.mean(dim=1)
+
+importance_estimates = (
+    ratios * logged_rewards
+).mean(dim=1)
+
+# TODO 5: Doubly robust correction.
+chosen_estimated_q = ...
+doubly_robust_estimates = ...
+
+# Exact value for each sampled context batch.
+true_q_for_context = true_reward_means[contexts]
+
+true_values = (
+    target_for_context
+    * true_q_for_context
+).sum(dim=-1).mean(dim=1)
+
+def rmse(estimates):
+    return (
+        (estimates - true_values)
+        .square()
+        .mean()
+        .sqrt()
+    )
+
+print(&quot;Mean true value:&quot;, true_values.mean().item())
+
+print(
+    &quot;Direct method:&quot;,
+    f&quot;mean={direct_estimates.mean().item():.3f}&quot;,
+    f&quot;RMSE={rmse(direct_estimates).item():.3f}&quot;,
+)
+
+print(
+    &quot;Importance sampling:&quot;,
+    f&quot;mean={importance_estimates.mean().item():.3f}&quot;,
+    f&quot;RMSE={rmse(importance_estimates).item():.3f}&quot;,
+)
+
+print(
+    &quot;Doubly robust:&quot;,
+    f&quot;mean={doubly_robust_estimates.mean().item():.3f}&quot;,
+    f&quot;RMSE={rmse(doubly_robust_estimates).item():.3f}&quot;,
+)
+
+print(&quot;Maximum importance ratio:&quot;, ratios.max().item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the true target-policy value for equally common contexts?</p></li>
+<li><p>Will the direct method be biased high or low?</p></li>
+<li><p>Which should usually have lower variance: IS or DR?</p></li>
+<li><p>What is the maximum possible importance ratio?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Index <span style="background-color: codeinlinebg"><code> [contexts, actions]</code></span> to select logged-action probabilities.</p></li>
+<li><p>Ratio direction is <span style="background-color: codeinlinebg"><code> target / behavior</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> direct_terms</code></span> is a probability-weighted sum over actions.</p></li>
+<li><p>The correction residual is <span style="background-color: codeinlinebg"><code> reward - estimated Q</code></span>.</p></li>
+<li><p>Average the complete DR term over the logged batch.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Reverse the ratio:</p>
+<pre class="code python"><code class="language-python">ratios = (
+    chosen_behavior_probs
+    / chosen_target_probs
+)</code></pre>
+<p>The correction no longer transforms behavior-policy samples into target-policy expectations.</p>
+<p>Then remove the correction:</p>
+<pre class="code python"><code class="language-python">doubly_robust_estimates = direct_terms.mean(dim=1)</code></pre>
+<p>This reduces DR to the biased direct-method estimate.</p>
+<p>Finally, corrupt both the behavior probabilities and reward model. The “doubly robust” guarantee no longer applies: two incorrect components do not cancel automatically.</p>
+<p>In a real pipeline, avoid evaluating a highly flexible reward model on the exact samples used to fit it. Use held-out data or cross-fitting to reduce overfitting bias.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does DR use the reward residual <span class="math inline">\(r-\hat Q(x,a)\)</span>?</p></li>
+<li><p>If the reward model is perfect, what is the correction’s expected value?</p></li>
+<li><p>Does DR remove the target-policy support requirement?</p></li>
+<li><p>Which diagnostics should accompany a DR estimate?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Context-specific behavior probabilities:</p>
+<pre class="code python"><code class="language-python">behavior_for_context = (
+    behavior_probs[contexts]
+)</code></pre>
+<p>Selected probabilities and ratios:</p>
+<pre class="code python"><code class="language-python">chosen_behavior_probs = behavior_probs[
+    contexts,
+    logged_actions,
+]
+
+chosen_target_probs = target_probs[
+    contexts,
+    logged_actions,
+]
+
+ratios = (
+    chosen_target_probs
+    / chosen_behavior_probs
+)</code></pre>
+<p>Direct-method terms:</p>
+<pre class="code python"><code class="language-python">direct_terms = (
+    target_for_context
+    * estimated_q_for_context
+).sum(dim=-1)</code></pre>
+<p>Doubly robust estimate:</p>
+<pre class="code python"><code class="language-python">chosen_estimated_q = estimated_q[
+    contexts,
+    logged_actions,
+]
+
+corrections = ratios * (
+    logged_rewards
+    - chosen_estimated_q
+)
+
+doubly_robust_estimates = (
+    direct_terms + corrections
+).mean(dim=1)</code></pre>
+<p>For context <span style="background-color: codeinlinebg"><code> 0</code></span>, the target value is:</p>
+<p><span class="math display">\[0.1(0.2)+0.9(0.8)=0.74\]</span></p>
+<p>For context <span style="background-color: codeinlinebg"><code> 1</code></span>:</p>
+<p><span class="math display">\[0.9(0.7)+0.1(0.3)=0.66\]</span></p>
+<p>With equally common contexts:</p>
+<p><span class="math display">\[V^\pi=\frac{0.74+0.66}{2}=0.70\]</span></p>
+<p>The biased reward model predicts:</p>
+<p><span class="math display">\[\frac{
+[0.1(0.35)+0.9(0.70)]
++
+[0.9(0.55)+0.1(0.40)]
+}{2}
+=
+0.60\]</span></p>
+<p>Thus the direct method is biased downward.</p>
+<p>The largest ratio occurs when the target assigns probability <span style="background-color: codeinlinebg"><code> 0.9</code></span> to an action receiving behavior probability <span style="background-color: codeinlinebg"><code> 0.2</code></span>:</p>
+<p><span class="math display">\[\rho_{\max}=\frac{0.9}{0.2}=4.5\]</span></p>
+<p>IS and DR should average near <span class="math inline">\(0.70\)</span>, but DR will normally have lower RMSE because it importance-weights the reward-model residual rather than the entire reward.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The model prediction supplies a low-variance starting value; the weighted residual corrects its observed error.</p></li>
+<li><p>Zero. Conditioned on context and action, <span class="math inline">\(E[R-\hat Q(x,a)]=0\)</span>.</p></li>
+<li><p>No. If the behavior policy never logs a target action, neither its reward nor its model error can be checked from data.</p></li>
+<li><p>Report reward-model held-out error, propensity calibration, weight percentiles, ESS, support violations, uncertainty intervals and estimates from DM, IS and DR separately.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>It avoids multiplying early rewards by ratios from future actions that could not have affected them.</p></li>
+<li><p>Evaluation is unidentified for those actions: no reweighting method can recover outcomes never observed under the logging policy.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> direct evaluation trusts a reward model; importance sampling trusts logged propensities. Doubly robust evaluation uses both, letting weighted observations correct reward-model mistakes while usually reducing variance relative to pure importance sampling.</p>

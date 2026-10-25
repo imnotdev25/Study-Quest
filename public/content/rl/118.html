@@ -1,0 +1,389 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can an unweighted old-rollout average fail to estimate the current-policy KL?</p></li>
+<li><p>What does a low importance-sampling ESS tell you?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="kl-coefficient-as-a-feedback-controller">2. KL coefficient as a feedback controller</h3>
+<p>A KL-regularized RLHF objective is:</p>
+<p><span class="math display">\[J(\theta)
+=
+E[R]-\beta D_{\mathrm{KL}}(\pi_\theta\|\pi_{\text{ref}})\]</span></p>
+<p>Here, <span class="math inline">\(\beta\)</span> determines how expensive policy drift is:</p>
+<ul>
+<li><p>larger <span class="math inline">\(\beta\)</span>: stronger reference constraint;</p></li>
+<li><p>smaller <span class="math inline">\(\beta\)</span>: task reward dominates.</p></li>
+</ul>
+<p>Rather than fixing <span class="math inline">\(\beta\)</span>, choose a target KL <span class="math inline">\(D^*\)</span> and update it from a detached rollout-level measurement <span class="math inline">\(\hat D_n\)</span>:</p>
+<p><span class="math display">\[e_n=\frac{\hat D_n}{D^*}-1\]</span></p>
+<p>A useful multiplicative controller is:</p>
+<p><span class="math display">\[\log\beta_{n+1}
+=
+\log\beta_n+
+\eta\,\operatorname{clip}(e_n,-c,c)\]</span></p>
+<p>Equivalently:</p>
+<p><span class="math display">\[\beta_{n+1}
+=
+\beta_n
+\exp\left(
+\eta\,\operatorname{clip}(e_n,-c,c)
+\right)\]</span></p>
+<p>The sign is crucial:</p>
+<p><span class="math display">\[\hat D&gt;D^*
+\Rightarrow e&gt;0
+\Rightarrow \beta\uparrow
+\Rightarrow \text{future KL}\downarrow\]</span></p>
+<p>Updating in log space keeps <span class="math inline">\(\beta&gt;0\)</span>. Clipping the controller error limits sudden coefficient jumps; this is distinct from PPO ratio clipping.</p>
+<p>The policy responds with delay. A large controller gain <span class="math inline">\(\eta\)</span> can therefore alternate between excessive and insufficient regularization. A noisy minibatch KL can also make <span class="math inline">\(\beta\)</span> wander. Update it from globally aggregated valid response tokens, usually once per rollout rather than once per minibatch.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>token KL and response mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>globally aggregated KL and <span class="math inline">\(\beta\)</span>: scalars</p></li>
+<li><p>simulated controller histories: <span style="background-color: codeinlinebg"><code> [C, S + 1]</code></span></p></li>
+</ul>
+<p>The KL target must match the reduction: nats per response token, per response or sequence-summed KL are different units. Reward rescaling also changes the relative influence of <span class="math inline">\(\beta\)</span>.</p>
+<p>DPO’s <span class="math inline">\(\beta\)</span> scales preference log-ratio margins in a fixed-data loss. It is not normally a feedback coefficient updated from online rollout KL.</p>
+<h3 class="unnumbered" id="pytorch-exercise-stable-control-oscillation-and-a-sign-bug">3. PyTorch exercise — stable control, oscillation and a sign bug</h3>
+<p>This simplified “plant” models delayed policy response:</p>
+<p><span class="math display">\[D_{\text{equilibrium}}(\beta)
+=
+\frac{D_{\text{free}}}{1+g\beta}\]</span></p>
+<p>It is an analogy for debugging controllers, not a model of real PPO training.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_steps = 80
+target_kl = torch.tensor(0.10)
+
+unregularized_kl = torch.tensor(0.50)
+regularization_gain = 4.0
+policy_response_rate = 0.20
+
+initial_beta = 0.05
+initial_kl = 0.45
+
+error_clip = 1.0
+beta_minimum = 1e-4
+beta_maximum = 100.0
+
+controller_names = [
+    &quot;stable aggregated&quot;,
+    &quot;too aggressive&quot;,
+    &quot;noisy minibatch&quot;,
+    &quot;wrong sign&quot;,
+]
+
+# One row per controller.
+controller_rates = torch.tensor([
+    0.20,  # stable
+    2.00,  # aggressive
+    0.20,  # stable gain, noisy measurement
+    0.20,  # stable gain, wrong sign
+])
+
+controller_signs = torch.tensor([
+    1.0,
+    1.0,
+    1.0,
+    -1.0,
+])
+
+measurement_noise_sd = torch.tensor([
+    0.005,
+    0.005,
+    0.050,
+    0.005,
+])
+
+num_controllers = len(controller_names)
+
+
+# TODO 1: Solve analytically for the beta that gives
+# equilibrium KL equal to target_kl.
+expected_beta = ...
+
+
+# TODO 2: Allocate histories and reproducible noise.
+betas = ...
+
+true_kls = ...
+
+measured_kls = ...
+normalized_errors = ...
+
+betas[:, 0] = ...
+true_kls[:, 0] = ...
+
+measurement_noise = ...
+
+
+for step in range(num_steps):
+    # TODO 3: Obtain a detached, noisy measurement
+    # and normalized control error.
+    measured_kl = ...
+
+    normalized_error = ...
+
+    controlled_error = ...
+
+    measured_kls[:, step] = ...
+    normalized_errors[:, step] = ...
+
+
+    # TODO 4: Update beta in log space.
+    next_log_beta = ...
+
+    next_log_beta = ...
+
+    next_beta = ...
+
+    betas[:, step + 1] = ...
+
+
+    # The policy moves only partway toward the
+    # equilibrium induced by the new beta.
+    equilibrium_kl = ...
+
+    true_kls[:, step + 1] = ...
+
+
+# TODO 5: Controller diagnostics.
+tail_length = 20
+
+tail_mean_kl = ...
+tail_mean_absolute_error = ...
+tail_mean_beta = ...
+
+target_crossings = ...
+
+beta_saturation_fraction = ...
+
+results = torch.stack([
+    tail_mean_kl,
+    tail_mean_absolute_error,
+    tail_mean_beta,
+    target_crossings.to(torch.float64),
+    beta_saturation_fraction,
+], dim=1)
+
+checkpoints = torch.tensor([
+    0, 1, 2, 5, 10, 20, 40, 80
+])
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Analytic equilibrium beta:&quot;, expected_beta.item())
+
+print(
+    &quot;\nRows:&quot;,
+    controller_names,
+)
+print(
+    &quot;Columns: tail KL, tail MAE, tail beta, &quot;
+    &quot;target crossings, beta saturation fraction&quot;
+)
+print(results)
+
+print(&quot;\nKL history at checkpoints:&quot;)
+print(true_kls[:, checkpoints])
+
+print(&quot;\nBeta history at checkpoints:&quot;)
+print(betas[:, checkpoints])</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the analytic equilibrium value of <span class="math inline">\(\beta\)</span>?</p></li>
+<li><p>Should the stable controller initially increase or decrease <span class="math inline">\(\beta\)</span>?</p></li>
+<li><p>What happens when the controller sign is reversed?</p></li>
+<li><p>Why can the aggressive controller oscillate?</p></li>
+<li><p>Which controller should have the noisiest steady-state <span class="math inline">\(\beta\)</span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Solve:</p></li>
+</ul>
+<p><span class="math display">\[D^*=\frac{D_{\text{free}}}{1+g\beta^*}\]</span></p>
+<ul>
+<li><p>History shapes are <span style="background-color: codeinlinebg"><code> [num_controllers, num_steps + 1]</code></span>.</p></li>
+<li><p>Noise shape is <span style="background-color: codeinlinebg"><code> [num_controllers, num_steps]</code></span>.</p></li>
+<li><p>Detach the measured KL before updating the controller.</p></li>
+<li><p>Clamp the normalized error before multiplying by the controller rate.</p></li>
+<li><p>Clamp <span style="background-color: codeinlinebg"><code> next_log_beta</code></span> between the logs of the coefficient bounds.</p></li>
+<li><p>A target crossing occurs when consecutive signed KL errors have opposite signs.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Reverse the controller sign.</p></li>
+<li><p>Update <span class="math inline">\(\beta\)</span> from every noisy minibatch.</p></li>
+<li><p>Compare token-mean KL against a sequence-sum target.</p></li>
+<li><p>Include padding or prompt tokens in the KL measurement.</p></li>
+<li><p>Change reward scale without monitoring <span class="math inline">\(\beta\)</span> saturation.</p></li>
+<li><p>Backpropagate through the controller update.</p></li>
+<li><p>Average worker-local KL means when workers have different valid-token counts.</p></li>
+<li><p>Increase controller gain to compensate for stale rollout measurements.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is controller gain not an ordinary model learning rate?</p></li>
+<li><p>Why should <span class="math inline">\(\beta\)</span> be updated from a detached statistic?</p></li>
+<li><p>What should distributed workers aggregate?</p></li>
+<li><p>What does persistent <span class="math inline">\(\beta\)</span> saturation indicate?</p></li>
+<li><p>Why can a measured KL below target still be misleading?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Analytic equilibrium:</p>
+<pre class="code python"><code class="language-python">expected_beta = (
+    unregularized_kl / target_kl - 1.0
+) / regularization_gain</code></pre>
+<p>This gives:</p>
+<p><span class="math display">\[\beta^*
+=
+\frac{0.50/0.10-1}{4}
+=
+1\]</span></p>
+<p>History initialization:</p>
+<pre class="code python"><code class="language-python">betas = torch.empty(
+    num_controllers,
+    num_steps + 1,
+)
+
+true_kls = torch.empty_like(betas)
+
+measured_kls = torch.empty(
+    num_controllers,
+    num_steps,
+)
+
+normalized_errors = torch.empty_like(
+    measured_kls
+)
+
+betas[:, 0] = initial_beta
+true_kls[:, 0] = initial_kl
+
+measurement_noise = (
+    measurement_noise_sd[:, None]
+    * torch.randn(
+        num_controllers,
+        num_steps,
+    )
+)</code></pre>
+<p>Measurement and error:</p>
+<pre class="code python"><code class="language-python">measured_kl = (
+    true_kls[:, step].detach()
+    + measurement_noise[:, step]
+).clamp_min(0.0)
+
+normalized_error = (
+    measured_kl / target_kl - 1.0
+)
+
+controlled_error = normalized_error.clamp(
+    -error_clip,
+    error_clip,
+)
+
+measured_kls[:, step] = measured_kl
+normalized_errors[:, step] = (
+    normalized_error
+)</code></pre>
+<p>Controller and delayed policy response:</p>
+<pre class="code python"><code class="language-python">next_log_beta = (
+    betas[:, step].log()
+    + controller_signs
+    * controller_rates
+    * controlled_error
+)
+
+next_log_beta = next_log_beta.clamp(
+    min=math.log(beta_minimum),
+    max=math.log(beta_maximum),
+)
+
+next_beta = next_log_beta.exp()
+
+betas[:, step + 1] = next_beta
+
+equilibrium_kl = (
+    unregularized_kl
+    / (
+        1.0
+        + regularization_gain
+        * next_beta
+    )
+)
+
+true_kls[:, step + 1] = (
+    true_kls[:, step]
+    + policy_response_rate
+    * (
+        equilibrium_kl
+        - true_kls[:, step]
+    )
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">tail_mean_kl = (
+    true_kls[:, -tail_length:]
+    .mean(dim=1)
+)
+
+tail_mean_absolute_error = (
+    true_kls[:, -tail_length:]
+    .sub(target_kl)
+    .abs()
+    .mean(dim=1)
+)
+
+tail_mean_beta = (
+    betas[:, -tail_length:]
+    .mean(dim=1)
+)
+
+signed_errors = (
+    true_kls - target_kl
+)
+
+target_crossings = (
+    (
+        signed_errors[:, 1:]
+        * signed_errors[:, :-1]
+    ) &lt; 0.0
+).sum(dim=1)
+
+beta_saturation_fraction = (
+    (
+        (betas &lt;= beta_minimum * 1.001)
+        | (betas &gt;= beta_maximum * 0.999)
+    )
+    .to(torch.float64)
+    .mean(dim=1)
+)</code></pre>
+<p>Expected behavior:</p>
+<ul>
+<li><p><strong>Stable aggregated:</strong> <span class="math inline">\(\beta\)</span> rises from <span style="background-color: codeinlinebg"><code> 0.05</code></span> toward roughly <span style="background-color: codeinlinebg"><code> 1</code></span>, while KL approaches <span style="background-color: codeinlinebg"><code> 0.10</code></span>.</p></li>
+<li><p><strong>Too aggressive:</strong> delayed policy response causes repeated overshoot and target crossings.</p></li>
+<li><p><strong>Noisy minibatch:</strong> the average direction is correct, but <span class="math inline">\(\beta\)</span> wanders more.</p></li>
+<li><p><strong>Wrong sign:</strong> high KL decreases <span class="math inline">\(\beta\)</span>, weakening the penalty and creating positive feedback. It approaches the lower bound while KL approaches the unregularized value <span style="background-color: codeinlinebg"><code> 0.50</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Controller gain governs feedback speed relative to delayed policy response; excessive gain destabilizes the closed loop.</p></li>
+<li><p>The coefficient update is an outer control decision, not part of the policy’s backpropagation graph.</p></li>
+<li><p>Globally sum valid token KL and valid-token count, then divide once. Prompt-balanced control instead needs per-response statistics followed by a global response mean.</p></li>
+<li><p>The target may be unreachable, reward/KL scales may be mismatched, the sign may be wrong, or the measurement may not match the intended KL.</p></li>
+<li><p>The statistic may use stale-policy samples, the wrong mask or reduction, or a biased clipped estimator.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Old actions follow <span class="math inline">\(\mu\)</span>, while forward current-policy KL requires expectation under <span class="math inline">\(p\)</span>; without valid importance correction, these are different measures.</p></li>
+<li><p>A low ESS means a small number of high-weight samples dominate, producing high variance and weak effective support.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> adaptive KL is a delayed feedback loop. Measure one clearly defined detached KL over the full rollout, increase <span class="math inline">\(\beta\)</span> when that KL is too high, and tune controller speed using oscillation, saturation and measurement-noise diagnostics.</p>

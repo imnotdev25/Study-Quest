@@ -1,0 +1,72 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A probability <span class="math inline">\(P\)</span> assigns numbers in <span class="math inline">\([0,1]\)</span> to events, with <span class="math inline">\(P(\Omega)=1\)</span> and <span class="math inline">\(P(A\cup B)=P(A)+P(B)\)</span> for disjoint <span class="math inline">\(A,B\)</span>. Everything else follows. <em>Conditional probability</em> <span class="math inline">\(P(A\mid B)=P(A\cap B)/P(B)\)</span> is probability after learning that <span class="math inline">\(B\)</span> happened. <strong>Real-life version:</strong> a weather forecast that updates as clouds roll in. Bayes’ rule is the update.</p>
+</div>
+<ul>
+<li><p><strong>Complement</strong>: <span class="math inline">\(P(A^c)=1-P(A)\)</span>. <strong>Union</strong>: <span class="math inline">\(P(A\cup B)=P(A)+P(B)-P(A\cap B)\)</span>.</p></li>
+<li><p><strong>Product rule</strong>: <span class="math inline">\(P(A\cap B)=P(A\mid B)P(B)\)</span>. <strong>Independence</strong>: <span class="math inline">\(P(A\cap B)=P(A)P(B)\)</span>.</p></li>
+<li><p><strong>Total probability</strong>: if <span class="math inline">\(B_1,\dots,B_k\)</span> partition <span class="math inline">\(\Omega\)</span>, <span class="math inline">\(P(A)=\sum_iP(A\mid B_i)P(B_i)\)</span>.</p></li>
+<li><p><strong>Bayes</strong>: <span class="math inline">\(P(B\mid A)=\dfrac{P(A\mid B)P(B)}{P(A)}\)</span>, i.e. posterior <span class="math inline">\(\propto\)</span> likelihood <span class="math inline">\(\times\)</span> prior.</p></li>
+</ul>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: A 95%-accurate test, 1% prevalence</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(P(+)=P(+\mid D)P(D)+P(+\mid D^c)P(D^c)=0.95\cdot0.01+0.05\cdot0.99=0.059\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(P(D\mid+)=0.95\cdot0.01/0.059=0.161\)</span>. Only one positive in six is real: the false positives from the healthy 99% outnumber the true ones.</p>
+<p><strong>Step 3.</strong> A second independent positive: use 0.161 as the new prior. <span class="math inline">\(P(D\mid++)=0.785\)</span>. Updating one observation at a time gives the same answer as updating on all of them at once.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Beta–Bernoulli: the conjugate update</div>
+<p><strong>Step 1.</strong> Prior on a coin’s bias <span class="math inline">\(\theta\)</span>: <span class="math inline">\(\text{Beta}(a,b)\)</span>, density <span class="math inline">\(\propto\theta^{a-1}(1-\theta)^{b-1}\)</span>.</p>
+<p><strong>Step 2.</strong> Likelihood of <span class="math inline">\(h\)</span> heads and <span class="math inline">\(t\)</span> tails: <span class="math inline">\(\theta^h(1-\theta)^t\)</span>.</p>
+<p><strong>Step 3.</strong> Posterior <span class="math inline">\(\propto\theta^{a+h-1}(1-\theta)^{b+t-1}\)</span>: <span class="math inline">\(\boxed{\text{Beta}(a+h,\,b+t)}\)</span>. The prior acts like <span class="math inline">\(a\)</span> imaginary heads and <span class="math inline">\(b\)</span> imaginary tails. Posterior mean <span class="math inline">\(\frac{a+h}{a+b+n}\)</span> moves from the prior mean toward <span class="math inline">\(h/n\)</span> as data accumulates, and the spread shrinks like <span class="math inline">\(1/\sqrt n\)</span>.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/403735535d52.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The posterior over a coin’s bias sharpens as flips arrive (the runs in the output below).</em></p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Probability: the rules, Bayes&#x27; theorem, and Bayesian updating.&quot;&quot;&quot;
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# 1. Bayes on a diagnostic test: P(disease | positive).
+prev, sens, spec = 0.01, 0.95, 0.95
+p_pos = sens * prev + (1 - spec) * (1 - prev)                 # law of total probability
+post1 = sens * prev / p_pos
+p_pos2 = sens * post1 + (1 - spec) * (1 - post1)
+post2 = sens * post1 / p_pos2                                 # yesterday&#x27;s posterior is today&#x27;s prior
+print(f&quot;[bayes] P(+) = {p_pos:.4f}   P(D | +) = {post1:.4f}   after a second independent + : {post2:.4f}&quot;)
+n = 2_000_000
+d = rng.random(n) &lt; prev
+t = np.where(d, rng.random(n) &lt; sens, rng.random(n) &lt; 1 - spec)
+print(f&quot;[bayes] simulation of {n:,} people: P(D | +) = {d[t].mean():.4f}&quot;)
+
+# 2. Beta-Bernoulli: prior Beta(a, b), after h heads and t tails the posterior is Beta(a + h, b + t).
+a, b = 2.0, 2.0
+flips = rng.random(40) &lt; 0.7
+for k in (0, 5, 20, 40):
+    h = flips[:k].sum(); A, B = a + h, b + k - h
+    mean, sd = A / (A + B), np.sqrt(A * B / ((A + B) ** 2 * (A + B + 1)))
+    print(f&quot;[beta] after {k:2d} flips ({h:2d} heads): Beta({A:.0f},{B:.0f})  mean {mean:.3f}  sd {sd:.3f}&quot;)
+A_seq, B_seq = a, b
+for f in flips:                                               # one flip at a time
+    A_seq, B_seq = A_seq + f, B_seq + (1 - f)
+print(f&quot;[beta] sequential updates == one batch update: {(A_seq, B_seq) == (a + flips.sum(), b + 40 - flips.sum())}&quot;)
+
+# 3. Grid posterior for the same coin (no conjugacy needed): prior x likelihood, normalise.
+theta = np.linspace(0.001, 0.999, 999)
+prior = theta ** (a - 1) * (1 - theta) ** (b - 1)
+like = theta ** flips.sum() * (1 - theta) ** (40 - flips.sum())
+post = prior * like; post /= post.sum()
+print(f&quot;[grid] posterior mean on a grid {(theta * post).sum():.4f}  vs conjugate {(a + flips.sum()) / (a + b + 40):.4f}&quot;)
+
+# 4. Monty Hall: switching wins 2/3.
+car, pick = rng.integers(3, size=100_000), rng.integers(3, size=100_000)
+print(f&quot;[monty] stay wins {(car == pick).mean():.3f}   switch wins {(car != pick).mean():.3f}&quot;)</code></pre>
+<pre class="code output"><code class="output">[bayes] P(+) = 0.0590   P(D | +) = 0.1610   after a second independent + : 0.7848
+[bayes] simulation of 2,000,000 people: P(D | +) = 0.1601
+[beta] after  0 flips ( 0 heads): Beta(2,2)  mean 0.500  sd 0.224
+[beta] after  5 flips ( 2 heads): Beta(4,5)  mean 0.444  sd 0.157
+[beta] after 20 flips (11 heads): Beta(13,11)  mean 0.542  sd 0.100
+[beta] after 40 flips (25 heads): Beta(27,17)  mean 0.614  sd 0.073
+[beta] sequential updates == one batch update: True
+[grid] posterior mean on a grid 0.6136  vs conjugate 0.6136
+[monty] stay wins 0.331   switch wins 0.669</code></pre>

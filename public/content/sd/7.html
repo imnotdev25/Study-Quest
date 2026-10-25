@@ -1,0 +1,166 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Why transactions across services are hard, two-phase commit, the saga pattern (choreography and orchestration), durable execution engines, and consensus algorithms like Raft.</p>
+</div>
+<h1 id="the-problem">The Problem</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Booking a holiday needs a flight, a hotel, and a car. If the car rental fails after you paid for the flight and hotel, you want all three cancelled, not a flight to a city where you have nowhere to sleep. Inside one database, a transaction gives this “all or nothing” for free. Across three companies’ systems, you have to build it yourself.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Local transactions give <strong>ACID</strong>: Atomicity, Consistency, Isolation, Durability. Once data is split across services, each with its own database (as microservices recommend), there is no single transaction manager. Options:</p>
+<ol>
+<li><p>Avoid it: redraw service boundaries so the invariant lives in one service.</p></li>
+<li><p>Two-phase commit (strong, blocking).</p></li>
+<li><p>Sagas (eventual consistency with compensation).</p></li>
+</ol>
+</div>
+<h1 id="two-phase-commit-2pc">Two-Phase Commit (2PC)</h1>
+<figure class="tikz"><img src="figs/sd/9bfebaa6cd23.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Two-phase commit: prepare (vote), then commit.</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>2PC guarantees atomicity but is <em>blocking</em>: if the coordinator crashes after participants vote YES, they hold locks until it recovers, since they cannot decide alone. Latency is at least two round trips with locks held, and availability is the product of every participant’s availability. It works inside a single database vendor’s distributed engine (Spanner, CockroachDB run 2PC over Raft-replicated groups, so a participant is never really “down”) and in XA transactions across a few databases, but is rarely used across independently owned microservices. 3PC adds a phase to reduce blocking but does not handle network partitions, so it is mostly of academic interest.</p>
+</div>
+<h1 id="the-saga-pattern">The Saga Pattern</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A saga is a to-do list where every step has an “undo” written next to it. Do each step in order. If a step fails, walk back up the list doing each undo.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/6055f782554c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A saga runs local transactions in sequence; on failure it runs compensations in reverse.</em></p>
+<h2 id="choreography-vs-orchestration">Choreography vs Orchestration</h2>
+<figure class="tikz"><img src="figs/sd/f4228c9cd5fd.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Choreography: services react to each other’s events. Orchestration: a central coordinator issues commands.</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"></th>
+<th style="text-align: left;">Choreography</th>
+<th style="text-align: left;">Orchestration</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Control</td>
+<td style="text-align: left;">Decentralized events</td>
+<td style="text-align: left;">Central workflow definition</td>
+</tr>
+<tr>
+<td style="text-align: left;">Coupling</td>
+<td style="text-align: left;">Low between services</td>
+<td style="text-align: left;">Services coupled to orchestrator API</td>
+</tr>
+<tr>
+<td style="text-align: left;">Visibility</td>
+<td style="text-align: left;">Flow is implicit, hard to trace</td>
+<td style="text-align: left;">Flow explicit, easy to inspect</td>
+</tr>
+<tr>
+<td style="text-align: left;">Best for</td>
+<td style="text-align: left;">2–4 steps, simple flows</td>
+<td style="text-align: left;">Many steps, branching, timeouts, human approval</td>
+</tr>
+</tbody>
+</table>
+<p><em>Saga coordination styles</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Durable execution engines</strong> have become the standard way to implement orchestrated sagas: <strong>Temporal</strong>, AWS Step Functions, Azure Durable Functions, Restate, DBOS, Inngest. You write the workflow as ordinary code; the engine persists each step’s result, so a crash resumes exactly where it left off, with built-in retries, timers, and compensation.</p>
+</div>
+<pre class="code python"><code class="language-python">@workflow.defn
+class OrderSaga:
+    @workflow.run
+    async def run(self, order):
+        compensations = []
+        try:
+            await workflow.execute_activity(reserve_stock, order, retry_policy=RETRY)
+            compensations.append(release_stock)
+            await workflow.execute_activity(charge_card, order, retry_policy=RETRY)
+            compensations.append(refund_card)
+            await workflow.execute_activity(create_shipment, order, retry_policy=RETRY)
+        except ActivityError:
+            for undo in reversed(compensations):
+                await workflow.execute_activity(undo, order, retry_policy=RETRY_FOREVER)
+            raise</code></pre>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Sagas are ACD, not ACID:</strong> there is no isolation. Other transactions can see intermediate states (stock reserved, card not yet charged). Countermeasures:</p>
+<ul>
+<li><p><strong>Semantic locks</strong>: status fields like <code>PENDING</code> that other operations respect.</p></li>
+<li><p><strong>Commutative updates</strong>: design operations so order does not matter.</p></li>
+<li><p><strong>Pivot transaction</strong>: order steps so the point of no return (e.g. shipping) comes after all steps that can fail; steps after the pivot must be retriable until they succeed.</p></li>
+<li><p><strong>Reread value</strong>: verify data has not changed before overwriting.</p></li>
+</ul>
+<p>Compensations must be idempotent and must eventually succeed (retry forever, alert humans). Some actions cannot be undone (an email sent); compensate semantically (send a correction).</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Travel booking</div>
+<p>Orchestrated saga: reserve flight <span class="math inline">\(\to\)</span> reserve hotel <span class="math inline">\(\to\)</span> reserve car <span class="math inline">\(\to\)</span> charge card <span class="math inline">\(\to\)</span> confirm all. Reservations are holds with expiry times, so even if compensation is delayed the holds lapse on their own.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Bank transfer between two banks</div>
+<p>Debit source account (local TX, record <code>transfer_id</code>) <span class="math inline">\(\to\)</span> send via payment network <span class="math inline">\(\to\)</span> credit destination. If the credit is rejected, a compensating credit refunds the source. Every step is keyed by <code>transfer_id</code> so retries never double-move money. A daily reconciliation job double-checks ledgers.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: AI agent with real-world actions</div>
+<p>An agent that books meetings and sends invoices runs inside a durable workflow. Each tool call is an activity with retries; if the LLM provider times out mid-task the agent resumes from its last completed step instead of re-sending invoices. Human approval steps are workflow signals.</p>
+</div>
+<h1 id="consensus-raft-and-paxos">Consensus: Raft and Paxos</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Consensus lets a group of nodes agree on one value (or an ordered log) even if some fail. <strong>Raft</strong> elects a leader by majority vote with randomized election timeouts; the leader appends entries to its log and replicates them; an entry is committed once a majority has it. With <span class="math inline">\(2f+1\)</span> nodes the cluster tolerates <span class="math inline">\(f\)</span> failures (3 nodes tolerate 1, 5 tolerate 2). Used by etcd (Kubernetes), Consul, CockroachDB, TiKV, Kafka KRaft.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Consensus is used for metadata and coordination: leader election, distributed locks, configuration, membership, shard maps. A lock service needs <strong>fencing tokens</strong>: monotonically increasing numbers checked by the storage layer, because a paused process (GC, VM migration) may still believe it holds an expired lock. This is why a Redis lock (Redlock) is not safe for correctness-critical mutual exclusion without fencing.</p>
+</div>
+<h1 id="clocks-and-ordering">Clocks and Ordering</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Two people send letters from different cities with handwritten timestamps. If their watches disagree by five minutes, the timestamps cannot tell you which letter was written first. Distributed systems have the same problem, so they track “what could have caused what” instead of trusting wall clocks.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Physical clocks</strong> drift (tens of parts per million) and are corrected by NTP, which can jump them forward or backward. Typical skew between servers is milliseconds, sometimes much worse. Never use wall-clock timestamps alone to order events across machines, to decide which write wins, or to expire locks.</p>
+<p><strong>Lamport clocks</strong>: each node keeps a counter; increment it on every event, attach it to messages, and on receive set <code>counter = max(local, received) + 1</code>. If event <span class="math inline">\(a\)</span> caused <span class="math inline">\(b\)</span>, then <span class="math inline">\(L(a) &lt; L(b)\)</span>. The converse is not true, but ties broken by node ID give a <em>total order</em> consistent with causality, enough for things like ordering operations in a replicated log.</p>
+<p><strong>Vector clocks</strong>: each node keeps a vector of counters, one per node. Comparing two vectors tells you whether one event happened before the other or they are <strong>concurrent</strong> (neither vector dominates). Dynamo used them to detect conflicting versions of a shopping cart and return both to the application to merge (Part (cases)). Their size grows with the number of writers, so systems prune them or use version vectors per replica.</p>
+<p><strong>Hybrid logical clocks</strong> (HLC) combine a physical timestamp with a logical counter: close to wall-clock time for humans, yet causally consistent. CockroachDB and YugabyteDB use HLC; Spanner instead bounds physical uncertainty with TrueTime.</p>
+</div>
+<h1 id="leader-election-locks-and-leases">Leader Election, Locks, and Leases</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Leader election</strong> picks one node to coordinate (a primary database, a scheduler partition owner). Use a consensus system rather than inventing one: etcd or ZooKeeper (create an ephemeral key or node; the holder is leader; others watch it), Kubernetes Lease objects, or Raft built into the database. <strong>Leases</strong> are locks with an expiry: the holder must renew before it expires, so a crashed holder’s lock frees itself. The danger is a holder that is <em>paused</em> (GC, VM freeze) past its lease and then acts as if it still holds it. <strong>Fencing tokens</strong> fix this: the lock service returns an increasing number with each grant, and the protected resource rejects requests carrying a token lower than one it has already seen. <strong>Redis Redlock</strong> acquires a lock on a majority of independent Redis nodes with a timeout; it is fine for efficiency (avoid duplicate work) but, as Martin Kleppmann argued, unsafe for correctness without fencing because it depends on timing assumptions.</p>
+</div>
+<h1 id="gossip-membership-and-distributed-hash-tables">Gossip, Membership, and Distributed Hash Tables</h1>
+<h2 id="gossip-protocols">Gossip Protocols</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Each node periodically picks a few random peers and exchanges state (membership lists, heartbeats, versions). Information spreads like an epidemic, reaching all <span class="math inline">\(N\)</span> nodes in about <span class="math inline">\(O(\log N)\)</span> rounds, with no central coordinator and graceful handling of failures. <strong>SWIM</strong> adds failure detection: ping a random member; if no reply, ask <span class="math inline">\(k\)</span> others to ping it indirectly; mark it <em>suspect</em>, then dead if suspicion is not refuted. Used by Cassandra (membership and schema), Consul and Serf, Uber’s Ringpop, and Redis Cluster. Trade-off: eventual convergence (seconds) instead of immediate agreement.</p>
+</div>
+<h2 id="metadata-service-and-node-discovery">Metadata Service and Node Discovery</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Distributed stores need to know which nodes exist and which node owns which data. Two designs: a <strong>central metadata service</strong> (strongly consistent, built on Raft or Paxos: HDFS NameNode, Kafka’s KRaft controller, Bigtable’s master with Chubby, etcd for Kubernetes), which is simple to reason about but must be highly available and is kept off the data path by client caching; or <strong>decentralized membership</strong> via gossip with consistent hashing (Dynamo, Cassandra), where every node can route. New nodes discover the cluster through seed nodes or DNS, then learn the rest. Clients cache the routing map and refresh on “wrong node” errors.</p>
+</div>
+<h2 id="distributed-hash-tables">Distributed Hash Tables</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A DHT spreads key ownership across many peers with no central directory, each peer knowing only a few others. <strong>Chord</strong> places nodes and keys on a hash ring; each node keeps a <em>finger table</em> of nodes at distances <span class="math inline">\(2^0, 2^1, \dots, 2^{m-1}\)</span> around the ring, so a lookup halves the remaining distance each hop: <span class="math inline">\(O(\log N)\)</span> hops. <strong>Kademlia</strong> measures distance as the XOR of IDs and keeps buckets of contacts per distance range; lookups query several nodes in parallel. Used in BitTorrent’s trackerless mode, IPFS, and Ethereum’s node discovery. Inside a datacenter, systems usually prefer one-hop routing (every node knows the full ring, as in Dynamo) because membership is small and latency matters.</p>
+</div>
+<h1 id="deep-dive-raft-step-by-step">Deep Dive: Raft Step by Step</h1>
+<figure class="tikz"><img src="figs/sd/c6fbc475867a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Raft roles.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Terms.</strong> Time is divided into numbered <em>terms</em>; each has at most one leader. Any message with a higher term makes the receiver step down.</p>
+<p><strong>Election.</strong> A follower that hears no heartbeat for a randomized timeout (e.g. 150–300 ms) increments the term, votes for itself, and asks others. A node grants its vote only if it has not voted this term <em>and</em> the candidate’s log is at least as up to date as its own. Randomized timeouts make split votes rare.</p>
+<p><strong>Replication.</strong> Clients send writes to the leader, which appends them to its log and sends <code>AppendEntries</code> to followers. An entry is <em>committed</em> once stored on a majority; the leader then applies it and replies. Each <code>AppendEntries</code> carries the index and term of the previous entry; a follower rejects it if its log does not match, and the leader backs up until logs agree, overwriting the follower’s conflicting suffix.</p>
+<p><strong>Why it is safe.</strong> Two majorities always overlap, so any new leader must have received a vote from a node holding every committed entry, and the “log at least as up to date” rule ensures it already has them.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Practical details: <strong>linearizable reads</strong> need the leader to confirm it is still leader (a heartbeat round, “ReadIndex,” or time-based leases with bounded clock drift) or a stale ex-leader could serve old data. <strong>Membership changes</strong> use joint consensus or single-server changes to avoid two disjoint majorities. <strong>Log compaction</strong> via snapshots keeps logs bounded. Performance: each write costs one round trip to a majority, so a 5-node cluster across three regions pays cross-region latency per commit; that is why Spanner and CockroachDB let you place replicas to keep quorums local. <strong>Multi-Raft</strong>: systems like TiKV and CockroachDB run thousands of small Raft groups (one per data range) rather than one giant one, spreading leaders across nodes.</p>
+</div>
+<h1 id="deep-dive-designing-a-saga-you-can-trust">Deep Dive: Designing a Saga You Can Trust</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A checklist for every saga step:</p>
+<ol>
+<li><p>Is the step idempotent? (Use the saga ID plus step name as an idempotency key.)</p></li>
+<li><p>What is its compensation, and is that idempotent and always eventually successful?</p></li>
+<li><p>Is this step before or after the pivot (the point of no return)?</p></li>
+<li><p>What do other users see while this step’s result is visible but the saga is unfinished? Add a <code>PENDING</code> state if that view is harmful.</p></li>
+<li><p>What is the timeout, and what happens on timeout: retry, compensate, or ask a human?</p></li>
+<li><p>How will you find sagas stuck mid-way? (Durable engines show them; with choreography you need a tracking table and an alert.)</p></li>
+</ol>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>First try to avoid cross-service transactions via better boundaries.</p></li>
+<li><p>2PC is strong but blocking; fine inside one database system.</p></li>
+<li><p>Sagas trade isolation for availability; design compensations and pivots carefully.</p></li>
+<li><p>Durable execution engines make sagas and long-running agents reliable.</p></li>
+</ul>
+</div>

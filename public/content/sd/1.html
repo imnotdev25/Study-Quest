@@ -1,0 +1,486 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How a request travels from a browser to your server: DNS, TCP/UDP, TLS, HTTP/1.1–3, CDNs, and the API styles (REST, gRPC, GraphQL, WebSockets, SSE) you choose between.</p>
+</div>
+<h1 id="the-life-of-a-request">The Life of a Request</h1>
+<figure class="tikz"><img src="figs/sd/fe1fd8d93cee.svg" alt="diagram" loading="lazy"></figure>
+<p><em>DNS lookup, connection setup, edge cache, then origin.</em></p>
+<h1 id="dns">DNS</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>DNS is the internet’s phone book. You type <code>shop.example.com</code>; DNS returns a number like <code>203.0.113.7</code> that computers use to connect.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Resolution walks root <span class="math inline">\(\to\)</span> TLD (<code>.com</code>) <span class="math inline">\(\to\)</span> authoritative server, with caching at every layer governed by TTL. Record types: <code>A</code>/<code>AAAA</code> (IPv4/IPv6), <code>CNAME</code> (alias), <code>MX</code> (mail), <code>TXT</code> (verification), <code>SRV</code> (service location). DNS is also a load-balancing tool: <strong>GeoDNS</strong> returns the nearest region, weighted records split traffic, and health-checked records (Route 53) fail over.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Low TTLs (30–60 s) enable fast failover but raise resolver load, and many clients ignore TTLs anyway (JVM caches, OS stubs). For instant failover, prefer <strong>anycast</strong> (one IP announced from many locations via BGP) over DNS changes. DNS is a classic single point of failure: the 2016 Dyn outage took down many major sites. Use two DNS providers for critical domains.</p>
+</div>
+<h1 id="transport-tcp-udp-quic">Transport: TCP, UDP, QUIC</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"></th>
+<th style="text-align: left;">TCP</th>
+<th style="text-align: left;">UDP</th>
+<th style="text-align: left;">QUIC (HTTP/3)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Delivery</td>
+<td style="text-align: left;">Reliable, ordered</td>
+<td style="text-align: left;">Best effort</td>
+<td style="text-align: left;">Reliable per stream</td>
+</tr>
+<tr>
+<td style="text-align: left;">Setup</td>
+<td style="text-align: left;">1 RTT + TLS 1 RTT</td>
+<td style="text-align: left;">None</td>
+<td style="text-align: left;">1 RTT incl. TLS, 0-RTT resume</td>
+</tr>
+<tr>
+<td style="text-align: left;">Head-of-line blocking</td>
+<td style="text-align: left;">Yes</td>
+<td style="text-align: left;">No</td>
+<td style="text-align: left;">No (across streams)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Connection migration</td>
+<td style="text-align: left;">No</td>
+<td style="text-align: left;">n/a</td>
+<td style="text-align: left;">Yes (Wi-Fi <span class="math inline">\(\to\)</span> 5G)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Used by</td>
+<td style="text-align: left;">HTTP/1.1, HTTP/2, DBs</td>
+<td style="text-align: left;">DNS, VoIP, games</td>
+<td style="text-align: left;">HTTP/3, modern browsers, CDNs</td>
+</tr>
+</tbody>
+</table>
+<p><em>Transport protocols compared</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>HTTP/1.1</strong> sends one request at a time per connection, so browsers open six connections. <strong>HTTP/2</strong> multiplexes many streams over one TCP connection with header compression, but a single lost packet stalls all streams (TCP head-of-line blocking). <strong>HTTP/3</strong> runs over QUIC on UDP, fixing that and cutting handshake time. <strong>TLS 1.3</strong> reduced the handshake to one round trip.</p>
+</div>
+<h1 id="content-delivery-networks">Content Delivery Networks</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A CDN is like having copies of a popular book in libraries in every city, so readers do not have to travel to the publisher.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Pull CDN</strong>: the edge fetches from origin on first miss and caches by TTL (most common). <strong>Push CDN</strong>: you upload content ahead of time (large, predictable files). Control caching with <code>Cache-Control</code>, <code>ETag</code>, and <code>Vary</code>. Use versioned filenames (<code>app.3f9a.js</code>) so you can cache forever and never need to purge. Modern CDNs also run code at the edge (Cloudflare Workers, Lambda@Edge, Fastly Compute) for auth, A/B routing, personalization, and even small AI inference.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Video streaming platform</div>
+<p>Videos are transcoded into segments at multiple bitrates (HLS/DASH). Segments are immutable and cached at edges near viewers; the player switches bitrate based on bandwidth. Netflix goes further with Open Connect appliances placed inside ISP networks, serving most traffic without crossing the internet backbone.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: E-commerce flash sale</div>
+<p>Product images, JS, and CSS come from the CDN. The product page HTML is cached for 10 seconds at the edge (“micro-caching”), absorbing 99% of traffic while staying almost fresh. Only cart and checkout hit origin.</p>
+</div>
+<h1 id="api-styles">API Styles</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Style</th>
+<th style="text-align: left;">Strengths</th>
+<th style="text-align: left;">Weaknesses</th>
+<th style="text-align: left;">Best for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">REST/JSON</td>
+<td style="text-align: left;">Simple, cacheable, universal</td>
+<td style="text-align: left;">Over/under-fetching, loose contracts</td>
+<td style="text-align: left;">Public APIs</td>
+</tr>
+<tr>
+<td style="text-align: left;">gRPC</td>
+<td style="text-align: left;">Fast binary (Protobuf), streaming, typed contracts</td>
+<td style="text-align: left;">Browser support needs proxy, harder to debug</td>
+<td style="text-align: left;">Service-to-service</td>
+</tr>
+<tr>
+<td style="text-align: left;">GraphQL</td>
+<td style="text-align: left;">Client picks fields, one endpoint</td>
+<td style="text-align: left;">Caching harder, N+1 query risk, complexity</td>
+<td style="text-align: left;">Rich UIs, mobile</td>
+</tr>
+<tr>
+<td style="text-align: left;">WebSocket</td>
+<td style="text-align: left;">Full duplex, low latency</td>
+<td style="text-align: left;">Stateful connections to scale</td>
+<td style="text-align: left;">Chat, games, collaboration</td>
+</tr>
+<tr>
+<td style="text-align: left;">SSE</td>
+<td style="text-align: left;">Simple server push over HTTP</td>
+<td style="text-align: left;">One direction only</td>
+<td style="text-align: left;">LLM token streaming, feeds</td>
+</tr>
+<tr>
+<td style="text-align: left;">Webhooks</td>
+<td style="text-align: left;">Event push to other systems</td>
+<td style="text-align: left;">Delivery and security to manage</td>
+<td style="text-align: left;">Integrations</td>
+</tr>
+</tbody>
+</table>
+<p><em>Choosing an API style</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>API design rules that age well:</strong> version in path or header (<code>/v1/</code>); cursor-based pagination (<code>?after=opaque_cursor</code>) rather than offsets for large tables; idempotency keys on mutating POSTs; consistent error envelopes (RFC 9457 Problem Details); explicit rate-limit headers. For streaming LLM output, SSE has become the de facto standard (OpenAI, Anthropic APIs), since it works through HTTP proxies and needs no upgrade handshake. WebSockets are used when the client must also stream (realtime voice).</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Real-time chat</div>
+<p>Clients hold a WebSocket to a gateway fleet. A connection registry (Redis: <code>user_id</code> <span class="math inline">\(\to\)</span> gateway node) lets any service find where a user is connected. Messages go through a pub/sub layer to the right gateway. With millions of connections, gateways are tuned for file descriptors and memory per connection (often 10–50 KB).</p>
+</div>
+<h1 id="http-request-types-methods">HTTP Request Types (Methods)</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>An HTTP method is the verb of a request. <code>GET</code> means “give me this,” <code>POST</code> means “do something with this,” <code>PUT</code> means “store this here,” <code>DELETE</code> means “remove this.” Proxies, caches, browsers, and retry logic all make decisions based on the verb, so picking the right one is a correctness choice, not just style.</p>
+</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Method</th>
+<th style="text-align: left;">Meaning</th>
+<th style="text-align: left;">Safe</th>
+<th style="text-align: left;">Idempotent</th>
+<th style="text-align: left;">Cacheable</th>
+<th style="text-align: left;">Body</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">GET</td>
+<td style="text-align: left;">read a resource</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">no (ignored)</td>
+</tr>
+<tr>
+<td style="text-align: left;">HEAD</td>
+<td style="text-align: left;">GET without the body (check existence, size, ETag)</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">no</td>
+</tr>
+<tr>
+<td style="text-align: left;">OPTIONS</td>
+<td style="text-align: left;">ask what is allowed (CORS preflight)</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">optional</td>
+</tr>
+<tr>
+<td style="text-align: left;">POST</td>
+<td style="text-align: left;">create a child resource or run an action</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;"><strong>no</strong></td>
+<td style="text-align: left;">rarely</td>
+<td style="text-align: left;">yes</td>
+</tr>
+<tr>
+<td style="text-align: left;">PUT</td>
+<td style="text-align: left;">create or fully replace the resource at this URL</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">yes</td>
+</tr>
+<tr>
+<td style="text-align: left;">PATCH</td>
+<td style="text-align: left;">partially modify a resource</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">not guaranteed</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">yes</td>
+</tr>
+<tr>
+<td style="text-align: left;">DELETE</td>
+<td style="text-align: left;">remove a resource</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">optional</td>
+</tr>
+<tr>
+<td style="text-align: left;">CONNECT</td>
+<td style="text-align: left;">open a tunnel (HTTPS through a proxy)</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">n/a</td>
+</tr>
+<tr>
+<td style="text-align: left;">TRACE</td>
+<td style="text-align: left;">echo the request (diagnostics; usually disabled)</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">no</td>
+</tr>
+</tbody>
+</table>
+<p><em>HTTP methods (RFC 9110).</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Safe</strong> means the request should not change server state, so crawlers, prefetchers, and link previews can call it freely. Never let a <code>GET</code> delete or charge anything (<code>GET /delete?id=5</code> gets triggered by a link-preview bot).</p></li>
+<li><p><strong>Idempotent</strong> means sending it twice has the same effect as once, so clients and proxies may retry it automatically after a timeout. <code>PUT</code> and <code>DELETE</code> are idempotent by design; <code>POST</code> is not, which is why payment and order creation need an <code>Idempotency-Key</code> header (Chapter (resilience)). <code>PATCH</code> is idempotent only if the patch is (“set name to X” is; “append item” is not).</p></li>
+<li><p><strong>PUT vs PATCH</strong>: <code>PUT</code> sends the full representation; fields left out are removed. <code>PATCH</code> sends changes, as JSON Merge Patch (RFC 7396: send only the fields to change, <code>null</code> deletes) or JSON Patch (RFC 6902: a list of operations).</p></li>
+<li><p><strong>POST vs PUT for creation</strong>: <code>POST /orders</code> when the server picks the ID; <code>PUT /orders/{client-generated-id}</code> when the client does, which makes creation naturally idempotent.</p></li>
+<li><p><strong>Search with a large filter</strong>: a <code>GET</code> with a long query string can exceed URL limits (often about 8 KB at proxies); options are <code>POST /search</code> (not cacheable, not idempotent by default) or the newer <code>QUERY</code> method draft (safe and idempotent with a body), not yet widely supported.</p></li>
+</ul>
+</div>
+<h2 id="status-codes-that-matter-in-design">Status Codes That Matter in Design</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Code</th>
+<th style="text-align: left;">Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">200 OK / 201 Created / 202 Accepted / 204 No Content</td>
+<td style="text-align: left;">success; 201 with a <code>Location</code> header; 202 when work is queued (async); 204 for a successful DELETE with no body</td>
+</tr>
+<tr>
+<td style="text-align: left;">206 Partial Content</td>
+<td style="text-align: left;">response to a <code>Range</code> request (resumable downloads, video seeking)</td>
+</tr>
+<tr>
+<td style="text-align: left;">301 / 308 vs 302 / 307</td>
+<td style="text-align: left;">permanent vs temporary redirect; 307/308 keep the method and body, 301/302 may turn POST into GET</td>
+</tr>
+<tr>
+<td style="text-align: left;">304 Not Modified</td>
+<td style="text-align: left;">conditional GET: the cached copy is still valid, no body sent</td>
+</tr>
+<tr>
+<td style="text-align: left;">400 / 422</td>
+<td style="text-align: left;">malformed request / well-formed but invalid (validation errors)</td>
+</tr>
+<tr>
+<td style="text-align: left;">401 / 403</td>
+<td style="text-align: left;">not authenticated / authenticated but not allowed</td>
+</tr>
+<tr>
+<td style="text-align: left;">404 / 410</td>
+<td style="text-align: left;">not found / gone permanently</td>
+</tr>
+<tr>
+<td style="text-align: left;">409 Conflict</td>
+<td style="text-align: left;">state conflict (duplicate, idempotency key in progress)</td>
+</tr>
+<tr>
+<td style="text-align: left;">412 Precondition Failed</td>
+<td style="text-align: left;"><code>If-Match</code> failed: someone else changed the resource</td>
+</tr>
+<tr>
+<td style="text-align: left;">429 Too Many Requests</td>
+<td style="text-align: left;">rate limited; include <code>Retry-After</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">500 / 502 / 503 / 504</td>
+<td style="text-align: left;">server bug / bad upstream / overloaded or down (retryable) / upstream timeout (retryable)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="headers-that-carry-design-decisions">Headers That Carry Design Decisions</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Conditional requests</strong>: the server returns an <code>ETag</code> (a version or hash). A client re-validates with <code>If-None-Match</code> (gets <code>304</code> if unchanged, saving bandwidth) and updates with <code>If-Match</code> (gets <code>412</code> if someone else changed it first). That is <strong>optimistic concurrency over HTTP</strong>: no lost updates without locks.</p></li>
+<li><p><strong>Caching</strong>: <code>Cache-Control</code> (<code>max-age</code>, <code>no-store</code>, <code>private</code>, <code>immutable</code>, <code>stale-while-revalidate</code>), <code>Vary</code>.</p></li>
+<li><p><strong>Content negotiation</strong>: <code>Accept</code>, <code>Content-Type</code>, <code>Accept-Encoding</code> (gzip, br, zstd).</p></li>
+<li><p><strong>Range</strong>: <code>Range: bytes=1000000-</code> resumes a download or seeks in a video.</p></li>
+<li><p><strong>CORS</strong>: browsers send an <code>OPTIONS</code> preflight before cross-origin requests with custom headers or non-simple methods; the server answers with <code>Access-Control-Allow-*</code>. Cache the preflight (<code>Access-Control-Max-Age</code>) to avoid an extra round trip per call.</p></li>
+<li><p><strong>Tracing and identity</strong>: <code>traceparent</code>, <code>Authorization</code>, <code>Idempotency-Key</code>, <code>X-Request-Id</code>.</p></li>
+</ul>
+</div>
+<h2 id="request-body-formats">Request Body Formats</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>JSON (<code>application/json</code>) for most APIs; <code>application/x-www-form-urlencoded</code> for simple HTML forms; <code>multipart/form-data</code> for file uploads from browsers (each part has its own headers), though large files should go directly to object storage (Chapter (media)); Protocol Buffers for gRPC; <code>application/octet-stream</code> for raw bytes; NDJSON (one JSON object per line) for streaming many records.</p>
+</div>
+<h1 id="request-transport-mechanisms">Request Transport Mechanisms</h1>
+<figure class="tikz"><img src="figs/sd/b5ebf1084db5.svg" alt="diagram" loading="lazy"></figure>
+<p><em>How each mechanism delivers an event that happens at one moment (green). Short polling finds it on the next poll; the others deliver it almost immediately.</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Mechanism</th>
+<th style="text-align: left;">Direction</th>
+<th style="text-align: left;">Latency for new data</th>
+<th style="text-align: left;">Cost / complexity</th>
+<th style="text-align: left;">Typical use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Request–response (HTTP/1.1, /2, /3)</td>
+<td style="text-align: left;">client asks, server answers</td>
+<td style="text-align: left;">n/a</td>
+<td style="text-align: left;">lowest</td>
+<td style="text-align: left;">CRUD APIs, page loads</td>
+</tr>
+<tr>
+<td style="text-align: left;">Short polling</td>
+<td style="text-align: left;">client asks every <span class="math inline">\(N\)</span> s</td>
+<td style="text-align: left;">up to <span class="math inline">\(N\)</span> s</td>
+<td style="text-align: left;">wasteful requests; trivial</td>
+<td style="text-align: left;">job status, low-traffic dashboards</td>
+</tr>
+<tr>
+<td style="text-align: left;">Long polling</td>
+<td style="text-align: left;">server holds the request until data or timeout</td>
+<td style="text-align: left;">near real time</td>
+<td style="text-align: left;">one open request per client; works everywhere</td>
+<td style="text-align: left;">fallback push, file-sync notifications</td>
+</tr>
+<tr>
+<td style="text-align: left;">Server-Sent Events</td>
+<td style="text-align: left;">server <span class="math inline">\(\to\)</span> client stream over HTTP</td>
+<td style="text-align: left;">real time</td>
+<td style="text-align: left;">simple; auto-reconnect; text only</td>
+<td style="text-align: left;">feeds, notifications, LLM token streaming</td>
+</tr>
+<tr>
+<td style="text-align: left;">WebSocket</td>
+<td style="text-align: left;">full duplex over one upgraded connection</td>
+<td style="text-align: left;">real time</td>
+<td style="text-align: left;">stateful connections, custom protocol</td>
+<td style="text-align: left;">chat, games, collaboration, voice</td>
+</tr>
+<tr>
+<td style="text-align: left;">gRPC streaming (HTTP/2)</td>
+<td style="text-align: left;">unary, server, client, or bidirectional streams</td>
+<td style="text-align: left;">real time</td>
+<td style="text-align: left;">typed contracts; needs proxy for browsers</td>
+<td style="text-align: left;">service-to-service streams, mobile push (Uber)</td>
+</tr>
+<tr>
+<td style="text-align: left;">WebTransport (HTTP/3)</td>
+<td style="text-align: left;">multiplexed streams + unreliable datagrams</td>
+<td style="text-align: left;">real time, no head-of-line blocking</td>
+<td style="text-align: left;">newest; growing browser support</td>
+<td style="text-align: left;">games, media, low-latency apps</td>
+</tr>
+<tr>
+<td style="text-align: left;">WebRTC</td>
+<td style="text-align: left;">peer to peer media and data over UDP</td>
+<td style="text-align: left;">sub-second</td>
+<td style="text-align: left;">NAT traversal, TURN relays</td>
+<td style="text-align: left;">calls, live interactive video</td>
+</tr>
+<tr>
+<td style="text-align: left;">Webhooks</td>
+<td style="text-align: left;">server <span class="math inline">\(\to\)</span> your server (HTTP POST)</td>
+<td style="text-align: left;">near real time</td>
+<td style="text-align: left;">you run a public endpoint</td>
+<td style="text-align: left;">payments, Git events, integrations</td>
+</tr>
+<tr>
+<td style="text-align: left;">MQTT</td>
+<td style="text-align: left;">publish/subscribe over a broker</td>
+<td style="text-align: left;">real time</td>
+<td style="text-align: left;">tiny overhead, QoS levels</td>
+<td style="text-align: left;">IoT devices, unreliable networks</td>
+</tr>
+</tbody>
+</table>
+<p><em>Request transport mechanisms compared.</em></p>
+<h2 id="http-versions-under-the-hood">HTTP Versions Under the Hood</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>HTTP/1.1</strong>: one request at a time per connection (pipelining is unused in practice); keep-alive reuses connections; browsers open about six per host. <strong>Chunked transfer encoding</strong> lets a server stream a response of unknown length, which is what SSE and streamed JSON ride on. <strong>HTTP/2</strong>: binary frames, many concurrent <em>streams</em> on one TCP connection, header compression (HPACK), per-stream flow control; one lost packet still stalls every stream (TCP head-of-line blocking). <strong>HTTP/3</strong>: the same model over QUIC (UDP), with independent streams, 1-RTT (or 0-RTT) setup including TLS 1.3, and connection migration across networks. All three expose the same methods, headers, and status codes.</p>
+</div>
+<h2 id="long-polling-in-detail">Long Polling in Detail</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The client sends <code>GET /updates?cursor=123</code>. If new data exists, the server answers at once; otherwise it holds the request (say up to 30 seconds), answering as soon as data arrives or with an empty response at the timeout. The client immediately sends the next request with the new cursor. The cursor is what makes it reliable: nothing is lost between requests. Server side, a held request must not hold a thread (use async I/O), and timeouts at every proxy must exceed the hold time. Dropbox used long polling for change notifications.</p>
+</div>
+<h2 id="server-sent-events-in-detail">Server-Sent Events in Detail</h2>
+<pre class="code text"><code class="language-plaintext">retry: 3000
+
+id: 41
+event: token
+data: {&quot;text&quot;: &quot;Hello&quot;}
+
+id: 42
+event: token
+data: {&quot;text&quot;: &quot; world&quot;}
+
+: comment lines keep the connection alive through idle proxies</code></pre>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Each event is a few <code>field: value</code> lines ending with a blank line. On disconnect, the browser’s <code>EventSource</code> reconnects after <code>retry</code> milliseconds and sends <code>Last-Event-ID: 42</code>, so the server can resume from the right place. Limitations: server to client only (send client messages with normal POSTs), UTF-8 text only, and <code>EventSource</code> cannot set custom headers (so LLM APIs are usually consumed with <code>fetch</code> and a streamed body instead). Under HTTP/1.1, each SSE connection uses one of the browser’s six per-host connections; HTTP/2 removes that limit. Disable proxy buffering for streams (Chapter (lb)).</p>
+</div>
+<h2 id="websockets-in-detail">WebSockets in Detail</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The client sends an HTTP <code>GET</code> with <code>Upgrade: websocket</code> and a random key; the server replies <code>101 Switching Protocols</code>, and the TCP connection becomes a bidirectional stream of small frames (text, binary, ping, pong, close). There is no built-in request/response matching, acknowledgement, or resume, so applications add message IDs, acks, sequence numbers for resync, heartbeats (ping every 20–30 s to detect dead connections and keep NATs open), and authentication at connect time (a short-lived token, since browsers cannot set custom headers on the upgrade request). Scaling needs sticky routing of a connection to one gateway, a registry of which gateway holds each user, and pub/sub between gateways (Slack and Netflix cases, Part (cases)).</p>
+</div>
+<h2 id="grpc-streaming-modes">gRPC Streaming Modes</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Unary</strong>: one request, one response (like REST).</p></li>
+<li><p><strong>Server streaming</strong>: one request, a stream of responses (subscribe to price updates, stream LLM tokens between services).</p></li>
+<li><p><strong>Client streaming</strong>: a stream of requests, one response (upload sensor readings, then get a summary).</p></li>
+<li><p><strong>Bidirectional streaming</strong>: both sides stream independently (chat, Uber’s push platform, interactive agents).</p></li>
+</ul>
+<p>Each RPC carries a deadline that propagates to downstream calls; flow control comes from HTTP/2. Browsers need gRPC-Web or Connect through a proxy.</p>
+</div>
+<h2 id="webhooks-in-detail">Webhooks in Detail</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The provider sends <code>POST</code> requests to a URL you registered when events happen. Design rules for both sides:</p>
+<ul>
+<li><p><strong>Verify</strong> every request: an HMAC signature of the body with a shared secret (Stripe’s <code>Stripe-Signature</code>, GitHub’s <code>X-Hub-Signature-256</code>) and a timestamp to reject replays.</p></li>
+<li><p><strong>Acknowledge fast</strong> (<code>2xx</code> within a few seconds) and process asynchronously; providers retry on timeouts or non-2xx with exponential backoff for hours or days.</p></li>
+<li><p><strong>Deduplicate</strong> by event ID, since delivery is at least once and order is not guaranteed; fetch the latest state from the provider’s API when ordering matters.</p></li>
+<li><p><strong>Providers</strong> should offer a replay UI, a list-events API for recovery, per-endpoint circuit breaking, and signing-secret rotation.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview</div>
+<p><strong>Choosing a mechanism in an interview</strong>:</p>
+<ul>
+<li><p>Ordinary reads and writes: request–response over HTTP/2 or HTTP/3.</p></li>
+<li><p>Updates every few minutes, few clients: short polling.</p></li>
+<li><p>Server pushes to browsers, one direction (notifications, feeds, LLM output): SSE.</p></li>
+<li><p>Both directions, high frequency (chat, games, collaborative editing): WebSocket.</p></li>
+<li><p>Between your own services with streams: gRPC streaming.</p></li>
+<li><p>Real-time audio and video: WebRTC.</p></li>
+<li><p>Notifying another company’s server: webhooks.</p></li>
+<li><p>Battery- and bandwidth-constrained devices: MQTT.</p></li>
+</ul>
+<p>Whatever the transport, design for disconnects: a cursor or sequence number so the client can resume, idempotent handlers, and a fallback to plain HTTP fetching.</p>
+</div>
+<h1 id="service-to-service-communication-in-practice">Service-to-Service Communication in Practice</h1>
+<h2 id="batching">Batching</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Each network call has fixed overhead (round trip, headers, serialization, syscalls). Batching amortizes it: one <code>MGET</code> of 100 keys instead of 100 <code>GET</code>s, a <code>multi_get(ids)</code> API, Kafka producer batches (<code>linger.ms</code> waits a few milliseconds to fill a batch), bulk inserts, GPU inference batches. The trade-off is latency: an item waits until the batch fills or a timeout fires. Bound batch size (memory, request limits) and wait time, and fail individual items, not the whole batch, when one is bad. The <strong>N+1 query problem</strong> (loading a list, then one query per item) is the most common missed batching opportunity; GraphQL servers fix it with a DataLoader that batches lookups within one request.</p>
+</div>
+<h2 id="backpressure">Backpressure</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>When a consumer is slower than its producer, work piles up somewhere. Without backpressure, queues grow without bound until memory runs out or latency becomes useless. Mechanisms:</p>
+<ul>
+<li><p><strong>Bounded queues</strong> that block or reject when full.</p></li>
+<li><p><strong>Flow control</strong> in the protocol: TCP windows, HTTP/2 and gRPC stream flow control, Reactive Streams’ <code>request(n)</code>.</p></li>
+<li><p><strong>Pull-based consumers</strong> (Kafka): consumers fetch at their own pace and lag becomes the visible signal.</p></li>
+<li><p><strong>Signals upstream</strong>: <code>429</code>/<code>503</code> with <code>Retry-After</code>, so callers slow down.</p></li>
+</ul>
+<p>Choose deliberately what happens at the limit: block the producer, drop the newest, drop the oldest, or sample. For metrics and logs, dropping is acceptable; for payments, it is not.</p>
+</div>
+<h2 id="tail-latency">Tail Latency</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The slowest 1% of requests matter more than averages suggest, because a user action fans out to many services (Chapter (foundations)). Sources of tail latency: GC pauses, queueing behind slow requests, noisy neighbors, cold caches, background compaction, retries, and network retransmits. Techniques from Google’s “The Tail at Scale” (Dean and Barroso, 2013):</p>
+<ul>
+<li><p><strong>Hedged requests</strong>: after the p95 time, send a duplicate to another replica and use the first response (adds about 5% load).</p></li>
+<li><p><strong>Tied requests</strong>: send to two replicas, each told about the other, and the first to start cancels the other.</p></li>
+<li><p><strong>Micro-partitioning</strong>: many small partitions per machine so load can be moved quickly.</p></li>
+<li><p><strong>Selective replication</strong> of hot items, and <strong>latency-aware load balancing</strong> (least outstanding requests).</p></li>
+<li><p>Return <strong>good-enough partial results</strong> when a few shards are slow.</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>DNS and anycast are your first layer of load balancing and failover.</p></li>
+<li><p>HTTP/3 over QUIC removes head-of-line blocking and speeds up mobile.</p></li>
+<li><p>Cache static assets forever with versioned names; micro-cache dynamic pages.</p></li>
+<li><p>REST outside, gRPC inside, SSE for streaming tokens, WebSocket for duplex.</p></li>
+</ul>
+</div>

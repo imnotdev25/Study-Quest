@@ -1,0 +1,242 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Backprop through a network</strong> is just Part 0’s identities applied layer by layer, from the loss backward: a linear layer passes <span class="math inline">\(GW^\top\)</span> to its input and <span class="math inline">\(X^\top G\)</span> to its weights, an elementwise layer multiplies by its derivative, and a bias sums over the batch.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>For softmax cross-entropy, what is <span class="math inline">\(\partial L/\partial Z\)</span>?</p></li>
+<li><p>Why does each row of that logits gradient sum to zero?</p></li>
+</ol>
+<p>Consider a two-layer classifier:</p>
+<p><span class="math display">\[X\in\mathbb{R}^{B\times D}\]</span></p>
+<p><span class="math display">\[Z_1=XW_1+b_1,
+\qquad W_1\in\mathbb{R}^{D\times H}\]</span></p>
+<p><span class="math display">\[A_1=\operatorname{ReLU}(Z_1)
+\in\mathbb{R}^{B\times H}\]</span></p>
+<p><span class="math display">\[Z_2=A_1W_2+b_2,
+\qquad W_2\in\mathbb{R}^{H\times C}\]</span></p>
+<p>For mean cross-entropy:</p>
+<p><span class="math display">\[\Delta_2
+=
+\frac{\partial L}{\partial Z_2}
+=
+\frac{P-\operatorname{onehot}(y)}{B}\]</span></p>
+<p>Backpropagate through the second linear layer:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial W_2}
+=
+A_1^\top\Delta_2
+\in\mathbb{R}^{H\times C}\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial b_2}
+=
+\sum_{i=1}^{B}\Delta_{2,i}
+\in\mathbb{R}^{C}\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial A_1}
+=
+\Delta_2W_2^\top
+\in\mathbb{R}^{B\times H}\]</span></p>
+<p>Then through ReLU:</p>
+<p><span class="math display">\[\Delta_1
+=
+\frac{\partial L}{\partial Z_1}
+=
+\frac{\partial L}{\partial A_1}
+\odot\mathbf1[Z_1&gt;0]\]</span></p>
+<p>Finally:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial W_1}
+=
+X^\top\Delta_1
+\in\mathbb{R}^{D\times H}\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial X}
+=
+\Delta_1W_1^\top
+\in\mathbb{R}^{B\times D}\]</span></p>
+<p>The recurring pattern is:</p>
+<pre class="code text"><code class="language-plaintext">upstream gradient → local derivative → parameter/input gradients</code></pre>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: a two-layer classifier, end to end</div>
+<p><strong>Step 1.</strong> Loss gradient at the output logits: <span class="math inline">\(\Delta_2=\frac{P-Y}{B}\)</span> (Session 17).</p>
+<p><strong>Step 2.</strong> Layer 2, <span class="math inline">\(Z_2=A_1W_2+b_2\)</span>: <span class="math inline">\(\ \nabla W_2=A_1^\top\Delta_2\ (H\times C)\)</span>, <span class="math inline">\(\nabla b_2=\sum_i\Delta_{2,i}\)</span>, and the gradient passed down is <span class="math inline">\(\nabla A_1=\Delta_2W_2^\top\ (B\times H)\)</span>.</p>
+<p><strong>Step 3.</strong> ReLU, <span class="math inline">\(A_1=\max(0,Z_1)\)</span>: <span class="math inline">\(\Delta_1=\nabla A_1\odot\mathbb 1[Z_1&gt;0]\)</span>. Units that were off pass no gradient.</p>
+<p><strong>Step 4.</strong> Layer 1, <span class="math inline">\(Z_1=XW_1+b_1\)</span>: <span class="math inline">\(\nabla W_1=X^\top\Delta_1\ (D\times H)\)</span>, <span class="math inline">\(\nabla b_1=\sum_i\Delta_{1,i}\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>What to save from the forward pass:</strong> <span class="math inline">\(X\)</span>, <span class="math inline">\(Z_1\)</span> (or its mask), <span class="math inline">\(A_1\)</span>, <span class="math inline">\(P\)</span>. Backward needs exactly these, which is why activations dominate training memory.</p>
+<p><strong>Step 6.</strong> <strong>Dead ReLUs:</strong> if a unit’s <span class="math inline">\(Z_1\le0\)</span> for every example, its column of <span class="math inline">\(\Delta_1\)</span> is 0, so its weights never change again.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: backprop through a two-layer MLP</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(X,y\)</span>, <span class="math inline">\(W_1,b_1,W_2,b_2\)</span></div>
+<div class="algo-line" style="--d:0">forward: <span class="math inline">\(Z_1\gets XW_1+b_1\)</span>; <span class="math inline">\(A_1\gets\operatorname{ReLU}(Z_1)\)</span>; <span class="math inline">\(Z_2\gets A_1W_2+b_2\)</span>; <span class="math inline">\(P\gets\operatorname{softmax}(Z_2)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\Delta_2\gets(P-\onehot(y))/B\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\nabla W_2\gets A_1^\top\Delta_2\)</span>; <span class="math inline">\(\nabla b_2\gets\mathbf 1^\top\Delta_2\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\Delta_1\gets(\Delta_2W_2^\top)\odot\mathbb 1[Z_1&gt;0]\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\nabla W_1\gets X^\top\Delta_1\)</span>; <span class="math inline">\(\nabla b_1\gets\mathbf 1^\top\Delta_1\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Complete the entire backward pass manually and compare every gradient with autograd.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(111)
+
+B, D, H, C = 5, 4, 6, 3
+
+X = torch.randn(B, D, requires_grad=True)
+
+W1 = (
+    torch.randn(D, H) * (2 / D) ** 0.5
+).requires_grad_()
+b1 = torch.zeros(H, requires_grad=True)
+
+W2 = (
+    torch.randn(H, C) * (2 / H) ** 0.5
+).requires_grad_()
+b2 = torch.zeros(C, requires_grad=True)
+
+targets = torch.tensor([0, 2, 1, 0, 2])
+
+# Forward
+Z1 = ...                                     # TODO 1: [B, H]
+A1 = ...                                     # TODO 2: [B, H]
+logits = ...                                 # TODO 3: [B, C]
+
+loss = F.cross_entropy(logits, targets)
+
+# Detach values used by the manual backward pass
+x = X.detach()
+z1 = Z1.detach()
+a1 = A1.detach()
+w1 = W1.detach()
+w2 = W2.detach()
+z2 = logits.detach()
+
+# Cross-entropy backward
+probs = ...                                  # TODO 4: [B, C]
+dZ2 = probs.clone()
+dZ2[...] -= ...                              # TODO 5: target one-hot
+dZ2 /= ...                                   # TODO 6: mean reduction
+
+# Second linear layer
+manual_dW2 = ...                             # TODO 7: [H, C]
+manual_db2 = ...                             # TODO 8: [C]
+dA1 = ...                                    # TODO 9: [B, H]
+
+# ReLU
+dZ1 = ...                                    # TODO 10: [B, H]
+
+# First linear layer
+manual_dW1 = ...                             # TODO 11: [D, H]
+manual_db1 = ...                             # TODO 12: [H]
+manual_dX = ...                              # TODO 13: [B, D]
+
+# Autograd
+loss.backward()
+
+for name, manual, automatic in [
+    (&quot;W2&quot;, manual_dW2, W2.grad),
+    (&quot;b2&quot;, manual_db2, b2.grad),
+    (&quot;W1&quot;, manual_dW1, W1.grad),
+    (&quot;b1&quot;, manual_db1, b1.grad),
+    (&quot;X&quot;,  manual_dX,  X.grad),
+]:
+    error = (manual - automatic).abs().max().item()
+    print(f&quot;{name:&gt;2} max error: {error:.3e}&quot;)
+    assert torch.allclose(manual, automatic, atol=1e-6)
+
+print(&quot;ReLU active fraction:&quot;,
+      (z1 &gt; 0).float().mean().item())</code></pre>
+<p>Before running, predict which gradient first incorporates the ReLU mask.</p>
+<p>Debugging extension: initialize the first-layer bias far below zero:</p>
+<pre class="code python"><code class="language-python">b1_dead = torch.full((H,), -20.0, requires_grad=True)
+
+Z1_dead = X @ W1 + b1_dead
+A1_dead = torch.relu(Z1_dead)
+logits_dead = A1_dead @ W2 + b2
+loss_dead = F.cross_entropy(logits_dead, targets)
+
+grads = torch.autograd.grad(
+    loss_dead,
+    [W1, b1_dead, W2, b2],
+)
+
+for name, grad in zip(
+    [&quot;W1&quot;, &quot;b1&quot;, &quot;W2&quot;, &quot;b2&quot;],
+    grads,
+):
+    print(name, grad.norm().item())</code></pre>
+<p>Predict which parameters receive zero gradients and which can still receive nonzero gradients.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Linear layers use <code>input @ weight + bias</code>.</p></li>
+<li><p><code>dW = input.T @ upstream</code>.</p></li>
+<li><p>Bias gradients sum over the batch dimension.</p></li>
+<li><p>ReLU backward multiplies by <code>(z1 &gt; 0)</code>.</p></li>
+<li><p><code>dX = upstream @ weight.T</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why is <code>manual_dW2</code> an outer-product sum between hidden activations and output errors?</p></li>
+<li><p>Prediction: if <code>W2</code> is exactly zero, which first-layer gradients are zero on the first backward pass?</p></li>
+<li><p>Debugging: <code>b2.grad</code> is healthy but <code>W2.grad</code> is zero. What does that suggest about <code>A1</code>?</p></li>
+<li><p>If the loss changes from mean to sum reduction, how do all parameter gradients change?</p></li>
+<li><p>Why can inspecting only the global gradient norm hide a dead layer?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python"># Forward
+Z1 = X @ W1 + b1
+A1 = torch.relu(Z1)
+logits = A1 @ W2 + b2
+
+loss = F.cross_entropy(logits, targets)
+
+# Manual cross-entropy backward
+probs = torch.softmax(z2, dim=-1)
+
+dZ2 = probs.clone()
+dZ2[torch.arange(B), targets] -= 1
+dZ2 /= B
+
+# Second layer
+manual_dW2 = a1.T @ dZ2
+manual_db2 = dZ2.sum(dim=0)
+dA1 = dZ2 @ w2.T
+
+# ReLU
+dZ1 = dA1 * (z1 &gt; 0)
+
+# First layer
+manual_dW1 = x.T @ dZ1
+manual_db1 = dZ1.sum(dim=0)
+manual_dX = dZ1 @ w1.T</code></pre>
+<p><code>dA1</code> is the upstream gradient arriving from the second linear layer. <code>dZ1</code> is the first gradient that incorporates the ReLU mask:</p>
+<p><span class="math display">\[dZ_1=dA_1\odot\mathbf1[Z_1&gt;0]\]</span></p>
+<p>With a sufficiently negative first-layer bias, all ReLU outputs become zero:</p>
+<p><span class="math display">\[A_1=0\]</span></p>
+<p>Consequently:</p>
+<ul>
+<li><p><code>W2.grad</code> is zero because its input <span class="math inline">\(A_1\)</span> is zero.</p></li>
+<li><p><code>W1.grad</code> and <code>b1.grad</code> are zero because ReLU blocks their gradients.</p></li>
+<li><p><code>b2.grad</code> can remain nonzero because logits still depend directly on <span class="math inline">\(b_2\)</span>.</p></li>
+</ul>
+<p>Check answers:</p>
+<ol>
+<li><p>Each example contributes <span class="math inline">\(a_{1,i}^{\top}\Delta_{2,i}\)</span>; matrix multiplication sums these contributions across the batch.</p></li>
+<li><p>If <span class="math inline">\(W_2=0\)</span>, then <span class="math inline">\(dA_1=dZ_2W_2^\top=0\)</span>. Therefore <code>W1</code>, <code>b1</code>, and <code>X</code> receive zero gradients initially. <code>W2</code> and <code>b2</code> can still receive gradients.</p></li>
+<li><p>The hidden activations are probably all zero, detached, or otherwise not reaching the output projection.</p></li>
+<li><p>Every gradient becomes <span class="math inline">\(B\)</span> times larger.</p></li>
+<li><p>Healthy gradients in later layers can dominate the global norm while an earlier layer has exactly zero gradients.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial Z}
+=
+\frac{P-\operatorname{onehot}(y)}{B}\]</span></p>
+<p>Each row sums to zero because both the probability vector and one-hot target sum to one.</p>

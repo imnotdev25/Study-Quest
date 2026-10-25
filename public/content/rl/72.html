@@ -1,0 +1,361 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a prepaid metro card</div>
+<p>A prepaid metro card doesn’t “discourage” you from riding beyond your balance. The gate just won’t open. For that to work, the gate has to know your current balance. Hard tool budgets need the same two pieces: remaining budget in the state, and a mask that blocks unaffordable actions.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can’t a fixed tool-cost penalty guarantee a target budget?</p></li>
+<li><p>In a Lagrangian update, what happens to <span class="math inline">\(\lambda\)</span> when measured cost exceeds the budget?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="expected-constraints-are-not-hard-limits">2. Expected constraints are not hard limits</h3>
+<p>A Lagrangian can keep average cost near a budget, but one trajectory may still overspend. For a hard per-request limit, remaining budget must be part of the state:</p>
+<p><span class="math display">\[\tilde s_t=(s_t,b_t)\]</span></p>
+<p>After action <span class="math inline">\(a_t\)</span> with cost <span class="math inline">\(c(a_t)\)</span>:</p>
+<p><span class="math display">\[b_{t+1}=b_t-c(a_t)\]</span></p>
+<p>An action is feasible only when:</p>
+<p><span class="math display">\[M_t(a)=\mathbf 1[c(a)\le b_t]\]</span></p>
+<p>Mask infeasible actions before sampling:</p>
+<p><span class="math display">\[\pi^M(a\mid s_t,b_t)
+=
+\frac{
+\pi(a\mid s_t)M_t(a)
+}{
+\sum_{a&#39;}\pi(a&#39;\mid s_t)M_t(a&#39;)
+}\]</span></p>
+<p>This is like a debit-card authorization: the transaction is blocked before execution, not merely penalized afterward.</p>
+<p>The shield changes the policy distribution. PPO must therefore use masked rollout and training probabilities:</p>
+<p><span class="math display">\[r_t(\theta)
+=
+\exp\left(
+\log\pi_\theta^M(a_t\mid s_t,b_t)
+-
+\log\pi_{\text{old}}^M(a_t\mid s_t,b_t)
+\right)\]</span></p>
+<p>Using an unmasked numerator creates false ratios even when model weights are unchanged.</p>
+<p>Practical limits:</p>
+<ul>
+<li><p>always provide a zero-cost fallback such as “answer” or “abort”;</p></li>
+<li><p>reconstruct the exact budget and mask during training;</p></li>
+<li><p>for stochastic costs, reserve a safe upper bound before execution;</p></li>
+<li><p>log requested, reserved and actual cost separately.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>logits and masks: <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span></p></li>
+<li><p>action costs: <span style="background-color: codeinlinebg"><code> [A]</code></span></p></li>
+<li><p>actions and log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>remaining-budget history: <span style="background-color: codeinlinebg"><code> [B, T+1]</code></span></p></li>
+</ul>
+<p>DPO can prefer budget-compliant traces, but it cannot prevent an online sample from exceeding a runtime budget. The environment or policy shield must enforce that boundary.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: budget-augmented state</div>
+<p>Augment the state: <span class="math inline">\(\tilde s_t=(s_t,b_t)\)</span> with <span class="math inline">\(b_{t+1}=b_t-c(a_t)\)</span>. Mask: <span class="math inline">\(v_a(\tilde s)=\mathbb 1[c(a)\le b]\)</span>.</p>
+<ul>
+<li><p>Without <span class="math inline">\(b\)</span> in the state, the process isn’t Markov: the same observation with 1 or 10 calls left needs different actions.</p></li>
+<li><p>The mask guarantees <span class="math inline">\(\sum_tc(a_t)\le b_0\)</span> on <em>every</em> episode, a guarantee the Lagrangian can’t give.</p></li>
+<li><p>Always keep a free fallback action (“answer now”) so the mask is never empty.</p></li>
+</ul>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Average constraints shape behaviour, and a budget-aware shield enforces it.</p></li>
+<li><p>Update <span class="math inline">\(b\)</span> after every action and reproduce the exact mask in training.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: budget 3</div>
+<p>Search costs 2, calculator costs 1, answer costs 0. Start <span class="math inline">\(b=3\)</span>. After one search: <span class="math inline">\(b=1\)</span>, so search is masked, while calculator and answer stay legal. After a calculator call: <span class="math inline">\(b=0\)</span>, and only answer is left.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>The budget not in the observation.</p></li>
+<li><p>Decrementing <span class="math inline">\(b\)</span> for a call that failed to execute.</p></li>
+<li><p>The training mask computed from the final budget instead of the per-step budget.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-sample-only-affordable-tools">3. PyTorch exercise — sample only affordable tools</h3>
+<p>Actions are:</p>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> 0</code></span>: answer locally, cost <span style="background-color: codeinlinebg"><code> 0</code></span>;</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> 1</code></span>: cheap search, cost <span style="background-color: codeinlinebg"><code> 1</code></span>;</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> 2</code></span>: expensive database call, cost <span style="background-color: codeinlinebg"><code> 2</code></span>.</p></li>
+</ul>
+<p>The raw policy strongly prefers expensive actions.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 3
+time_steps = 4
+num_actions = 3
+
+action_costs = torch.tensor([
+    0, 1, 2
+])
+
+initial_budgets = torch.tensor([
+    3, 2, 1
+])
+
+base_logits = torch.tensor([
+    0.0, 2.0, 5.0
+])
+
+logits = torch.nn.Parameter(
+    base_logits.view(1, 1, num_actions)
+    .repeat(batch_size, time_steps, 1)
+)
+
+actions = torch.zeros(
+    batch_size,
+    time_steps,
+    dtype=torch.long,
+)
+
+old_log_probs = torch.zeros(
+    batch_size,
+    time_steps,
+)
+
+valid_masks = torch.zeros(
+    batch_size,
+    time_steps,
+    num_actions,
+    dtype=torch.bool,
+)
+
+remaining_history = torch.zeros(
+    batch_size,
+    time_steps + 1,
+    dtype=initial_budgets.dtype,
+)
+
+with torch.no_grad():
+    remaining = initial_budgets.clone()
+    remaining_history[:, 0] = remaining
+
+    for time in range(time_steps):
+        # TODO 1: Feasible actions from the
+        # current remaining budget.
+        valid = ...
+
+        assert bool(
+            valid.any(dim=-1).all()
+        )
+
+        valid_masks[:, time] = valid
+
+        # TODO 2: Mask before sampling, store the
+        # shielded log-probability and pay the cost.
+        masked_logits = ...
+
+        policy = ...
+        sampled_actions = ...
+        sampled_log_probs = ...
+        sampled_costs = ...
+
+        actions[:, time] = sampled_actions
+        old_log_probs[:, time] = (
+            sampled_log_probs
+        )
+
+        remaining = ...
+        remaining_history[:, time + 1] = (
+            remaining
+        )
+
+# TODO 3: Correct recomputation with the same masks.
+recomputed_masked_logits = ...
+
+correct_log_probs = ...
+correct_ratios = ...
+
+# TODO 4: Bug—training ignores the budget masks.
+wrong_log_probs = ...
+wrong_ratios = ...
+
+advantages = torch.tensor([
+    [1.0,  0.5, -0.2,  0.1],
+    [0.7, -0.1,  0.2,  0.3],
+    [0.4,  0.2,  0.1, -0.2],
+])
+
+# TODO 5: Shielded policy loss and diagnostics.
+policy_loss = ...
+
+logit_gradients = torch.autograd.grad(
+    policy_loss,
+    logits,
+)[0]
+
+selected_are_valid = ...
+
+maximum_correct_ratio_error = ...
+mean_wrong_ratio_error = ...
+maximum_invalid_gradient = ...
+
+print(&quot;Sampled actions:\n&quot;, actions)
+
+print(
+    &quot;Remaining-budget history:\n&quot;,
+    remaining_history,
+)
+
+print(
+    &quot;All sampled actions valid:&quot;,
+    selected_are_valid.item(),
+)
+
+print(
+    &quot;Maximum correct |ratio - 1|:&quot;,
+    maximum_correct_ratio_error.item(),
+)
+
+print(
+    &quot;Mean unmasked |ratio - 1|:&quot;,
+    mean_wrong_ratio_error.item(),
+)
+
+print(
+    &quot;Minimum remaining budget:&quot;,
+    remaining_history.min().item(),
+)
+
+print(
+    &quot;Maximum invalid-logit gradient:&quot;,
+    maximum_invalid_gradient.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Can the agent ever sample action <span style="background-color: codeinlinebg"><code> 2</code></span> with only one budget unit remaining?</p></li>
+<li><p>What should correctly recomputed ratios equal before any update?</p></li>
+<li><p>Can unmasked ratios differ from one despite unchanged logits?</p></li>
+<li><p>What direct gradient should an infeasible action logit receive?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Compare <span style="background-color: codeinlinebg"><code> action_costs[None, :]</code></span> with <span style="background-color: codeinlinebg"><code> remaining[:, None]</code></span>.</p></li>
+<li><p>Fill infeasible logits with <span style="background-color: codeinlinebg"><code> -torch.inf</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> Categorical(logits=masked_logits)</code></span>.</p></li>
+<li><p>Index selected costs with <span style="background-color: codeinlinebg"><code> action_costs[sampled_actions]</code></span>.</p></li>
+<li><p>Correct training reuses <span style="background-color: codeinlinebg"><code> valid_masks</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> gather</code></span> to verify selected-action validity.</p></li>
+<li><p>Detach advantages in the actor loss.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Compute the mask from <span style="background-color: codeinlinebg"><code> initial_budgets</code></span> at every timestep. Later training masks will permit actions that were unaffordable during rollout.</p>
+<p>Construct <span style="background-color: codeinlinebg"><code> Categorical</code></span> from raw logits and mask only the loss. The environment can already receive an over-budget action before its loss is removed.</p>
+<p>Remove action <span style="background-color: codeinlinebg"><code> 0</code></span> and exhaust the budget. An all-<span class="math inline">\(-\infty\)</span> row makes the categorical probabilities undefined.</p>
+<p>Finally, replace deterministic costs with noisy actual costs. Masking by mean cost can still overspend; reserve a maximum or high-confidence cost bound.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why must remaining budget be included in the policy state?</p></li>
+<li><p>How does a hard shield differ from a Lagrangian constraint?</p></li>
+<li><p>Why must PPO reconstruct the same mask used during rollout?</p></li>
+<li><p>What should be logged when tool costs are stochastic?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Dynamic feasibility:</p>
+<pre class="code python"><code class="language-python">valid = (
+    action_costs[None, :]
+    &lt;= remaining[:, None]
+)</code></pre>
+<p>Shielded sampling and budget update:</p>
+<pre class="code python"><code class="language-python">masked_logits = logits[
+    :, time
+].masked_fill(
+    ~valid,
+    -torch.inf,
+)
+
+policy = Categorical(
+    logits=masked_logits
+)
+
+sampled_actions = policy.sample()
+
+sampled_log_probs = policy.log_prob(
+    sampled_actions
+)
+
+sampled_costs = action_costs[
+    sampled_actions
+]
+
+remaining = (
+    remaining - sampled_costs
+)</code></pre>
+<p>Correct recomputation:</p>
+<pre class="code python"><code class="language-python">recomputed_masked_logits = (
+    logits.masked_fill(
+        ~valid_masks,
+        -torch.inf,
+    )
+)
+
+correct_log_probs = Categorical(
+    logits=recomputed_masked_logits
+).log_prob(actions)
+
+correct_ratios = torch.exp(
+    correct_log_probs
+    - old_log_probs.detach()
+)</code></pre>
+<p>Incorrect unmasked recomputation:</p>
+<pre class="code python"><code class="language-python">wrong_log_probs = Categorical(
+    logits=logits
+).log_prob(actions)
+
+wrong_ratios = torch.exp(
+    wrong_log_probs
+    - old_log_probs.detach()
+)</code></pre>
+<p>Loss and diagnostics:</p>
+<pre class="code python"><code class="language-python">policy_loss = -(
+    correct_log_probs
+    * advantages.detach()
+).mean()
+
+selected_are_valid = (
+    valid_masks.gather(
+        dim=-1,
+        index=actions.unsqueeze(-1),
+    )
+    .squeeze(-1)
+    .all()
+)
+
+maximum_correct_ratio_error = (
+    correct_ratios - 1.0
+).abs().max()
+
+mean_wrong_ratio_error = (
+    wrong_ratios - 1.0
+).abs().mean()
+
+maximum_invalid_gradient = (
+    logit_gradients[~valid_masks]
+    .abs()
+    .max()
+)</code></pre>
+<p>Because parameters and masks are unchanged:</p>
+<p><span class="math display">\[r_t^{\text{correct}}=1\]</span></p>
+<p>The unmasked policy includes unaffordable actions in its softmax denominator, so its selected-action probability differs from the rollout probability. Its apparent PPO ratio can therefore be far from one.</p>
+<p>Known deterministic costs and pre-sampling masks guarantee:</p>
+<p><span class="math display">\[b_t\ge0\]</span></p>
+<p>Infeasible logits receive zero direct gradient through this masked distribution. Shared model parameters can still change through valid logits elsewhere.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The same observation can have different legal actions depending on earlier spending.</p></li>
+<li><p>A Lagrangian regulates average behavior; a shield makes forbidden actions impossible on each decision.</p></li>
+<li><p>The PPO numerator and denominator must describe the same action space and conditioning state.</p></li>
+<li><p>Log quoted cost, reserved cost, actual cost, overruns, remaining budget, fallback frequency and failures by tool.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A fixed penalty defines a trade-off, but the resulting cost changes with rewards, policy capacity and environment distribution.</p></li>
+<li><p>Increase <span class="math inline">\(\lambda\)</span> when cost exceeds the budget; expensive behavior then receives a stronger penalty.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> average constraints shape behavior, while a budget-aware shield enforces the boundary. Update remaining budget after every action and reproduce the exact mask during training.</p>

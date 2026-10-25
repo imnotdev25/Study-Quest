@@ -1,0 +1,124 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How traffic is spread across servers: L4 vs L7, balancing algorithms, health checks, global load balancing, consistent hashing, and the reverse proxy that sits in front of nearly every production system.</p>
+</div>
+<h1 id="load-balancing">Load Balancing</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A load balancer is the host at a busy restaurant who seats each new group at the table with the free waiter. If a waiter calls in sick, the host stops sending guests to that section. Nobody waits in a long line while other tables sit empty.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/bc30dd126855.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A load balancer exposes one virtual IP and removes failed servers from rotation.</em></p>
+<h2 id="l4-vs-l7">L4 vs L7</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"></th>
+<th style="text-align: left;">Layer 4 (Transport)</th>
+<th style="text-align: left;">Layer 7 (Application)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Sees</td>
+<td style="text-align: left;">IP, port, TCP/UDP</td>
+<td style="text-align: left;">HTTP path, headers, cookies, gRPC method</td>
+</tr>
+<tr>
+<td style="text-align: left;">Speed</td>
+<td style="text-align: left;">Very fast, millions of connections</td>
+<td style="text-align: left;">Slower; parses each request</td>
+</tr>
+<tr>
+<td style="text-align: left;">Features</td>
+<td style="text-align: left;">Pass-through, TLS passthrough</td>
+<td style="text-align: left;">Path routing, TLS termination, retries, auth, compression</td>
+</tr>
+<tr>
+<td style="text-align: left;">Examples</td>
+<td style="text-align: left;">AWS NLB, Maglev, IPVS, Katran</td>
+<td style="text-align: left;">AWS ALB, Nginx, Envoy, HAProxy, Traefik</td>
+</tr>
+</tbody>
+</table>
+<p><em>L4 vs L7 load balancing</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Algorithms:</strong></p>
+<ul>
+<li><p><strong>Round robin</strong>: next server in turn. Good when requests are uniform.</p></li>
+<li><p><strong>Weighted round robin</strong>: bigger machines get more traffic.</p></li>
+<li><p><strong>Least connections / least outstanding requests</strong>: send to the least busy server. Best when request costs vary (and for LLM backends).</p></li>
+<li><p><strong>IP hash / consistent hash</strong>: same client or key goes to the same server. Needed for cache affinity and sticky sessions.</p></li>
+<li><p><strong>Power of two choices</strong>: pick two random servers, send to the less loaded. Nearly as good as global least-loaded with no shared state.</p></li>
+</ul>
+<p><strong>Health checks</strong> can be active (LB pings <code>/healthz</code> every few seconds) or passive (outlier detection: eject a host after 5 consecutive 5xx). Distinguish <em>liveness</em> (process alive) from <em>readiness</em> (able to take traffic, e.g. warm cache, DB connected).</p>
+</div>
+<h2 id="consistent-hashing">Consistent Hashing</h2>
+<figure class="tikz"><img src="figs/sd/7187e396ef23.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Consistent hash ring with virtual nodes (A’, B’, C’). Adding or removing a node only moves about <span class="math inline">\(1/N\)</span> of keys.</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>With naive <code>hash(key) mod N</code>, changing <span class="math inline">\(N\)</span> remaps nearly every key, destroying cache hit rates. Consistent hashing maps both nodes and keys onto a ring; each key belongs to the next node clockwise. <strong>Virtual nodes</strong> (100–200 per physical node) smooth out uneven distribution. Alternatives: <strong>rendezvous (HRW) hashing</strong> (score every node, pick the max: simple, no ring), <strong>jump consistent hash</strong> (no memory, but only supports appending buckets), and Google’s <strong>Maglev</strong> hashing (lookup-table based, used in L4 LBs). Bounded-load consistent hashing caps any node at <span class="math inline">\((1+\epsilon)\times\)</span> average load, which matters for hot keys.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Worked example: how much moves?</strong> 10 cache nodes, 100M keys.</p>
+<ul>
+<li><p><code>hash(key) mod N</code>, going from 10 to 11 nodes: a key stays put only if <code>h mod 10 = h mod 11</code>, which is true for about 1 in 11 keys. About 91% of keys move, so the hit rate collapses.</p></li>
+<li><p>Consistent hashing, going from 10 to 11 nodes: only keys in the new node’s ranges move, about <span class="math inline">\(1/11 \approx 9\%\)</span>.</p></li>
+<li><p>Without virtual nodes, the largest node’s share can easily be 2–3<span class="math inline">\(\times\)</span> the average because random points on a ring leave uneven gaps. With 100–200 virtual nodes per server, the spread typically falls to within a few percent.</p></li>
+</ul>
+</div>
+<pre class="code python"><code class="language-python">import bisect, hashlib
+
+def h(s): return int(hashlib.md5(s.encode()).hexdigest()[:16], 16)
+
+class Ring:
+    def __init__(self, nodes, vnodes=150):
+        self.ring = sorted((h(f&quot;{n}#{i}&quot;), n) for n in nodes for i in range(vnodes))
+        self.points = [p for p, _ in self.ring]
+
+    def node_for(self, key):
+        i = bisect.bisect(self.points, h(key)) % len(self.points)  # next clockwise
+        return self.ring[i][1]</code></pre>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Seen in production</div>
+<p>Discord routes every request for a channel to the same data-service instance by consistent hashing so duplicate reads can be coalesced; Slack assigns channels to channel servers on a hash ring managed by CHARMs; Uber’s Ringpop shards geographic cells across dispatch servers. See Part (cases).</p>
+</div>
+<h2 id="global-load-balancing">Global Load Balancing</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Multi-region systems route users to the nearest healthy region using GeoDNS, anycast IPs (Cloudflare, Google Cloud global LB), or latency-based routing. Inside a region a second tier of L4/L7 balancers distributes to services.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Multi-region SaaS failover</div>
+<p>Anycast routes EU users to Frankfurt and US users to Virginia. Frankfurt’s health checks fail; BGP withdraws the route and users land in Virginia within seconds. The application must tolerate higher latency and be able to serve EU users’ data from the US (or fail gracefully if data residency forbids it).</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: LLM inference fleet</div>
+<p>Round robin works poorly for LLMs: one request may be 50 tokens, another 50<span>,</span>000. Inference gateways route by queue depth and KV-cache usage, and prefer the replica that already has the prompt prefix cached (<em>prefix-aware routing</em>). See Chapter (inference).</p>
+</div>
+<h1 id="reverse-proxies">Reverse Proxies</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A reverse proxy is a receptionist for a building. Visitors talk only to the receptionist, who forwards them to the right office. Visitors never learn the internal room numbers.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/efffe68b36e8.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Reverse proxies act on behalf of servers; forward proxies act on behalf of clients.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Responsibilities: TLS termination, HTTP/2 and HTTP/3 to clients, compression (gzip/Brotli/Zstd), response caching, request buffering (protects slow servers from slow clients), path and host routing, header rewriting, WAF rules, and connection pooling to backends. Popular choices: <strong>Nginx</strong> (mature, config-file driven), <strong>Envoy</strong> (dynamic config via xDS APIs, the base of most service meshes and AI gateways), <strong>HAProxy</strong> (high-performance L4/L7), <strong>Caddy</strong> (automatic HTTPS), <strong>Traefik</strong> (auto-discovers containers).</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Things that bite in production: proxies buffer responses by default, which breaks streaming (set <code>proxy_buffering off</code> or <code>X-Accel-Buffering: no</code> for SSE); idle timeouts shorter than a long LLM generation will cut streams; proxies must forward real client IPs via <code>X-Forwarded-For</code> or PROXY protocol, and you must only trust these headers from known hops. Connection reuse to backends (keep-alive) often matters more for latency than any other knob.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Monolith to microservices migration</div>
+<p>Nginx sits in front of the monolith. New services are added behind it and paths are moved one at a time (<code>/payments</code> now routes to the new payments service). This is the <em>strangler fig</em> pattern: the old system shrinks until it can be removed, and users never notice.</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Load balancer itself as a single point of failure; run it in an HA pair or use a managed LB.</p></li>
+<li><p>Health checks that only test “process up,” sending traffic to servers that cannot reach the DB.</p></li>
+<li><p>Sticky sessions that pin heavy users and defeat balancing; prefer stateless services.</p></li>
+<li><p>Health check endpoints that call dependencies, causing cascading ejection of every server when the DB blips.</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>L4 for raw speed, L7 for smart routing.</p></li>
+<li><p>Least-outstanding-requests beats round robin when request cost varies.</p></li>
+<li><p>Consistent hashing keeps caches warm as nodes change.</p></li>
+<li><p>Reverse proxies centralize TLS, compression, routing, and protection.</p></li>
+</ul>
+</div>

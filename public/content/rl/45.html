@@ -1,0 +1,301 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: one person one vote vs one word one vote</div>
+<p>In a meeting, should each <em>person</em> get one vote, or each <em>word spoken</em>? Under “one word one vote,” whoever talks longest wins. Loss reduction asks the same question about responses: average over tokens (long responses dominate) or over sequences (each response counts equally, so each token of a long response counts less).</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/b5c03f771058.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can an individual sampled KL log-ratio be negative?</p></li>
+<li><p>Why should padding tokens contribute neither KL nor policy loss?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="reduction-changes-the-learning-objective">2. Reduction changes the learning objective</h3>
+<p>For response <span class="math inline">\(i\)</span>, the autoregressive log-probability is:</p>
+<p><span class="math display">\[\log\pi_\theta(y_i\mid x_i)
+=
+\sum_{t=1}^{L_i}
+\log\pi_\theta(y_{i,t}\mid x_i,y_{i,&lt;t})\]</span></p>
+<p>With one sequence-level advantage <span class="math inline">\(A_i\)</span>, REINFORCE uses:</p>
+<p><span class="math display">\[L_{\mathrm{sequence}}
+=
+-\frac1B\sum_i
+A_i
+\sum_t M_{i,t}
+\log\pi_\theta(y_{i,t}\mid s_{i,t})\]</span></p>
+<p>The sum is not accidental. The probability of the complete response is the product of token probabilities, so its log-probability is their sum.</p>
+<p>Two common alternative reductions are:</p>
+<p><strong>Global token mean</strong></p>
+<p><span class="math display">\[L_{\mathrm{token}}
+=
+-
+\frac{
+\sum_{i,t}
+M_{i,t}A_i\log\pi_\theta(y_{i,t}\mid s_{i,t})
+}{
+\sum_{i,t}M_{i,t}
+}\]</span></p>
+<p>Long responses contain more valid tokens, so they receive more total influence.</p>
+<p><strong>Mean within each response</strong></p>
+<p><span class="math display">\[L_{\mathrm{response\ mean}}
+=
+-\frac1B\sum_i
+A_i
+\frac{
+\sum_tM_{i,t}\log\pi_\theta(y_{i,t}\mid s_{i,t})
+}{
+\sum_tM_{i,t}
+}\]</span></p>
+<p>This gives each response equal aggregate weight, but it is no longer the ordinary sequence-probability policy gradient. Length normalization changes the objective rather than merely improving numerical stability.</p>
+<p>The distinction becomes especially important because EOS is an action: response length is partly chosen by the policy.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>token IDs, selected log-probabilities and mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>lengths and sequence advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>reduced loss: scalar</p></li>
+<li><p>shared vocabulary logits and gradient: <span style="background-color: codeinlinebg"><code> [V]</code></span></p></li>
+</ul>
+<p>DPO similarly uses response log-probability ratios. Summing versus length-normalizing those ratios changes how short and long preference pairs influence training.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the denominators are part of the objective</div>
+<p>For responses <span class="math inline">\(i\)</span> with per-token losses <span class="math inline">\(\ell_{it}\)</span> and masks <span class="math inline">\(m_{it}\)</span>:</p>
+<ul>
+<li><p><strong>Global token mean:</strong> <span class="math inline">\(\dfrac{\sum_i\sum_tm_{it}\ell_{it}}{\sum_i\sum_tm_{it}}\)</span>. Every token counts equally, and long responses dominate.</p></li>
+<li><p><strong>Sequence mean:</strong> <span class="math inline">\(\dfrac1G\sum_i\dfrac{\sum_tm_{it}\ell_{it}}{\sum_tm_{it}}\)</span>. Every response counts equally, so per-token weight is <span class="math inline">\(1/|y_i|\)</span>.</p></li>
+<li><p><strong>Constant normalizer:</strong> <span class="math inline">\(\dfrac{1}{G\,L_{\max}}\sum_i\sum_tm_{it}\ell_{it}\)</span>. This matches the true sequence log-prob gradient, up to a constant.</p></li>
+</ul>
+<p><strong>Length bias:</strong> under a sequence mean, a <em>long wrong</em> answer’s negative advantage is spread thinly over many tokens, so each token is barely penalized and the policy drifts toward longer wrong answers. Dr. GRPO argues for a constant normalizer for this reason.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>The reduction choice is a weighting choice and changes what you optimize.</p></li>
+<li><p>Keep masks and denominators explicit, especially when length is learned.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: per-token weights</div>
+<p>Short response: 10 tokens. Long response: 100 tokens. Token mean: each token weighs <span class="math inline">\(\tfrac1{110}\)</span>, so the short response gets <span class="math inline">\(9\%\)</span> of the total. Sequence mean: short-response tokens weigh <span class="math inline">\(\tfrac1{20}\)</span> each, long-response tokens <span class="math inline">\(\tfrac1{200}\)</span> each, so it’s 50/50 per response.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Token mean per microbatch (see Topic 52).</p></li>
+<li><p>Padding in the denominator.</p></li>
+<li><p>Switching reductions mid-run without changing the learning rate.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-expose-hidden-length-weighting">3. PyTorch exercise — expose hidden length weighting</h3>
+<p>Both responses have advantage <span style="background-color: codeinlinebg"><code> +1</code></span>, but one has two action-<span style="background-color: codeinlinebg"><code> 0</code></span> tokens and the other has six action-<span style="background-color: codeinlinebg"><code> 1</code></span> tokens.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+# Padding IDs are arbitrary because the mask removes them.
+actions = torch.tensor([
+    [0, 0, 0, 0, 0, 0],  # valid length 2
+    [1, 1, 1, 1, 1, 1],  # valid length 6
+])
+
+lengths = torch.tensor([2, 6])
+
+mask = (
+    torch.arange(actions.shape[1])[None, :]
+    &lt; lengths[:, None]
+)
+
+advantages = torch.tensor([
+    1.0, 1.0
+])
+
+def gradient_for_reduction(reduction):
+    logits = torch.nn.Parameter(
+        torch.zeros(2)
+    )
+
+    policy = Categorical(logits=logits)
+
+    # [B, T]
+    selected_log_probs = policy.log_prob(
+        actions
+    )
+
+    float_mask = mask.to(
+        selected_log_probs.dtype
+    )
+
+    # TODO 1: Masked sum of log-probabilities per response.
+    sequence_log_probs = ...
+
+    if reduction == &quot;sequence_sum&quot;:
+        # Ordinary sequence-level REINFORCE.
+        # TODO 2
+        loss = ...
+
+    elif reduction == &quot;global_token_mean&quot;:
+        # Every valid token has equal weight.
+        # TODO 3
+        loss = ...
+
+    elif reduction == &quot;per_response_mean&quot;:
+        # Every response has equal aggregate weight.
+        # TODO 4
+        mean_log_probs = ...
+        loss = ...
+
+    else:
+        raise ValueError(reduction)
+
+    loss.backward()
+
+    # Convert minimization gradient to ascent direction.
+    return (
+        -logits.grad.detach().clone(),
+        loss.detach(),
+    )
+
+# TODO 5: Calculate all three gradients.
+sequence_gradient, sequence_loss = ...
+token_gradient, token_loss = ...
+response_mean_gradient, response_mean_loss = ...
+
+print(&quot;Mask:\n&quot;, mask)
+print(&quot;Lengths:&quot;, lengths)
+
+print(
+    &quot;Sequence-sum ascent gradient:&quot;,
+    sequence_gradient,
+)
+
+print(
+    &quot;Global-token-mean ascent gradient:&quot;,
+    token_gradient,
+)
+
+print(
+    &quot;Per-response-mean ascent gradient:&quot;,
+    response_mean_gradient,
+)
+
+print(
+    &quot;Gradient norms:&quot;,
+    {
+        &quot;sequence_sum&quot;:
+            sequence_gradient.norm().item(),
+        &quot;global_token_mean&quot;:
+            token_gradient.norm().item(),
+        &quot;per_response_mean&quot;:
+            response_mean_gradient.norm().item(),
+    },
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action will the sequence-sum gradient favor?</p></li>
+<li><p>Will the per-response-mean gradients from the two responses cancel?</p></li>
+<li><p>Are sequence sum and global token mean directionally different in this fixed batch?</p></li>
+<li><p>Is dividing every response by its length always a harmless rescaling?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Multiply selected log-probabilities by the mask before summing.</p></li>
+<li><p>Ordinary REINFORCE averages sequence log-probability times sequence advantage.</p></li>
+<li><p>The global token denominator is <span style="background-color: codeinlinebg"><code> float_mask.sum()</code></span>.</p></li>
+<li><p>For per-response means, divide each sequence sum by its own length.</p></li>
+<li><p>Call the helper three times using the three reduction names.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Remove the mask:</p>
+<pre class="code python"><code class="language-python">sequence_log_probs = selected_log_probs.sum(
+    dim=-1
+)</code></pre>
+<p>The four padding positions in the first row now reinforce action <span style="background-color: codeinlinebg"><code> 0</code></span>, even though those actions never occurred.</p>
+<p>Next, replace:</p>
+<pre class="code python"><code class="language-python">lengths = torch.tensor([2, 6])</code></pre>
+<p>with:</p>
+<pre class="code python"><code class="language-python">lengths = torch.tensor([6, 6])</code></pre>
+<p>The opposing responses become symmetric, so every reduction should produce cancellation.</p>
+<p>Finally, give the short response advantage <span style="background-color: codeinlinebg"><code> 3</code></span>:</p>
+<pre class="code python"><code class="language-python">advantages = torch.tensor([3.0, 1.0])</code></pre>
+<p>Under sequence sum, its total credit becomes <span class="math inline">\(3\times2=6\)</span>, matching the long response’s <span class="math inline">\(1\times6=6\)</span>. Reward scale and response length interact.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is a response log-probability a sum over token log-probabilities?</p></li>
+<li><p>Which reduction gives long responses more total influence?</p></li>
+<li><p>Why can length normalization affect EOS behavior?</p></li>
+<li><p>Which reduction should be reported explicitly in an RL training implementation?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Masked sequence log-probabilities:</p>
+<pre class="code python"><code class="language-python">sequence_log_probs = (
+    selected_log_probs * float_mask
+).sum(dim=-1)</code></pre>
+<p>Sequence-sum REINFORCE:</p>
+<pre class="code python"><code class="language-python">loss = -(
+    sequence_log_probs
+    * advantages.detach()
+).mean()</code></pre>
+<p>Global token mean:</p>
+<pre class="code python"><code class="language-python">loss = -(
+    selected_log_probs
+    * float_mask
+    * advantages[:, None].detach()
+).sum() / float_mask.sum()</code></pre>
+<p>Per-response mean:</p>
+<pre class="code python"><code class="language-python">mean_log_probs = (
+    sequence_log_probs
+    / lengths.to(
+        sequence_log_probs.dtype
+    )
+)
+
+loss = -(
+    mean_log_probs
+    * advantages.detach()
+).mean()</code></pre>
+<p>Three gradients:</p>
+<pre class="code python"><code class="language-python">sequence_gradient, sequence_loss = (
+    gradient_for_reduction(
+        &quot;sequence_sum&quot;
+    )
+)
+
+token_gradient, token_loss = (
+    gradient_for_reduction(
+        &quot;global_token_mean&quot;
+    )
+)
+
+response_mean_gradient, response_mean_loss = (
+    gradient_for_reduction(
+        &quot;per_response_mean&quot;
+    )
+)</code></pre>
+<p>At uniform probabilities, one action-<span style="background-color: codeinlinebg"><code> 0</code></span> token contributes ascent direction:</p>
+<p><span class="math display">\[[0.5,-0.5]\]</span></p>
+<p>and one action-<span style="background-color: codeinlinebg"><code> 1</code></span> token contributes:</p>
+<p><span class="math display">\[[-0.5,0.5]\]</span></p>
+<p>The short response contributes two action-<span style="background-color: codeinlinebg"><code> 0</code></span> terms, while the long response contributes six action-<span style="background-color: codeinlinebg"><code> 1</code></span> terms. Sequence sum therefore favors action <span style="background-color: codeinlinebg"><code> 1</code></span>.</p>
+<p>Global token mean divides the same total gradient by eight, changing its scale but not its direction for this fixed batch.</p>
+<p>Per-response normalization produces:</p>
+<p><span class="math display">\[\frac12
+\left(
+[0.5,-0.5]
++
+[-0.5,0.5]
+\right)
+=
+[0,0]\]</span></p>
+<p>because the two responses receive equal aggregate weight.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Autoregressive sequence probability is a product of conditional token probabilities; taking its logarithm converts that product into a sum.</p></li>
+<li><p>Sequence sum and global token mean both give longer responses more aggregate contribution.</p></li>
+<li><p>EOS determines length. Dividing by realized length changes the relative credit assigned to policies that terminate early or continue generating.</p></li>
+<li><p>Always report whether losses use sequence sums, global valid-token means or per-response length normalization, along with the exact mask denominator.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>KL is nonnegative after expectation; a sampled token may still be more probable under the reference, giving a negative log-ratio.</p></li>
+<li><p>Padding and post-termination actions never occurred in the trajectory, so including them creates fictitious gradient and KL contributions.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> loss reduction is part of the objective. Sequence sums follow the log-probability of the sampled response; token and length-normalized means impose different weighting. Keep masks and denominators explicit—especially when EOS and response length are learned behavior.</p>

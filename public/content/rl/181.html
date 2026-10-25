@@ -1,0 +1,86 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a kitchen that cooks while the recipe is being edited</div>
+<p>To keep a busy kitchen moving, cooks keep cooking from the recipe card they have, while the head chef edits the master recipe. Some dishes come out of a slightly old version. You can still learn from them, but you have to know how old each one was, and not trust very old ones too much.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/c8ac94e84cf8.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What does V-trace clip, and why? (Topic 168)</p></li>
+<li><p>What should every PPO ratio equal before the first update? (Topic 66)</p></li>
+</ol>
+<h3 class="unnumbered" id="two-mismatches">2. Two mismatches</h3>
+<p>Large LLM-RL systems (verl, OpenRLHF, AReaL and others) separate a fast inference engine from the trainer and run them concurrently. That creates two gaps between the policy that sampled and the policy being trained:</p>
+<ol>
+<li><p><strong>Staleness:</strong> the rollout used older weights <span class="math inline">\(\theta_{k-j}\)</span>.</p></li>
+<li><p><strong>Engine mismatch:</strong> even with identical weights, the inference engine’s kernels, precision or sampling code give slightly different log-probs than the trainer.</p></li>
+</ol>
+<p><strong>Fix: truncated importance sampling (TIS).</strong> Record <span class="math inline">\(\log\pi_{\text{rollout}}\)</span> at sampling time, recompute <span class="math inline">\(\log\pi_{\text{old}}\)</span> with the trainer, and multiply each token’s PPO term by a capped, detached weight: <span class="math display">\[w_t=\min\Big(\frac{\pi_{\text{old}}(y_t)}{\pi_{\text{rollout}}(y_t)},\ C\Big),\qquad\mathcal L=-\frac{\sum_tm_t\,\operatorname{sg}(w_t)\,\min\big(\rho_t\hat A_t,\operatorname{clip}(\rho_t)\hat A_t\big)}{\sum_tm_t}.\]</span> This is the same idea as V-trace’s truncated weights, applied to LLM tokens. The cap trades a little bias for bounded variance.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Async training and inference engines make “on-policy” data slightly off-policy.</p></li>
+<li><p>Log rollout-time log-probs, correct with capped weights, and monitor the mismatch.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: one bad token</div>
+<p>Rollout log-prob <span class="math inline">\(-3.0\)</span>, trainer log-prob <span class="math inline">\(-1.5\)</span>. Raw weight <span class="math inline">\(e^{1.5}=4.48\)</span>, capped at <span class="math inline">\(C=2\)</span>. Without the cap, this one token would count 4.5<span class="math inline">\(\times\)</span> a normal token in the gradient.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Using the trainer’s log-probs as the behaviour policy (the mismatch disappears from view, but not from the data).</p></li>
+<li><p>No cap (rare large weights dominate the gradient).</p></li>
+<li><p>Not logging the mismatch: a sudden jump often means a sync bug.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-ppo-with-a-truncated-is-correction">3. PyTorch exercise — PPO with a truncated IS correction</h3>
+<pre class="code python"><code class="language-python">import torch
+
+
+def async_ppo_loss(logp_new, logp_old, logp_rollout, adv, mask, eps=0.2, cap=2.0):
+    ratio = (logp_new - logp_old).exp()
+    # TODO 1: truncated, detached IS weight between trainer-old and rollout policies
+    tis = ...
+    surr = torch.min(ratio * adv, ratio.clamp(1 - eps, 1 + eps) * adv)
+    # TODO 2: weighted, masked token mean
+    return ...</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can identical weights still give an IS weight <span class="math inline">\(\ne1\)</span>?</p></li>
+<li><p>What does the cap <span class="math inline">\(C\)</span> trade?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+
+
+def async_ppo_loss(logp_new, logp_old, logp_rollout, adv, mask, eps=0.2, cap=2.0):
+    ratio = (logp_new - logp_old).exp()                        # PPO ratio vs trainer&#x27;s old policy
+    tis = (logp_old - logp_rollout).exp().clamp(max=cap).detach()   # truncated IS: rollout engine mismatch
+    surr = torch.min(ratio * adv, ratio.clamp(1 - eps, 1 + eps) * adv)
+    return -(tis * surr * mask).sum() / mask.sum()
+
+
+# 4 tokens. The rollout engine&#x27;s log-probs differ slightly from the trainer&#x27;s (kernels, precision, staleness).
+logp_rollout = torch.tensor([-1.0, -2.0, -0.5, -3.0])
+logp_old = torch.tensor([-1.0, -1.9, -0.6, -1.5])              # last token: big mismatch
+logp_new = logp_old.clone().requires_grad_()
+adv, mask = torch.tensor([1.0, 1.0, -1.0, 1.0]), torch.ones(4)
+tis = (logp_old - logp_rollout).exp()
+print(&quot;raw IS weights      :&quot;, [round(x, 3) for x in tis.tolist()])
+print(&quot;truncated (cap=2.0) :&quot;, [round(x, 3) for x in tis.clamp(max=2.0).tolist()])
+loss = async_ppo_loss(logp_new, logp_old, logp_rollout, adv, mask)
+loss.backward()
+print(&quot;grad per token      :&quot;, [round(x, 3) for x in logp_new.grad.tolist()])</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">raw IS weights      : [1.0, 1.105, 0.905, 4.482]
+truncated (cap=2.0) : [1.0, 1.105, 0.905, 2.0]
+grad per token      : [-0.25, -0.276, 0.226, -0.5]</code></pre>
+<p>At <span class="math inline">\(\theta=\theta_{\text{old}}\)</span> each gradient is <span class="math inline">\(-w_t\hat A_t/4\)</span>: the last token’s weight is capped at 2 instead of 4.48.</p>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>Different numerical kernels, precision and sampling implementations in the inference engine.</p></li>
+<li><p>A small bias (large-weight tokens are undercounted) for bounded gradient variance.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) Importance weights, capped to bound variance from off-policy data. (2) Exactly 1.</p>
+<p><strong>Takeaway:</strong> at scale, “on-policy” is an approximation. Record what the sampler actually computed and correct for the gap.</p>

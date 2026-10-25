@@ -1,0 +1,185 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Seven AI systems: DeepSeek’s large-scale MoE inference, Character.AI’s inference cost reductions, OpenAI’s Kubernetes clusters for training, LinkedIn’s GenAI product architecture, Uber’s on-call copilot, Netflix’s foundation model for recommendations, and DoorDash’s tools for AI agents.</p>
+</div>
+<h4 id="the-common-thread.">The common thread.</h4>
+<p>AI systems are distributed systems with an unusual resource: GPU memory, which holds both weights and the KV cache. The production winners are teams that treat KV cache, batching, and routing as first-class design problems, and that build evaluation into every step.</p>
+<h1 id="case-deepseek-serving-a-671b-moe-model-at-scale">Case: DeepSeek: Serving a 671B MoE Model at Scale</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> LLM inference<br />
+<strong>Scale:</strong> Hundreds of H800 GPU nodes serving V3/R1; reported 608B input tokens in one day<br />
+<strong>Concepts:</strong> Mixture of experts, expert parallelism, prefill/decode disaggregation, KV cache on disk, load balancing<br />
+<strong>Source:</strong> DeepSeek, “DeepSeek-V3/R1 Inference System Overview” (Open Source Week, 2025)</p>
+</div>
+<h4 id="the-model.">The model.</h4>
+<p>DeepSeek-V3 is a Mixture-of-Experts model with 671B total parameters but only about 37B active per token: each token is routed to a few of 256 experts per layer. It uses Multi-head Latent Attention (MLA), which compresses the KV cache into a small latent vector, making long contexts cheaper.</p>
+<figure class="tikz"><img src="figs/sd/c3dc7ef70e69.svg" alt="diagram" loading="lazy"></figure>
+<p><em>DeepSeek’s disaggregated MoE serving (as reported).</em></p>
+<h4 id="the-serving-design.">The serving design.</h4>
+<ul>
+<li><p><strong>Prefill and decode on separate clusters</strong> (disaggregation), each with a different degree of expert parallelism: prefill units span 4 nodes, decode units span 18 nodes, so in decode each GPU holds only a few experts.</p></li>
+<li><p><strong>Large-scale expert parallelism</strong> increases batch size per expert (each expert sees tokens from many sequences), raising GPU efficiency, and reduces memory per GPU. The cost is all-to-all communication between GPUs.</p></li>
+<li><p><strong>Overlapping compute and communication</strong>: each batch is split into two micro-batches, so one computes while the other communicates.</p></li>
+<li><p><strong>Load balancing at three levels</strong>: prefill (balance tokens and attention compute across GPUs), decode (balance KV cache use), and experts (replicate popular experts across GPUs).</p></li>
+<li><p><strong>KV cache on disk</strong>: the KV of previous requests is stored on a distributed SSD filesystem (3FS), giving a reported 56% cache hit rate on input tokens, which makes multi-turn conversations and shared prefixes cheap.</p></li>
+<li><p><strong>Elastic capacity</strong>: during the day all nodes serve inference; at night, when traffic is low, nodes shift to research and training.</p></li>
+</ul>
+<h4 id="numbers-reported.">Numbers reported.</h4>
+<p>Average throughput per H800 node of about 73.7K input tokens/s during prefill (including cache hits) and 14.8K output tokens/s during decode.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>MoE models make expert parallelism and expert load balancing central to serving.</p></li>
+<li><p>Prefix caching at disk scale turns repeated context into a large cost saving.</p></li>
+<li><p>Disaggregation lets prefill and decode use different parallelism and scale independently.</p></li>
+<li><p>Diurnal traffic means inference capacity can double as training capacity at night.</p></li>
+</ul>
+</div>
+<h1 id="case-character.ai-cutting-serving-cost-33times">Case: Character.AI: Cutting Serving Cost 33<span class="math inline">\(\times\)</span></h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Consumer conversational AI<br />
+<strong>Scale:</strong> Over 20<span>,</span>000 inference queries per second (2024)<br />
+<strong>Concepts:</strong> KV cache reduction, attention architecture, inter-turn caching, quantization<br />
+<strong>Source:</strong> Character.AI blog, “Optimizing AI Inference at Character.AI” (June 2024)</p>
+</div>
+<h4 id="the-problem.">The problem.</h4>
+<p>Character.AI’s workload is long, multi-turn chat. Each reply needs the whole conversation history in context, so KV cache size and prefill of long histories dominate cost.</p>
+<h4 id="the-techniques.">The techniques.</h4>
+<ul>
+<li><p><strong>Multi-Query Attention</strong> (all heads share one KV head) cut KV cache size by about 8<span class="math inline">\(\times\)</span> compared to grouped-query attention.</p></li>
+<li><p><strong>Hybrid attention</strong>: most layers use local attention over a short sliding window; only a few layers use global attention over the whole context. KV for local layers stays small regardless of length.</p></li>
+<li><p><strong>Cross-layer KV sharing</strong>: adjacent layers share the same KV cache, reducing it further. Combined, the KV cache shrank by more than 20<span class="math inline">\(\times\)</span>.</p></li>
+<li><p><strong>Stateful inter-turn caching</strong>: the KV cache of each conversation is kept in host memory between turns, in a radix-tree-like structure keyed by message prefix. When the user sends the next message, only the new tokens need prefill. Requests are routed with sticky sessions so a conversation returns to the server holding its cache. Reported cache hit rate: about 95%.</p></li>
+<li><p><strong>int8 quantization</strong> of weights, activations, and KV cache, with the model <em>trained</em> in int8 so there is no accuracy loss from post-training quantization.</p></li>
+</ul>
+<p>They reported serving cost fell by a factor of 33 between late 2022 and mid-2024.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>For chat, the conversation’s KV cache is state; cache it and route sessions back to it.</p></li>
+<li><p>Architecture choices (MQA, local attention, KV sharing) are inference cost decisions.</p></li>
+<li><p>Quantization-aware training avoids the quality loss of quantizing later.</p></li>
+</ul>
+</div>
+<h1 id="case-openai-scaling-kubernetes-to-7500-nodes">Case: OpenAI: Scaling Kubernetes to 7<span>,</span>500 Nodes</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> ML training infrastructure<br />
+<strong>Scale:</strong> Single clusters of 7<span>,</span>500 nodes (2021)<br />
+<strong>Concepts:</strong> Kubernetes at extreme scale, networking, gang scheduling, control-plane tuning<br />
+<strong>Source:</strong> OpenAI blog, “Scaling Kubernetes to 7,500 nodes” (2021)</p>
+</div>
+<h4 id="the-workload.">The workload.</h4>
+<p>Large training jobs span many nodes, each pod often using all GPUs on a node, communicating with MPI or NCCL. This is very different from typical web workloads: few, huge, tightly coupled jobs where one slow node slows the whole job.</p>
+<h4 id="what-they-changed.">What they changed.</h4>
+<ul>
+<li><p><strong>Networking</strong>: moved from overlay networking (Flannel) to native pod networking on Azure for throughput; most training traffic uses InfiniBand or high-speed networks outside Kubernetes’ normal path.</p></li>
+<li><p><strong>API servers and etcd</strong>: dedicated nodes for etcd and API servers, and avoiding expensive LIST/WATCH patterns from many clients; monitoring was tuned so Prometheus and other tools did not overload the API server.</p></li>
+<li><p><strong>Scheduling</strong>: <em>gang scheduling</em> (all pods of a job start together or none do) via a coscheduling plugin, and a “team taint” scheme with balloon pods to reserve capacity per team.</p></li>
+<li><p><strong>Health checks for GPUs</strong>: automated detection of bad GPUs and network faults, which cordon nodes, because a single faulty GPU can stall a job running across thousands.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Large training is gang-scheduled and failure-sensitive; detect and remove bad hardware automatically.</p></li>
+<li><p>At large scale, the Kubernetes control plane needs dedicated capacity and careful client behavior.</p></li>
+<li><p>Do not force high-performance training traffic through general-purpose cluster networking.</p></li>
+</ul>
+</div>
+<h1 id="case-linkedin-building-generative-ai-product-features">Case: LinkedIn: Building Generative AI Product Features</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Professional network<br />
+<strong>Scale:</strong> GenAI features across feed, jobs, and profiles for hundreds of millions of members<br />
+<strong>Concepts:</strong> Routing, RAG, tool use (“skills”), structured output, evaluation<br />
+<strong>Source:</strong> LinkedIn engineering blog, “Musings on building a Generative AI product” (2024)</p>
+</div>
+<h4 id="the-architecture.">The architecture.</h4>
+<p>LinkedIn’s AI-assisted features (such as asking “am I a good fit for this job?”) follow a three-step pipeline:</p>
+<ol>
+<li><p><strong>Routing</strong>: a smaller model decides which specialized “agent” should handle the question (jobs, posts, learning).</p></li>
+<li><p><strong>Retrieval</strong>: the agent calls internal APIs (wrapped as “skills” with LLM-friendly descriptions) and search to gather facts about the member, the job, and the company.</p></li>
+<li><p><strong>Generation</strong>: a model writes the answer from the collected context.</p></li>
+</ol>
+<h4 id="practical-lessons-they-reported.">Practical lessons they reported.</h4>
+<ul>
+<li><p><strong>Structured output</strong>: the team found YAML was less verbose than JSON and led to fewer formatting errors from the model; combined with a defensive parser that fixed common mistakes, formatting errors dropped from about 10% to about 0.01%.</p></li>
+<li><p><strong>Evaluation</strong> was the hardest part: they built guidelines for human raters and used both humans and automated evaluation.</p></li>
+<li><p><strong>The last 20%</strong>: reaching 80% of the target experience took about a month; the remaining improvements took many more months.</p></li>
+<li><p><strong>Capacity and latency</strong>: GPU capacity and streaming were constraints; they streamed responses and ran parts of the pipeline in parallel.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Route first, then retrieve, then generate: small models for routing save cost and latency.</p></li>
+<li><p>Wrap existing APIs as tools with clear descriptions instead of building new data paths.</p></li>
+<li><p>Budget most of the effort for evaluation and the last-mile quality.</p></li>
+</ul>
+</div>
+<h1 id="case-uber-genie-an-on-call-copilot-with-rag">Case: Uber Genie: An On-Call Copilot with RAG</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Internal developer support<br />
+<strong>Scale:</strong> Questions across many Slack help channels; reported thousands of engineering hours saved<br />
+<strong>Concepts:</strong> RAG over internal docs, data ingestion pipelines, evaluation, feedback loops<br />
+<strong>Source:</strong> Uber engineering blog, “Genie: Uber’s Gen AI On-Call Copilot” (2024)</p>
+</div>
+<h4 id="the-problem.-1">The problem.</h4>
+<p>Platform teams at Uber answered the same questions over and over in Slack support channels. Answers existed in wikis and docs, but people did not find them.</p>
+<h4 id="the-design.">The design.</h4>
+<ul>
+<li><p><strong>Ingestion</strong>: a Spark pipeline pulls internal wikis, Stack Overflow (internal), and engineering docs, chunks them, creates embeddings, and writes them to a vector store. Data sources are scoped per channel, so each team’s bot answers from its own docs.</p></li>
+<li><p><strong>Answering</strong>: when a question is posted in a channel, Genie retrieves relevant chunks and asks an LLM to answer with links to sources.</p></li>
+<li><p><strong>Feedback</strong>: users rate answers in Slack; low-rated answers are reviewed, and missing or bad documents are identified.</p></li>
+<li><p><strong>Evaluation</strong>: an LLM-as-judge pipeline scores answers and highlights which source documents are unclear or outdated, giving teams a concrete list of docs to fix.</p></li>
+<li><p><strong>Security</strong>: data sources were reviewed so that no restricted information is indexed.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Internal support is one of the highest-return RAG use cases.</p></li>
+<li><p>A RAG system is a documentation quality detector; feed its failures back to doc owners.</p></li>
+<li><p>Scope retrieval per audience to keep answers relevant and data safe.</p></li>
+</ul>
+</div>
+<h1 id="case-netflix-a-foundation-model-for-recommendations">Case: Netflix: A Foundation Model for Recommendations</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Recommendations<br />
+<strong>Scale:</strong> Hundreds of millions of members, billions of interactions<br />
+<strong>Concepts:</strong> Large sequence models, embeddings, model consolidation, fine-tuning<br />
+<strong>Source:</strong> Netflix TechBlog, “Foundation Model for Personalized Recommendation” (2025)</p>
+</div>
+<h4 id="the-problem.-2">The problem.</h4>
+<p>Netflix ran many separate recommendation models (for different rows, pages, and use cases), each trained on overlapping data. Improvements in one did not carry over to others, and maintenance cost grew with the number of models.</p>
+<h4 id="the-approach.">The approach.</h4>
+<p>Inspired by LLMs, Netflix trained a large <strong>foundation model</strong> on members’ full interaction histories, treating each interaction (a play, a search, a rating) as a “token” in a sequence and learning to predict next interactions. Key ideas from their description:</p>
+<ul>
+<li><p><strong>Interaction tokenization</strong>: merging related events (like several plays of the same show) to keep sequences manageable.</p></li>
+<li><p><strong>Sparse attention and sliding windows</strong> to handle long histories within latency budgets.</p></li>
+<li><p><strong>Cold start</strong> for new titles by using metadata-based embeddings, since a new show has no interaction history.</p></li>
+<li><p><strong>Downstream use</strong>: the model can be used directly for predictions, as a source of user and item embeddings, or fine-tuned for specific products.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Consolidating many task-specific models into one foundation model can raise quality and cut maintenance.</p></li>
+<li><p>Sequence modeling ideas from LLMs transfer to user behavior data.</p></li>
+<li><p>Embeddings from a central model become shared infrastructure for many teams.</p></li>
+</ul>
+</div>
+<h1 id="case-doordash-a-toolbox-for-ai-agents">Case: DoorDash: A Toolbox for AI Agents</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Internal AI platform<br />
+<strong>Scale:</strong> Many internal teams building agents<br />
+<strong>Concepts:</strong> Agent platform, tool registry, guardrails, evaluation, reusable components<br />
+<strong>Source:</strong> DoorDash engineering blog and ByteByteGo coverage, “How DoorDash Built a Toolbox for AI Agents”</p>
+</div>
+<h4 id="the-problem.-3">The problem.</h4>
+<p>As teams started building LLM agents (support automation, internal assistants, data analysis), each team rebuilt the same pieces: model access, tool definitions, retrieval, guardrails, logging, and evaluation.</p>
+<h4 id="the-approach.-1">The approach.</h4>
+<p>A central platform provides building blocks so teams assemble agents rather than build them from scratch:</p>
+<ul>
+<li><p>A <strong>model gateway</strong> for access to multiple LLM providers with budgets, logging, and fallbacks.</p></li>
+<li><p>A <strong>tool registry</strong>: shared, reviewed tools (query a data warehouse, look up an order, search docs) with clear schemas and permissions.</p></li>
+<li><p><strong>Shared retrieval</strong> infrastructure over internal knowledge.</p></li>
+<li><p><strong>Guardrails</strong> applied consistently (PII handling, policy checks).</p></li>
+<li><p><strong>Evaluation and tracing</strong> built in, so every agent can be measured and debugged the same way.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Once several teams build agents, a platform for tools, models, and evals pays off quickly.</p></li>
+<li><p>A reviewed tool registry is where security and least privilege get enforced.</p></li>
+<li><p>Standard tracing and evals make agents from different teams comparable and debuggable.</p></li>
+</ul>
+</div>

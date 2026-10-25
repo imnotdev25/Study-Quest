@@ -1,0 +1,336 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: 4.9 stars from 8 reviews</div>
+<p>Would you trust a restaurant with 4.9 stars from 8 reviews over one with 4.6 stars from 3<span>,</span>000? The first has a higher <em>point estimate</em>, but a huge uncertainty. Bootstrapping asks “if I’d gotten a different random sample of reviews, how different would the score be?” A deployment decision should look at the worst plausible case, not just the average.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/77e35ac3c635.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A 95% interval of about <span class="math inline">\([-0.009,0.069]\)</span> (shaded) includes 0, so the improvement could be harmful. Don’t ship on the mean alone.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What two components does a doubly robust estimator combine?</p></li>
+<li><p>Does doubly robust evaluation recover actions missing from the logged data?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="estimate-uncertainty-not-only-value">2. Estimate uncertainty, not only value</h3>
+<p>Suppose off-policy evaluation produces:</p>
+<p><span class="math display">\[\hat V^\pi=0.71\]</span></p>
+<p>That number alone does not reveal whether the plausible range is <span style="background-color: codeinlinebg"><code> [0.70, 0.72]</code></span> or <span style="background-color: codeinlinebg"><code> [0.45, 0.97]</code></span>.</p>
+<p>For per-example evaluation contributions <span class="math inline">\(z_i\)</span>:</p>
+<p><span class="math display">\[\hat V=\frac1N\sum_i z_i\]</span></p>
+<p>A nonparametric bootstrap repeatedly resamples the <span class="math inline">\(N\)</span> logged examples with replacement:</p>
+<p><span class="math display">\[\mathcal D_b^*
+=
+\{z_{i_1},\ldots,z_{i_N}\}\]</span></p>
+<p>and recalculates:</p>
+<p><span class="math display">\[\hat V_b^*
+=
+\frac1N\sum_{j=1}^N z_{i_j}\]</span></p>
+<p>The empirical 2.5% and 97.5% quantiles form a percentile 95% confidence interval.</p>
+<p>For doubly robust evaluation, each contribution is:</p>
+<p><span class="math display">\[z_i
+=
+\sum_a\pi(a\mid x_i)\hat Q(x_i,a)
++
+\rho_i
+\left[
+r_i-\hat Q(x_i,a_i)
+\right]\]</span></p>
+<p>A conservative deployment rule can use the lower confidence bound:</p>
+<p><span class="math display">\[\operatorname{LCB}_{95\%}(\pi)
+&gt;
+V_{\text{required}}\]</span></p>
+<p>This asks whether the policy still clears the requirement under an unfavorable estimate—not merely whether its point estimate does.</p>
+<h3 class="unnumbered" id="resample-the-independent-unit">Resample the independent unit</h3>
+<p>If eight LLM responses were generated for one prompt, those responses share the same prompt and are correlated. Resampling them as eight independent examples creates an overly narrow interval.</p>
+<p>Usually resample:</p>
+<ul>
+<li><p>prompts, when each prompt has multiple generations;</p></li>
+<li><p>complete episodes, for agents;</p></li>
+<li><p>users or conversations, when observations share a user;</p></li>
+<li><p>experimental seeds, when comparing training runs.</p></li>
+</ul>
+<p>Bootstrap intervals measure sampling uncertainty. They do not repair reward-model bias, missing support, benchmark leakage or an incorrect logging policy.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>DR contributions: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>bootstrap indices: <span style="background-color: codeinlinebg"><code> [bootstraps, B]</code></span></p></li>
+<li><p>bootstrap estimates: <span style="background-color: codeinlinebg"><code> [bootstraps]</code></span></p></li>
+<li><p>confidence bounds: scalar</p></li>
+</ul>
+<p>The same principle applies when evaluating PPO, GRPO or DPO policies: policy-training loss is not an uncertainty estimate of real task performance.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: bootstrap the right units</div>
+<p><strong>Algorithm:</strong> resample the <span class="math inline">\(n\)</span> independent units (prompts or episodes) with replacement <span class="math inline">\(B\)</span> times, recompute the estimate each time, and take the 2.5% and 97.5% percentiles.</p>
+<p><strong>Resample prompts, not tokens.</strong> Tokens within a response are correlated. If each prompt has <span class="math inline">\(m\)</span> correlated samples with intra-cluster correlation <span class="math inline">\(\rho\)</span>, the variance is inflated by <span class="math inline">\(1+(m-1)\rho\)</span> (the design effect). Resampling tokens ignores this and gives intervals that are falsely narrow.</p>
+<p><strong>Deployment gate:</strong> ship only if the lower confidence bound exceeds 0 (or a safety margin), and if the IS diagnostics (ESS, max weight) look healthy.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Report a distribution, not a single number.</p></li>
+<li><p>Resample whole independent units and decide on the lower bound when harm is costly.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: bootstrap by hand</div>
+<p>Per-prompt differences <span class="math inline">\(d=(0.2,-0.1,0.0,0.3)\)</span>, mean <span class="math inline">\(0.1\)</span>. Resample 1: <span class="math inline">\((0.2,0.2,-0.1,0.3)\)</span>, mean <span class="math inline">\(0.15\)</span>. Resample 2: <span class="math inline">\((-0.1,0.0,-0.1,0.3)\)</span>, mean <span class="math inline">\(0.025\)</span>. Repeat about 2000 times and take percentiles. With only 4 prompts the interval is wide, and that’s honest.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Resampling tokens or turns instead of whole prompts or users.</p></li>
+<li><p>Using <span class="math inline">\(B=50\)</span> and reading the 2.5th percentile.</p></li>
+<li><p>Shipping on the mean when tail risk matters.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Bootstrap confidence interval and deployment gate</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> per-unit scores <span class="math inline">\(d_1,\dots,d_n\)</span> (one per independent prompt or episode), resamples <span class="math inline">\(B\)</span>, level <span class="math inline">\(\alpha\)</span>, margin <span class="math inline">\(m\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(b=1,\dots,B\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">draw <span class="math inline">\(n\)</span> indices with replacement; <span class="math inline">\(\hat\theta_b\gets\)</span> mean of the <span class="math inline">\(d\)</span> values drawn</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets\)</span> the <span class="math inline">\(\alpha/2\)</span> quantile of <span class="math inline">\(\{\hat\theta_b\}\)</span>; <span class="math inline">\(U\gets\)</span> the <span class="math inline">\(1-\alpha/2\)</span> quantile</div>
+<div class="algo-line" style="--d:0"><strong>if</strong> <span class="math inline">\(L&gt;m\)</span> <strong>and</strong> the IS diagnostics (ESS, max weight) are healthy <strong>then</strong></div>
+<div class="algo-line" style="--d:1">deploy</div>
+<div class="algo-line" style="--d:0"><strong>else</strong></div>
+<div class="algo-line" style="--d:1">hold and collect more evidence</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-build-a-conservative-deployment-gate">3. PyTorch exercise — build a conservative deployment gate</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+batch_size = 512
+num_bootstraps = 2000
+
+true_reward_means = torch.tensor([
+    [0.2, 0.8],
+    [0.7, 0.3],
+])
+
+behavior_probs = torch.tensor([
+    [0.8, 0.2],
+    [0.2, 0.8],
+])
+
+target_probs = torch.tensor([
+    [0.1, 0.9],
+    [0.9, 0.1],
+])
+
+estimated_q = torch.tensor([
+    [0.35, 0.70],
+    [0.55, 0.40],
+])
+
+contexts = torch.randint(
+    0,
+    2,
+    (batch_size,),
+)
+
+logging_policy = Categorical(
+    probs=behavior_probs[contexts]
+)
+
+actions = logging_policy.sample()
+
+reward_means = true_reward_means[
+    contexts,
+    actions,
+]
+
+rewards = torch.bernoulli(
+    reward_means
+)
+
+# TODO 1: Importance ratios for logged actions.
+ratios = ...
+
+# TODO 2: Direct target-policy estimate per context.
+direct_terms = ...
+
+# TODO 3: One doubly robust contribution per logged example.
+chosen_estimated_q = ...
+dr_contributions = ...
+
+point_estimate = dr_contributions.mean()
+
+# Resample complete logged examples.
+bootstrap_indices = torch.randint(
+    0,
+    batch_size,
+    (num_bootstraps, batch_size),
+)
+
+# TODO 4: Recalculate the mean for every bootstrap dataset.
+bootstrap_estimates = ...
+
+# TODO 5: Percentile confidence interval.
+confidence_bounds = ...
+
+ci_low = confidence_bounds[0]
+ci_high = confidence_bounds[1]
+
+bootstrap_standard_error = (
+    bootstrap_estimates.std(
+        unbiased=False
+    )
+)
+
+deployment_floor = 0.65
+
+safe_to_deploy = (
+    ci_low &gt; deployment_floor
+)
+
+effective_sample_size = (
+    ratios.sum().square()
+    / (
+        ratios.square().sum()
+        + 1e-8
+    )
+)
+
+# Exact value is available only in this synthetic example.
+true_terms = (
+    target_probs[contexts]
+    * true_reward_means[contexts]
+).sum(dim=-1)
+
+true_value = true_terms.mean()
+
+print(&quot;True value:&quot;, true_value.item())
+print(&quot;DR point estimate:&quot;, point_estimate.item())
+print(
+    &quot;Bootstrap standard error:&quot;,
+    bootstrap_standard_error.item(),
+)
+print(
+    &quot;95% bootstrap interval:&quot;,
+    (ci_low.item(), ci_high.item()),
+)
+print(
+    &quot;Deployment floor:&quot;,
+    deployment_floor,
+)
+print(
+    &quot;Pass conservative gate:&quot;,
+    bool(safe_to_deploy),
+)
+print(
+    &quot;Importance-weight ESS:&quot;,
+    effective_sample_size.item(),
+    &quot;of&quot;,
+    batch_size,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should the point estimate be near <span style="background-color: codeinlinebg"><code> 0.60</code></span> or <span style="background-color: codeinlinebg"><code> 0.70</code></span>?</p></li>
+<li><p>Must the true value lie inside this particular interval?</p></li>
+<li><p>Can the point estimate exceed <span style="background-color: codeinlinebg"><code> 0.65</code></span> while the deployment gate fails?</p></li>
+<li><p>Would increasing the logged sample size usually widen or narrow the interval?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Select probabilities using <span style="background-color: codeinlinebg"><code> [contexts, actions]</code></span>.</p></li>
+<li><p>The direct term sums <span style="background-color: codeinlinebg"><code> target_probability * estimated_q</code></span> over actions.</p></li>
+<li><p>DR adds <span style="background-color: codeinlinebg"><code> ratio * (reward - chosen_q)</code></span> to the direct term.</p></li>
+<li><p>Indexing <span style="background-color: codeinlinebg"><code> dr_contributions[bootstrap_indices]</code></span> produces <span style="background-color: codeinlinebg"><code> [bootstraps, B]</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.quantile</code></span> with probabilities <span style="background-color: codeinlinebg"><code> 0.025</code></span> and <span style="background-color: codeinlinebg"><code> 0.975</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Resample individual tokens from an LLM response instead of complete responses. The resulting interval treats correlated tokens as independent and will be misleadingly narrow.</p>
+<p>Then accidentally reuse one bootstrap index row:</p>
+<pre class="code python"><code class="language-python">bootstrap_estimates = (
+    dr_contributions[
+        bootstrap_indices[0]
+    ].mean()
+).repeat(num_bootstraps)</code></pre>
+<p>Every bootstrap estimate becomes identical, producing standard error zero—a clear implementation bug.</p>
+<p>Finally, clip large ratios before constructing <span style="background-color: codeinlinebg"><code> dr_contributions</code></span>. The interval may shrink, but it now describes a biased clipped estimator. A narrow interval around the wrong quantity is not safety.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why might a policy with the best point estimate still fail a deployment gate?</p></li>
+<li><p>Why should multiple generations from one prompt be resampled together?</p></li>
+<li><p>Does a 95% bootstrap interval mean a 95% probability that this fixed interval contains the true value?</p></li>
+<li><p>What can produce a narrow but misleading confidence interval?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Importance ratios:</p>
+<pre class="code python"><code class="language-python">chosen_behavior_probs = behavior_probs[
+    contexts,
+    actions,
+]
+
+chosen_target_probs = target_probs[
+    contexts,
+    actions,
+]
+
+ratios = (
+    chosen_target_probs
+    / chosen_behavior_probs
+)</code></pre>
+<p>Direct terms:</p>
+<pre class="code python"><code class="language-python">direct_terms = (
+    target_probs[contexts]
+    * estimated_q[contexts]
+).sum(dim=-1)</code></pre>
+<p>Doubly robust contributions:</p>
+<pre class="code python"><code class="language-python">chosen_estimated_q = estimated_q[
+    contexts,
+    actions,
+]
+
+dr_contributions = (
+    direct_terms
+    + ratios
+    * (
+        rewards
+        - chosen_estimated_q
+    )
+)</code></pre>
+<p>Bootstrap estimates:</p>
+<pre class="code python"><code class="language-python">bootstrap_estimates = (
+    dr_contributions[
+        bootstrap_indices
+    ].mean(dim=1)
+)</code></pre>
+<p>Confidence interval:</p>
+<pre class="code python"><code class="language-python">confidence_bounds = torch.quantile(
+    bootstrap_estimates,
+    torch.tensor([
+        0.025,
+        0.975,
+    ]),
+)</code></pre>
+<p>The expected target value is:</p>
+<p><span class="math display">\[V^\pi
+=
+\frac{
+[0.1(0.2)+0.9(0.8)]
++
+[0.9(0.7)+0.1(0.3)]
+}{2}
+=
+0.70\]</span></p>
+<p>The point estimate should be near <span style="background-color: codeinlinebg"><code> 0.70</code></span>, although noisy rewards and rare high-ratio actions can move it noticeably.</p>
+<p>It is entirely possible to observe:</p>
+<pre class="code text"><code class="language-plaintext">point estimate &gt; 0.65
+lower confidence bound &lt; 0.65</code></pre>
+<p>In that case, the candidate looks promising but the available logged data is not strong enough for the conservative deployment rule.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Its uncertainty may be large enough that plausible values include unacceptable performance.</p></li>
+<li><p>They share the same prompt difficulty and context, so treating them as independent exaggerates the effective sample size.</p></li>
+<li><p>No. In frequentist terms, the interval-producing procedure has approximately 95% long-run coverage under its assumptions.</p></li>
+<li><p>Incorrect independence assumptions, benchmark leakage, reward-model bias, missing support, ratio clipping or bootstrapping the wrong unit.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A reward-model prediction plus an importance-weighted correction using the observed reward residual.</p></li>
+<li><p>No. Missing behavior-policy support remains an identification failure; the reward model cannot be validated on unseen actions.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> report distributions, not just point estimates. Bootstrap complete independent units, inspect importance-weight diagnostics, and use lower confidence bounds when an uncertain improvement could cause an unsafe deployment.</p>

@@ -1,0 +1,263 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: homework with an answer key</div>
+<p>Grading an essay needs a human opinion. Grading <span class="math inline">\(17\times23\)</span> needs only the answer key: 391 or not. Verifiable rewards are answer keys: exact-match math, unit tests for code, a game’s win condition. They’re clean and cheap, but a student who notices the grader only checks the last line will learn to write just the last line.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/976bf7689b8c.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why does PPO compare the current policy with the rollout policy?</p></li>
+<li><p>Why can reward-model score increase while real quality decreases?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="reward-without-a-learned-judge">2. Reward without a learned judge</h3>
+<p>Some tasks have outcomes that can be checked automatically:</p>
+<ul>
+<li><p>mathematics: does the final answer match?</p></li>
+<li><p>code: does it pass hidden tests?</p></li>
+<li><p>tool use: did the requested state change occur?</p></li>
+<li><p>structured output: does it satisfy the schema?</p></li>
+<li><p>theorem proving: does the proof checker accept it?</p></li>
+</ul>
+<p>A deterministic verifier produces:</p>
+<p><span class="math display">\[R(x,y)=
+\begin{cases}
+1,&amp;\text{if }V(x,y)\text{ passes}\\
+0,&amp;\text{otherwise}
+\end{cases}\]</span></p>
+<p>Unlike a learned reward model, a reliable verifier does not merely predict whether a response looks correct. It executes a check.</p>
+<p>The policy objective remains:</p>
+<p><span class="math display">\[J(\theta)
+=
+\mathbb E_{y\sim\pi_\theta(\cdot\mid x)}
+[R(x,y)]\]</span></p>
+<p>and a basic policy-gradient estimator is:</p>
+<p><span class="math display">\[L_{\text{policy}}
+=
+-\frac1B\sum_b
+\left(R_b-\bar R\right)
+\log\pi_\theta(y_b\mid x_b)\]</span></p>
+<p>The verifier’s output is detached. We do not backpropagate through sampled tokens or through a test runner.</p>
+<h3 class="unnumbered" id="sparse-rewards">Sparse rewards</h3>
+<p>A verifier often returns only pass or fail. It may provide no information about how close a failed solution was.</p>
+<p>If all sampled responses fail:</p>
+<p><span class="math display">\[R_b=0\quad\forall b\]</span></p>
+<p>then the centered advantages are all zero and no policy update occurs. Exploration, sufficiently large sample groups, curricula or trustworthy process rewards can help.</p>
+<h3 class="unnumbered" id="what-the-verifier-does-not-measure">What the verifier does not measure</h3>
+<p>A final-answer checker may give equal reward to:</p>
+<pre class="code python"><code class="language-python">5</code></pre>
+<p>and:</p>
+<pre class="code text"><code class="language-plaintext">2 + 3 = 5</code></pre>
+<p>It may ignore explanation quality, safety and whether the reasoning was genuine. A flawed checker can also be exploited—for example, weak code tests may accept hard-coded outputs.</p>
+<p>For <span class="math inline">\(K\)</span> possible responses and batch size <span class="math inline">\(B\)</span>:</p>
+<ul>
+<li><p>policy logits: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+<li><p>sampled response IDs: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>rewards and advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>policy loss: scalar</p></li>
+</ul>
+<p>Verifiable-reward training is online RL when the current policy repeatedly generates new attempts. DPO remains offline preference optimization over fixed response pairs.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: binary rewards: where the signal lives</div>
+<p>If a prompt is solved with probability <span class="math inline">\(p\)</span>, then <span class="math inline">\(R\sim\text{Bernoulli}(p)\)</span>: <span class="math inline">\(\mathbb E[R]=p\)</span> and <span class="math inline">\(\operatorname{Var}[R]=p(1-p)\)</span>. Prompts that are always solved or never solved give <em>zero</em> learning signal.</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/c6a3728d2a5f.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Learning signal peaks at <span class="math inline">\(p=0.5\)</span>. Pass@k <span class="math inline">\(=1-(1-p)^k\)</span> rises fast, which is why RL often improves pass@1 more than pass@k.</em></p>
+</div>
+<p><strong>The checker defines the task:</strong> if it accepts a wrong answer with probability <span class="math inline">\(f\)</span>, RL optimizes <span class="math inline">\(p_{\text{true}}+f\cdot(\text{wrong-but-accepted})\)</span>, not <span class="math inline">\(p_{\text{true}}\)</span>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Verifiers swap “looks good” for “passed a check.”</p></li>
+<li><p>The best training prompts are the ones solved about half the time.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: pass@k and signal</div>
+<p><span class="math inline">\(p=0.2\)</span>. pass@1 <span class="math inline">\(=0.2\)</span>, pass@4 <span class="math inline">\(=1-0.8^4=0.590\)</span>, pass@16 <span class="math inline">\(=0.972\)</span>. Signal <span class="math inline">\(4p(1-p)=0.64\)</span>. A checker that also accepts 5% of wrong answers turns the measured <span class="math inline">\(p\)</span> into <span class="math inline">\(0.2+0.8(0.05)=0.24\)</span>, and RL will chase that extra 4%.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Lenient parsing (“any number in the output”).</p></li>
+<li><p>Reusing the training checker as the only evaluation.</p></li>
+<li><p>Keeping prompts the model always or never solves (zero gradient).</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: RL with verifiable rewards (RLVR)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> prompts with reference answers or tests, checker <span class="math inline">\(C(y,\text{ref})\in\{0,1\}\)</span>, policy <span class="math inline">\(\pi_\theta\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each iteration <strong>do</strong></div>
+<div class="algo-line" style="--d:1">sample prompts <span class="math inline">\(x\)</span> and responses <span class="math inline">\(y\sim\pi_\theta(\cdot|x)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(R\gets C(y,\text{ref})\)</span> <em>▷ exact match, unit tests, game win</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(A\gets R-b(x)\)</span> <em>▷ e.g. <span class="math inline">\(b(x)\)</span> = running solve rate of that prompt</em></div>
+<div class="algo-line" style="--d:1">masked policy-gradient update (Topic 25) or PPO/GRPO update</div>
+<div class="algo-line" style="--d:1">track solve rate per prompt; drop prompts with solve rate <span class="math inline">\(\approx0\)</span> or <span class="math inline">\(\approx1\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-optimize-against-an-exact-checker">3. PyTorch exercise — optimize against an exact checker</h3>
+<p>Two responses produce the correct final answer. The verifier cannot distinguish their explanation quality.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+batch_size = 256
+num_updates = 120
+target_answer = 5
+
+# Four complete responses represented as categorical actions.
+candidate_final_answers = torch.tensor([
+    4,  # incorrect
+    5,  # terse but correct
+    5,  # clear derivation and correct
+    7,  # incorrect
+])
+
+policy_logits = torch.nn.Parameter(
+    torch.zeros(4)
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.05,
+)
+
+for update in range(num_updates):
+    policy = Categorical(logits=policy_logits)
+
+    # TODO 1: Generate fresh attempts.
+    sampled_responses = ...
+
+    with torch.no_grad():
+        sampled_answers = candidate_final_answers[
+            sampled_responses
+        ]
+
+        # TODO 2: Exact binary verifier reward.
+        rewards = ...
+
+        # TODO 3: Center and normalize rewards.
+        advantages = ...
+        advantages = ...
+
+    # TODO 4: Log-probabilities of sampled responses.
+    selected_log_probs = ...
+
+    # TODO 5: Policy-gradient loss.
+    policy_loss = ...
+
+    optimizer.zero_grad()
+    policy_loss.backward()
+
+    gradient_norm = policy_logits.grad.norm().item()
+
+    optimizer.step()
+
+    with torch.no_grad():
+        updated_policy = Categorical(
+            logits=policy_logits
+        )
+
+        success_rate = rewards.mean()
+        entropy = updated_policy.entropy()
+
+        correct_probability = (
+            updated_policy.probs[1]
+            + updated_policy.probs[2]
+        )
+
+    if update in [0, 1, 9, 39, 119]:
+        print(
+            f&quot;update={update:3d}&quot;,
+            f&quot;success={success_rate.item():.3f}&quot;,
+            f&quot;P(correct)={correct_probability.item():.3f}&quot;,
+            f&quot;entropy={entropy.item():.3f}&quot;,
+            f&quot;grad_norm={gradient_norm:.3f}&quot;,
+            f&quot;probs={updated_policy.probs.tolist()}&quot;,
+        )
+
+print(
+    &quot;Final probabilities:&quot;,
+    policy_logits.softmax(dim=-1).detach(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the initial probability of sampling a correct response?</p></li>
+<li><p>Should the combined probability of actions <span style="background-color: codeinlinebg"><code> 1</code></span> and <span style="background-color: codeinlinebg"><code> 2</code></span> increase?</p></li>
+<li><p>Must the clearer response <span style="background-color: codeinlinebg"><code> 2</code></span> become more likely than terse response <span style="background-color: codeinlinebg"><code> 1</code></span>?</p></li>
+<li><p>What happens if an entire batch receives the same reward?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample using <span style="background-color: codeinlinebg"><code> policy.sample((batch_size,))</code></span>.</p></li>
+<li><p>Equality with the target produces a Boolean tensor; convert it to float.</p></li>
+<li><p>Subtract the batch reward mean.</p></li>
+<li><p>Normalize using population standard deviation plus <span style="background-color: codeinlinebg"><code> 1e-8</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> policy.log_prob</code></span>.</p></li>
+<li><p>Gradient descent requires a leading negative sign.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Introduce a broken verifier:</p>
+<pre class="code python"><code class="language-python">rewards = (
+    sampled_answers &gt;= target_answer
+).float()</code></pre>
+<p>Now the incorrect answer <span style="background-color: codeinlinebg"><code> 7</code></span> also passes. Training will correctly optimize the implemented reward while producing incorrect task behaviour.</p>
+<p>This distinction is crucial:</p>
+<pre class="code text"><code class="language-plaintext">RL bug: optimization fails to increase reward
+Specification bug: reward increases, but desired behaviour does not</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why are executable tests often stronger than learned reward models?</p></li>
+<li><p>Why can a binary verifier create an exploration problem?</p></li>
+<li><p>Does perfect verifier reward prove that the reasoning is sound?</p></li>
+<li><p>Which diagnostics would expose a weak verifier?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Fresh samples and verifier:</p>
+<pre class="code python"><code class="language-python">sampled_responses = policy.sample(
+    (batch_size,)
+)
+
+rewards = (
+    sampled_answers == target_answer
+).float()</code></pre>
+<p>Advantages:</p>
+<pre class="code python"><code class="language-python">advantages = rewards - rewards.mean()
+
+advantages = advantages / (
+    rewards.std(unbiased=False) + 1e-8
+)</code></pre>
+<p>Policy loss:</p>
+<pre class="code python"><code class="language-python">selected_log_probs = policy.log_prob(
+    sampled_responses
+)
+
+policy_loss = -(
+    selected_log_probs
+    * advantages.detach()
+).mean()</code></pre>
+<p>Initially the policy is uniform:</p>
+<p><span class="math display">\[\pi=[0.25,0.25,0.25,0.25]\]</span></p>
+<p>Two of four responses pass, so:</p>
+<p><span class="math display">\[P(\text{correct})=0.25+0.25=0.5\]</span></p>
+<p>Training should move probability away from actions <span style="background-color: codeinlinebg"><code> 0</code></span> and <span style="background-color: codeinlinebg"><code> 3</code></span> and toward actions <span style="background-color: codeinlinebg"><code> 1</code></span> and <span style="background-color: codeinlinebg"><code> 2</code></span>.</p>
+<p>However, the verifier assigns both correct responses reward one:</p>
+<p><span class="math display">\[R(1)=R(2)=1\]</span></p>
+<p>It provides no expected gradient preference between them. Sampling noise may cause one to dominate, but that does not mean it is better according to the intended qualities absent from the verifier.</p>
+<p>If every sample receives the same reward:</p>
+<p><span class="math display">\[R_b-\bar R=0\]</span></p>
+<p>so all advantages and policy gradients become zero. This commonly happens after policy collapse or when successes are extremely rare.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>They directly test an observable property instead of predicting quality from learned correlations.</p></li>
+<li><p>Most attempts may receive identical failure rewards, providing no direction for improvement.</p></li>
+<li><p>No. A final-answer checker can accept guessing, invalid reasoning or a hard-coded exploit.</p></li>
+<li><p>Use hidden and adversarial tests, test-coverage measurement, held-out problem families, manual audits and separate process-quality evaluation.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The ratio corrects for using tokens generated by an older policy and clipping limits excessively beneficial-looking changes during data reuse.</p></li>
+<li><p>The policy can exploit scorer errors or sacrifice qualities the reward model does not measure.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> verifiable rewards replace “this response looks good” with “this outcome passed a check.” That can provide cleaner supervision, but RL will exploit the exact checker supplied—so verifier coverage is part of the learning algorithm, not merely evaluation infrastructure.</p>

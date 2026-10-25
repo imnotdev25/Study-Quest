@@ -1,0 +1,276 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: curving a class where everyone scored 79–81</div>
+<p>If every student scores between 79 and 81, a curve that standardizes scores turns an 81 into an “A” and a 79 into an “F.” The 2-point difference might be pure luck, but standardization blows it up to the same size as a real gap. That’s the risk of dividing GRPO advantages by a tiny group standard deviation.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/2e173580f16e.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why does a self-including group-mean baseline scale the expected gradient by <span class="math inline">\(1-1/G\)</span>?</p></li>
+<li><p>What happens when every response in a GRPO group receives the same reward?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="centering-and-scaling-do-different-jobs">2. Centering and scaling do different jobs</h3>
+<p>For responses sampled for prompt <span class="math inline">\(i\)</span>, group centering gives:</p>
+<p><span class="math display">\[A_{i,j}^{\text{centered}}
+=
+R_{i,j}-\mu_i\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[\mu_i=\frac1G\sum_jR_{i,j}\]</span></p>
+<p>Centering says whether a response is above or below its group average.</p>
+<p>Group standardization additionally divides by the group standard deviation:</p>
+<p><span class="math display">\[\sigma_i
+=
+\sqrt{
+\frac1G
+\sum_j
+(R_{i,j}-\mu_i)^2
+}\]</span></p>
+<p><span class="math display">\[A_{i,j}^{\text{standardized}}
+=
+\frac{R_{i,j}-\mu_i}
+{\sigma_i+\epsilon}\]</span></p>
+<p>This makes groups with different raw reward scales more comparable.</p>
+<p>For a positive affine reward transformation:</p>
+<p><span class="math display">\[R&#39; = cR+d,\qquad c&gt;0\]</span></p>
+<p>ideal standardization gives approximately:</p>
+<p><span class="math display">\[\frac{R&#39;-\mu&#39;}{\sigma&#39;}
+=
+\frac{c(R-\mu)}{c\sigma}
+=
+\frac{R-\mu}{\sigma}\]</span></p>
+<p>So adding <span style="background-color: codeinlinebg"><code> 10</code></span> or multiplying rewards by <span style="background-color: codeinlinebg"><code> 100</code></span> should barely change standardized advantages.</p>
+<h3 class="unnumbered" id="the-dangerous-side">The dangerous side</h3>
+<p>Suppose rewards are:</p>
+<pre class="code python"><code class="language-python">[0.490, 0.500, 0.510, 0.500]</code></pre>
+<p>The differences may be scorer noise, but standardization expands them to order-one advantages. Standardization removes units; it does not prove that tiny differences are meaningful.</p>
+<p>Other practical cases:</p>
+<ul>
+<li><p>zero group variance produces zero centered advantages;</p></li>
+<li><p>omitting epsilon produces division by zero;</p></li>
+<li><p>large epsilon dampens low-variance groups;</p></li>
+<li><p>global normalization mixes prompt difficulty with response quality;</p></li>
+<li><p>reward normalization changes the effective balance with KL, entropy and auxiliary losses.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>group rewards and advantages: <span style="background-color: codeinlinebg"><code> [prompts, group]</code></span></p></li>
+<li><p>group mean and standard deviation: <span style="background-color: codeinlinebg"><code> [prompts, 1]</code></span></p></li>
+<li><p>policy logits and gradients: <span style="background-color: codeinlinebg"><code> [prompts, group]</code></span></p></li>
+</ul>
+<p>DPO uses preference pairs and a <span class="math inline">\(\beta\)</span>-scaled log-ratio objective. It does not require online group-reward normalization, though its own scale hyperparameters still affect update strength.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: scale invariance cuts both ways</div>
+<p><span class="math inline">\(\hat A_i=(r_i-\bar r)/(\sigma+\varepsilon)\)</span> is unchanged when <span class="math inline">\(r\to ar+c\)</span> with <span class="math inline">\(a&gt;0\)</span>. That’s useful: prompts with different reward scales become comparable. But the same invariance means a group whose rewards differ by <span class="math inline">\(0.001\)</span> of pure noise gets advantages as large as a group with a real, clear winner.</p>
+<p><strong>Bernoulli case:</strong> <span class="math inline">\(\sigma=\sqrt{p(1-p)}\)</span>, so dividing by it upweights prompts that are almost always right or almost always wrong by <span class="math inline">\(1/\sqrt{p(1-p)}\)</span>. This is one argument behind Dr. GRPO’s choice to <em>drop</em> the std division.</p>
+<p><strong>Practical:</strong> log the raw within-group std, set a floor on <span class="math inline">\(\varepsilon\)</span>, and check whether near-zero-std groups dominate the update.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Standardization equalizes scales, and it also equalizes signal with noise.</p></li>
+<li><p>Inspect raw group variance before trusting normalized advantages.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: tiny differences become big advantages</div>
+<p><span class="math inline">\(r=(0.80,0.81,0.79,0.80)\)</span>. Mean <span class="math inline">\(0.80\)</span>, sample std <span class="math inline">\(0.0082\)</span>. <span class="math inline">\(\hat A=(0,+1.22,-1.22,0)\)</span>. A 0.01 difference, possibly judge noise, gets as large an advantage as a real success vs failure.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p><span class="math inline">\(\varepsilon\)</span> too small (<span class="math inline">\(10^{-8}\)</span>) for continuous judge scores.</p></li>
+<li><p>Not logging the raw within-group std.</p></li>
+<li><p>Assuming std-normalization is harmless because it “just rescales.”</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-inspect-what-normalization-amplifies">3. PyTorch exercise — inspect what normalization amplifies</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+epsilon = 1e-8
+
+rewards = torch.tensor([
+    [0.00, 0.00, 0.00, 1.00],  # sparse success
+    [0.00, 0.00, 0.00, 0.00],  # no signal
+    [0.49, 0.50, 0.51, 0.50],  # tiny differences
+    [1.00, 2.00, 3.00, 4.00],  # wide scale
+])
+
+num_prompts, group_size = rewards.shape
+
+# TODO 1: Per-prompt means and population standard deviations.
+group_means = ...
+group_stds = ...
+
+# TODO 2: Centered and standardized advantages.
+centered_advantages = ...
+standardized_advantages = ...
+
+# Positive affine reward transformation.
+scaled_rewards = 100.0 * rewards + 7.0
+
+scaled_means = scaled_rewards.mean(
+    dim=1,
+    keepdim=True,
+)
+
+scaled_stds = scaled_rewards.std(
+    dim=1,
+    keepdim=True,
+    unbiased=False,
+)
+
+# TODO 3: Standardize the transformed rewards.
+scaled_standardized_advantages = ...
+
+def ascent_gradient(advantages):
+    logits = torch.nn.Parameter(
+        torch.zeros_like(rewards)
+    )
+
+    probabilities = logits.softmax(
+        dim=-1
+    )
+
+    objective = (
+        probabilities
+        * advantages.detach()
+    ).sum(dim=-1).mean()
+
+    loss = -objective
+
+    loss.backward()
+
+    return -logits.grad.detach().clone()
+
+# TODO 4: Compare centered and standardized gradient signals.
+centered_gradient = ...
+standardized_gradient = ...
+
+# TODO 5: Measure scale-invariance error.
+scale_invariance_error = ...
+
+print(&quot;Group means:\n&quot;, group_means)
+print(&quot;Group standard deviations:\n&quot;, group_stds)
+print(&quot;Centered advantages:\n&quot;, centered_advantages)
+print(&quot;Standardized advantages:\n&quot;, standardized_advantages)
+
+print(
+    &quot;Centered gradient norm per prompt:\n&quot;,
+    centered_gradient.norm(dim=-1),
+)
+
+print(
+    &quot;Standardized gradient norm per prompt:\n&quot;,
+    standardized_gradient.norm(dim=-1),
+)
+
+print(
+    &quot;Maximum affine-scale error:&quot;,
+    scale_invariance_error.item(),
+)
+
+print(
+    &quot;Zero-variance group gradient:&quot;,
+    standardized_gradient[1],
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which group should produce exactly zero gradient?</p></li>
+<li><p>Which group’s tiny raw differences will be strongly amplified?</p></li>
+<li><p>Will multiplying rewards by <span style="background-color: codeinlinebg"><code> 100</code></span> multiply standardized gradients by <span style="background-color: codeinlinebg"><code> 100</code></span>?</p></li>
+<li><p>Will centered gradient norms be comparable across the four groups?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Preserve the group dimension with <span style="background-color: codeinlinebg"><code> keepdim=True</code></span>.</p></li>
+<li><p>Use population standard deviation: <span style="background-color: codeinlinebg"><code> unbiased=False</code></span>.</p></li>
+<li><p>Standardization divides centered rewards by <span style="background-color: codeinlinebg"><code> std + epsilon</code></span>.</p></li>
+<li><p>Pass each advantage tensor to <span style="background-color: codeinlinebg"><code> ascent_gradient</code></span>.</p></li>
+<li><p>Compare the two standardized advantage tensors using maximum absolute difference.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Remove epsilon:</p>
+<pre class="code python"><code class="language-python">standardized_advantages = (
+    centered_advantages / group_stds
+)</code></pre>
+<p>The all-zero group divides <span style="background-color: codeinlinebg"><code> 0</code></span> by <span style="background-color: codeinlinebg"><code> 0</code></span> and produces <span style="background-color: codeinlinebg"><code> nan</code></span>.</p>
+<p>Next, normalize globally:</p>
+<pre class="code python"><code class="language-python">global_advantages = (
+    rewards - rewards.mean()
+) / (
+    rewards.std(unbiased=False) + epsilon
+)</code></pre>
+<p>The prompt with rewards <span style="background-color: codeinlinebg"><code> [1,2,3,4]</code></span> now dominates the common scale, while prompt difficulty and reward magnitude leak into comparisons across prompts.</p>
+<p>Finally, set:</p>
+<pre class="code python"><code class="language-python">epsilon = 0.1</code></pre>
+<p>The tiny-difference group is strongly dampened because its standard deviation is much smaller than epsilon. Epsilon is therefore not only a numerical detail when reward variance is small.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does standardization make positive reward scaling mostly irrelevant?</p></li>
+<li><p>Why can standardizing a low-variance group be harmful?</p></li>
+<li><p>Why does a zero-variance group contain no relative learning signal?</p></li>
+<li><p>Does reward standardization eliminate the need to monitor raw rewards?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Group statistics:</p>
+<pre class="code python"><code class="language-python">group_means = rewards.mean(
+    dim=1,
+    keepdim=True,
+)
+
+group_stds = rewards.std(
+    dim=1,
+    keepdim=True,
+    unbiased=False,
+)</code></pre>
+<p>Advantages:</p>
+<pre class="code python"><code class="language-python">centered_advantages = (
+    rewards - group_means
+)
+
+standardized_advantages = (
+    centered_advantages
+    / (
+        group_stds + epsilon
+    )
+)</code></pre>
+<p>Transformed rewards:</p>
+<pre class="code python"><code class="language-python">scaled_standardized_advantages = (
+    scaled_rewards - scaled_means
+) / (
+    scaled_stds + epsilon
+)</code></pre>
+<p>Gradients:</p>
+<pre class="code python"><code class="language-python">centered_gradient = ascent_gradient(
+    centered_advantages
+)
+
+standardized_gradient = ascent_gradient(
+    standardized_advantages
+)</code></pre>
+<p>Scale-invariance error:</p>
+<pre class="code python"><code class="language-python">scale_invariance_error = (
+    standardized_advantages
+    - scaled_standardized_advantages
+).abs().max()</code></pre>
+<p>The all-zero group has:</p>
+<p><span class="math display">\[R_j-\mu=0
+\quad\forall j\]</span></p>
+<p>so every advantage and policy gradient is zero.</p>
+<p>The small-difference group has standard deviation around <span style="background-color: codeinlinebg"><code> 0.007</code></span>, so rewards separated by only <span style="background-color: codeinlinebg"><code> 0.01</code></span> become order-one standardized signals. This makes its gradient magnitude comparable to groups whose raw reward gaps are much larger.</p>
+<p>Centered gradients retain reward units. The <span style="background-color: codeinlinebg"><code> [1,2,3,4]</code></span> group therefore produces a much larger gradient than the <span style="background-color: codeinlinebg"><code> [0.49,0.50,0.51,0.50]</code></span> group. Standardization largely removes this scale difference.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Both the centered numerator and standard deviation are multiplied by the same positive constant, which cancels.</p></li>
+<li><p>It can convert evaluator noise or insignificant score differences into large policy updates.</p></li>
+<li><p>No sampled response is better or worse than another according to the supplied reward.</p></li>
+<li><p>No. Log raw means, standard deviations, extrema, zero-variance-group rate and reward components alongside normalized advantages.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The current reward appears inside its own baseline, partially subtracting its correlation with the score-function gradient.</p></li>
+<li><p>Centering produces zero advantages for every response, so the prompt contributes no policy-learning signal.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> group standardization makes prompt-level reward scales comparable, but it also treats tiny reliable differences and tiny noisy differences alike. Always inspect raw group variance before trusting normalized advantages.</p>

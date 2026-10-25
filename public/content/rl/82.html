@@ -1,0 +1,324 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a clinical trial needs more than a positive average</div>
+<p>A new drug with a slightly higher average recovery isn’t approved on that alone. Regulators want a confidence interval that clears zero, ideally by a margin. Safe policy improvement asks the same of a candidate policy: deploy only when the <em>lower</em> bound on improvement clears the bar.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/6481c09c2bf5.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Same mean improvement. Pairing on the same episodes shrinks the interval enough to clear 0.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Which importance ratio should weight reward <span class="math inline">\(r_t\)</span> in per-decision importance sampling?</p></li>
+<li><p>Why is using only the current-step ratio generally biased?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="compare-policies-on-the-same-episodes">2. Compare policies on the same episodes</h3>
+<p>Suppose off-policy evaluation estimates:</p>
+<p><span class="math display">\[\hat J(\pi_{\text{candidate}})=0.66,
+\qquad
+\hat J(\pi_{\text{baseline}})=0.60\]</span></p>
+<p>The estimated improvement is positive:</p>
+<p><span class="math display">\[\hat\Delta=0.06\]</span></p>
+<p>But deployment needs a second question: how uncertain is that difference?</p>
+<p>Let <span class="math inline">\(Z_i^c\)</span> and <span class="math inline">\(Z_i^b\)</span> be candidate and baseline OPE contributions from the same logged episode. These could come from PDIS or a doubly robust estimator. Form paired differences:</p>
+<p><span class="math display">\[D_i=Z_i^c-Z_i^b\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\hat\Delta=\frac1N\sum_i D_i,
+\qquad
+\operatorname{SE}(\hat\Delta)
+=
+\frac{s_D}{\sqrt N}\]</span></p>
+<p>A one-sided approximate 95% lower confidence bound is:</p>
+<p><span class="math display">\[\operatorname{LCB}_{0.95}
+=
+\hat\Delta
+-
+1.645\operatorname{SE}(\hat\Delta)\]</span></p>
+<p>Deploy only if:</p>
+<p><span class="math display">\[\operatorname{LCB}_{0.95}&gt;\Delta_{\min}\]</span></p>
+<p>Usually <span class="math inline">\(\Delta_{\min}=0\)</span>, although deployment costs may justify a positive minimum improvement.</p>
+<p>Pairing matters because both policies face the same easy and difficult episodes:</p>
+<p><span class="math display">\[\operatorname{Var}(Z^c-Z^b)
+=
+\operatorname{Var}(Z^c)
++
+\operatorname{Var}(Z^b)
+-
+2\operatorname{Cov}(Z^c,Z^b)\]</span></p>
+<p>Positive covariance cancels shared episode difficulty. Pairing does not always reduce variance, but computing differences preserves the actual covariance instead of discarding it.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>candidate and baseline contributions: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>paired differences: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>bootstrap indices: <span style="background-color: codeinlinebg"><code> [bootstraps, N]</code></span></p></li>
+<li><p>improvement, standard error and LCB: scalar</p></li>
+</ul>
+<p>This bound assumes independent episodes and an approximately normal mean. Extreme importance weights, support failures or biased OPE invalidate the conclusion. If many candidates were screened, use an untouched evaluation set or correct for multiple comparisons.</p>
+<p>For safety costs, reverse the direction: require an upper confidence bound on cost to remain below the limit.</p>
+<p>DPO can produce a candidate checkpoint from fixed preferences, but its training loss does not certify improved environmental reward. The resulting policy still needs deployment-oriented evaluation.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: paired differences</div>
+<p><span class="math inline">\(\operatorname{Var}[\bar X-\bar Y]=\frac1n\big(\sigma_X^2+\sigma_Y^2-2\operatorname{Cov}(X,Y)\big)\)</span>. Evaluating both policies on the same episodes makes the covariance large and positive, because both see the same easy and hard prompts. <strong>Gate:</strong> deploy iff <span class="math inline">\(\mathrm{LCB}_{1-\delta}(\bar d)\ge m\)</span>, with the margin <span class="math inline">\(m\)</span> and <span class="math inline">\(\delta\)</span> fixed <em>before</em> looking at the data.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Compare candidate and baseline on the same episodes.</p></li>
+<li><p>Deploy on the lower confidence bound, not the mean.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: correlation shrinks the interval</div>
+<p><span class="math inline">\(\sigma_X=\sigma_Y=1\)</span>, <span class="math inline">\(n=400\)</span>, mean difference 0.08. Unpaired: SE <span class="math inline">\(=\sqrt{2/400}=0.071\)</span>, 95% LCB <span class="math inline">\(=0.08-0.139=-0.059\)</span> (fail). Paired with <span class="math inline">\(\operatorname{corr}=0.9\)</span>: SE <span class="math inline">\(=\sqrt{0.2/400}=0.022\)</span>, LCB <span class="math inline">\(=0.036\)</span> (pass).</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Comparing on different prompt samples.</p></li>
+<li><p>Choosing the margin after seeing the results.</p></li>
+<li><p>Repeatedly checking and stopping when the LCB first clears (Topic 91).</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Safe policy improvement gate</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> baseline <span class="math inline">\(\pi_0\)</span>, candidate <span class="math inline">\(\pi_1\)</span>, <span class="math inline">\(n\)</span> shared evaluation episodes, margin <span class="math inline">\(m\)</span>, level <span class="math inline">\(\delta\)</span> (both fixed in advance)</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i=1,\dots,n\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">evaluate both policies on episode <span class="math inline">\(i\)</span> (same prompt and seed); <span class="math inline">\(d_i\gets G^{(1)}_i-G^{(0)}_i\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\mathrm{LCB}\gets\bar d-z_{1-\delta}\operatorname{sd}(d)/\sqrt n\)</span> <em>▷ or a bootstrap/clustered bound</em></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> <span class="math inline">\(\mathrm{LCB}\ge m\)</span> <strong>then</strong> deploy <span class="math inline">\(\pi_1\)</span> <strong>else</strong> keep <span class="math inline">\(\pi_0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-paired-evidence-can-reveal-a-real-improvement">3. PyTorch exercise — paired evidence can reveal a real improvement</h3>
+<p>Each synthetic OPE contribution contains large shared episode difficulty and small policy-specific noise.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 500
+confidence_z = 1.645
+minimum_improvement = 0.0
+
+shared_difficulty = torch.randn(
+    num_episodes
+)
+
+baseline_contributions = (
+    0.60
+    + shared_difficulty
+    + 0.15 * torch.randn(num_episodes)
+)
+
+candidate_contributions = (
+    0.66
+    + shared_difficulty
+    + 0.15 * torch.randn(num_episodes)
+)
+
+# TODO 1: Policy values and paired improvement.
+baseline_value = ...
+candidate_value = ...
+
+paired_differences = ...
+estimated_improvement = ...
+
+# TODO 2: Paired standard error and one-sided LCB.
+paired_standard_error = ...
+
+paired_lcb = ...
+
+# TODO 3: Standard error if pairing is ignored.
+pairing_ignored_standard_error = ...
+
+pairing_ignored_lcb = ...
+
+# TODO 4: Measure how strongly the two episode-level
+# estimates move together.
+episode_correlation = ...
+
+# TODO 5: Paired episode bootstrap.
+num_bootstraps = 2_000
+
+bootstrap_indices = ...
+
+bootstrap_improvements = ...
+
+bootstrap_lcb = ...
+
+deploy_candidate = (
+    paired_lcb &gt; minimum_improvement
+)
+
+print(&quot;Baseline value:&quot;, baseline_value.item())
+print(&quot;Candidate value:&quot;, candidate_value.item())
+
+print(
+    &quot;Estimated improvement:&quot;,
+    estimated_improvement.item(),
+)
+
+print(
+    &quot;Episode correlation:&quot;,
+    episode_correlation.item(),
+)
+
+print(
+    &quot;Paired standard error:&quot;,
+    paired_standard_error.item(),
+)
+
+print(
+    &quot;Pairing-ignored standard error:&quot;,
+    pairing_ignored_standard_error.item(),
+)
+
+print(&quot;Paired normal LCB:&quot;, paired_lcb.item())
+
+print(
+    &quot;Pairing-ignored LCB:&quot;,
+    pairing_ignored_lcb.item(),
+)
+
+print(
+    &quot;Paired bootstrap LCB:&quot;,
+    bootstrap_lcb.item(),
+)
+
+print(
+    &quot;Deploy candidate:&quot;,
+    deploy_candidate.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the estimated improvement be close to <span style="background-color: codeinlinebg"><code> 0.06</code></span>?</p></li>
+<li><p>Which standard error should be smaller?</p></li>
+<li><p>Should the paired LCB be positive while the pairing-ignored LCB is negative?</p></li>
+<li><p>Why must bootstrap sampling preserve episode pairs?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Compute <span style="background-color: codeinlinebg"><code> candidate_contributions - baseline_contributions</code></span>.</p></li>
+<li><p>Use sample standard deviation with <span style="background-color: codeinlinebg"><code> correction=1</code></span>.</p></li>
+<li><p>Divide by <span style="background-color: codeinlinebg"><code> math.sqrt(num_episodes)</code></span>.</p></li>
+<li><p>Ignoring pairing adds the two separate variance estimates.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.corrcoef</code></span> on a stacked <span style="background-color: codeinlinebg"><code> [2, N]</code></span> tensor.</p></li>
+<li><p>Bootstrap the differences, or use identical sampled indices for both policies.</p></li>
+<li><p>The lower bootstrap percentile for a one-sided 95% bound is <span style="background-color: codeinlinebg"><code> 0.05</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Shuffle candidate contributions before subtracting. Shared episode difficulty no longer cancels.</p></li>
+<li><p>Bootstrap baseline and candidate episodes independently. This destroys the paired design.</p></li>
+<li><p>Treat every token as an independent sample. Correlated tokens produce a severely underestimated standard error.</p></li>
+<li><p>Increase policy-specific noise from <span style="background-color: codeinlinebg"><code> 0.15</code></span> to <span style="background-color: codeinlinebg"><code> 1.0</code></span>. The same mean improvement becomes harder to establish.</p></li>
+<li><p>Select the best of 100 candidates and report its uncorrected LCB on the same data. This introduces selection bias.</p></li>
+<li><p>Replace these light-tailed contributions with extreme importance-weighted terms. Compare normal and bootstrap bounds while monitoring maximum weight and ESS.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is directly estimating the improvement preferable to comparing two separate confidence intervals?</p></li>
+<li><p>Does a positive point estimate justify deployment?</p></li>
+<li><p>What assumptions can make the LCB misleading?</p></li>
+<li><p>Which diagnostics should accompany a safe-improvement decision?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Policy values and differences:</p>
+<pre class="code python"><code class="language-python">baseline_value = (
+    baseline_contributions.mean()
+)
+
+candidate_value = (
+    candidate_contributions.mean()
+)
+
+paired_differences = (
+    candidate_contributions
+    - baseline_contributions
+)
+
+estimated_improvement = (
+    paired_differences.mean()
+)</code></pre>
+<p>Paired lower bound:</p>
+<pre class="code python"><code class="language-python">paired_standard_error = (
+    paired_differences.std(
+        correction=1
+    )
+    / math.sqrt(num_episodes)
+)
+
+paired_lcb = (
+    estimated_improvement
+    - confidence_z
+    * paired_standard_error
+)</code></pre>
+<p>Pairing-ignored calculation:</p>
+<pre class="code python"><code class="language-python">pairing_ignored_standard_error = torch.sqrt(
+    candidate_contributions.var(
+        correction=1
+    ) / num_episodes
+    +
+    baseline_contributions.var(
+        correction=1
+    ) / num_episodes
+)
+
+pairing_ignored_lcb = (
+    estimated_improvement
+    - confidence_z
+    * pairing_ignored_standard_error
+)</code></pre>
+<p>Correlation:</p>
+<pre class="code python"><code class="language-python">episode_correlation = torch.corrcoef(
+    torch.stack([
+        baseline_contributions,
+        candidate_contributions,
+    ])
+)[0, 1]</code></pre>
+<p>Paired bootstrap:</p>
+<pre class="code python"><code class="language-python">bootstrap_indices = torch.randint(
+    low=0,
+    high=num_episodes,
+    size=(
+        num_bootstraps,
+        num_episodes,
+    ),
+)
+
+bootstrap_improvements = (
+    paired_differences[
+        bootstrap_indices
+    ].mean(dim=1)
+)
+
+bootstrap_lcb = torch.quantile(
+    bootstrap_improvements,
+    0.05,
+)</code></pre>
+<p>The expected improvement is approximately:</p>
+<p><span class="math display">\[0.66-0.60=0.06\]</span></p>
+<p>Because shared difficulty cancels, the paired standard error is roughly:</p>
+<p><span class="math display">\[\sqrt{\frac{0.15^2+0.15^2}{500}}
+\approx0.0095\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\operatorname{LCB}_{\text{paired}}
+\approx
+0.06-1.645(0.0095)
+\approx0.044\]</span></p>
+<p>Ignoring pairing retains the large shared variance:</p>
+<p><span class="math display">\[\operatorname{SE}_{\text{ignored}}
+\approx0.064\]</span></p>
+<p>giving an LCB near <span style="background-color: codeinlinebg"><code> -0.045</code></span>. Exact outputs vary with the sampled noise.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The paired difference directly includes covariance and answers the deployment question: <span class="math inline">\(J(c)-J(b)\)</span>. Separate intervals do not.</p></li>
+<li><p>No. The apparent gain may be sampling noise, OPE bias or unsupported extrapolation.</p></li>
+<li><p>Non-independent episodes, heavy-tailed weights, missing support, biased propensities, model leakage, distribution shift and candidate selection on the evaluation data.</p></li>
+<li><p>Report improvement, standard error, LCB, episode count, bootstrap result, importance-weight quantiles, ESS, support violations, reward components, costs and safety metrics.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Reward <span class="math inline">\(r_t\)</span> uses the cumulative ratio <span class="math inline">\(\rho_{0:t}\)</span>, containing decisions through time <span class="math inline">\(t\)</span>.</p></li>
+<li><p>Earlier actions influence the state distribution at time <span class="math inline">\(t\)</span>; the current ratio alone leaves that distribution under the behavior policy.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> evaluate candidate and baseline on the same episodes, estimate their paired difference, and deploy only when the lower confidence bound—not merely the mean—clears the required margin.</p>

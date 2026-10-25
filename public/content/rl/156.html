@@ -1,0 +1,431 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why is target-KL early stopping a practical guardrail rather than a mathematical trust-region guarantee?</p></li>
+<li><p>Why should the safety multiplier update only once per newly collected rollout batch?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-old-policy-and-reference-policy-have-different-jobs">2. The old policy and reference policy have different jobs</h3>
+<p>LLM PPO commonly keeps two frozen models:</p>
+<ul>
+<li><p><span class="math inline">\(\pi_{\text{old}}\)</span>: the snapshot that generated the current rollouts;</p></li>
+<li><p><span class="math inline">\(\pi_{\text{ref}}\)</span>: usually the original SFT policy.</p></li>
+</ul>
+<p>Think of the old policy as a step-size ruler and the reference policy as a behavioural anchor.</p>
+<p>The PPO update ratio is:</p>
+<p><span class="math display">\[\rho_t
+=
+\underbrace{
+\frac{\pi_\theta(a_t\mid s_t)}
+{\pi_{\text{old}}(a_t\mid s_t)}
+}_{\text{movement during this PPO update}}\]</span></p>
+<p>Its KL diagnostic is typically:</p>
+<p><span class="math display">\[D_{\mathrm{update}}
+=
+\underbrace{
+D_{\mathrm{KL}}
+\left(
+\pi_{\text{old}}\Vert\pi_\theta
+\right)
+}_{\text{have PPO epochs moved too far?}}\]</span></p>
+<p>Reference regularization instead measures:</p>
+<p><span class="math display">\[D_{\mathrm{ref}}
+=
+\underbrace{
+D_{\mathrm{KL}}
+\left(
+\pi_\theta\Vert\pi_{\text{ref}}
+\right)
+}_{\text{has the policy drifted far from SFT?}}\]</span></p>
+<p>A policy can be very close to <span class="math inline">\(\pi_{\text{old}}\)</span> while both are already far from <span class="math inline">\(\pi_{\text{ref}}\)</span>.</p>
+<p>A common rollout-time KL reward is:</p>
+<p><span class="math display">\[k_t
+=
+\underbrace{
+\log\pi_{\text{old}}(a_t\mid s_t)
+-
+\log\pi_{\text{ref}}(a_t\mid s_t)
+}_{\text{sampled reference log-ratio}}\]</span></p>
+<p><span class="math display">\[r_t^{\text{shaped}}
+=
+\underbrace{r_t^{\text{task}}}_{\text{reward-model or verifier reward}}
+-
+\underbrace{\beta k_t}_{\text{reference-drift cost}}\]</span></p>
+<p>Individual sampled <span class="math inline">\(k_t\)</span> values may be negative. Their expectation under the policy is a nonnegative KL.</p>
+<p>An adaptive controller can update <span class="math inline">\(\beta\)</span>:</p>
+<p><span class="math display">\[e
+=
+\underbrace{
+\frac{\widehat D_{\mathrm{ref}}}
+{D_{\mathrm{target}}}-1
+}_{\substack{&gt;0:\text{ too far from reference}\\&lt;0:\text{ overly constrained}}}\]</span></p>
+<p><span class="math display">\[\beta
+\leftarrow
+\underbrace{
+\beta\exp\!\left(
+\eta_\beta\operatorname{clip}(e,-c,c)
+\right)
+}_{\text{smooth positive update}}\]</span></p>
+<p>Do not simultaneously apply this rollout reward penalty and the same differentiable KL penalty again in the actor loss unless double regularization is intentional.</p>
+<p>DPO also uses policy-versus-reference log-ratios, but its <span class="math inline">\(\beta_{\text{DPO}}\)</span> scales a preference-classification margin. It is not PPO’s old-policy ratio or automatically an adaptive KL controller.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>logits: <span style="background-color: codeinlinebg"><code> [B, T, V]</code></span></p></li>
+<li><p>sampled tokens and chosen log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>token KL rewards and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>KL means and <span class="math inline">\(\beta\)</span>: scalar <span style="background-color: codeinlinebg"><code> []</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-close-to-old-far-from-reference">3. PyTorch exercise — close to old, far from reference</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 32
+horizon = 6
+vocabulary_size = 4
+
+update_kl_target = 0.01
+reference_kl_target = 0.25
+
+kl_coefficient = torch.tensor(0.10)
+controller_lr = 0.10
+controller_error_clip = 0.20
+
+lengths = torch.randint(
+    low=3,
+    high=horizon + 1,
+    size=(batch_size,),
+)
+
+valid_mask = (
+    torch.arange(horizon)[None, :]
+    &lt; lengths[:, None]
+).to(torch.float64)
+
+
+def masked_mean(values, mask):
+    # TODO 1
+    return ...
+
+
+def categorical_kl(
+    p_logits,
+    q_logits,
+):
+    # TODO 2: KL(p || q) for every [B, T].
+    p_log_probabilities = ...
+    q_log_probabilities = ...
+
+    p_probabilities = ...
+
+    return ...
+
+
+reference_logits = (
+    0.30
+    * torch.randn(
+        batch_size,
+        horizon,
+        vocabulary_size,
+    )
+)
+
+# The rollout policy has already drifted toward token 0.
+old_logits = reference_logits.clone()
+old_logits[..., 0] += 1.80
+
+# The current PPO policy is only a small step from old.
+new_logits = (
+    old_logits
+    + 0.08
+    * torch.randn_like(old_logits)
+)
+
+reference_distribution = (
+    torch.distributions.Categorical(
+        logits=reference_logits
+    )
+)
+
+old_distribution = (
+    torch.distributions.Categorical(
+        logits=old_logits
+    )
+)
+
+# TODO 3: Freeze rollout actions and log-probabilities.
+with torch.no_grad():
+    actions = ...
+
+    old_chosen_log_probabilities = ...
+
+    reference_chosen_log_probabilities = ...
+
+# Exact full-distribution KLs.
+update_kl_tokens = ...
+reference_kl_tokens = ...
+
+mean_update_kl = ...
+mean_reference_kl = ...
+
+# Sampled rollout estimate of KL(old || reference).
+sampled_reference_log_ratios = ...
+
+sampled_reference_kl = ...
+
+negative_sample_fraction = ...
+
+# Sequence-level task reward occurs at the final valid token.
+task_rewards = torch.zeros(
+    batch_size,
+    horizon,
+)
+
+terminal_rewards = torch.linspace(
+    0.50,
+    1.50,
+    batch_size,
+)
+
+task_rewards[
+    torch.arange(batch_size),
+    lengths - 1,
+] = terminal_rewards
+
+# TODO 4: Apply rollout-time KL shaping.
+shaped_rewards = ...
+
+task_sequence_rewards = ...
+
+shaped_sequence_rewards = ...
+
+# TODO 5: Independent control decisions.
+ppo_should_stop = ...
+
+relative_reference_error = ...
+
+clipped_controller_error = ...
+
+updated_kl_coefficient = ...
+
+torch.set_printoptions(
+    precision=5,
+    sci_mode=False,
+)
+
+print(
+    &quot;Update KL(old || new):&quot;,
+    mean_update_kl.item(),
+)
+print(
+    &quot;Reference KL(new || ref):&quot;,
+    mean_reference_kl.item(),
+)
+print(
+    &quot;Sampled KL(old || ref):&quot;,
+    sampled_reference_kl.item(),
+)
+print(
+    &quot;Fraction of sampled token KLs below zero:&quot;,
+    negative_sample_fraction.item(),
+)
+
+print(
+    &quot;Mean task sequence reward:&quot;,
+    task_sequence_rewards.mean().item(),
+)
+print(
+    &quot;Mean shaped sequence reward:&quot;,
+    shaped_sequence_rewards.mean().item(),
+)
+
+print(&quot;Stop PPO epochs:&quot;, ppo_should_stop.item())
+print(
+    &quot;KL coefficient: old, updated&quot;,
+    kl_coefficient.item(),
+    updated_kl_coefficient.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Can update KL be below <span style="background-color: codeinlinebg"><code> 0.01</code></span> while reference KL exceeds <span style="background-color: codeinlinebg"><code> 0.25</code></span>?</p></li>
+<li><p>Should every sampled token log-ratio be nonnegative?</p></li>
+<li><p>Which policy is refreshed after collecting a new rollout batch?</p></li>
+<li><p>Which policy normally remains fixed throughout RLHF?</p></li>
+<li><p>If reference KL is too large, should <span class="math inline">\(\beta\)</span> increase or decrease?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Categorical KL requires probabilities for every vocabulary item.</p></li>
+<li><p>Sample actions from <span style="background-color: codeinlinebg"><code> old_distribution</code></span>.</p></li>
+<li><p>Exact update KL is <span style="background-color: codeinlinebg"><code> KL(old || new)</code></span>.</p></li>
+<li><p>Exact reference KL here is <span style="background-color: codeinlinebg"><code> KL(new || reference)</code></span>.</p></li>
+<li><p>Apply the valid mask before averaging sampled ratios.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.exp</code></span> for the multiplicative controller so <span class="math inline">\(\beta\)</span> remains positive.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Accidentally replace the reference model with the latest policy after every rollout.</p></li>
+<li><p>Use reference KL as PPO’s importance-sampling denominator.</p></li>
+<li><p>Penalize prompt and padding positions.</p></li>
+<li><p>Apply KL reward shaping and add the identical penalty again to the actor loss.</p></li>
+<li><p>Tune <span class="math inline">\(\beta\)</span> using unmasked sequence lengths.</p></li>
+<li><p>Assume a negative sampled token KL means the exact categorical KL is negative.</p></li>
+<li><p>Interpret DPO’s <span class="math inline">\(\beta\)</span> as PPO’s adaptive KL coefficient.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can <span class="math inline">\(D_{\mathrm{update}}\)</span> be small while <span class="math inline">\(D_{\mathrm{ref}}\)</span> is large?</p></li>
+<li><p>Why can one sampled KL contribution be negative?</p></li>
+<li><p>What failure occurs if <span class="math inline">\(\pi_{\text{old}}\)</span> is recomputed during PPO epochs?</p></li>
+<li><p>Does reference-KL control enforce factuality or safety by itself?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Masked mean and categorical KL:</p>
+<pre class="code python"><code class="language-python">def masked_mean(values, mask):
+    return (
+        values * mask
+    ).sum() / mask.sum()
+
+
+def categorical_kl(
+    p_logits,
+    q_logits,
+):
+    p_log_probabilities = torch.log_softmax(
+        p_logits,
+        dim=-1,
+    )
+
+    q_log_probabilities = torch.log_softmax(
+        q_logits,
+        dim=-1,
+    )
+
+    p_probabilities = torch.exp(
+        p_log_probabilities
+    )
+
+    return (
+        p_probabilities
+        * (
+            p_log_probabilities
+            - q_log_probabilities
+        )
+    ).sum(dim=-1)</code></pre>
+<p>Frozen rollout data:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    actions = old_distribution.sample()
+
+    old_chosen_log_probabilities = (
+        old_distribution.log_prob(actions)
+    )
+
+    reference_chosen_log_probabilities = (
+        reference_distribution.log_prob(
+            actions
+        )
+    )</code></pre>
+<p>Exact and sampled KLs:</p>
+<pre class="code python"><code class="language-python">update_kl_tokens = categorical_kl(
+    old_logits,
+    new_logits,
+)
+
+reference_kl_tokens = categorical_kl(
+    new_logits,
+    reference_logits,
+)
+
+mean_update_kl = masked_mean(
+    update_kl_tokens,
+    valid_mask,
+)
+
+mean_reference_kl = masked_mean(
+    reference_kl_tokens,
+    valid_mask,
+)
+
+sampled_reference_log_ratios = (
+    old_chosen_log_probabilities
+    - reference_chosen_log_probabilities
+) * valid_mask
+
+sampled_reference_kl = masked_mean(
+    sampled_reference_log_ratios,
+    valid_mask,
+)
+
+negative_sample_fraction = masked_mean(
+    (
+        sampled_reference_log_ratios &lt; 0.0
+    ).to(torch.float64),
+    valid_mask,
+)</code></pre>
+<p>KL-shaped rewards:</p>
+<pre class="code python"><code class="language-python">shaped_rewards = (
+    task_rewards
+    - kl_coefficient
+    * sampled_reference_log_ratios
+) * valid_mask
+
+task_sequence_rewards = (
+    task_rewards * valid_mask
+).sum(dim=1)
+
+shaped_sequence_rewards = (
+    shaped_rewards * valid_mask
+).sum(dim=1)</code></pre>
+<p>Independent controllers:</p>
+<pre class="code python"><code class="language-python">ppo_should_stop = (
+    mean_update_kl
+    &gt; update_kl_target
+)
+
+relative_reference_error = (
+    sampled_reference_kl
+    / reference_kl_target
+    - 1.0
+)
+
+clipped_controller_error = (
+    relative_reference_error.clamp(
+        -controller_error_clip,
+        controller_error_clip,
+    )
+)
+
+updated_kl_coefficient = (
+    kl_coefficient
+    * torch.exp(
+        controller_lr
+        * clipped_controller_error
+    )
+)</code></pre>
+<p>The intended pattern is:</p>
+<p><span class="math display">\[\underbrace{
+D_{\mathrm{KL}}(\pi_{\text{old}}\Vert\pi_{\text{new}})
+}_{\text{one small PPO step}}
+&lt;0.01\]</span></p>
+<p>while:</p>
+<p><span class="math display">\[\underbrace{
+D_{\mathrm{KL}}(\pi_{\text{new}}\Vert\pi_{\text{ref}})
+}_{\text{accumulated drift across rollouts}}
+&gt;0.25\]</span></p>
+<p>Thus PPO epochs can continue according to the update-KL rule while the reference controller independently increases <span class="math inline">\(\beta\)</span>.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Each rollout can make a small step, while many previous rollout updates have accumulated substantial reference drift.</p></li>
+<li><p>A sampled action may be more likely under the reference policy. Only the expectation under the policy equals a nonnegative KL.</p></li>
+<li><p>Ratios no longer compare against the policy that generated the data, invalidating PPO’s importance correction.</p></li>
+<li><p>No. KL only limits distributional drift; a nearby reference policy can itself be incorrect or unsafe.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Target-KL stopping measures and limits observed movement but does not solve a formally constrained trust-region optimization.</p></li>
+<li><p>Repeating the update would count the same cost observations multiple times and distort the dual dynamics.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> LLM PPO has two separate anchors. The old policy controls how far one optimization phase moves; the reference policy controls cumulative drift from SFT. Monitor and tune them independently.</p>

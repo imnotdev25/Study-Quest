@@ -1,0 +1,399 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Write the doubly robust estimator using outcome prediction <span class="math inline">\(m(X_i)\)</span> and audit probability <span class="math inline">\(\pi_i\)</span>.</p></li>
+<li><p>What must be correct for the usual “doubly robust” guarantee?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-model-can-erase-the-residual-it-must-estimate">2. A model can erase the residual it must estimate</h3>
+<p>The doubly robust correction uses:</p>
+<p><span class="math display">\[Y_i-m(X_i)\]</span></p>
+<p>If a flexible outcome model trains on <span class="math inline">\(Y_i\)</span> and memorizes it, then on audited rows:</p>
+<p><span class="math display">\[m(X_i)\approx Y_i\]</span></p>
+<p>The residual becomes artificially zero. The evaluator concludes that its predictions need no correction—even if those predictions are badly biased elsewhere.</p>
+<p>Cross-fitting prevents this:</p>
+<ol>
+<li><p>divide episodes into <span class="math inline">\(K\)</span> folds;</p></li>
+<li><p>train nuisance models using every fold except <span class="math inline">\(k\)</span>;</p></li>
+<li><p>predict outcomes and propensities for fold <span class="math inline">\(k\)</span>;</p></li>
+<li><p>join all out-of-fold predictions.</p></li>
+</ol>
+<p>For episode <span class="math inline">\(i\)</span> in fold <span class="math inline">\(k(i)\)</span>:</p>
+<p><span class="math display">\[\hat\mu_{\text{CF-DR}}
+=
+\frac1N\sum_i
+\left[
+m^{(-k(i))}(X_i)
++
+\frac{S_i}{\pi_i}
+\left(
+Y_i-m^{(-k(i))}(X_i)
+\right)
+\right]\]</span></p>
+<p>The superscript <span class="math inline">\((-k)\)</span> means that fold <span class="math inline">\(k\)</span>’s labels were excluded from training.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>outcome, audit mask, propensity and fold ID: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>out-of-fold predictions and corrections: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>fold diagnostics: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+</ul>
+<p>For LLM evaluation, split by the independent unit—often user, source prompt or template family—not individual completions. Otherwise near-duplicate prompts can leak across folds.</p>
+<p>For DPO, evaluating preference accuracy on pairs used to train the reward or preference model is the same leakage problem. Cross-fitting improves fixed-data evaluation; it does not turn DPO into online RL.</p>
+<h3 class="unnumbered" id="pytorch-exercise-memorization-defeats-dr-correction">3. PyTorch exercise — memorization defeats DR correction</h3>
+<p>A deliberately leaky model memorizes every audited label. A cross-fitted model remains wrong, but correct propensities can repair it.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 100_000
+num_folds = 5
+
+high_risk_probability = 0.20
+
+low_risk_incident_probability = 0.02
+high_risk_incident_probability = 0.30
+
+low_risk_audit_probability = 0.02
+high_risk_audit_probability = 0.60
+
+
+# TODO 1: Generate deployment episodes.
+high_risk = ...
+
+incident_probabilities = ...
+
+true_incidents = ...
+
+
+# TODO 2: Select targeted human audits.
+audit_probabilities = ...
+
+audited = ...
+
+observed_incidents = ...
+
+naive_audit_rate = ...
+
+
+# TODO 3: Create a leaky memorizing prediction.
+# It copies each audited label and uses the global
+# audited mean everywhere else.
+global_audit_mean = ...
+
+leaky_predictions = ...
+
+
+# TODO 4: Create honest out-of-fold predictions.
+fold_ids = ...
+
+cross_fitted_predictions = torch.empty_like(
+    true_incidents
+)
+
+fold_training_means = []
+
+for fold in range(num_folds):
+    validation_mask = ...
+
+    training_audit_mask = ...
+
+    training_mean = ...
+
+    cross_fitted_predictions[
+        validation_mask
+    ] = ...
+
+    fold_training_means.append(...)
+
+fold_training_means = ...
+
+
+# TODO 5: Compare evaluation estimators.
+def doubly_robust(outcome_predictions):
+    predictions = ...
+
+    corrections = ...
+
+    return ...
+
+
+oracle_rate = ...
+
+outcome_only_cross_fitted = ...
+
+ipw_rate = ...
+
+dr_leaky = ...
+
+dr_cross_fitted = ...
+
+
+# Diagnostics.
+leaky_audited_residual_mae = ...
+
+cross_fitted_audited_residual_mae = ...
+
+cross_fitted_mean_correction = ...
+
+print(&quot;Oracle incident rate:&quot;, oracle_rate.item())
+print(&quot;Naive audit rate:&quot;, naive_audit_rate.item())
+print(
+    &quot;Outcome-only cross-fitted rate:&quot;,
+    outcome_only_cross_fitted.item(),
+)
+print(&quot;IPW rate:&quot;, ipw_rate.item())
+print(&quot;Leaky DR rate:&quot;, dr_leaky.item())
+print(
+    &quot;Cross-fitted DR rate:&quot;,
+    dr_cross_fitted.item(),
+)
+
+print(
+    &quot;\nFold training means:&quot;,
+    fold_training_means,
+)
+print(
+    &quot;Leaky audited residual MAE:&quot;,
+    leaky_audited_residual_mae.item(),
+)
+print(
+    &quot;Cross-fitted audited residual MAE:&quot;,
+    cross_fitted_audited_residual_mae.item(),
+)
+print(
+    &quot;Mean cross-fitted correction:&quot;,
+    cross_fitted_mean_correction.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the deployment incident rate closer to <span style="background-color: codeinlinebg"><code> 0.076</code></span> or <span style="background-color: codeinlinebg"><code> 0.267</code></span>?</p></li>
+<li><p>What will the leaky model’s audited residual error be?</p></li>
+<li><p>Will its doubly robust estimate remain biased?</p></li>
+<li><p>Can cross-fitted DR recover <span style="background-color: codeinlinebg"><code> 0.076</code></span> even though its outcome predictions remain near <span style="background-color: codeinlinebg"><code> 0.267</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Deployment value:</p></li>
+</ul>
+<p><span class="math display">\[0.8(0.02)+0.2(0.30)=0.076\]</span></p>
+<ul>
+<li><p>Store unaudited outcomes as zero, but always protect them with the audit mask.</p></li>
+<li><p>A balanced random fold assignment is <span style="background-color: codeinlinebg"><code> torch.randperm(N) % K</code></span>.</p></li>
+<li><p>For fold <span class="math inline">\(k\)</span>, train using <span style="background-color: codeinlinebg"><code> audited &amp; (fold_ids != k)</code></span>.</p></li>
+<li><p>Inside the DR function, call <span style="background-color: codeinlinebg"><code> .detach()</code></span> on predictions.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where(audited, residual / propensity, 0)</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Train the evaluator on all labels and call its training accuracy validation.</p></li>
+<li><p>Split individual paraphrases while their shared template crosses folds.</p></li>
+<li><p>Fit preprocessing or calibration on the complete dataset before folding.</p></li>
+<li><p>Regenerate folds while selecting hyperparameters until results improve.</p></li>
+<li><p>Join out-of-fold predictions using row position after shuffling.</p></li>
+<li><p>Backpropagate through the reported DR estimate into the reward model.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does a zero in-sample residual not prove that the outcome model is calibrated?</p></li>
+<li><p>Does cross-fitting make an incorrect outcome model correct?</p></li>
+<li><p>Why can correct propensity weighting repair wrong cross-fitted predictions?</p></li>
+<li><p>What should define a fold when one user produces multiple correlated episodes?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Deployment population:</p>
+<pre class="code python"><code class="language-python">high_risk = (
+    torch.rand(num_episodes)
+    &lt; high_risk_probability
+)
+
+incident_probabilities = torch.where(
+    high_risk,
+    torch.tensor(
+        high_risk_incident_probability
+    ),
+    torch.tensor(
+        low_risk_incident_probability
+    ),
+)
+
+true_incidents = (
+    torch.rand(num_episodes)
+    &lt; incident_probabilities
+).to(torch.float64)</code></pre>
+<p>Targeted audit:</p>
+<pre class="code python"><code class="language-python">audit_probabilities = torch.where(
+    high_risk,
+    torch.tensor(
+        high_risk_audit_probability
+    ),
+    torch.tensor(
+        low_risk_audit_probability
+    ),
+)
+
+audited = (
+    torch.rand(num_episodes)
+    &lt; audit_probabilities
+)
+
+observed_incidents = torch.where(
+    audited,
+    true_incidents,
+    torch.zeros_like(true_incidents),
+)
+
+naive_audit_rate = (
+    observed_incidents[audited].mean()
+)</code></pre>
+<p>Leaky predictions:</p>
+<pre class="code python"><code class="language-python">global_audit_mean = (
+    observed_incidents[audited]
+    .mean()
+    .detach()
+)
+
+leaky_predictions = torch.where(
+    audited,
+    observed_incidents,
+    global_audit_mean,
+)</code></pre>
+<p>Cross-fitting:</p>
+<pre class="code python"><code class="language-python">fold_ids = (
+    torch.randperm(num_episodes)
+    % num_folds
+)
+
+for fold in range(num_folds):
+    validation_mask = (
+        fold_ids == fold
+    )
+
+    training_audit_mask = (
+        audited
+        &amp; (fold_ids != fold)
+    )
+
+    training_mean = (
+        observed_incidents[
+            training_audit_mask
+        ]
+        .mean()
+        .detach()
+    )
+
+    cross_fitted_predictions[
+        validation_mask
+    ] = training_mean
+
+    fold_training_means.append(
+        training_mean
+    )
+
+fold_training_means = torch.stack(
+    fold_training_means
+)</code></pre>
+<p>Estimators:</p>
+<pre class="code python"><code class="language-python">def doubly_robust(outcome_predictions):
+    predictions = (
+        outcome_predictions.detach()
+    )
+
+    corrections = torch.where(
+        audited,
+        (
+            observed_incidents
+            - predictions
+        ) / audit_probabilities,
+        torch.zeros_like(predictions),
+    )
+
+    return (
+        predictions + corrections
+    ).mean()
+
+
+oracle_rate = true_incidents.mean()
+
+outcome_only_cross_fitted = (
+    cross_fitted_predictions.mean()
+)
+
+ipw_rate = (
+    audited.to(torch.float64)
+    * observed_incidents
+    / audit_probabilities
+).mean()
+
+dr_leaky = doubly_robust(
+    leaky_predictions
+)
+
+dr_cross_fitted = doubly_robust(
+    cross_fitted_predictions
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">leaky_audited_residual_mae = (
+    observed_incidents[audited]
+    - leaky_predictions[audited]
+).abs().mean()
+
+cross_fitted_audited_residual_mae = (
+    observed_incidents[audited]
+    - cross_fitted_predictions[audited]
+).abs().mean()
+
+cross_fitted_corrections = torch.where(
+    audited,
+    (
+        observed_incidents
+        - cross_fitted_predictions
+    ) / audit_probabilities,
+    torch.zeros_like(
+        cross_fitted_predictions
+    ),
+)
+
+cross_fitted_mean_correction = (
+    cross_fitted_corrections.mean()
+)</code></pre>
+<p>The deployment incident rate is:</p>
+<p><span class="math display">\[0.076\]</span></p>
+<p>Targeted auditing produces an audited incident rate near:</p>
+<p><span class="math display">\[\frac{
+0.8(0.02)(0.02)
++
+0.2(0.60)(0.30)
+}{
+0.8(0.02)+0.2(0.60)
+}
+\approx0.267\]</span></p>
+<p>The leaky model copies every audited outcome, so:</p>
+<p><span class="math display">\[Y_i-m_{\text{leaky}}(X_i)=0\]</span></p>
+<p>on all rows that could provide corrections. Its DR result therefore remains near <span style="background-color: codeinlinebg"><code> 0.267</code></span>.</p>
+<p>The cross-fitted predictions are also near <span style="background-color: codeinlinebg"><code> 0.267</code></span>, but they did not see their own validation labels. Their honest residuals remain available. Correct inverse-probability correction moves the estimate back toward <span style="background-color: codeinlinebg"><code> 0.076</code></span>.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>A model may have memorized the same labels used to calculate residuals; zero training error says nothing about unseen outcomes.</p></li>
+<li><p>No. It makes predictions honest and out-of-sample, allowing correction and uncertainty estimates to work as intended.</p></li>
+<li><p>Each audited residual is expanded by the inverse probability of observing it, restoring the deployment residual distribution.</p></li>
+<li><p>Keep all episodes from the same independent cluster—such as a user, source prompt or template family—in one fold.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li></li>
+</ol>
+<p><span class="math display">\[\hat\mu_{\text{DR}}
+=
+\frac1N\sum_i
+\left[
+m(X_i)+
+\frac{S_i}{\pi_i}
+(Y_i-m(X_i))
+\right]\]</span></p>
+<ol>
+<li><p>Either the outcome model or propensity model must be correctly specified, with adequate support and honest nuisance predictions.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> an evaluator must not inspect the label whose residual it later claims to measure. Generate every nuisance prediction out-of-fold, preserve cluster boundaries, detach evaluation tensors and inspect residuals by fold.</p>

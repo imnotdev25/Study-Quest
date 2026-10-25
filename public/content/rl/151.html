@@ -1,0 +1,388 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>If expected cost exceeds its limit, should the Lagrange multiplier increase or decrease?</p></li>
+<li><p>Why does a fixed cost penalty not guarantee constraint satisfaction?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="from-exact-expectations-to-sampled-gradients">2. From exact expectations to sampled gradients</h3>
+<p>We want to maximize reward while limiting expected cost:</p>
+<p><span class="math display">\[\max_\theta J_R(\theta)
+\quad\text{subject to}\quad
+J_C(\theta)\le d\]</span></p>
+<p>The Lagrangian is:</p>
+<p><span class="math display">\[\mathcal L(\theta,\lambda)
+=
+\underbrace{J_R(\theta)}_{\text{reward}}
+-
+\underbrace{\lambda}_{\text{learned cost price}}
+\underbrace{(J_C(\theta)-d)}_{\text{constraint violation}}
++
+\underbrace{\beta H(\pi_\theta)}_{\text{exploration}}\]</span></p>
+<p>For sampled trajectories, the policy gradient becomes:</p>
+<p><span class="math display">\[\nabla_\theta\mathcal L
+=
+E\!\left[
+\nabla_\theta\log\pi_\theta(A)
+\left(G_R-\lambda G_C\right)
+\right]
++
+\beta\nabla_\theta H\]</span></p>
+<p>Separate baselines reduce variance:</p>
+<p><span class="math display">\[A_i^{\text{aug}}
+=
+\underbrace{(G_i^R-b_i^R)}_{\text{reward surprise}}
+-
+\underbrace{\lambda}_{\text{safety price}}
+\underbrace{(G_i^C-b_i^C)}_{\text{cost surprise}}\]</span></p>
+<p>The minimized actor loss is:</p>
+<p><span class="math display">\[L_{\text{actor}}
+=
+-\frac1B\sum_i
+\underbrace{\log\pi_\theta(a_i)}_{\text{credit path}}
+\underbrace{\operatorname{stopgrad}(A_i^{\text{aug}})}_{\text{sampled direction}}
+-
+\beta H(\pi_\theta)\]</span></p>
+<p>A positive augmented advantage increases the sampled action’s probability; the leading minus sign converts gradient ascent into PyTorch’s gradient descent.</p>
+<p>The multiplier follows raw cost—not centered cost:</p>
+<p><span class="math display">\[\lambda
+\leftarrow
+\left[
+\lambda+
+\eta_\lambda
+\underbrace{(\bar C-d)}_{\substack{&gt;0:\ \text{raise price}\\&lt;0:\ \text{lower price}}}
+\right]_+\]</span></p>
+<p>The limit <span class="math inline">\(d\)</span> is absent from the actor advantage because it is constant with respect to the action. It matters in the dual update.</p>
+<p>For an exactly unbiased minibatch baseline, exclude sample <span class="math inline">\(i\)</span>:</p>
+<p><span class="math display">\[b^R_{-i}
+=
+\frac{\sum_{j\ne i}G_j^R}{B-1}\]</span></p>
+<p>Using the full current-batch mean includes the sample’s own outcome and shrinks the gradient by <span class="math inline">\(1-1/B\)</span>. A baseline from earlier batches is another valid option.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>actions, rewards, costs, log-probabilities, advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>policy logit, entropy mean, multiplier and loss: scalar <span style="background-color: codeinlinebg"><code> []</code></span></p></li>
+</ul>
+<p>DPO instead optimizes preference likelihood on a fixed dataset. It has no environment cost samples or dual update, so it does not itself enforce an online expected-cost constraint.</p>
+<h3 class="unnumbered" id="pytorch-exercise-learn-the-safety-price-from-samples">3. PyTorch exercise — learn the safety price from samples</h3>
+<p>The risky action pays more but costs more. The allowed risky probability is at most:</p>
+<p><span class="math display">\[p_{\max}
+=
+\frac{0.30-0.10}{0.80-0.10}
+=
+\frac27
+\approx0.286\]</span></p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+reward_by_action = torch.tensor([0.3, 1.0])
+cost_by_action = torch.tensor([0.1, 0.8])
+
+cost_limit = 0.30
+entropy_coefficient = 0.20
+
+batch_size = 256
+num_steps = 5_000
+actor_lr = 0.05
+dual_lr = 0.005
+
+policy_logit = torch.nn.Parameter(
+    torch.tensor(0.0)
+)
+multiplier = torch.tensor(0.0)
+
+optimizer = torch.optim.SGD(
+    [policy_logit],
+    lr=actor_lr,
+)
+
+def leave_one_out_mean(values):
+    # TODO 1
+    return ...
+
+history = []
+tail_probabilities = []
+
+for step in range(num_steps):
+    distribution = torch.distributions.Bernoulli(
+        logits=policy_logit.expand(batch_size)
+    )
+
+    actions = distribution.sample()
+    action_ids = actions.to(torch.long)
+
+    rewards = reward_by_action[action_ids]
+    costs = cost_by_action[action_ids]
+
+    # TODO 2: Build separate, unbiased advantages.
+    reward_baselines = ...
+    cost_baselines = ...
+
+    reward_advantages = ...
+    cost_advantages = ...
+
+    augmented_advantages = ...
+
+    # TODO 3: Actor loss.
+    actor_loss = ...
+
+    optimizer.zero_grad()
+    actor_loss.backward()
+    optimizer.step()
+
+    # TODO 4: Dual update from raw sampled cost.
+    with torch.no_grad():
+        multiplier = ...
+
+        risky_probability = torch.sigmoid(
+            policy_logit
+        )
+
+        if step &gt;= num_steps - 500:
+            tail_probabilities.append(
+                risky_probability.clone()
+            )
+
+        if step % 500 == 0 or step == num_steps - 1:
+            expected_reward = (
+                (1.0 - risky_probability)
+                * reward_by_action[0]
+                + risky_probability
+                * reward_by_action[1]
+            )
+
+            expected_cost = (
+                (1.0 - risky_probability)
+                * cost_by_action[0]
+                + risky_probability
+                * cost_by_action[1]
+            )
+
+            history.append((
+                step + 1,
+                risky_probability.item(),
+                expected_reward.item(),
+                expected_cost.item(),
+                multiplier.item(),
+            ))
+
+print(&quot;step, p(risky), E[reward], E[cost], lambda&quot;)
+for row in history:
+    print(row)
+
+print(
+    &quot;Final-500 mean p(risky):&quot;,
+    torch.stack(tail_probabilities).mean().item(),
+)
+
+# Gradient-variance diagnostic at fixed p and lambda.
+num_repetitions = 5_000
+gradient_batch_size = 64
+
+probe_probability = torch.tensor(0.30)
+probe_multiplier = torch.tensor(1.20)
+
+probe_actions = (
+    torch.rand(
+        num_repetitions,
+        gradient_batch_size,
+    ) &lt; probe_probability
+).to(torch.float64)
+
+probe_ids = probe_actions.to(torch.long)
+probe_rewards = reward_by_action[probe_ids]
+probe_costs = cost_by_action[probe_ids]
+
+# d log Bernoulli(a; logit) / d logit
+score_terms = probe_actions - probe_probability
+
+# TODO 5: Compare raw and leave-one-out gradients.
+raw_signals = ...
+raw_gradients = ...
+
+reward_loo = ...
+cost_loo = ...
+
+centered_signals = ...
+centered_gradients = ...
+
+true_gradient = ...
+
+print(
+    &quot;Raw gradient: mean, SD&quot;,
+    raw_gradients.mean().item(),
+    raw_gradients.std().item(),
+)
+print(
+    &quot;LOO gradient: mean, SD&quot;,
+    centered_gradients.mean().item(),
+    centered_gradients.std().item(),
+)
+print(&quot;Analytical gradient:&quot;, true_gradient.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>At <span class="math inline">\(p=0.30,\lambda=1.20\)</span>, is the reward-minus-cost gradient positive or negative?</p></li>
+<li><p>Will both gradient estimators average near the same value?</p></li>
+<li><p>Which estimator should have lower variance?</p></li>
+<li><p>Should the learned multiplier settle near zero or a positive value?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Leave-one-out mean: <span style="background-color: codeinlinebg"><code> (values.sum() - values) / (B - 1)</code></span>.</p></li>
+<li><p>Detach both advantages and the multiplier inside the actor loss.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> -mean(log_prob * advantage) - beta * entropy</code></span>.</p></li>
+<li><p>Update <span class="math inline">\(\lambda\)</span> using <span style="background-color: codeinlinebg"><code> costs.mean() - cost_limit</code></span>, then clamp at zero.</p></li>
+<li><p>For a Bernoulli logit, the score term is <span class="math inline">\(a-p\)</span>.</p></li>
+<li><p>The analytical sampled-return gradient is:</p></li>
+</ul>
+<p><span class="math display">\[p(1-p)
+\left[
+\underbrace{(r_1-r_0)}_{\text{reward gap}}
+-
+\lambda
+\underbrace{(c_1-c_0)}_{\text{cost gap}}
+\right]\]</span></p>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Remove the minus sign from the actor loss: updates move opposite the desired direction.</p></li>
+<li><p>Update <span class="math inline">\(\lambda\)</span> from centered cost advantages: the constraint signal disappears.</p></li>
+<li><p>Use an excessively large dual learning rate: cost and multiplier oscillate.</p></li>
+<li><p>Forget <span style="background-color: codeinlinebg"><code> detach()</code></span>: learned critics or differentiable rewards may receive unintended actor gradients.</p></li>
+<li><p>Independently rescale reward or cost without adjusting <span class="math inline">\(\lambda\)</span>: its “price” changes meaning.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why maintain separate reward and cost advantages?</p></li>
+<li><p>Why must the dual update use raw mean cost?</p></li>
+<li><p>Does satisfying the constraint require every minibatch to have cost below <span class="math inline">\(d\)</span>?</p></li>
+<li><p>Why is a leave-one-out baseline safer than the ordinary current-batch mean?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">def leave_one_out_mean(values):
+    return (
+        values.sum() - values
+    ) / (values.numel() - 1)</code></pre>
+<p>Actor advantages and loss:</p>
+<pre class="code python"><code class="language-python">reward_baselines = leave_one_out_mean(
+    rewards
+)
+cost_baselines = leave_one_out_mean(
+    costs
+)
+
+reward_advantages = (
+    rewards - reward_baselines
+).detach()
+
+cost_advantages = (
+    costs - cost_baselines
+).detach()
+
+augmented_advantages = (
+    reward_advantages
+    - multiplier.detach()
+    * cost_advantages
+).detach()
+
+actor_loss = -(
+    distribution.log_prob(actions)
+    * augmented_advantages
+).mean() - (
+    entropy_coefficient
+    * distribution.entropy().mean()
+)</code></pre>
+<p>Dual update:</p>
+<pre class="code python"><code class="language-python">multiplier = torch.clamp(
+    multiplier
+    + dual_lr
+    * (
+        costs.detach().mean()
+        - cost_limit
+    ),
+    min=0.0,
+)</code></pre>
+<p>Variance diagnostic:</p>
+<pre class="code python"><code class="language-python">raw_signals = (
+    probe_rewards
+    - probe_multiplier
+    * probe_costs
+)
+
+raw_gradients = (
+    score_terms * raw_signals
+).mean(dim=1)
+
+reward_loo = (
+    probe_rewards.sum(
+        dim=1,
+        keepdim=True,
+    ) - probe_rewards
+) / (gradient_batch_size - 1)
+
+cost_loo = (
+    probe_costs.sum(
+        dim=1,
+        keepdim=True,
+    ) - probe_costs
+) / (gradient_batch_size - 1)
+
+centered_signals = (
+    probe_rewards - reward_loo
+    - probe_multiplier
+    * (probe_costs - cost_loo)
+)
+
+centered_gradients = (
+    score_terms * centered_signals
+).mean(dim=1)
+
+true_gradient = (
+    probe_probability
+    * (1.0 - probe_probability)
+    * (
+        reward_by_action[1]
+        - reward_by_action[0]
+        - probe_multiplier
+        * (
+            cost_by_action[1]
+            - cost_by_action[0]
+        )
+    )
+)</code></pre>
+<p>Typical training results are:</p>
+<p><span class="math display">\[P(\text{risky})\approx0.28,
+\qquad
+E[R]\approx0.50,
+\qquad
+E[C]\approx0.30,
+\qquad
+\lambda\approx1.27\]</span></p>
+<p>Individual iterations fluctuate because both actor and multiplier use samples. The final-window average is more informative than one final minibatch.</p>
+<p>At the diagnostic point:</p>
+<p><span class="math display">\[\begin{aligned}
+\nabla
+&amp;=
+0.3(0.7)
+\left[0.7-1.2(0.7)\right] \\
+&amp;=
+0.21(-0.14)\\
+&amp;=-0.0294
+\end{aligned}\]</span></p>
+<p>Both estimators should average near <span style="background-color: codeinlinebg"><code> -0.0294</code></span>. Typical standard deviations are roughly <span style="background-color: codeinlinebg"><code> 0.0047</code></span> for the raw estimator and <span style="background-color: codeinlinebg"><code> 0.0033</code></span> with leave-one-out baselines.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>They permit variance reduction and diagnostics for each signal while preserving the explicit reward–cost tradeoff.</p></li>
+<li><p>The multiplier must respond to actual constraint violation. Centered costs deliberately remove the mean.</p></li>
+<li><p>No. This is an expected-cost constraint; individual minibatches can exceed it.</p></li>
+<li><p>It excludes sample <span class="math inline">\(i\)</span>’s own action-dependent outcome, preserving an unbiased score-function estimator.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Increase <span class="math inline">\(\lambda\)</span>; unsafe actions then receive a larger effective penalty.</p></li>
+<li><p>The correct tradeoff depends on reward scale, cost scale and policy behavior. An adaptive multiplier responds directly to observed violation.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> use centered reward and cost signals for a lower-variance actor gradient, but update the safety price from raw constraint violation. The actor learns what to do; the multiplier learns how expensive unsafe behavior must become.</p>

@@ -1,0 +1,446 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What is the difference between a user-average and an episode-average effect?</p></li>
+<li><p>Why does averaging a zero-padded trajectory tensor estimate neither quantity?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="dividing-by-length-changes-the-objective">2. Dividing by length changes the objective</h3>
+<p>For a generated sequence of length <span class="math inline">\(L\)</span>, three plausible rewards are:</p>
+<p><span class="math display">\[R_{\text{sum}}
+=
+\sum_{t=1}^{L} r_t\]</span></p>
+<p><span class="math display">\[R_{\text{mean}}
+=
+\frac1L\sum_{t=1}^{L}r_t\]</span></p>
+<p><span class="math display">\[R_{\text{utility}}
+=
+R_{\text{task}}-cL\]</span></p>
+<p>These are different objectives, not alternative implementations of the same metric:</p>
+<ul>
+<li><p>positive per-token reward sums encourage longer responses;</p></li>
+<li><p>mean token reward may encourage short but incomplete responses;</p></li>
+<li><p>terminal reward measures task success;</p></li>
+<li><p>an explicit length cost expresses the actual latency or token tradeoff.</p></li>
+</ul>
+<p>Consider a policy choosing concise or verbose behavior. If:</p>
+<p><span class="math display">\[p=\sigma(\theta)\]</span></p>
+<p>is its probability of choosing verbose output, then:</p>
+<p><span class="math display">\[J(\theta)
+=
+(1-p)J_{\text{concise}}
++
+pJ_{\text{verbose}}\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\frac{\partial J}{\partial\theta}
+=
+p(1-p)
+\left(
+J_{\text{verbose}}
+-
+J_{\text{concise}}
+\right)\]</span></p>
+<p>The reward definition can therefore reverse the policy-gradient sign.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>lengths and terminal rewards: <span style="background-color: codeinlinebg"><code> [A, B]</code></span></p></li>
+<li><p>token masks and scores: <span style="background-color: codeinlinebg"><code> [A, B, T]</code></span></p></li>
+<li><p>policy-level objectives: <span style="background-color: codeinlinebg"><code> [A]</code></span></p></li>
+</ul>
+<p>Here <span class="math inline">\(A=2\)</span> behaviors, <span class="math inline">\(B\)</span> sampled sequences and <span class="math inline">\(T\)</span> maximum length.</p>
+<p>For DPO, sequence log-ratios are normally masked sums over response tokens. Replacing sums with length-normalized means changes the preference objective. DPO optimizes the supplied preference pairs; it does not decide which deployment notion of utility is correct.</p>
+<h3 class="unnumbered" id="pytorch-exercise-one-reward-pushes-toward-verbosity">3. PyTorch exercise — one reward pushes toward verbosity</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_policies = 2
+batch_size = 5_000
+maximum_length = 100
+
+policy_names = [
+    &quot;concise&quot;,
+    &quot;verbose&quot;,
+]
+
+token_score_means = torch.tensor([
+    0.70,
+    0.65,
+])
+
+success_probabilities = torch.tensor([
+    0.72,
+    0.68,
+])
+
+token_cost = 0.002
+
+
+# TODO 1: Sample response lengths.
+concise_lengths = ...
+
+verbose_lengths = ...
+
+lengths = ...
+
+
+# TODO 2: Construct token masks and scores.
+token_positions = ...
+
+token_mask = ...
+
+raw_token_scores = ...
+
+padded_token_scores = ...
+
+safe_token_scores = ...
+
+
+# TODO 3: Calculate sequence-level measurements.
+sequence_score_sums = ...
+
+sequence_score_means = ...
+
+terminal_successes = ...
+
+sequence_utilities = ...
+
+
+# TODO 4: Aggregate each policy.
+mean_lengths = ...
+
+sum_objectives = ...
+
+mean_objectives = ...
+
+success_objectives = ...
+
+utility_objectives = ...
+
+# Incorrectly includes padded zeros in the denominator.
+wrong_padded_objectives = ...
+
+
+# TODO 5: Determine the policy-gradient direction.
+def verbose_ascent_gradient(policy_values):
+    theta = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    verbose_probability = ...
+
+    expected_objective = ...
+
+    loss = ...
+
+    loss.backward()
+
+    # PyTorch gives d(loss)/d(theta).
+    # Return d(objective)/d(theta).
+    ascent_gradient = ...
+
+    return (
+        expected_objective.detach(),
+        ascent_gradient,
+    )
+
+
+_, sum_gradient = ...
+_, mean_gradient = ...
+_, success_gradient = ...
+_, utility_gradient = ...
+
+
+results = torch.stack([
+    mean_lengths,
+    sum_objectives,
+    mean_objectives,
+    success_objectives,
+    utility_objectives,
+    wrong_padded_objectives,
+], dim=1)
+
+print(
+    &quot;Rows: concise, verbose\n&quot;
+    &quot;Columns: length, token sum, token mean, &quot;
+    &quot;success, utility, wrong padded mean&quot;
+)
+print(results)
+
+print(
+    &quot;\nAscent gradients for verbose probability&quot;
+)
+print(&quot;Token sum:&quot;, sum_gradient.item())
+print(&quot;Token mean:&quot;, mean_gradient.item())
+print(&quot;Terminal success:&quot;, success_gradient.item())
+print(&quot;Explicit utility:&quot;, utility_gradient.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which policy wins under summed token scores?</p></li>
+<li><p>Which policy wins under mean token score?</p></li>
+<li><p>Which policy has higher task success?</p></li>
+<li><p>Should the verbose-logit gradient have the same sign for every objective?</p></li>
+<li><p>What happens if padded zeros are included in the mean?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample concise lengths from <span style="background-color: codeinlinebg"><code> [15, 25]</code></span> and verbose lengths from <span style="background-color: codeinlinebg"><code> [70, 90]</code></span>.</p></li>
+<li><p>The mask is:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">token_positions &lt; lengths[:, :, None]</code></pre>
+<ul>
+<li><p>Compute masked sums first, then divide by actual lengths.</p></li>
+<li><p>Sample terminal success with a Bernoulli comparison.</p></li>
+<li><p>Utility is <span style="background-color: codeinlinebg"><code> success - token_cost * length</code></span>.</p></li>
+<li><p>PyTorch minimizes <span style="background-color: codeinlinebg"><code> loss = -expected_objective</code></span>, so the ascent gradient is <span style="background-color: codeinlinebg"><code> -theta.grad</code></span>.</p></li>
+<li><p>Detach the measured policy values before mixing them with the trainable logit.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Sum a positive per-token judge score without monitoring length.</p></li>
+<li><p>Average over padded slots instead of valid response tokens.</p></li>
+<li><p>Include prompt tokens in the response-reward mask.</p></li>
+<li><p>Treat truncation at <span style="background-color: codeinlinebg"><code> maximum_length</code></span> as successful termination.</p></li>
+<li><p>Normalize reward by length without recognizing that length is policy-controlled.</p></li>
+<li><p>Rescale terminal reward but leave the token-cost coefficient unchanged.</p></li>
+<li><p>Compare gradient magnitudes across objectives with radically different scales.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can length normalization reverse the gradient direction?</p></li>
+<li><p>Is mean token reward necessarily a better user-utility measure?</p></li>
+<li><p>What mask should exclude prompt and padding tokens?</p></li>
+<li><p>How should maximum-length truncations be represented?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Lengths:</p>
+<pre class="code python"><code class="language-python">concise_lengths = torch.randint(
+    low=15,
+    high=26,
+    size=(batch_size,),
+)
+
+verbose_lengths = torch.randint(
+    low=70,
+    high=91,
+    size=(batch_size,),
+)
+
+lengths = torch.stack([
+    concise_lengths,
+    verbose_lengths,
+], dim=0)</code></pre>
+<p>Masks and token scores:</p>
+<pre class="code python"><code class="language-python">token_positions = torch.arange(
+    maximum_length
+)[None, None, :]
+
+token_mask = (
+    token_positions
+    &lt; lengths[:, :, None]
+)
+
+raw_token_scores = (
+    token_score_means[:, None, None]
+    + 0.10
+    * torch.randn(
+        num_policies,
+        batch_size,
+        maximum_length,
+    )
+).clamp(0.0, 1.0)
+
+padded_token_scores = torch.where(
+    token_mask,
+    raw_token_scores,
+    torch.tensor(float(&quot;nan&quot;)),
+)
+
+safe_token_scores = torch.where(
+    token_mask,
+    padded_token_scores,
+    torch.zeros_like(
+        padded_token_scores
+    ),
+)</code></pre>
+<p>Sequence measurements:</p>
+<pre class="code python"><code class="language-python">sequence_score_sums = (
+    safe_token_scores.sum(dim=2)
+)
+
+sequence_score_means = (
+    sequence_score_sums
+    / lengths.to(torch.float64)
+)
+
+terminal_successes = (
+    torch.rand(
+        num_policies,
+        batch_size,
+    )
+    &lt; success_probabilities[:, None]
+).to(torch.float64)
+
+sequence_utilities = (
+    terminal_successes
+    - token_cost
+    * lengths.to(torch.float64)
+)</code></pre>
+<p>Policy aggregates:</p>
+<pre class="code python"><code class="language-python">mean_lengths = (
+    lengths
+    .to(torch.float64)
+    .mean(dim=1)
+)
+
+sum_objectives = (
+    sequence_score_sums.mean(dim=1)
+)
+
+mean_objectives = (
+    sequence_score_means.mean(dim=1)
+)
+
+success_objectives = (
+    terminal_successes.mean(dim=1)
+)
+
+utility_objectives = (
+    sequence_utilities.mean(dim=1)
+)
+
+wrong_padded_objectives = (
+    safe_token_scores.mean(
+        dim=(1, 2)
+    )
+)</code></pre>
+<p>Gradient directions:</p>
+<pre class="code python"><code class="language-python">def verbose_ascent_gradient(policy_values):
+    theta = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    verbose_probability = torch.sigmoid(
+        theta
+    )
+
+    values = policy_values.detach()
+
+    expected_objective = (
+        (1.0 - verbose_probability)
+        * values[0]
+        + verbose_probability
+        * values[1]
+    )
+
+    loss = -expected_objective
+
+    loss.backward()
+
+    ascent_gradient = (
+        -theta.grad.detach()
+    )
+
+    return (
+        expected_objective.detach(),
+        ascent_gradient,
+    )
+
+
+_, sum_gradient = verbose_ascent_gradient(
+    sum_objectives
+)
+
+_, mean_gradient = verbose_ascent_gradient(
+    mean_objectives
+)
+
+_, success_gradient = verbose_ascent_gradient(
+    success_objectives
+)
+
+_, utility_gradient = verbose_ascent_gradient(
+    utility_objectives
+)</code></pre>
+<p>Expected approximate values are:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Objective</strong></th>
+<th style="text-align: left;"><strong>Concise</strong></th>
+<th style="text-align: left;"><strong>Verbose</strong></th>
+<th style="text-align: left;"><strong>Favoured</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Objective</strong></td>
+<td style="text-align: left;"><strong>Concise</strong></td>
+<td style="text-align: left;"><strong>Verbose</strong></td>
+<td style="text-align: left;"><strong>Favoured</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Length</td>
+<td style="text-align: left;">20</td>
+<td style="text-align: left;">80</td>
+<td style="text-align: left;">—</td>
+</tr>
+<tr>
+<td style="text-align: left;">Token-score sum</td>
+<td style="text-align: left;"><span class="math inline">\(20(0.70)=14\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(80(0.65)=52\)</span></td>
+<td style="text-align: left;">Verbose</td>
+</tr>
+<tr>
+<td style="text-align: left;">Token-score mean</td>
+<td style="text-align: left;">0.70</td>
+<td style="text-align: left;">0.65</td>
+<td style="text-align: left;">Concise</td>
+</tr>
+<tr>
+<td style="text-align: left;">Terminal success</td>
+<td style="text-align: left;">0.72</td>
+<td style="text-align: left;">0.68</td>
+<td style="text-align: left;">Concise</td>
+</tr>
+<tr>
+<td style="text-align: left;">Success minus length cost</td>
+<td style="text-align: left;">0.68</td>
+<td style="text-align: left;">0.52</td>
+<td style="text-align: left;">Concise</td>
+</tr>
+</tbody>
+</table>
+<p>At <span class="math inline">\(\theta=0\)</span>, <span class="math inline">\(p=0.5\)</span>, so:</p>
+<p><span class="math display">\[\frac{\partial J}{\partial\theta}
+=
+0.25
+\left(
+J_{\text{verbose}}
+-
+J_{\text{concise}}
+\right)\]</span></p>
+<p>The summed token objective produces a positive gradient toward verbosity. The other objectives produce negative gradients.</p>
+<p>The incorrect padded mean is approximately:</p>
+<p><span class="math display">\[\frac{20(0.70)}{100}=0.14\]</span></p>
+<p>for concise responses and:</p>
+<p><span class="math display">\[\frac{80(0.65)}{100}=0.52\]</span></p>
+<p>for verbose responses. A masking mistake therefore manufactures a strong verbosity preference.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Because summed reward, mean reward and explicit utility assign different values to policy-controlled length.</p></li>
+<li><p>No. A short incomplete answer can have excellent average token quality but poor task success.</p></li>
+<li><p>Use a response mask that is true only for generated, non-padding tokens; exclude prompt, padding and post-EOS positions.</p></li>
+<li><p>Log them separately and assign the intended timeout or incomplete-task outcome. Do not silently treat truncation as a normal EOS.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The user average gives each user equal weight; the episode average weights users according to how many episodes they generate.</p></li>
+<li><p>Padding changes the denominator unless masked, so the result is neither a valid-user nor valid-episode mean.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> length normalization is part of the reward specification. Monitor sequence length, EOS and truncation rates alongside reward—and verify that the chosen reward gives the intended policy-gradient sign.</p>

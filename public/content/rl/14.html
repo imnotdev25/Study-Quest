@@ -1,0 +1,265 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a 70% exam score</div>
+<p>Scoring 70% feels amazing if you expected 50%, and awful if you expected 90%. What teaches you is the <em>surprise</em>, not the raw score.</p>
+<p>Brains work this way. In famous monkey experiments, dopamine neurons fired when juice arrived unexpectedly, stopped firing once the juice was predicted, and <em>dipped</em> when predicted juice didn’t come. Advantage <span class="math inline">\(=\)</span> actual <span class="math inline">\(-\)</span> expected is the RL version of that signal.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Write the REINFORCE loss for one trajectory.</p></li>
+<li><p>Why does an unsuccessful trajectory with zero return produce no gradient in the previous exercise?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="return-alone-lacks-context">2. Return alone lacks context</h3>
+<p>Suppose you score 70 on an exam:</p>
+<ul>
+<li><p>if the usual score is 40, that result is excellent;</p></li>
+<li><p>if the usual score is 95, it is disappointing.</p></li>
+</ul>
+<p>The raw result is the <strong>return</strong>. The expected result is a <strong>baseline</strong>. Their difference is an advantage:</p>
+<p><span class="math display">\[A_t=G_t-b(S_t)\]</span></p>
+<p>Interpretation:</p>
+<ul>
+<li><p><span class="math inline">\(A_t&gt;0\)</span>: the sampled action led to a better-than-expected outcome;</p></li>
+<li><p><span class="math inline">\(A_t&lt;0\)</span>: worse than expected;</p></li>
+<li><p><span class="math inline">\(A_t\approx0\)</span>: unsurprising outcome.</p></li>
+</ul>
+<p>The policy loss becomes:</p>
+<p><span class="math display">\[L_{\text{policy}}
+=
+-\frac1B
+\sum_{b,t}
+A_{b,t}
+\log\pi_\theta(A_{b,t}\mid S_{b,t})\]</span></p>
+<p>Positive advantage increases an action’s probability. Negative advantage decreases it.</p>
+<h3 class="unnumbered" id="why-a-baseline-does-not-change-the-expected-gradient">Why a baseline does not change the expected gradient</h3>
+<p>If the baseline depends on the state but not the sampled action:</p>
+<p><span class="math display">\[\mathbb E_{a\sim\pi}
+\left[
+b(s)\nabla_\theta\log\pi_\theta(a\mid s)
+\right]
+=0\]</span></p>
+<p>because:</p>
+<p><span class="math display">\[\sum_a
+\pi(a\mid s)\nabla_\theta\log\pi(a\mid s)
+=
+\nabla_\theta\sum_a\pi(a\mid s)
+=
+\nabla_\theta 1
+=
+0\]</span></p>
+<p>So subtracting a suitable baseline preserves the expected policy gradient while usually reducing its variance.</p>
+<h3 class="unnumbered" id="baseline-is-not-reward-shaping">Baseline is not reward shaping</h3>
+<p>Reward shaping changes the task’s reward signal. A baseline changes only the gradient estimator:</p>
+<p><span class="math display">\[G_t
+\quad\rightarrow\quad
+G_t-b(S_t)\]</span></p>
+<p>The environment reward and optimization objective remain the same.</p>
+<p>Today we use an exponential moving average of previous returns. Later, a critic will learn the state-dependent baseline:</p>
+<p><span class="math display">\[b(S_t)\approx V_\phi(S_t)\]</span></p>
+<h3 class="unnumbered" id="tensor-shapes">Tensor shapes</h3>
+<ul>
+<li><p>returns: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>baseline: <span style="background-color: codeinlinebg"><code> [T]</code></span>, broadcast across the batch</p></li>
+<li><p>advantages: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>policy loss: scalar</p></li>
+</ul>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>If an LLM completion receives reward <span style="background-color: codeinlinebg"><code> 0.7</code></span>, that number alone is hard to interpret. If similar completions usually score <span style="background-color: codeinlinebg"><code> 0.2</code></span>, its advantage is positive.</p>
+<p>Group-relative LLM methods use related responses to construct baselines. We will revisit this idea when discussing GRPO.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: baselines don’t add bias, and the variance curve</div>
+<p><strong>Unbiased for any <span class="math inline">\(b(s)\)</span>:</strong> <span class="math inline">\(\mathbb E_{a\sim\pi}[b(s)\nabla\log\pi(a|s)]=b(s)\nabla\sum_a\pi(a|s)=0\)</span>. Subtracting <span class="math inline">\(b\)</span> changes the variance only.</p>
+<p><strong>Example:</strong> returns are 10 or 11 with equal chance. With <span class="math inline">\(b=0\)</span>, every action is pushed up hard and the signal is buried in the shared <span class="math inline">\(+10\)</span>. With <span class="math inline">\(b=10.5\)</span>, the advantages are <span class="math inline">\(\pm0.5\)</span>: a clean “better or worse” signal.</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/fed31d8832d6.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<p><strong>Advantage:</strong> <span class="math inline">\(A^\pi(s,a)=Q^\pi(s,a)-V^\pi(s)\)</span>, and <span class="math inline">\(\mathbb E_{a\sim\pi}[A^\pi(s,a)]=0\)</span>. The truly variance-optimal constant baseline is <span class="math inline">\(b^*=\frac{\mathbb E[\|\nabla\log\pi\|^2G]}{\mathbb E[\|\nabla\log\pi\|^2]}\)</span>, but <span class="math inline">\(V(s)\)</span> is the practical choice.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Learn from “better or worse than expected,” not “good or bad.”</p></li>
+<li><p>Any state-only baseline keeps the gradient unbiased.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: a moving baseline catches up</div>
+<p>Returns are always <span class="math inline">\(G=10\)</span>. Baseline <span class="math inline">\(b\gets b+0.1(G-b)\)</span>, starting at <span class="math inline">\(b=0\)</span>. Advantages <span class="math inline">\(G-b\)</span>: <span class="math inline">\(10\to9\to8.1\to7.29\to\dots\to0\)</span>. Early on, <span class="math inline">\(b\)</span> lags, so every action looks great. Once <span class="math inline">\(b\approx\mathbb E[G]\)</span>, only real differences remain.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Letting the baseline depend on the action taken (it creates bias).</p></li>
+<li><p>Not detaching <span class="math inline">\(V(s)\)</span> inside the actor’s advantage.</p></li>
+<li><p>Updating <span class="math inline">\(b\)</span> with <span class="math inline">\(G\)</span> before computing that same sample’s advantage (a slight self-baseline, see Topic 42).</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: REINFORCE with a learned baseline</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy <span class="math inline">\(\pi_\theta\)</span>, value network <span class="math inline">\(V_\phi\)</span> (or a running mean <span class="math inline">\(b\)</span>)</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each iteration <strong>do</strong></div>
+<div class="algo-line" style="--d:1">collect episodes with <span class="math inline">\(\pi_\theta\)</span>; compute <span class="math inline">\(G_t\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(A_t\gets G_t-V_\phi(s_t)\)</span> <em>▷ detached: the baseline is not trained by the actor loss</em></div>
+<div class="algo-line" style="--d:1">actor step on <span class="math inline">\(-\sum_t\log\pi_\theta(a_t|s_t)\,A_t\)</span></div>
+<div class="algo-line" style="--d:1">critic step on <span class="math inline">\(\sum_t\big(G_t-V_\phi(s_t)\big)^2\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-add-a-moving-baseline">3. PyTorch exercise — add a moving baseline</h3>
+<p>Reward remains <span style="background-color: codeinlinebg"><code> 1</code></span> only when both actions are <span style="background-color: codeinlinebg"><code> 1</code></span>.</p>
+<p>Complete the TODOs:</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+batch_size = 128
+num_steps = 2
+num_actions = 2
+baseline_decay = 0.9
+
+logits = torch.nn.Parameter(
+    torch.zeros(num_steps, num_actions)
+)  # [T, A]
+
+optimizer = torch.optim.Adam([logits], lr=0.1)
+
+# Uses information from previous batches only.
+baseline = torch.zeros(num_steps)  # [T]
+
+gradient_norms = []
+
+for update in range(200):
+    batch_logits = logits.unsqueeze(0).expand(
+        batch_size, -1, -1
+    )  # [B, T, A]
+
+    policy = Categorical(logits=batch_logits)
+    actions = policy.sample()              # [B, T]
+    log_probs = policy.log_prob(actions)   # [B, T]
+
+    rewards = torch.zeros(batch_size, num_steps)
+
+    success = (
+        (actions[:, 0] == 1)
+        &amp; (actions[:, 1] == 1)
+    )
+    rewards[:, -1] = success.float()
+
+    # With gamma=1 and terminal-only reward:
+    # both actions receive the final reward.
+    returns = rewards[:, -1:].expand(
+        -1, num_steps
+    ).clone()  # [B, T]
+
+    # TODO 1:
+    # Compare each return with the previous running baseline.
+    advantages = ...
+
+    # TODO 2:
+    # REINFORCE loss weighted by detached advantages.
+    loss = ...
+
+    optimizer.zero_grad()
+    loss.backward()
+
+    # TODO 3: Compute total policy gradient norm.
+    grad_norm = ...
+    gradient_norms.append(grad_norm)
+
+    optimizer.step()
+
+    # Update the baseline only after using it for this batch.
+    with torch.no_grad():
+        # TODO 4: Exponential moving-average update.
+        baseline = ...
+
+    if update in [0, 1, 9, 49, 199]:
+        with torch.no_grad():
+            probs = logits.softmax(dim=-1)
+            mean_advantage = advantages.mean(dim=0)
+
+        print(
+            f&quot;update={update:3d}&quot;,
+            f&quot;success={success.float().mean().item():.3f}&quot;,
+            f&quot;baseline={baseline.tolist()}&quot;,
+            f&quot;mean_A={mean_advantage.tolist()}&quot;,
+            f&quot;P(action=1)={probs[:, 1].tolist()}&quot;,
+        )
+
+print(
+    &quot;Final policy:&quot;,
+    logits.softmax(dim=-1).detach(),
+)
+print(
+    &quot;Final mean grad norm:&quot;,
+    sum(gradient_norms[-20:]) / 20,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Initially, what is the advantage of a successful episode?</p></li>
+<li><p>Once the baseline is positive, what advantage does a failed episode receive?</p></li>
+<li><p>If the baseline exactly equals a trajectory’s return, what policy-gradient contribution does that trajectory make?</p></li>
+<li><p>Which action probabilities should approach one?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Advantages: return minus baseline.</p></li>
+<li><p>The <span style="background-color: codeinlinebg"><code> [T]</code></span> baseline broadcasts across <span style="background-color: codeinlinebg"><code> [B, T]</code></span>.</p></li>
+<li><p>Policy loss still has a leading negative sign.</p></li>
+<li><p>Gradient norm:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">logits.grad.norm().item()</code></pre>
+<ul>
+<li><p>Moving average:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">decay * old + (1 - decay) * batch_mean</code></pre>
+<ul>
+<li><p>Detach advantages so the policy loss does not optimize their construction.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Reverse the subtraction:</p>
+<pre class="code python"><code class="language-python">advantages = baseline - returns</code></pre>
+<p>Successful trajectories now receive negative advantage and become less likely. This is the policy-gradient equivalent of reversing the TD-error sign.</p>
+<p>Also try updating the baseline before calculating advantages. The current batch then influences both its return and its baseline. This is common in approximate implementations, but using the previous baseline keeps today’s dependency cleaner.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can a failed trajectory now produce a useful gradient?</p></li>
+<li><p>What restriction must a valid baseline satisfy?</p></li>
+<li><p>Does a positive return always imply positive advantage?</p></li>
+<li><p>Why should the advantage normally be detached in the policy loss?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">advantages = returns - baseline</code></pre>
+<pre class="code python"><code class="language-python">loss = -(
+    log_probs * advantages.detach()
+).sum(dim=1).mean()</code></pre>
+<pre class="code python"><code class="language-python">grad_norm = logits.grad.norm().item()</code></pre>
+<p>Moving-baseline update:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    batch_mean_return = returns.mean(dim=0)
+
+    baseline = (
+        baseline_decay * baseline
+        + (1.0 - baseline_decay)
+        * batch_mean_return
+    )</code></pre>
+<p>At the beginning, the baseline is zero:</p>
+<pre class="code text"><code class="language-plaintext">successful return = 1
+advantage = 1 - 0 = 1</code></pre>
+<p>After the baseline becomes, for example, <span style="background-color: codeinlinebg"><code> 0.6</code></span>:</p>
+<pre class="code text"><code class="language-plaintext">success: advantage = 1 - 0.6 =  0.4
+failure: advantage = 0 - 0.6 = -0.6</code></pre>
+<p>Successes increase their sampled action probabilities; failures decrease theirs.</p>
+<p>The mean advantage will not be exactly zero because the baseline is a delayed moving estimate. A slowly updating baseline is stable but stale; a rapidly updating baseline follows recent noise.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Once the baseline is positive, a zero-return failure has negative advantage and its sampled actions become less probable.</p></li>
+<li><p>It must not depend on which current action was sampled in a way that introduces action-dependent bias.</p></li>
+<li><p>No. A positive return below the expected baseline has negative advantage.</p></li>
+<li><p>Advantages are supervision for the policy. Gradient flow into their construction would add unintended optimization paths.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(\displaystyle L=-\sum_tG_t\log\pi_\theta(A_t\mid S_t)\)</span>.</p></li>
+<li><p>Its <span style="background-color: codeinlinebg"><code> return × log_probability</code></span> term is zero.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> return asks, “How well did this trajectory do?” Advantage asks the more useful question: “How much better or worse was it than expected?”</p>

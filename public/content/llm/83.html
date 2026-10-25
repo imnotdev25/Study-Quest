@@ -1,0 +1,291 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Label smoothing</strong> replaces the one-hot target with a slightly spread-out one: <span class="math inline">\(q^{(\epsilon)}=(1-\epsilon)\onehot(y)+\frac{\epsilon}{C}\mathbf 1\)</span>. The loss is still cross-entropy <span class="math inline">\(-\sum_cq_c\log p_c\)</span>, just against a softer target (Part 0: minimizing it means matching <span class="math inline">\(q^{(\epsilon)}\)</span>).</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why can temperature scaling change confidence without changing top-1 predictions?</p></li>
+<li><p>Why can low aggregate ECE hide subgroup miscalibration?</p></li>
+</ol>
+<p>For logits and labels:</p>
+<p><span class="math display">\[Z\in\mathbb{R}^{B\times C},
+\qquad
+y\in\{0,\ldots,C-1\}^{B}\]</span></p>
+<p>ordinary cross-entropy uses one-hot targets <span class="math inline">\(q\)</span>:</p>
+<p><span class="math display">\[L
+=
+-\frac1B\sum_{i,c}q_{ic}\log p_{ic}\]</span></p>
+<p><span class="math display">\[p_{ic}
+=
+\operatorname{softmax}(Z_i)_c\]</span></p>
+<p>Its key gradient is:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial Z_{ic}}
+=
+\frac{p_{ic}-q_{ic}}{B}\]</span></p>
+<p>With hard labels:</p>
+<p><span class="math display">\[q_{ic}=\mathbf1[c=y_i]\]</span></p>
+<p>Label smoothing replaces this target with:</p>
+<p><span class="math display">\[q_{ic}^{(\epsilon)}
+=
+(1-\epsilon)\mathbf1[c=y_i]
++
+\frac{\epsilon}{C}\]</span></p>
+<p>The correct-class target becomes:</p>
+<p><span class="math display">\[1-\epsilon+\frac{\epsilon}{C}\]</span></p>
+<p>while every other class receives <span class="math inline">\(\epsilon/C\)</span>.</p>
+<p>This prevents training from continually demanding probability one for the observed class. For an extremely confident correct prediction, hard-label gradients approach zero; smoothed-label gradients can instead push confidence downward.</p>
+<p>Practical consequences:</p>
+<ul>
+<li><p>finite pressure against extreme logit gaps;</p></li>
+<li><p>often less overconfidence;</p></li>
+<li><p>changed gradients even when accuracy is already perfect;</p></li>
+<li><p>potentially worse calibration or likelihood under distribution shift;</p></li>
+<li><p>undesirable behavior when true labels genuinely should be nearly deterministic.</p></li>
+</ul>
+<p>Label smoothing is a training objective—not a guaranteed calibration method.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the gradient, and why logits stay finite</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\ell=-\sum_cq_c\log p_c=\LSE(z)\sum_cq_c-\sum_cq_cz_c=\LSE(z)-q^\top z\)</span>, since <span class="math inline">\(\sum q=1\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\nabla_z\ell=p-q\)</span>: the same “prediction minus target” form, with the soft target.</p>
+<p><strong>Step 3.</strong> <strong>Hard labels:</strong> <span class="math inline">\(p-\onehot(y)\)</span> is never 0 for finite logits (<span class="math inline">\(p_y&lt;1\)</span> always), so the optimum pushes <span class="math inline">\(z_y-z_c\to\infty\)</span>: overconfidence is built in.</p>
+<p><strong>Step 4.</strong> <strong>Smoothed:</strong> the gradient is 0 when <span class="math inline">\(p=q^{(\epsilon)}\)</span>, so <span class="math inline">\(\frac{p_y}{p_c}=e^{z_y-z_c}=\frac{1-\epsilon+\epsilon/C}{\epsilon/C}\)</span>, a finite gap.</p>
+<p><strong>Step 5.</strong> <strong>Example:</strong> <span class="math inline">\(\epsilon=0.1\)</span>, <span class="math inline">\(C=10\)</span>: target <span class="math inline">\(0.91\)</span> for the true class and <span class="math inline">\(0.01\)</span> for the others, so the optimal logit gap is <span class="math inline">\(\ln91=4.51\)</span>.</p>
+<p><strong>Step 6.</strong> Decomposition: <span class="math inline">\(\ell=(1-\epsilon)\operatorname{CE}(\onehot,p)+\epsilon\operatorname{CE}(\text{uniform},p)\)</span>. The second term is a penalty for putting near-zero probability on any class.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: label-smoothed cross-entropy</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logits <span class="math inline">\(Z\in\mathbb R^{B\times C}\)</span>, labels <span class="math inline">\(y\)</span>, <span class="math inline">\(\epsilon\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\log P\gets\operatorname{log\_softmax}(Z)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(q\gets(1-\epsilon)\onehot(y)+\epsilon/C\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets-\frac1B\sum_{i,c}q_{ic}\log P_{ic}\)</span> <em>▷ <code>cross_entropy(..., label_smoothing=eps)</code></em></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement smoothed cross-entropy and verify its gradient analytically.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+B, C = 4, 4
+epsilon = 0.2
+
+logits = torch.tensor([
+    [   8.0,   -2.0,   -3.0,   -4.0],  # confident correct
+    [   2.0,    1.0,    0.0,   -1.0],  # moderately correct
+    [  -1.0,    3.0,    0.0,    1.0],  # confidently wrong
+    [1000.0,  999.0,  998.0,  997.0],  # numerical-stability test
+], requires_grad=True)                              # [B,C]
+
+labels = torch.tensor([
+    0,
+    0,
+    0,
+    0,
+])                                                   # [B]
+
+log_probabilities = ...                              # TODO 1: [B,C]
+probabilities = ...                                  # TODO 2: [B,C]
+
+one_hot = ...                                        # TODO 3: [B,C]
+smoothed_targets = ...                               # TODO 4: [B,C]
+
+hard_per_example = ...                               # TODO 5: [B]
+smooth_per_example = ...                             # TODO 6: [B]
+
+hard_loss = ...                                      # TODO 7
+smooth_loss = ...                                    # TODO 8
+
+print(&quot;probabilities:\n&quot;,
+      probabilities.detach())
+
+print(&quot;\nhard losses:&quot;,
+      hard_per_example.detach())
+
+print(&quot;smoothed losses:&quot;,
+      smooth_per_example.detach())</code></pre>
+<p>Compare gradients:</p>
+<pre class="code python"><code class="language-python">hard_gradient = torch.autograd.grad(
+    hard_loss,
+    logits,
+    retain_graph=True,
+)[0]
+
+smooth_gradient = torch.autograd.grad(
+    smooth_loss,
+    logits,
+)[0]
+
+expected_hard_gradient = ...                         # TODO 9
+expected_smooth_gradient = ...                       # TODO 10
+
+print(&quot;\nhard gradient:\n&quot;,
+      hard_gradient)
+
+print(&quot;\nsmoothed gradient:\n&quot;,
+      smooth_gradient)
+
+assert torch.allclose(
+    hard_gradient,
+    expected_hard_gradient,
+    atol=1e-6,
+)
+
+assert torch.allclose(
+    smooth_gradient,
+    expected_smooth_gradient,
+    atol=1e-6,
+)</code></pre>
+<p>Inspect the confident correct example:</p>
+<pre class="code python"><code class="language-python">print(
+    &quot;\nconfident example, hard correct-class gradient:&quot;,
+    hard_gradient[0, 0].item(),
+)
+
+print(
+    &quot;confident example, smoothed correct-class gradient:&quot;,
+    smooth_gradient[0, 0].item(),
+)
+
+print(
+    &quot;smoothed target for correct class:&quot;,
+    smoothed_targets[0, 0].item(),
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Is the hard-label gradient for <code>logits</code><span><code>[</code></span><code>0, 0</code><span><code>]</code></span> nearly zero?</p></li>
+<li><p>What is the smoothed correct-class target when <span class="math inline">\(C=4\)</span> and <span class="math inline">\(\epsilon=0.2\)</span>?</p></li>
+<li><p>For the confident correct example, what sign will the smoothed correct-class gradient have?</p></li>
+</ul>
+<p>Finally, reproduce an unstable softmax implementation:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    exponentials = ...                                # TODO 11
+
+    naive_probabilities = ...                         # TODO 12
+    naive_log_probabilities = ...                     # TODO 13
+
+print(
+    &quot;\nnaive computation finite:&quot;,
+    torch.isfinite(
+        naive_log_probabilities
+    ).all().item(),
+)
+
+print(
+    &quot;stable log-softmax finite:&quot;,
+    torch.isfinite(
+        log_probabilities
+    ).all().item(),
+)</code></pre>
+<p>Explain why subtracting the row maximum—or directly using <code>log_softmax</code>—fixes the issue without changing the resulting probabilities.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>F.log_softmax(logits, dim=-1)</code>.</p></li>
+<li><p>Convert <code>F.one_hot</code> to the logits’ dtype.</p></li>
+<li><p>Hard per-example loss is the negative true-class log-probability.</p></li>
+<li><p>Smoothed loss sums over classes.</p></li>
+<li><p>For mean reduction, divide analytical gradients by <span class="math inline">\(B\)</span>.</p></li>
+<li><p>The deliberately unstable implementation directly exponentiates logits.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why is the cross-entropy logit gradient <span class="math inline">\(p-q\)</span>?</p></li>
+<li><p>Prediction: when <span class="math inline">\(p_y\)</span> exceeds the smoothed correct-class target, which direction does gradient descent move the correct-class logit?</p></li>
+<li><p>Does label smoothing change only the loss value, or also the optimization target?</p></li>
+<li><p>Debugging: smoothed training loss remains above zero even with perfect accuracy. Is this necessarily a bug?</p></li>
+<li><p>Why should label smoothing strength be tuned using downstream calibration and accuracy rather than training loss alone?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<p>Forward computation:</p>
+<pre class="code python"><code class="language-python">log_probabilities = F.log_softmax(
+    logits,
+    dim=-1,
+)
+
+probabilities = log_probabilities.exp()
+
+one_hot = F.one_hot(
+    labels,
+    num_classes=C,
+).to(logits.dtype)
+
+smoothed_targets = (
+    (1.0 - epsilon) * one_hot
+    + epsilon / C
+)
+
+hard_per_example = -log_probabilities.gather(
+    dim=-1,
+    index=labels[:, None],
+).squeeze(-1)
+
+smooth_per_example = -(
+    smoothed_targets * log_probabilities
+).sum(dim=-1)
+
+hard_loss = hard_per_example.mean()
+smooth_loss = smooth_per_example.mean()</code></pre>
+<p>Analytical gradients:</p>
+<pre class="code python"><code class="language-python">expected_hard_gradient = (
+    probabilities.detach() - one_hot
+) / B
+
+expected_smooth_gradient = (
+    probabilities.detach() - smoothed_targets
+) / B</code></pre>
+<p>Unstable computation:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    exponentials = logits.exp()
+
+    naive_probabilities = (
+        exponentials
+        / exponentials.sum(dim=-1, keepdim=True)
+    )
+
+    naive_log_probabilities = (
+        naive_probabilities.log()
+    )</code></pre>
+<p>For <span class="math inline">\(C=4\)</span> and <span class="math inline">\(\epsilon=0.2\)</span>, the correct-class target is:</p>
+<p><span class="math display">\[1-0.2+\frac{0.2}{4}
+=
+0.85\]</span></p>
+<p>The first example has <span class="math inline">\(p_y\approx1\)</span>. Therefore:</p>
+<p><span class="math display">\[\frac{\partial L_{\text{smooth}}}{\partial z_y}
+=
+\frac{p_y-0.85}{B}
+&gt;0\]</span></p>
+<p>Gradient descent subtracts this positive gradient, reducing the correct-class logit and its excessive confidence.</p>
+<p>The hard-label gradient is instead:</p>
+<p><span class="math display">\[\frac{p_y-1}{B}\approx0\]</span></p>
+<p>For the large logits, direct exponentiation computes values such as:</p>
+<p><span class="math display">\[e^{1000}\]</span></p>
+<p>which overflow to infinity. The subsequent division can produce <span class="math inline">\(\infty/\infty\)</span>, yielding <code>NaN</code>.</p>
+<p>Softmax is invariant to a common row shift:</p>
+<p><span class="math display">\[\frac{e^{z_c-a}}{\sum_j e^{z_j-a}}
+=
+\frac{e^{z_c}}{\sum_j e^{z_j}}\]</span></p>
+<p>Choosing:</p>
+<p><span class="math display">\[a=\max_jz_j\]</span></p>
+<p>makes the largest exponent equal to one and prevents overflow. <code>F.log_softmax</code> performs this computation stably without first materializing potentially tiny probabilities.</p>
+<p>A nonzero smoothed loss at perfect accuracy is expected: the target distribution assigns positive mass to non-target classes, so probability one on the correct class is not the optimum.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Differentiating log-softmax combines the target contribution with softmax normalization, producing predicted probability minus target probability.</p></li>
+<li><p>The gradient is positive, so gradient descent lowers that logit.</p></li>
+<li><p>It changes the target distribution and therefore every class-logit gradient.</p></li>
+<li><p>No. Perfect argmax accuracy does not imply that predictions equal the smoothed target distribution.</p></li>
+<li><p>Smoothing trades confidence, likelihood, ranking, and accuracy differently across tasks and subgroups; training loss alone cannot identify the useful operating point.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Positive temperature scaling preserves logit ordering while changing softmax sharpness.</p></li>
+<li><p>Aggregate ECE can average over context or entity groups with very different calibration errors.</p></li>
+</ul>

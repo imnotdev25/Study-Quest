@@ -1,0 +1,11 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Mid-training</strong> is the last part of pre-training, run with a different data mix: more math, code, textbooks and synthetic reasoning, plus some instruction-style text, during the learning-rate decay. It’s also where the context window is extended. Most 2025–2026 base models are mid-trained before any post-training starts.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why the decay phase is the place for the best data</div>
+<p><strong>Step 1.</strong> During the constant-LR phase, the optimizer is noisy: each step moves the weights by about <span class="math inline">\(\eta\)</span> in a direction dominated by gradient noise. Loss falls slowly.</p>
+<p><strong>Step 2.</strong> As <span class="math inline">\(\eta\to0\)</span>, the noise averages out and the weights settle into a sharper point of the basin. Most of the final loss improvement happens here, and the model is most influenced by the data it sees <em>last</em>.</p>
+<p><strong>Step 3.</strong> So the recipe is: mostly web text in the stable phase, then switch to a high-quality mix for the 10–20% decay. OLMo 2 calls this its “Dolmino” mix; SmolLM2 and SmolLM3 use several stages with growing math and code shares.</p>
+<p><strong>Step 4.</strong> <strong>Data mixtures:</strong> the mix is a set of weights over sources. Small proxy runs (a few hundred million parameters) are used to choose them, because mixture preferences transfer reasonably well upward in scale.</p>
+<p><strong>Step 5.</strong> <strong>Context extension:</strong> train on long documents with a larger RoPE base or YaRN scaling (<em>LLM Fundamentals</em>, Part VI, “Long Context”), usually 4K/8K <span class="math inline">\(\to\)</span> 32K–128K over a few billion tokens. DeepSeek-V4 extends 64K <span class="math inline">\(\to\)</span> 1M with YaRN factor 16; Kimi K3 goes 8K <span class="math inline">\(\to\)</span> 64K in pre-training and 256K <span class="math inline">\(\to\)</span> 1M in cooldown.</p>
+</div>

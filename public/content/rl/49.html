@@ -1,0 +1,272 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a speed limit in the wrong units</div>
+<p>A speed limit of “0.2” is sensible in km per second and absurd in km per hour. PPO’s value clipping caps how far <span class="math inline">\(V\)</span> can move per update. With <span class="math inline">\(\epsilon=0.2\)</span> and returns around 1, that’s a gentle cap. With returns around 500, the critic is nearly frozen, and that’s a units problem, not a learning problem.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What does negative explained variance say about a critic?</p></li>
+<li><p>Why is value MSE not directly comparable after reward rescaling?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="prevent-abrupt-critic-updates">2. Prevent abrupt critic updates</h3>
+<p>PPO usually updates the actor and critic on the same rollout batch. The critic can overfit that batch or change sharply, destabilizing advantages used by later updates.</p>
+<p>Let:</p>
+<ul>
+<li><p><span class="math inline">\(V_{\text{old}}(s_t)\)</span>: value prediction stored during rollout;</p></li>
+<li><p><span class="math inline">\(V_\phi(s_t)\)</span>: current prediction;</p></li>
+<li><p><span class="math inline">\(\hat R_t\)</span>: fixed return target.</p></li>
+</ul>
+<p>Clip the change in prediction:</p>
+<p><span class="math display">\[V_{\text{clip}}
+=
+V_{\text{old}}
++
+\operatorname{clip}
+\left(
+V_\phi-V_{\text{old}},
+-\epsilon_v,\epsilon_v
+\right)\]</span></p>
+<p>The PPO-style value loss is:</p>
+<p><span class="math display">\[L_V
+=
+\frac12
+\mathbb E
+\left[
+\max
+\left(
+(V_\phi-\hat R)^2,
+(V_{\text{clip}}-\hat R)^2
+\right)
+\right]\]</span></p>
+<p>The <span style="background-color: codeinlinebg"><code> max</code></span> is deliberate. The critic is not allowed to report the optimistic smaller error produced by an excessively large update.</p>
+<p>This is analogous to actor clipping:</p>
+<ul>
+<li><p>actor clipping limits probability-ratio improvement;</p></li>
+<li><p>value clipping limits prediction movement from rollout-time values.</p></li>
+</ul>
+<p>Important limitations:</p>
+<ul>
+<li><p>clipping can slow necessary critic adaptation;</p></li>
+<li><p><span class="math inline">\(\epsilon_v\)</span> depends on reward and return scale;</p></li>
+<li><p>stored old values and return targets must be detached;</p></li>
+<li><p>clipping does not make incorrect bootstrap targets correct;</p></li>
+<li><p>low value loss still does not imply high explained variance.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>old/current values, returns and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>value deltas and loss elements: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>final masked value loss: scalar</p></li>
+</ul>
+<p>DPO ordinarily has no critic and therefore no value-clipping objective.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the clipped value loss</div>
+<p><span class="math display">\[L^V=\max\Big((V_\phi-\hat G)^2,\ \big(V_{\text{old}}+\operatorname{clip}(V_\phi-V_{\text{old}},-\epsilon,\epsilon)-\hat G\big)^2\Big).\]</span></p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/15f39199afec.svg" alt="diagram" loading="lazy"></figure>
+<p><em><span class="math inline">\(V_{\text{old}}=0\)</span>, target <span class="math inline">\(\hat G=1\)</span>, <span class="math inline">\(\epsilon=0.2\)</span>. Past <span class="math inline">\(V=0.2\)</span> the loss is flat at 0.64, so the gradient is zero even though <span class="math inline">\(V\)</span> is still far from the target.</em></p>
+</div>
+<p><strong>Implications:</strong> the critic can close at most about <span class="math inline">\(\epsilon\)</span> of the gap per rollout. If <span class="math inline">\(|\hat G-V_{\text{old}}|\gg\epsilon\)</span>, it needs many iterations. Normalize returns, or scale <span class="math inline">\(\epsilon\)</span> to the return scale, and track the value clip fraction.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>The critic can have its own trust region, measured in return units.</p></li>
+<li><p>Track the value clip fraction, raw errors and explained variance together.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: how slow can the critic be?</div>
+<p><span class="math inline">\(V_{\text{old}}=0\)</span>, target <span class="math inline">\(1\)</span>, <span class="math inline">\(\epsilon_v=0.2\)</span>: one update reaches at most <span class="math inline">\(0.2\)</span>, so the gap closes in about 5 rollouts. Same setup with returns <span class="math inline">\(\times100\)</span> (target <span class="math inline">\(100\)</span>): about 500 rollouts. Normalize returns.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>One <span class="math inline">\(\epsilon\)</span> shared by the policy and value clips with unnormalized returns.</p></li>
+<li><p>Clipping around the <em>current</em> <span class="math inline">\(V_\phi\)</span> instead of rollout-time <span class="math inline">\(V_{\text{old}}\)</span>.</p></li>
+<li><p>Using <span class="math inline">\(\min\)</span> instead of <span class="math inline">\(\max\)</span> (that makes the critic optimistic, not pessimistic).</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: PPO critic update with value clipping</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> new predictions <span class="math inline">\(V_\phi(s_t)\)</span>, rollout-time values <span class="math inline">\(V_{\text{old}}(s_t)\)</span>, targets <span class="math inline">\(\hat R_t\)</span>, clip <span class="math inline">\(\epsilon_v\)</span>, mask <span class="math inline">\(m_t\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(V_{\text{clip}}\gets V_{\text{old}}+\operatorname{clip}(V_\phi-V_{\text{old}},-\epsilon_v,\epsilon_v)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L_V\gets\frac12\sum_tm_t\max\big((V_\phi-\hat R_t)^2,(V_{\text{clip}}-\hat R_t)^2\big)\big/\sum_tm_t\)</span></div>
+<div class="algo-line" style="--d:0">gradient step on <span class="math inline">\(L_V\)</span></div>
+<div class="algo-line" style="--d:0">log the value clip fraction <span class="math inline">\(\operatorname{mean}_t\,\mathbb 1[|V_\phi-V_{\text{old}}|&gt;\epsilon_v]\)</span> and explained variance</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-identify-clipped-critic-updates">3. PyTorch exercise — identify clipped critic updates</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+value_clip_epsilon = 0.2
+
+# [batch=2, time=3]
+old_values = torch.zeros(2, 3)
+
+current_values = torch.nn.Parameter(
+    torch.tensor([
+        [ 0.1,  0.5, 99.0],
+        [-0.5,  0.1, 99.0],
+    ])
+)
+
+returns = torch.tensor([
+    [ 1.0, 1.0, 0.0],
+    [-1.0, 0.0, 0.0],
+])
+
+# Final column is padding.
+mask = torch.tensor([
+    [1.0, 1.0, 0.0],
+    [1.0, 1.0, 0.0],
+])
+
+# TODO 1: Change from rollout-time values.
+value_deltas = ...
+
+# TODO 2: Clip the change and construct clipped predictions.
+clipped_deltas = ...
+clipped_values = ...
+
+# TODO 3: Unclipped and clipped squared errors.
+unclipped_errors = ...
+clipped_errors = ...
+
+# PPO pessimistically selects the larger error.
+# TODO 4: Masked value loss.
+value_loss_elements = ...
+value_loss = ...
+
+value_loss.backward()
+
+valid = mask.bool()
+
+# TODO 5: Diagnostics.
+delta_clip_fraction = ...
+clipped_branch_fraction = ...
+
+print(&quot;Value deltas:\n&quot;, value_deltas.detach())
+print(&quot;Clipped values:\n&quot;, clipped_values.detach())
+
+print(&quot;Unclipped squared errors:\n&quot;,
+      unclipped_errors.detach())
+
+print(&quot;Clipped squared errors:\n&quot;,
+      clipped_errors.detach())
+
+print(&quot;Selected loss elements:\n&quot;,
+      value_loss_elements.detach())
+
+print(&quot;Value loss:&quot;, value_loss.item())
+print(&quot;Delta clip fraction:&quot;,
+      delta_clip_fraction.item())
+print(&quot;Clipped-branch fraction:&quot;,
+      clipped_branch_fraction.item())
+
+print(
+    &quot;Gradient w.r.t. current values:\n&quot;,
+    current_values.grad,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which valid predictions exceed the clipping range?</p></li>
+<li><p>Why does the loss use <span style="background-color: codeinlinebg"><code> maximum</code></span>, not <span style="background-color: codeinlinebg"><code> minimum</code></span>?</p></li>
+<li><p>Which positions should have zero gradient?</p></li>
+<li><p>Would multiplying all returns and values by <span style="background-color: codeinlinebg"><code> 100</code></span> preserve the behaviour of <span style="background-color: codeinlinebg"><code> epsilon_v=0.2</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Delta is <span style="background-color: codeinlinebg"><code> current - old</code></span>.</p></li>
+<li><p>Clamp delta to <span style="background-color: codeinlinebg"><code> [-0.2, 0.2]</code></span>.</p></li>
+<li><p>Both errors compare a prediction against the same detached return.</p></li>
+<li><p>Multiply by the mask before dividing by valid-token count.</p></li>
+<li><p>The clipped branch is selected where its squared error is larger.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Use <span style="background-color: codeinlinebg"><code> minimum</code></span> instead of <span style="background-color: codeinlinebg"><code> maximum</code></span>:</p>
+<pre class="code python"><code class="language-python">value_loss_elements = torch.minimum(
+    unclipped_errors,
+    clipped_errors,
+)</code></pre>
+<p>The critic can now benefit from whichever branch looks better, defeating the conservative clipping rule.</p>
+<p>Next, accidentally use current predictions as old values:</p>
+<pre class="code python"><code class="language-python">old_values = current_values.detach()</code></pre>
+<p>Every delta becomes zero, so value clipping never detects movement from the actual rollout critic.</p>
+<p>Finally, scale returns by <span style="background-color: codeinlinebg"><code> 100</code></span> while retaining <span style="background-color: codeinlinebg"><code> epsilon_v=0.2</code></span>. The permitted update becomes tiny relative to the target scale, potentially freezing useful critic learning.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why must rollout-time old values remain fixed?</p></li>
+<li><p>Can value clipping produce zero gradients for badly predicted states?</p></li>
+<li><p>Why should value clip fraction be logged with explained variance?</p></li>
+<li><p>When might disabling value clipping be reasonable?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Value changes:</p>
+<pre class="code python"><code class="language-python">value_deltas = (
+    current_values - old_values
+)</code></pre>
+<p>Clipped predictions:</p>
+<pre class="code python"><code class="language-python">clipped_deltas = value_deltas.clamp(
+    -value_clip_epsilon,
+    value_clip_epsilon,
+)
+
+clipped_values = (
+    old_values + clipped_deltas
+)</code></pre>
+<p>Squared errors:</p>
+<pre class="code python"><code class="language-python">unclipped_errors = (
+    current_values
+    - returns.detach()
+).square()
+
+clipped_errors = (
+    clipped_values
+    - returns.detach()
+).square()</code></pre>
+<p>Masked value loss:</p>
+<pre class="code python"><code class="language-python">value_loss_elements = torch.maximum(
+    unclipped_errors,
+    clipped_errors,
+)
+
+value_loss = 0.5 * (
+    value_loss_elements * mask
+).sum() / mask.sum()</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">delta_clip_fraction = (
+    value_deltas[valid].abs()
+    &gt; value_clip_epsilon
+).to(
+    current_values.dtype
+).mean()
+
+clipped_branch_fraction = (
+    clipped_errors[valid]
+    &gt; unclipped_errors[valid]
+).to(
+    current_values.dtype
+).mean()</code></pre>
+<p>The valid deltas are:</p>
+<pre class="code python"><code class="language-python">+0.1, +0.5, -0.5, +0.1</code></pre>
+<p>The middle two exceed the allowed magnitude <span style="background-color: codeinlinebg"><code> 0.2</code></span>.</p>
+<p>For the prediction <span style="background-color: codeinlinebg"><code> 0.5</code></span> with target <span style="background-color: codeinlinebg"><code> 1.0</code></span>:</p>
+<p><span class="math display">\[(0.5-1)^2=0.25\]</span></p>
+<p>but its clipped prediction is <span style="background-color: codeinlinebg"><code> 0.2</code></span>:</p>
+<p><span class="math display">\[(0.2-1)^2=0.64\]</span></p>
+<p>The loss selects <span style="background-color: codeinlinebg"><code> 0.64</code></span>, preventing the critic from claiming the improvement produced by moving farther than the clipping range.</p>
+<p>In this simplified example, the selected clipped branch is constant outside the clamp and can produce zero gradient. Real shared-network parameters may still receive gradients from other tokens and loss terms.</p>
+<p>All padded positions must have zero gradient despite their extreme value <span style="background-color: codeinlinebg"><code> 99</code></span>.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Otherwise, both sides move together and the delta no longer measures change from the policy that generated the rollout.</p></li>
+<li><p>Yes. When the constant clipped branch supplies the maximum loss, that sample may contribute no direct value gradient.</p></li>
+<li><p>A large clip fraction may explain stalled critic learning or poor EV even when the reported clipped loss appears stable.</p></li>
+<li><p>When reward scales change rapidly, the critic is severely underfit, or careful learning-rate control and monitoring provide sufficient stability.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Its residuals vary more than the returns themselves; predicting a constant return mean would perform better.</p></li>
+<li><p>MSE has squared reward units. Multiplying rewards and predictions by <span class="math inline">\(c\)</span> multiplies MSE by <span class="math inline">\(c^2\)</span>, even if relative prediction quality is unchanged.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> PPO constrains not only the actor but often the critic. Value clipping can stabilize training, yet its threshold is reward-scale dependent and can suppress necessary learning. Track clip fraction, raw value errors and explained variance together.</p>

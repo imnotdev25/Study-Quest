@@ -1,0 +1,307 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: game over vs the café closing</div>
+<p>A board game ends because someone won: there’s nothing after that. Or it ends because the café is closing, but the position on the board still has a likely winner. Termination means future value is 0. Truncation means the future is unobserved but real, so you estimate it with <span class="math inline">\(V\)</span>. Topic 47 had the idea. This topic is about the plumbing that breaks it.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can unchanged recurrent-policy weights still produce PPO ratios different from one?</p></li>
+<li><p>What does burn-in reconstruct at the beginning of a sequence chunk?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="done-hides-two-different-events">2. “Done” hides two different events</h3>
+<p>A trajectory can stop because:</p>
+<ul>
+<li><p><strong>Termination:</strong> the task truly ended, such as success, failure or an absorbing state.</p></li>
+<li><p><strong>Truncation:</strong> data collection stopped, such as a step limit, context limit or infrastructure timeout.</p></li>
+</ul>
+<p>For a one-step TD target:</p>
+<p><span class="math display">\[y_t
+=
+r_t+
+\gamma
+\left(1-\text{terminated}_t\right)
+V(s_{t+1})\]</span></p>
+<p>At a true terminal state, there is no future value:</p>
+<p><span class="math display">\[y_t=r_t\]</span></p>
+<p>At an artificial truncation, the underlying process may continue:</p>
+<p><span class="math display">\[y_t=r_t+\gamma V(s_{t+1})\]</span></p>
+<p>Treating every timeout as terminal systematically underestimates states near the collection limit.</p>
+<p>Tool-agent semantics matter. A network timeout may be an artificial truncation. Exhausting a real user-defined tool budget may instead be task failure and therefore termination.</p>
+<p>GAE needs two masks:</p>
+<p><span class="math display">\[\delta_t
+=
+r_t+
+\gamma(1-\text{terminated}_t)V(s_{t+1})
+-
+V(s_t)\]</span></p>
+<p><span class="math display">\[\hat A_t
+=
+\delta_t+
+\gamma\lambda
+C_t\hat A_{t+1}\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[C_t
+=
+1-
+(\text{terminated}_t
+\lor
+\text{truncated}_t)\]</span></p>
+<p>The bootstrap mask allows the boundary-state value after truncation. The continuation mask prevents the GAE recursion from crossing into padding or another episode.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>rewards and values: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>;</p></li>
+<li><p>terminated, truncated and valid masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>;</p></li>
+<li><p>TD targets, deltas and advantages: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>.</p></li>
+</ul>
+<p>Detach bootstrap values and targets when training the critic. Otherwise, the network can reduce loss by moving both the prediction and its own target.</p>
+<p>DPO has no critic or bootstrap target. However, labeling every timed-out trace as a rejected response can still teach infrastructure failures as behavioral preferences.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: auto-reset environments</div>
+<p>Gymnasium’s <code>step</code> returns <code>(obs, reward, terminated, truncated, info)</code>. Vectorized environments auto-reset, so when an episode ends, the returned <code>obs</code> is <em>already the next episode’s first observation</em>. The real final observation is in <code>info["final_observation"]</code> (or similar, depending on the version). Bootstrap target at a truncation: <span class="math inline">\(r+\gamma V(s_{\text{final}})\)</span>, using the true final observation, never the reset one. <strong>Storage:</strong> reset recurrent state and trajectory buffers on <em>either</em> flag. Zero the bootstrap only on <code>terminated</code>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Reset storage at both events, but zero bootstrapping only at true termination.</p></li>
+<li><p>Fetch the real final observation from the auto-reset info.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: one terminal trace, one truncated</div>
+<p><span class="math inline">\(\gamma=0.9\)</span>, last reward 1. Terminal: target <span class="math inline">\(=1\)</span>. Truncated with <span class="math inline">\(V(s_{\text{final}})=4\)</span>: target <span class="math inline">\(=1+3.6=4.6\)</span>. Truncated but using the reset observation with <span class="math inline">\(V(s_0^{\text{new}})=0.5\)</span>: <span class="math inline">\(1.45\)</span>, which is wrong.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p><code>done = terminated or truncated</code> used in the target.</p></li>
+<li><p>Bootstrapping from the reset observation.</p></li>
+<li><p>Treating a context-limit stop as success or failure without saying so.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-one-terminal-trace-one-truncated-trace">3. PyTorch exercise — one terminal trace, one truncated trace</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.9
+gae_lambda = 0.95
+
+# Trace 0 ends naturally at time 2.
+# Trace 1 is truncated at time 1; time 2 is padding.
+rewards = torch.tensor([
+    [0.0, 0.0, 1.0],
+    [0.0, 1.0, 99.0],
+])
+
+values = torch.tensor([
+    [2.0, 2.0, 2.0],
+    [2.0, 2.0, 99.0],
+])
+
+next_values = torch.tensor([
+    [2.0, 2.0, 0.0],
+    [2.0, 5.0, 99.0],
+])
+
+terminated = torch.tensor([
+    [False, False, True ],
+    [False, False, False],
+])
+
+truncated = torch.tensor([
+    [False, False, False],
+    [False, True,  False],
+])
+
+valid = torch.tensor([
+    [True, True, True ],
+    [True, True, False],
+])
+
+# TODO 1: Correct bootstrap mask.
+bootstrap_mask = ...
+
+# Common bug: treat termination and truncation
+# as one generic &quot;done&quot; flag.
+done = terminated | truncated
+buggy_bootstrap_mask = ...
+
+# TODO 2: Correct and buggy TD targets.
+correct_targets = ...
+buggy_targets = ...
+
+# Ignore padding after target construction.
+correct_targets = correct_targets * valid
+buggy_targets = buggy_targets * valid
+
+# TODO 3: TD residuals.
+correct_deltas = ...
+buggy_deltas = ...
+
+# TODO 4: GAE continuation mask. It must stop at
+# both true episode ends and collection boundaries.
+continuation_mask = ...
+
+correct_advantages = torch.zeros_like(rewards)
+buggy_advantages = torch.zeros_like(rewards)
+
+correct_running = torch.zeros(
+    rewards.shape[0]
+)
+
+buggy_running = torch.zeros(
+    rewards.shape[0]
+)
+
+# TODO 5: Reverse GAE recursion.
+for time in reversed(range(rewards.shape[1])):
+    ...
+
+print(&quot;Correct TD targets:\n&quot;, correct_targets)
+print(&quot;Buggy TD targets:\n&quot;, buggy_targets)
+
+print(
+    &quot;Correct advantages:\n&quot;,
+    correct_advantages,
+)
+
+print(
+    &quot;Buggy advantages:\n&quot;,
+    buggy_advantages,
+)
+
+print(
+    &quot;Truncated boundary targets:&quot;,
+    {
+        &quot;correct&quot;:
+            correct_targets[1, 1].item(),
+        &quot;buggy&quot;:
+            buggy_targets[1, 1].item(),
+    },
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the target at trace <span style="background-color: codeinlinebg"><code> 0</code></span>, time <span style="background-color: codeinlinebg"><code> 2</code></span>?</p></li>
+<li><p>What is the correct target at trace <span style="background-color: codeinlinebg"><code> 1</code></span>, time <span style="background-color: codeinlinebg"><code> 1</code></span>?</p></li>
+<li><p>Should the padded rewards of <span style="background-color: codeinlinebg"><code> 99</code></span> affect any valid advantage?</p></li>
+<li><p>Does every time limit necessarily count as truncation?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>The correct bootstrap mask is <span style="background-color: codeinlinebg"><code> ~terminated</code></span>.</p></li>
+<li><p>The buggy mask is <span style="background-color: codeinlinebg"><code> ~done</code></span>.</p></li>
+<li><p>Convert Boolean masks to the reward dtype before multiplication.</p></li>
+<li><p>Correct target: <span style="background-color: codeinlinebg"><code> reward + gamma * bootstrap_mask * next_value</code></span>.</p></li>
+<li><p>Stop the GAE recurrence at either termination or truncation.</p></li>
+<li><p>Multiply the running GAE value by <span style="background-color: codeinlinebg"><code> valid[:, time]</code></span>.</p></li>
+<li><p>Store the running value in the corresponding advantage column.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Use <span style="background-color: codeinlinebg"><code> ~terminated</code></span> as both the bootstrap and GAE-continuation mask. Bootstrapping becomes correct, but the recurrence may cross a truncation boundary into padding or the next packed episode.</p>
+<p>Remove <span style="background-color: codeinlinebg"><code> valid</code></span> from the reverse recursion. The padded values of <span style="background-color: codeinlinebg"><code> 99</code></span> contaminate trace <span style="background-color: codeinlinebg"><code> 1</code></span>.</p>
+<p>Let <span style="background-color: codeinlinebg"><code> next_values</code></span> require gradients and omit <span style="background-color: codeinlinebg"><code> .detach()</code></span> in a real critic. Inspect how gradients flow into both sides of the TD target.</p>
+<p>Finally, classify a real tool-call budget as truncation. If exhausting that budget actually means task failure, bootstrapping invents value beyond a boundary where the agent cannot continue.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is zeroing the bootstrap at every timeout biased?</p></li>
+<li><p>Why do GAE and TD bootstrapping need different masks?</p></li>
+<li><p>When should a tool limit count as termination?</p></li>
+<li><p>Which diagnostics reveal boundary-handling bugs?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Bootstrap masks:</p>
+<pre class="code python"><code class="language-python">bootstrap_mask = (
+    ~terminated
+).to(rewards.dtype)
+
+buggy_bootstrap_mask = (
+    ~done
+).to(rewards.dtype)</code></pre>
+<p>TD targets:</p>
+<pre class="code python"><code class="language-python">correct_targets = (
+    rewards
+    + gamma
+    * bootstrap_mask
+    * next_values.detach()
+)
+
+buggy_targets = (
+    rewards
+    + gamma
+    * buggy_bootstrap_mask
+    * next_values.detach()
+)</code></pre>
+<p>TD residuals:</p>
+<pre class="code python"><code class="language-python">correct_deltas = (
+    correct_targets - values
+) * valid
+
+buggy_deltas = (
+    buggy_targets - values
+) * valid</code></pre>
+<p>GAE continuation mask:</p>
+<pre class="code python"><code class="language-python">continuation_mask = (
+    valid
+    &amp; ~terminated
+    &amp; ~truncated
+).to(rewards.dtype)</code></pre>
+<p>Reverse recursion:</p>
+<pre class="code python"><code class="language-python">for time in reversed(range(rewards.shape[1])):
+    correct_running = (
+        correct_deltas[:, time]
+        + gamma
+        * gae_lambda
+        * continuation_mask[:, time]
+        * correct_running
+    )
+
+    buggy_running = (
+        buggy_deltas[:, time]
+        + gamma
+        * gae_lambda
+        * continuation_mask[:, time]
+        * buggy_running
+    )
+
+    correct_running = (
+        correct_running
+        * valid[:, time]
+    )
+
+    buggy_running = (
+        buggy_running
+        * valid[:, time]
+    )
+
+    correct_advantages[:, time] = (
+        correct_running
+    )
+
+    buggy_advantages[:, time] = (
+        buggy_running
+    )</code></pre>
+<p>The naturally terminated transition has:</p>
+<p><span class="math display">\[y=1\]</span></p>
+<p>The truncated transition should retain its estimated future:</p>
+<p><span class="math display">\[y
+=
+1+0.9(5)
+=
+5.5\]</span></p>
+<p>The buggy calculation instead gives:</p>
+<p><span class="math display">\[y_{\text{buggy}}=1\]</span></p>
+<p>This changes the boundary delta from:</p>
+<p><span class="math display">\[5.5-2=3.5\]</span></p>
+<p>to:</p>
+<p><span class="math display">\[1-2=-1\]</span></p>
+<p>The agent therefore receives negative credit where the correct estimate is positive.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Artificial collection limits do not erase the environment’s remaining future return.</p></li>
+<li><p>TD may bootstrap from a truncated boundary state, while GAE must still stop its sampled recursion at that boundary.</p></li>
+<li><p>When the limit is part of the task and no continuation is available, such as exhausting a hard user budget.</p></li>
+<li><p>Log termination and truncation counts separately, boundary TD errors, advantages by final-step type, padding leakage and value estimates near time limits.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>PPO also requires identical histories, hidden-state initialization and action masks; unchanged weights alone are insufficient.</p></li>
+<li><p>Burn-in reconstructs the recurrent state from preceding observations before loss-bearing timesteps.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> reset trajectory storage at both termination and truncation, but zero value bootstrapping only when the task itself truly ends.</p>

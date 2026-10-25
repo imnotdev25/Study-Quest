@@ -1,0 +1,303 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>The problem:</strong> we want <span class="math inline">\(\nabla_\theta\,\mathbb E_{a\sim\pi_\theta}[R(a)]\)</span>, but sampling isn’t differentiable and <span class="math inline">\(R\)</span> may not be differentiable at all. <strong>The score function</strong> <span class="math inline">\(\nabla_\theta\log\pi_\theta(a)\)</span> solves this: it turns the gradient of an expectation into an expectation we can estimate from samples.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why can a sampled policy/reference log-ratio be negative even though its expectation is a KL divergence?</p></li>
+<li><p>What does subtracting an action-independent baseline change: the expected policy gradient, its variance, or both?</p></li>
+</ol>
+<p>For a categorical policy:</p>
+<p><span class="math display">\[\pi_\theta(a\mid s)
+=
+\operatorname{softmax}(z)_a,
+\qquad
+z\in\mathbb{R}^{A}\]</span></p>
+<p>the expected reward is:</p>
+<p><span class="math display">\[J(\theta)
+=
+\mathbb E_{a\sim\pi_\theta}[R(a)]\]</span></p>
+<p>The score-function identity gives:</p>
+<p><span class="math display">\[\nabla_\theta J
+=
+\mathbb E_{a\sim\pi_\theta}
+\left[
+R(a)\nabla_\theta\log\pi_\theta(a)
+\right]\]</span></p>
+<p>We minimize the sampled loss:</p>
+<p><span class="math display">\[L_{\text{PG}}
+=
+-(R-b)\log\pi_\theta(a)\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[A=R-b\]</span></p>
+<p>is the advantage and <span class="math inline">\(b\)</span> is a baseline that must not depend on the sampled action.</p>
+<p>For categorical logits:</p>
+<p><span class="math display">\[\nabla_z\log\pi(a)
+=
+\operatorname{onehot}(a)-\pi\]</span></p>
+<p>Therefore the sampled loss gradient is:</p>
+<p><span class="math display">\[\nabla_zL_{\text{PG}}
+=
+-(R-b)
+\left[
+\operatorname{onehot}(a)-\pi
+\right]\]</span></p>
+<p>The baseline does not change the expected gradient:</p>
+<p><span class="math display">\[\mathbb E[b\nabla\log\pi(a)]
+=
+b\nabla\sum_a\pi(a)
+=
+0\]</span></p>
+<p>But a good baseline can substantially reduce variance. In actor–critic methods, the baseline is usually a learned value function and should be detached from the policy loss.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: REINFORCE, baselines, and the variance they remove</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\nabla J=\nabla\sum_a\pi_\theta(a)R(a)=\sum_a\pi_\theta(a)\nabla\log\pi_\theta(a)\,R(a)\)</span>, using <span class="math inline">\(\nabla\pi=\pi\nabla\log\pi\)</span>.</p>
+<p><strong>Step 2.</strong> So <span class="math inline">\(\nabla J=\mathbb E_{a\sim\pi}[R(a)\nabla\log\pi(a)]\)</span>, and one sample gives an unbiased estimate.</p>
+<p><strong>Step 3.</strong> <strong>Baselines are free:</strong> <span class="math inline">\(\mathbb E_\pi[b\nabla\log\pi]=b\sum_a\nabla\pi(a)=b\nabla1=0\)</span> for any <span class="math inline">\(b\)</span> independent of <span class="math inline">\(a\)</span>. So <span class="math inline">\((R-b)\nabla\log\pi\)</span> has the same mean.</p>
+<p><strong>Step 4.</strong> <strong>Variance:</strong> <span class="math inline">\(\operatorname{Var}=\mathbb E[(R-b)^2\|\nabla\log\pi\|^2]-\|\nabla J\|^2\)</span>. Setting the derivative in <span class="math inline">\(b\)</span> to 0 gives <span class="math inline">\(b^*=\frac{\mathbb E[R\|\nabla\log\pi\|^2]}{\mathbb E[\|\nabla\log\pi\|^2]}\)</span>, approximately <span class="math inline">\(\mathbb E[R]\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Softmax case:</strong> <span class="math inline">\(\nabla_z\log\pi(a)=\onehot(a)-\pi\)</span>. The loss to <em>minimize</em> is <span class="math inline">\(-(R-b)\log\pi(a)\)</span>, with <span class="math inline">\(R-b\)</span> detached.</p>
+<p><strong>Step 6.</strong> <strong>Why the baseline can’t depend on <span class="math inline">\(a\)</span>:</strong> then step 3’s sum no longer factors, and the estimator becomes biased.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: REINFORCE with a running-mean baseline</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy logits <span class="math inline">\(z_\theta\)</span>, baseline <span class="math inline">\(b\gets0\)</span>, rate <span class="math inline">\(\rho\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each batch <strong>do</strong></div>
+<div class="algo-line" style="--d:1">sample <span class="math inline">\(a_i\sim\pi_\theta\)</span>; observe <span class="math inline">\(R_i\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(A_i\gets R_i-b\)</span> <em>▷ detached</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(L\gets-\frac1n\sum_iA_i\log\pi_\theta(a_i)\)</span>; gradient step</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(b\gets\rho b+(1-\rho)\bar R\)</span> <em>▷ update after computing <span class="math inline">\(A\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Compare the exact gradient with Monte Carlo REINFORCE estimates, with and without a baseline.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(211)
+
+A = 4
+num_samples = 100_000
+
+logits = torch.tensor(
+    [0.2, -0.4, 0.1, 0.0],
+    requires_grad=True,
+)                                                # [A]
+
+reward_values = torch.tensor(
+    [1.0, -1.0, 3.0, 0.5]
+)                                                # [A]
+
+
+# Exact expected-reward objective
+probs = ...                                      # TODO 1: [A]
+expected_reward = ...                            # TODO 2: scalar
+exact_loss = ...                                 # TODO 3: minimize -J
+
+exact_gradient = torch.autograd.grad(
+    exact_loss,
+    logits,
+)[0]
+
+print(&quot;probabilities:&quot;, probs.detach())
+print(&quot;expected reward:&quot;, expected_reward.item())
+print(&quot;exact gradient:&quot;, exact_gradient)
+
+
+# Sample actions from the policy
+with torch.no_grad():
+    actions = ...                                # TODO 4: [N]
+    rewards = ...                                # TODO 5: [N]
+
+    one_hot_actions = ...                        # TODO 6: [N,A]
+
+    # ∇log π(a) for every sampled action
+    score_gradients = ...                        # TODO 7: [N,A]
+
+    baseline = ...                               # TODO 8: scalar
+
+    sample_gradients_no_baseline = ...           # TODO 9: [N,A]
+    sample_gradients_with_baseline = ...         # TODO 10: [N,A]
+
+    estimate_no_baseline = ...                   # TODO 11: [A]
+    estimate_with_baseline = ...                 # TODO 12: [A]
+
+    variance_no_baseline = (
+        sample_gradients_no_baseline.var(dim=0, unbiased=False).sum()
+    )
+
+    variance_with_baseline = (
+        sample_gradients_with_baseline.var(dim=0, unbiased=False).sum()
+    )
+
+print(&quot;\nMC gradient without baseline:&quot;, estimate_no_baseline)
+print(&quot;MC gradient with baseline:   &quot;, estimate_with_baseline)
+print(&quot;variance without baseline:&quot;, variance_no_baseline.item())
+print(&quot;variance with baseline:   &quot;, variance_with_baseline.item())
+
+assert torch.allclose(
+    estimate_no_baseline,
+    exact_gradient,
+    atol=1e-2,
+)
+
+assert torch.allclose(
+    estimate_with_baseline,
+    exact_gradient,
+    atol=1e-2,
+)</code></pre>
+<p>Now verify that autograd produces the same sampled REINFORCE gradient:</p>
+<pre class="code python"><code class="language-python">logits.grad = None
+
+log_probs = ...                                  # TODO 13: [A]
+selected_log_probs = ...                         # TODO 14: [N]
+
+advantages = ...                                 # TODO 15: detached [N]
+
+sampled_loss = ...                               # TODO 16: scalar
+sampled_loss.backward()
+
+print(
+    &quot;\nautograd matches sampled estimate:&quot;,
+    torch.allclose(
+        logits.grad,
+        estimate_with_baseline,
+        atol=1e-6,
+    ),
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Which actions have positive advantage?</p></li>
+<li><p>For a sampled action with positive advantage, does gradient descent increase or decrease its log-probability?</p></li>
+</ul>
+<p>Debugging extension—remove <code>.detach()</code>:</p>
+<pre class="code python"><code class="language-python">bad_advantages = rewards - expected_reward
+
+bad_loss = -(
+    bad_advantages
+    * F.log_softmax(logits, dim=-1)[actions]
+).mean()
+
+bad_gradient = torch.autograd.grad(
+    bad_loss,
+    logits,
+)[0]
+
+print(&quot;correct sampled gradient:&quot;, estimate_with_baseline)
+print(&quot;gradient through baseline:&quot;, bad_gradient)</code></pre>
+<p>Explain why allowing the policy-loss gradient to flow through the baseline introduces an unintended path.</p>
+<p>Hints:</p>
+<ul>
+<li><p><code>probs = torch.softmax(logits, dim=-1)</code>.</p></li>
+<li><p>Exact expected reward is <code>(probs * reward_values).sum()</code>.</p></li>
+<li><p>Sample with <code>torch.multinomial</code>.</p></li>
+<li><p>Use <code>F.one_hot(actions, num_classes=A).float()</code>.</p></li>
+<li><p>The score gradient is <code>one_hot_actions - probs.detach()</code>.</p></li>
+<li><p>The loss uses the negative advantage-weighted selected log-probability.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why can’t ordinary backpropagation differentiate through a sampled discrete action?</p></li>
+<li><p>Why does an action-independent baseline leave the expected policy gradient unchanged?</p></li>
+<li><p>Prediction: if <span class="math inline">\(R=b\)</span>, what gradient does that sample contribute?</p></li>
+<li><p>Debugging: rewards improve, but updates are extremely noisy and frequently clipped. What missing variance-reduction mechanism might help?</p></li>
+<li><p>Why should rewards, advantages, and value estimates normally be detached in the actor’s policy-gradient loss?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">probs = torch.softmax(logits, dim=-1)
+
+expected_reward = (
+    probs * reward_values
+).sum()
+
+exact_loss = -expected_reward
+
+exact_gradient = torch.autograd.grad(
+    exact_loss,
+    logits,
+)[0]</code></pre>
+<p>Monte Carlo estimator:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    actions = torch.multinomial(
+        probs,
+        num_samples=num_samples,
+        replacement=True,
+    )
+
+    rewards = reward_values[actions]
+
+    one_hot_actions = F.one_hot(
+        actions,
+        num_classes=A,
+    ).float()
+
+    score_gradients = (
+        one_hot_actions - probs.detach()
+    )
+
+    baseline = expected_reward.detach()
+
+    sample_gradients_no_baseline = (
+        -rewards[:, None] * score_gradients
+    )
+
+    sample_gradients_with_baseline = (
+        -(rewards - baseline)[:, None]
+        * score_gradients
+    )
+
+    estimate_no_baseline = (
+        sample_gradients_no_baseline.mean(dim=0)
+    )
+
+    estimate_with_baseline = (
+        sample_gradients_with_baseline.mean(dim=0)
+    )</code></pre>
+<p>Autograd estimator:</p>
+<pre class="code python"><code class="language-python">logits.grad = None
+
+log_probs = F.log_softmax(logits, dim=-1)
+selected_log_probs = log_probs[actions]
+
+advantages = (
+    rewards - expected_reward.detach()
+).detach()
+
+sampled_loss = -(
+    advantages * selected_log_probs
+).mean()
+
+sampled_loss.backward()</code></pre>
+<p>An action has positive advantage when:</p>
+<p><span class="math display">\[R(a)&gt;\mathbb E[R]\]</span></p>
+<p>For positive advantage:</p>
+<p><span class="math display">\[L=-A\log\pi(a)\]</span></p>
+<p>Gradient descent increases <span class="math inline">\(\log\pi(a)\)</span>, making that action more likely. Negative-advantage actions become less likely.</p>
+<p>If <code>expected_reward</code> is not detached, the loss contains an additional path:</p>
+<p><span class="math display">\[\theta\rightarrow b_\theta\rightarrow A\rightarrow L\]</span></p>
+<p>That path is not part of the REINFORCE policy-gradient estimator. In actor–critic training, the critic receives its own value loss; the actor treats its predicted baseline as fixed.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Sampling a categorical action is discrete and has no ordinary pathwise derivative. REINFORCE differentiates its log-probability instead.</p></li>
+<li><p>Because: <span class="math display">\[\mathbb E[b\nabla\log\pi(a)]
+  =
+  b\nabla\sum_a\pi(a)=0\]</span></p></li>
+<li><p>Its advantage is zero, so it contributes zero policy gradient.</p></li>
+<li><p>An advantage baseline, learned critic, reward normalization, larger rollout batch, or generalized advantage estimation may help.</p></li>
+<li><p>Otherwise, the policy loss can optimize the reward or baseline computation itself through unintended paths instead of only changing action probabilities.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>A sampled log-ratio is one Monte Carlo term; only the correctly sampled expectation equals KL.</p></li>
+<li><p>A good action-independent baseline preserves the expected gradient while reducing its variance.</p></li>
+</ul>

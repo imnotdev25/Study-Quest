@@ -1,0 +1,15 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>T5</strong> (Raffel et al., 2019) casts every task as text in, text out (“translate English to German: …”). The <strong>encoder</strong> reads the input with bidirectional attention. The <strong>decoder</strong> generates with causal self-attention plus <strong>cross-attention</strong>, whose queries come from the decoder and keys and values from the encoder’s output.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/66a48808b5ec.svg" alt="diagram" loading="lazy"></figure>
+<p><em>T5: the decoder’s queries attend to the encoder’s output through cross-attention.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: cross-attention, span corruption and relative position bias</div>
+<p><strong>Step 1.</strong> Cross-attention: <span class="math inline">\(Q=Y_{\text{dec}}W_Q\)</span>, <span class="math inline">\(K=H_{\text{enc}}W_K\)</span>, <span class="math inline">\(V=H_{\text{enc}}W_V\)</span>, <span class="math inline">\(O=\operatorname{softmax}(QK^\top/\sqrt d)V\)</span>. No causal mask here: the whole input is known.</p>
+<p><strong>Step 2.</strong> <strong>Span corruption:</strong> replace random spans (15% of tokens, mean length 3) with sentinels <span class="math inline">\(\langle X\rangle,\langle Y\rangle\)</span>, and train the decoder to output only the missing spans: “<span class="math inline">\(\langle X\rangle\)</span> for inviting <span class="math inline">\(\langle Y\rangle\)</span> last”. Targets are short, so training is cheap.</p>
+<p><strong>Step 3.</strong> Loss: next-token NLL on the decoder output, conditioned on the corrupted input: <span class="math inline">\(-\sum_t\log p(y_t\mid y_{&lt;t},\tilde x)\)</span>.</p>
+<p><strong>Step 4.</strong> <strong>Relative position bias:</strong> add a learned scalar <span class="math inline">\(b_{h}(\operatorname{bucket}(j-i))\)</span> to each attention logit: <span class="math inline">\(S_{ij}=q_i^\top k_j/\sqrt d+b_h(j-i)\)</span>. Buckets are exact for small offsets and logarithmic for large ones, so the model generalizes somewhat beyond trained lengths.</p>
+<p><strong>Step 5.</strong> <strong>Cost:</strong> encoder–decoder with <span class="math inline">\(L\)</span> layers each has about the parameters of a <span class="math inline">\(2L\)</span>-layer decoder, but the input is processed once and not re-attended causally.</p>
+</div>

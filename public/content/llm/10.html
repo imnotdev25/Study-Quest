@@ -1,0 +1,156 @@
+
+<div class="center">
+<table style="width:87%;">
+<colgroup>
+<col style="width: 17%" />
+<col style="width: 28%" />
+<col style="width: 9%" />
+<col style="width: 19%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Distribution</strong></th>
+<th style="text-align: left;"><strong>pmf / pdf</strong></th>
+<th style="text-align: left;"><strong>Mean</strong></th>
+<th style="text-align: left;"><strong>Variance</strong></th>
+<th style="text-align: left;"><strong>Models</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Bernoulli<span class="math inline">\((p)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(p^x(1-p)^{1-x}\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(p\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(p(1-p)\)</span></td>
+<td style="text-align: left;">one right/wrong answer</td>
+</tr>
+<tr>
+<td style="text-align: left;">Binomial<span class="math inline">\((n,p)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\binom nkp^k(1-p)^{n-k}\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(np\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(np(1-p)\)</span></td>
+<td style="text-align: left;">correct answers on <span class="math inline">\(n\)</span> items</td>
+</tr>
+<tr>
+<td style="text-align: left;">Geometric<span class="math inline">\((p)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\((1-p)^{k-1}p\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(1/p\)</span></td>
+<td style="text-align: left;"><span class="math inline">\((1-p)/p^2\)</span></td>
+<td style="text-align: left;">tries until first success</td>
+</tr>
+<tr>
+<td style="text-align: left;">Poisson<span class="math inline">\((\lambda)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(e^{-\lambda}\lambda^k/k!\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\lambda\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\lambda\)</span></td>
+<td style="text-align: left;">request arrivals per second</td>
+</tr>
+<tr>
+<td style="text-align: left;">Categorical<span class="math inline">\((p)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(p_k\)</span></td>
+<td style="text-align: left;">–</td>
+<td style="text-align: left;">–</td>
+<td style="text-align: left;">the next token</td>
+</tr>
+<tr>
+<td style="text-align: left;">Uniform<span class="math inline">\((a,b)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(1/(b-a)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\frac{a+b}2\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\frac{(b-a)^2}{12}\)</span></td>
+<td style="text-align: left;">random seeds</td>
+</tr>
+<tr>
+<td style="text-align: left;">Exponential<span class="math inline">\((\lambda)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\lambda e^{-\lambda x}\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(1/\lambda\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(1/\lambda^2\)</span></td>
+<td style="text-align: left;">gaps between arrivals</td>
+</tr>
+<tr>
+<td style="text-align: left;">Normal<span class="math inline">\((\mu,\sigma^2)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\frac1{\sqrt{2\pi\sigma^2}}e^{-(x-\mu)^2/2\sigma^2}\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\mu\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\sigma^2\)</span></td>
+<td style="text-align: left;">sums of many effects; init</td>
+</tr>
+<tr>
+<td style="text-align: left;">Gamma<span class="math inline">\((k,\theta)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\frac{x^{k-1}e^{-x/\theta}}{\Gamma(k)\theta^k}\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(k\theta\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(k\theta^2\)</span></td>
+<td style="text-align: left;">sums of exponentials</td>
+</tr>
+<tr>
+<td style="text-align: left;">Beta<span class="math inline">\((a,b)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\frac{x^{a-1}(1-x)^{b-1}}{B(a,b)}\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\frac a{a+b}\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\frac{ab}{(a+b)^2(a+b+1)}\)</span></td>
+<td style="text-align: left;">a probability itself</td>
+</tr>
+<tr>
+<td style="text-align: left;">Laplace<span class="math inline">\((0,b)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\frac1{2b}e^{-|x|/b}\)</span></td>
+<td style="text-align: left;">0</td>
+<td style="text-align: left;"><span class="math inline">\(2b^2\)</span></td>
+<td style="text-align: left;">heavy-ish tails; L1 prior</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/2819642ddacb.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The normal: 68% within one standard deviation, 95% within 1.96.</em></p>
+</div>
+<p><strong>How they connect.</strong> Bernoulli sums are binomial; <span class="math inline">\(\text{Binomial}(n,\lambda/n)\to\text{Poisson}(\lambda)\)</span> as <span class="math inline">\(n\to\infty\)</span> (the total-variation distance in the output falls 10<span class="math inline">\(\times\)</span> per decade of <span class="math inline">\(n\)</span>); exponential gaps between events make a Poisson count; sums of <span class="math inline">\(k\)</span> exponentials are Gamma; sums of almost anything become normal (CLT, below); and the Beta is conjugate to the Bernoulli.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Probability: the standard discrete and continuous distributions, theory vs simulation.&quot;&quot;&quot;
+import math
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+N = 1_000_000
+
+table = [  # name, sampler, theoretical mean, theoretical variance
+    (&quot;Bernoulli(0.3)&quot;, lambda: rng.random(N) &lt; 0.3, 0.3, 0.21),
+    (&quot;Binomial(20, 0.3)&quot;, lambda: rng.binomial(20, 0.3, N), 6.0, 4.2),
+    (&quot;Geometric(0.25) trials&quot;, lambda: rng.geometric(0.25, N), 4.0, 12.0),
+    (&quot;Poisson(4)&quot;, lambda: rng.poisson(4, N), 4.0, 4.0),
+    (&quot;Uniform(2, 8)&quot;, lambda: rng.uniform(2, 8, N), 5.0, 3.0),
+    (&quot;Exponential(rate 0.5)&quot;, lambda: rng.exponential(2, N), 2.0, 4.0),
+    (&quot;Normal(1, 9)&quot;, lambda: rng.normal(1, 3, N), 1.0, 9.0),
+    (&quot;Gamma(k=3, theta=2)&quot;, lambda: rng.gamma(3, 2, N), 6.0, 12.0),
+    (&quot;Beta(2, 5)&quot;, lambda: rng.beta(2, 5, N), 2 / 7, 10 / (49 * 8)),
+    (&quot;Laplace(0, b=1)&quot;, lambda: rng.laplace(0, 1, N), 0.0, 2.0),
+]
+print(&quot;[dist] distribution              mean (theory)        variance (theory)&quot;)
+for name, sample, m, v in table:
+    s = sample().astype(float)
+    print(f&quot;[dist] {name:24s} {s.mean():7.4f} ({m:7.4f})   {s.var():8.4f} ({v:8.4f})&quot;)
+
+# Poisson as the limit of Binomial(n, lam/n).
+lam = 3.0
+pois = np.array([math.exp(-lam) * lam**k / math.factorial(k) for k in range(40)])
+for n in (10, 100, 1000):
+    p = lam / n
+    binom = np.array([math.comb(n, k) * p**k * (1 - p) ** (n - k) if k &lt;= n else 0.0 for k in range(40)])
+    print(f&quot;[limit] Binomial({n}, 3/{n}) vs Poisson(3): total variation {0.5 * np.abs(binom - pois).sum():.5f}&quot;)
+
+# Sums: Exponential sums are Gamma; Bernoulli sums are Binomial; Normal sums stay Normal.
+s = rng.exponential(2, (N, 3)).sum(1)
+print(f&quot;[sums] sum of 3 Exponential(mean 2): mean {s.mean():.3f}, var {s.var():.3f}  -&gt; Gamma(3, 2): 6, 12&quot;)</code></pre>
+<pre class="code output"><code class="output">[dist] distribution              mean (theory)        variance (theory)
+[dist] Bernoulli(0.3)            0.3000 ( 0.3000)     0.2100 (  0.2100)
+[dist] Binomial(20, 0.3)         6.0008 ( 6.0000)     4.1985 (  4.2000)
+[dist] Geometric(0.25) trials    3.9974 ( 4.0000)    11.9645 ( 12.0000)
+[dist] Poisson(4)                3.9974 ( 4.0000)     4.0012 (  4.0000)
+[dist] Uniform(2, 8)             4.9999 ( 5.0000)     3.0006 (  3.0000)
+[dist] Exponential(rate 0.5)     1.9970 ( 2.0000)     3.9750 (  4.0000)
+[dist] Normal(1, 9)              0.9985 ( 1.0000)     9.0288 (  9.0000)
+[dist] Gamma(k=3, theta=2)       6.0032 ( 6.0000)    12.0244 ( 12.0000)
+[dist] Beta(2, 5)                0.2855 ( 0.2857)     0.0255 (  0.0255)
+[dist] Laplace(0, b=1)           0.0006 ( 0.0000)     1.9934 (  2.0000)
+[limit] Binomial(10, 3/10) vs Poisson(3): total variation 0.08641
+[limit] Binomial(100, 3/100) vs Poisson(3): total variation 0.00761
+[limit] Binomial(1000, 3/1000) vs Poisson(3): total variation 0.00075
+[sums] sum of 3 Exponential(mean 2): mean 6.000, var 12.020  -&gt; Gamma(3, 2): 6, 12</code></pre>

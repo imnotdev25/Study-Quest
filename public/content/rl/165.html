@@ -1,0 +1,254 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<p><strong>Curriculum position:</strong> LLM × RL → agent/tool-use RL<br />
+<strong>Previously delivered:</strong> action masking and trajectory credit assignment; mastery not yet assessed.</p>
+<h3 class="unnumbered" id="spaced-retrieval-2-minutes">1. Spaced retrieval — 2 minutes</h3>
+<ol>
+<li><p>Why can a useless early tool call receive positive return-to-go?</p></li>
+<li><p>Why must padded trajectory positions be removed from returns, losses and diagnostics?</p></li>
+<li><p>What does subtracting a value baseline change—and what does it preserve?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="helpful-milestones-can-become-loopholes-5-minutes">2. Helpful milestones can become loopholes — 5 minutes</h3>
+<p>Suppose the real task reward is:</p>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> +1</code></span>: correct final answer</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> 0</code></span>: otherwise</p></li>
+</ul>
+<p>Learning may be slow because success is rare. We might add rewards for intermediate steps:</p>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> +0.2</code></span> for searching</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> +0.2</code></span> for using a calculator</p></li>
+</ul>
+<p>This looks helpful, but the agent can now increase reward by calling unnecessary tools.</p>
+<p><span class="math display">\[\underbrace{r&#39;_t}_{\text{training reward}}
+=
+\underbrace{r_t}_{\text{real task reward}}
++
+\underbrace{b_t}_{\text{handwritten tool bonus}}\]</span></p>
+<p>A direct correct answer and a wasteful five-tool answer no longer optimize the same objective.</p>
+<p>A safer construction is <strong>potential-based reward shaping</strong>. Give each state a progress score <span class="math inline">\(\Phi(s)\)</span>, then reward only the change in discounted potential:</p>
+<p><span class="math display">\[\underbrace{F_t}_{\text{shaping signal}}
+=
+\underbrace{\gamma\Phi(s_{t+1})}_{\text{discounted next-state potential}}
+-
+\underbrace{\Phi(s_t)}_{\text{current-state potential}}\]</span></p>
+<p>The shaped reward is:</p>
+<p><span class="math display">\[\underbrace{r&#39;_t}_{\text{reward used for learning}}
+=
+\underbrace{r_t}_{\text{environment reward}}
++
+\underbrace{\gamma\Phi(s_{t+1})-\Phi(s_t)}_{\text{progress shaping}}\]</span></p>
+<p>Across a trajectory, the shaping terms telescope:</p>
+<p><span class="math display">\[\underbrace{G&#39;_0}_{\text{shaped return}}
+=
+\underbrace{G_0}_{\text{original return}}
+-
+\underbrace{\Phi(s_0)}_{\text{same starting-state offset}}
++
+\underbrace{\gamma^T\Phi(s_T)}_{\text{terminal boundary term}}\]</span></p>
+<p>If terminal potentials are zero:</p>
+<p><span class="math display">\[G&#39;_0=G_0-\Phi(s_0)\]</span></p>
+<p>Every action available from the same state receives the same constant offset. Therefore, the action ranking is preserved even though intermediate learning signals become denser.</p>
+<p>Important limits:</p>
+<ul>
+<li><p>A badly learned potential can still add variance or optimization difficulty.</p></li>
+<li><p>Terminal potential must be handled consistently.</p></li>
+<li><p>Timeouts and true terminal states should not be silently confused.</p></li>
+<li><p>Tool costs may legitimately belong in the real objective when latency or money truly matters.</p></li>
+<li><p>Process rewards that are not potential differences can redefine the task.</p></li>
+</ul>
+<p>DPO does not solve this automatically. DPO optimizes preference pairs; if annotators prefer verbose tool traces, those preferences can teach the same unnecessary-tool shortcut offline.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>environment and shaped rewards: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>state potentials: <span style="background-color: codeinlinebg"><code> [B, T + 1]</code></span></p></li>
+<li><p>transition mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>trajectory returns: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-10-minutes">3. PyTorch exercise — 10 minutes</h3>
+<p>Three trajectories are compared:</p>
+<ol>
+<li><p>direct success;</p></li>
+<li><p>tool-heavy success;</p></li>
+<li><p>tool loop followed by failure.</p></li>
+</ol>
+<p>Complete the TODOs and see which reward constructions change their ranking.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.90
+batch_size = 3
+max_steps = 5
+
+lengths = torch.tensor([2, 4, 5])
+transition_mask = (
+    torch.arange(max_steps)[None, :]
+    &lt; lengths[:, None]
+).to(torch.float64)
+
+# Real environment reward: success only at the terminal transition.
+environment_rewards = torch.tensor([
+    [0.0, 1.0, 0.0, 0.0, 0.0],  # direct success
+    [0.0, 0.0, 0.0, 1.0, 0.0],  # tool-heavy success
+    [0.0, 0.0, 0.0, 0.0, 0.0],  # tool loop, then failure
+])
+
+# Search/calculator calls receiving a naive +0.2 bonus.
+tool_calls = torch.tensor([
+    [0.0, 0.0, 0.0, 0.0, 0.0],
+    [1.0, 1.0, 0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0, 1.0, 0.0],
+])
+
+# Potential for every state, including the state after the last transition.
+# Every trajectory starts at potential 0.1 and terminates at potential 0.
+potentials = torch.tensor([
+    [0.1, 0.8, 0.0, 0.0, 0.0, 0.0],
+    [0.1, 0.3, 0.6, 0.9, 0.0, 0.0],
+    [0.1, 0.4, 0.5, 0.4, 0.2, 0.0],
+])
+
+def discounted_returns(rewards, mask):
+    running = torch.zeros(batch_size)
+    returns = torch.zeros_like(rewards)
+
+    for t in reversed(range(max_steps)):
+        # TODO 1: discounted backward recurrence plus masking.
+        running = ...
+        returns[:, t] = ...
+
+    return returns
+
+environment_returns = discounted_returns(
+    environment_rewards, transition_mask
+)
+
+# TODO 2: Add a naive per-tool bonus.
+naive_rewards = ...
+naive_returns = discounted_returns(
+    naive_rewards, transition_mask
+)
+
+# TODO 3: Potential-based transition reward.
+potential_shaping = ...
+potential_rewards = ...
+potential_returns = discounted_returns(
+    potential_rewards, transition_mask
+)
+
+# TODO 4: Verify the telescoping identity.
+expected_potential_start_return = ...
+telescoping_error = ...
+
+print(&quot;Original start returns:&quot;, environment_returns[:, 0])
+print(&quot;Naive-bonus start returns:&quot;, naive_returns[:, 0])
+print(&quot;Potential-shaped start returns:&quot;, potential_returns[:, 0])
+print(&quot;Telescoping error:&quot;, telescoping_error.item())
+
+print(
+    &quot;Original ranking:&quot;,
+    torch.argsort(environment_returns[:, 0], descending=True),
+)
+print(
+    &quot;Naive ranking:&quot;,
+    torch.argsort(naive_returns[:, 0], descending=True),
+)
+print(
+    &quot;Potential ranking:&quot;,
+    torch.argsort(potential_returns[:, 0], descending=True),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which successful trajectory does the original discounted objective prefer?</p></li>
+<li><p>Can the naive tool bonus make the longer success look better?</p></li>
+<li><p>Does the failed tool loop receive positive naive return?</p></li>
+<li><p>Should potential shaping preserve the original ranking?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Backward recurrence:</p>
+<p><span class="math display">\[G_t=(r_t+\gamma G_{t+1})m_t\]</span></p></li>
+<li><p>Naive reward is real reward plus <span style="background-color: codeinlinebg"><code> 0.2 * tool_calls</code></span>.</p></li>
+<li><p>Potential shaping uses adjacent entries of the <span style="background-color: codeinlinebg"><code> [B, T+1]</code></span> tensor.</p></li>
+<li><p>Apply the transition mask to the shaping reward.</p></li>
+<li><p>All initial potentials equal <span style="background-color: codeinlinebg"><code> 0.1</code></span>; all terminal potentials equal zero.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">def discounted_returns(rewards, mask):
+    running = torch.zeros(batch_size)
+    returns = torch.zeros_like(rewards)
+
+    for t in reversed(range(max_steps)):
+        running = rewards[:, t] + gamma * running
+        running = running * mask[:, t]
+        returns[:, t] = running
+
+    return returns
+
+environment_returns = discounted_returns(
+    environment_rewards, transition_mask
+)
+
+naive_rewards = (
+    environment_rewards + 0.2 * tool_calls
+) * transition_mask
+
+naive_returns = discounted_returns(
+    naive_rewards, transition_mask
+)
+
+potential_shaping = (
+    gamma * potentials[:, 1:]
+    - potentials[:, :-1]
+) * transition_mask
+
+potential_rewards = (
+    environment_rewards + potential_shaping
+) * transition_mask
+
+potential_returns = discounted_returns(
+    potential_rewards, transition_mask
+)
+
+expected_potential_start_return = (
+    environment_returns[:, 0] - potentials[:, 0]
+)
+
+telescoping_error = (
+    potential_returns[:, 0]
+    - expected_potential_start_return
+).abs().max()</code></pre>
+<p>Expected start returns:</p>
+<pre class="code text"><code class="language-plaintext">Original:          [0.9000, 0.7290, 0.0000]
+Naive tool bonus:  [0.9000, 1.1090, 0.6878]
+Potential-shaped:  [0.8000, 0.6290, -0.1000]
+Telescoping error: approximately 0</code></pre>
+<p>The naïve bonus changes the ranking:</p>
+<pre class="code text"><code class="language-plaintext">tool-heavy success &gt; direct success &gt; failed loop</code></pre>
+<p>Potential shaping preserves the original ranking:</p>
+<pre class="code text"><code class="language-plaintext">direct success &gt; tool-heavy success &gt; failed loop</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding-3-minutes">4. Checks for understanding — 3 minutes</h3>
+<ol>
+<li><p>Why does the tool-heavy success have a lower original return than the direct success?</p></li>
+<li><p>When is a tool penalty legitimately part of the real reward rather than mere shaping?</p></li>
+<li><p>What bug occurs if padded state potentials are allowed to enter the shaping term?</p></li>
+<li><p>Why should reward-component logging include environment reward and shaping reward separately?</p></li>
+</ol>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Discounting places the success farther in the future:</p>
+<p><span class="math display">\[0.9^1 &gt; 0.9^3\]</span></p></li>
+<li><p>When tool usage has a real deployment cost—latency, money, privacy exposure or safety risk—the penalty belongs in the task objective.</p></li>
+<li><p>Padding can create artificial potential changes after termination, adding fake rewards and breaking the telescoping identity.</p></li>
+<li><p>A rising shaped return can hide falling task success. Separate logging reveals whether the policy improves the true outcome or merely collects intermediate signals.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Return-to-go records temporal precedence, not causality. Every earlier action can inherit later success.</p></li>
+<li><p>Padding is not an environment transition. Including it invents rewards, losses and gradients.</p></li>
+<li><p>A valid baseline reduces variance. It does not change the expected policy-gradient direction when it is independent of the sampled action.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> dense feedback is useful only when you know what objective it creates. Potential differences provide progress signals while preserving the original action ranking; arbitrary milestone bonuses may quietly train the agent to farm tools.</p>

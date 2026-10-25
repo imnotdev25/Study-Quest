@@ -1,0 +1,190 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Adam</strong> keeps two running averages per parameter: <span class="math inline">\(m\)</span> (the average gradient, a direction) and <span class="math inline">\(v\)</span> (the average <em>squared</em> gradient, a scale). It steps by <span class="math inline">\(m/\sqrt v\)</span>, so every parameter moves at a similar speed whatever its gradient scale. <strong>AdamW</strong> shrinks weights toward 0 <em>separately</em> from that adaptive step.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>When accumulating unequal microbatches, what denominator reproduces the global mean gradient?</p></li>
+<li><p>Why should gradient clipping occur after the complete accumulation window?</p></li>
+</ol>
+<p>For parameter and gradient tensors:</p>
+<p><span class="math display">\[\theta,g_t,m_t,v_t\in\mathbb{R}^{D}\]</span></p>
+<p>Adam maintains first- and second-moment estimates:</p>
+<p><span class="math display">\[m_t=\beta_1m_{t-1}+(1-\beta_1)g_t\]</span></p>
+<p><span class="math display">\[v_t=\beta_2v_{t-1}+(1-\beta_2)g_t^2\]</span></p>
+<p>Because both states start at zero, early estimates are biased toward zero:</p>
+<p><span class="math display">\[\hat m_t=\frac{m_t}{1-\beta_1^t},
+\qquad
+\hat v_t=\frac{v_t}{1-\beta_2^t}\]</span></p>
+<p>The adaptive update is:</p>
+<p><span class="math display">\[\theta_t
+=
+\theta_{t-1}
+-\eta\frac{\hat m_t}{\sqrt{\hat v_t}+\epsilon}\]</span></p>
+<p>AdamW applies weight decay separately:</p>
+<p><span class="math display">\[\theta_t
+=
+(1-\eta\lambda)\theta_{t-1}
+-\eta\frac{\hat m_t}{\sqrt{\hat v_t}+\epsilon}\]</span></p>
+<p>This differs from adding an L2 penalty gradient:</p>
+<p><span class="math display">\[g_t^{\text{L2}}=g_t+\lambda\theta\]</span></p>
+<p>With adaptive optimizers, inserting <span class="math inline">\(\lambda\theta\)</span> into the gradient sends it through moment normalization. AdamW instead gives decay a direct, predictable multiplicative effect.</p>
+<p>Research-engineering concern: biases and normalization parameters are commonly excluded from weight decay. They control offsets and scales rather than large weight matrices, and shrinking them may hurt optimization.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: bias correction and why weight decay is decoupled</div>
+<p><strong>Step 1.</strong> Unroll with <span class="math inline">\(m_0=0\)</span>: <span class="math inline">\(m_t=(1-\beta_1)\sum_{k=1}^{t}\beta_1^{t-k}g_k\)</span>.</p>
+<p><strong>Step 2.</strong> If the gradients have a stationary mean <span class="math inline">\(\bar g\)</span>: <span class="math inline">\(\mathbb E[m_t]=\bar g(1-\beta_1)\sum_{j=0}^{t-1}\beta_1^j=\bar g(1-\beta_1^t)\)</span>. The zero start biases <span class="math inline">\(m_t\)</span> toward 0.</p>
+<p><strong>Step 3.</strong> Divide out the bias: <span class="math inline">\(\hat m_t=m_t/(1-\beta_1^t)\)</span>, and similarly <span class="math inline">\(\hat v_t=v_t/(1-\beta_2^t)\)</span>.</p>
+<p><strong>Step 4.</strong> <strong>First step:</strong> <span class="math inline">\(\hat m_1=g_1\)</span>, <span class="math inline">\(\hat v_1=g_1^2\)</span>, so the step is <span class="math inline">\(\eta\frac{g_1}{|g_1|}=\eta\operatorname{sign}(g_1)\)</span>: every parameter moves by about <span class="math inline">\(\eta\)</span>. Without any correction (<span class="math inline">\(\beta_1=0.9,\beta_2=0.999\)</span>): <span class="math inline">\(m_1=0.1g\)</span> and <span class="math inline">\(\sqrt{v_1}=0.032|g|\)</span>, so the first step is about <span class="math inline">\(3\times\)</span> too large. Correcting only <span class="math inline">\(m\)</span> would make it about <span class="math inline">\(30\times\)</span> too large.</p>
+<p><strong>Step 5.</strong> <strong>L2 inside Adam:</strong> adding <span class="math inline">\(\lambda\theta\)</span> to <span class="math inline">\(g\)</span> means the decay is also divided by <span class="math inline">\(\sqrt{\hat v}\)</span>. Parameters with large gradients get almost no decay.</p>
+<p><strong>Step 6.</strong> <strong>AdamW:</strong> <span class="math inline">\(\theta\gets\theta-\eta\big(\hat m/(\sqrt{\hat v}+\epsilon)+\lambda\theta\big)\)</span>. Every parameter decays by the same factor <span class="math inline">\((1-\eta\lambda)\)</span>, independent of its gradient history.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: AdamW</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(\eta,\beta_1,\beta_2,\epsilon,\lambda\)</span>; state <span class="math inline">\(m,v\gets0\)</span>, <span class="math inline">\(t\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each step <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(t\gets t+1\)</span>; <span class="math inline">\(g\gets\nabla L\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(m\gets\beta_1m+(1-\beta_1)g\)</span>; <span class="math inline">\(v\gets\beta_2v+(1-\beta_2)g^2\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\hat m\gets m/(1-\beta_1^t)\)</span>; <span class="math inline">\(\hat v\gets v/(1-\beta_2^t)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\theta\gets\theta-\eta\,\hat m/(\sqrt{\hat v}+\epsilon)-\eta\lambda\theta\)</span> <em>▷ decay usually skipped for biases and norms</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement one AdamW step manually and match <code>torch.optim.AdamW</code>.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(81)
+torch.set_default_dtype(torch.float64)
+
+theta0 = torch.tensor([2.0, -0.5, 0.01])  # [D=3]
+grad = torch.tensor([0.2, -4.0, 0.001])   # [D=3]
+
+lr = 1e-2
+beta1, beta2 = 0.9, 0.999
+eps = 1e-8
+weight_decay = 0.1
+step = 1
+
+# Initial optimizer state
+m = torch.zeros_like(theta0)
+v = torch.zeros_like(theta0)
+
+# Manual AdamW
+m = ...                                      # TODO 1: first moment
+v = ...                                      # TODO 2: second moment
+
+m_hat = ...                                  # TODO 3: bias correction
+v_hat = ...                                  # TODO 4: bias correction
+
+adaptive_update = ...                        # TODO 5: [D]
+theta_manual = ...                           # TODO 6: decay + update
+
+
+# Reference implementation using a fixed artificial gradient
+theta_torch = torch.nn.Parameter(theta0.clone())
+
+optimizer = torch.optim.AdamW(
+    [theta_torch],
+    lr=lr,
+    betas=(beta1, beta2),
+    eps=eps,
+    weight_decay=weight_decay,
+)
+
+loss = ...                                   # TODO 7: gives dloss/dtheta = grad
+loss.backward()
+optimizer.step()
+
+print(&quot;manual:  &quot;, theta_manual)
+print(&quot;PyTorch: &quot;, theta_torch.detach())
+print(&quot;max diff:&quot;,
+      (theta_manual - theta_torch.detach()).abs().max().item())
+
+assert torch.allclose(
+    theta_manual,
+    theta_torch.detach(),
+    atol=1e-12,
+    rtol=1e-10,
+)</code></pre>
+<p>Now implement the coupled-L2 alternative:</p>
+<pre class="code python"><code class="language-python">g_l2 = ...                                   # TODO 8
+
+m_l2 = (1 - beta1) * g_l2
+v_l2 = (1 - beta2) * g_l2.square()
+
+m_l2_hat = m_l2 / (1 - beta1**step)
+v_l2_hat = v_l2 / (1 - beta2**step)
+
+theta_l2 = theta0 - lr * (
+    m_l2_hat / (v_l2_hat.sqrt() + eps)
+)
+
+print(&quot;AdamW:      &quot;, theta_manual)
+print(&quot;Adam + L2:  &quot;, theta_l2)
+print(&quot;difference: &quot;, theta_manual - theta_l2)</code></pre>
+<p>Before running, predict whether AdamW and Adam-plus-L2 produce identical values.</p>
+<p>Debugging extension: set <code>grad = torch.zeros_like(theta0)</code>. Compare the decay behavior. Which method shrinks each parameter proportionally to its magnitude?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>m = beta1 * m + (1 - beta1) * grad</code>.</p></li>
+<li><p>The second moment uses <code>grad.square()</code>.</p></li>
+<li><p>AdamW decay is <code>theta0 * (1 - lr * weight_decay)</code>.</p></li>
+<li><p>A linear loss <code>(theta_torch * grad).sum()</code> produces the desired gradient.</p></li>
+<li><p>Coupled L2 uses <code>grad + weight_decay * theta0</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why are bias corrections most important during the first few optimizer steps?</p></li>
+<li><p>What shapes do Adam’s <span class="math inline">\(m\)</span> and <span class="math inline">\(v\)</span> states have relative to each parameter?</p></li>
+<li><p>Prediction: if the true gradient is zero, what multiplicative change does AdamW apply to <span class="math inline">\(\theta\)</span>?</p></li>
+<li><p>Debugging: after resuming training, updates are unexpectedly large despite correctly restored weights. Which optimizer state might be missing?</p></li>
+<li><p>Why might you exclude LayerNorm scale parameters and biases from weight decay?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python"># Manual AdamW
+m = beta1 * m + (1 - beta1) * grad
+v = beta2 * v + (1 - beta2) * grad.square()
+
+m_hat = m / (1 - beta1**step)
+v_hat = v / (1 - beta2**step)
+
+adaptive_update = m_hat / (v_hat.sqrt() + eps)
+
+theta_manual = (
+    theta0 * (1 - lr * weight_decay)
+    - lr * adaptive_update
+)
+
+# Fixed-gradient reference loss
+loss = (theta_torch * grad).sum()
+
+# Coupled L2
+g_l2 = grad + weight_decay * theta0</code></pre>
+<p>AdamW and coupled L2 generally differ. AdamW keeps the decay outside the adaptive moment calculation; coupled L2 normalizes the penalty contribution along with the task gradient.</p>
+<p>When the task gradient is zero, AdamW gives:</p>
+<p><span class="math display">\[\theta_t=(1-\eta\lambda)\theta_{t-1}\]</span></p>
+<p>Every parameter shrinks by the same proportion. Coupled L2 sends <span class="math inline">\(\lambda\theta\)</span> through Adam’s normalization; on the first step, the resulting update can behave approximately like a sign-based step rather than proportional shrinkage.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Zero-initialized moment estimates strongly underestimate the moments early in training; the bias vanishes as <span class="math inline">\(\beta^t\)</span> approaches zero.</p></li>
+<li><p>Each state tensor has the same shape as its corresponding parameter, contributing two parameter-sized state tensors.</p></li>
+<li><p>It multiplies the parameter by <span class="math inline">\(1-\eta\lambda\)</span>.</p></li>
+<li><p>Missing first- and second-moment buffers—or an incorrectly restored step counter—can change update magnitude substantially.</p></li>
+<li><p>Shrinking normalization scales and biases is often unnecessary and may restrict useful rescaling or offset behavior.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Divide each microbatch’s summed loss by the total number of contributing elements across the accumulation window.</p></li>
+<li><p>Clip after accumulation because clipping individual microbatch gradients changes their eventual vector sum.</p></li>
+</ul>

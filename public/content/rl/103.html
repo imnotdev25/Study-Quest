@@ -1,0 +1,417 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does pairing candidate and control on the same prompts reduce variance?</p></li>
+<li><p>Why is filling a missing paired outcome with zero invalid?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="response-a-wins-may-mean-the-judge-prefers-the-first-position">2. “Response A wins” may mean “the judge prefers the first position”</h3>
+<p>Let <span class="math inline">\(\delta\)</span> represent the candidate’s quality advantage over control and <span class="math inline">\(b\)</span> the judge’s first-position bias.</p>
+<p>A simple pairwise-judgment model is:</p>
+<p><span class="math display">\[P(\text{candidate wins}\mid\text{candidate first})
+=
+\sigma(\delta+b)\]</span></p>
+<p><span class="math display">\[P(\text{candidate wins}\mid\text{candidate second})
+=
+\sigma(\delta-b)\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[\sigma(x)=\frac{1}{1+e^{-x}}\]</span></p>
+<p>If candidate is shown first much more often, its naive win rate mixes quality with position.</p>
+<p>Let the observed win rates be <span class="math inline">\(p_F\)</span> and <span class="math inline">\(p_S\)</span>. Their logits satisfy:</p>
+<p><span class="math display">\[\operatorname{logit}(p_F)=\delta+b\]</span></p>
+<p><span class="math display">\[\operatorname{logit}(p_S)=\delta-b\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\hat\delta
+=
+\frac{
+\operatorname{logit}(p_F)
++
+\operatorname{logit}(p_S)
+}{2}\]</span></p>
+<p><span class="math display">\[\hat b
+=
+\frac{
+\operatorname{logit}(p_F)
+-
+\operatorname{logit}(p_S)
+}{2}\]</span></p>
+<p>Randomizing candidate position makes both effects identifiable. A 50/50 allocation also gives both orders useful sample sizes.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>position, logits, probabilities and judgments: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>group counts and win rates: scalars</p></li>
+</ul>
+<p>Clamp empirical probabilities before taking logits. A stratum with all wins or all losses otherwise produces infinity.</p>
+<p>DPO directly trains on preference labels. If those labels contain position bias, DPO learns from that bias; it does not automatically infer which preference signal was spurious.</p>
+<h3 class="unnumbered" id="pytorch-exercise-a-worse-candidate-appears-to-win">3. PyTorch exercise — a worse candidate appears to win</h3>
+<p>The candidate is slightly worse:</p>
+<p><span class="math display">\[\delta=-0.20\]</span></p>
+<p>But it appears first in 90% of judgments, and the judge has strong first-position bias.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_judgments = 20_000
+
+true_quality_logit = torch.tensor(-0.20)
+true_position_bias = torch.tensor(1.00)
+
+candidate_first_probability = 0.90
+epsilon = 1e-6
+z_value = 1.96
+
+# TODO 1: Randomize positions and simulate judgments.
+candidate_first = ...
+
+position_sign = ...
+
+candidate_win_logits = ...
+
+candidate_win_probabilities = ...
+
+candidate_wins = ...
+
+# TODO 2: Naive pooled result.
+naive_win_rate = ...
+
+naive_win_logit = ...
+
+naive_says_candidate_is_better = ...
+
+# TODO 3: Estimate win rates in each position.
+first_mask = ...
+second_mask = ...
+
+first_count = ...
+second_count = ...
+
+first_win_rate = ...
+second_win_rate = ...
+
+first_win_logit = ...
+second_win_logit = ...
+
+# TODO 4: Separate quality from position bias.
+estimated_quality_logit = ...
+
+estimated_position_bias = ...
+
+estimated_neutral_win_probability = ...
+
+balanced_order_win_rate = ...
+
+adjusted_says_candidate_is_better = ...
+
+# TODO 5: Approximate uncertainty for quality.
+first_logit_variance = ...
+
+second_logit_variance = ...
+
+quality_standard_error = ...
+
+quality_lower_bound = ...
+quality_upper_bound = ...
+
+# Oracle probabilities.
+exact_first_win_probability = ...
+
+exact_second_win_probability = ...
+
+exact_neutral_win_probability = ...
+
+exact_naive_win_probability = ...
+
+print(&quot;Candidate-first count:&quot;, first_count.item())
+print(&quot;Candidate-second count:&quot;, second_count.item())
+
+print(&quot;Naive win rate:&quot;, naive_win_rate.item())
+print(
+    &quot;Balanced-order win rate:&quot;,
+    balanced_order_win_rate.item(),
+)
+print(
+    &quot;Estimated neutral win probability:&quot;,
+    estimated_neutral_win_probability.item(),
+)
+
+print(
+    &quot;First/second win rates:&quot;,
+    first_win_rate.item(),
+    second_win_rate.item(),
+)
+print(
+    &quot;Estimated quality logit:&quot;,
+    estimated_quality_logit.item(),
+)
+print(
+    &quot;Estimated position bias:&quot;,
+    estimated_position_bias.item(),
+)
+print(
+    &quot;Quality-logit interval:&quot;,
+    quality_lower_bound.item(),
+    quality_upper_bound.item(),
+)
+
+print(
+    &quot;Naive says candidate better:&quot;,
+    naive_says_candidate_is_better.item(),
+)
+print(
+    &quot;Adjusted says candidate better:&quot;,
+    adjusted_says_candidate_is_better.item(),
+)
+
+print(
+    &quot;Exact first, second, neutral, naive:&quot;,
+    exact_first_win_probability.item(),
+    exact_second_win_probability.item(),
+    exact_neutral_win_probability.item(),
+    exact_naive_win_probability.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Can the naive candidate win rate exceed <span style="background-color: codeinlinebg"><code> 0.60</code></span> despite <span class="math inline">\(\delta&lt;0\)</span>?</p></li>
+<li><p>Should the candidate win more often when shown first or second?</p></li>
+<li><p>Will the adjusted quality estimate approach <span style="background-color: codeinlinebg"><code> -0.20</code></span>?</p></li>
+<li><p>Why would 50/50 ordering estimate the bias more precisely than 90/10 ordering?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Position sign is <span style="background-color: codeinlinebg"><code> +1</code></span> when candidate is first and <span style="background-color: codeinlinebg"><code> -1</code></span> otherwise.</p></li>
+<li><p>Sample a win with <span style="background-color: codeinlinebg"><code> torch.rand(N) &lt; probability</code></span>.</p></li>
+<li><p>Clamp each win rate to <span style="background-color: codeinlinebg"><code> [epsilon, 1-epsilon]</code></span> before <span style="background-color: codeinlinebg"><code> torch.logit</code></span>.</p></li>
+<li><p>Quality is the average of the two position-specific logits.</p></li>
+<li><p>Position bias is half their difference.</p></li>
+<li><p>For a binomial proportion:</p></li>
+</ul>
+<p><span class="math display">\[\operatorname{Var}[\operatorname{logit}(\hat p)]
+\approx
+\frac{1}{np(1-p)}\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Always display the candidate as response A.</p></li>
+<li><p>Randomize order but fail to record which policy became A.</p></li>
+<li><p>Reverse the displayed text without reversing the associated model ID.</p></li>
+<li><p>Take <span style="background-color: codeinlinebg"><code> torch.logit</code></span> of an empirical zero or one without clamping.</p></li>
+<li><p>Pool judgments across different judge prompts or model versions.</p></li>
+<li><p>Treat the balanced arithmetic win rate as exactly equal to <span class="math inline">\(\sigma(\delta)\)</span>.</p></li>
+<li><p>Train DPO on biased preferences and interpret lower loss as unbiased alignment.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can randomized ordering identify both quality and position bias?</p></li>
+<li><p>Why is a 90/10 split less efficient than a 50/50 split?</p></li>
+<li><p>Why is the balanced arithmetic win rate not exactly the neutral probability?</p></li>
+<li><p>What metadata should every pairwise judgment retain?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Judgment simulation:</p>
+<pre class="code python"><code class="language-python">candidate_first = (
+    torch.rand(num_judgments)
+    &lt; candidate_first_probability
+)
+
+position_sign = torch.where(
+    candidate_first,
+    torch.tensor(1.0),
+    torch.tensor(-1.0),
+)
+
+candidate_win_logits = (
+    true_quality_logit
+    + true_position_bias
+    * position_sign
+)
+
+candidate_win_probabilities = torch.sigmoid(
+    candidate_win_logits
+)
+
+candidate_wins = (
+    torch.rand(num_judgments)
+    &lt; candidate_win_probabilities
+).to(torch.float64)</code></pre>
+<p>Naive result:</p>
+<pre class="code python"><code class="language-python">naive_win_rate = candidate_wins.mean()
+
+naive_win_logit = torch.logit(
+    naive_win_rate.clamp(
+        epsilon,
+        1.0 - epsilon,
+    )
+)
+
+naive_says_candidate_is_better = (
+    naive_win_rate &gt; 0.50
+)</code></pre>
+<p>Position-specific rates:</p>
+<pre class="code python"><code class="language-python">first_mask = candidate_first
+second_mask = ~candidate_first
+
+first_count = first_mask.sum().to(
+    torch.float64
+)
+
+second_count = second_mask.sum().to(
+    torch.float64
+)
+
+first_win_rate = candidate_wins[
+    first_mask
+].mean()
+
+second_win_rate = candidate_wins[
+    second_mask
+].mean()
+
+first_win_logit = torch.logit(
+    first_win_rate.clamp(
+        epsilon,
+        1.0 - epsilon,
+    )
+)
+
+second_win_logit = torch.logit(
+    second_win_rate.clamp(
+        epsilon,
+        1.0 - epsilon,
+    )
+)</code></pre>
+<p>Quality and bias estimates:</p>
+<pre class="code python"><code class="language-python">estimated_quality_logit = (
+    first_win_logit
+    + second_win_logit
+) / 2.0
+
+estimated_position_bias = (
+    first_win_logit
+    - second_win_logit
+) / 2.0
+
+estimated_neutral_win_probability = (
+    torch.sigmoid(
+        estimated_quality_logit
+    )
+)
+
+balanced_order_win_rate = (
+    first_win_rate
+    + second_win_rate
+) / 2.0
+
+adjusted_says_candidate_is_better = (
+    estimated_quality_logit &gt; 0.0
+)</code></pre>
+<p>Approximate uncertainty:</p>
+<pre class="code python"><code class="language-python">first_logit_variance = (
+    1.0
+    / (
+        first_count
+        * first_win_rate
+        * (1.0 - first_win_rate)
+    )
+)
+
+second_logit_variance = (
+    1.0
+    / (
+        second_count
+        * second_win_rate
+        * (1.0 - second_win_rate)
+    )
+)
+
+quality_standard_error = (
+    0.5
+    * torch.sqrt(
+        first_logit_variance
+        + second_logit_variance
+    )
+)
+
+quality_lower_bound = (
+    estimated_quality_logit
+    - z_value
+    * quality_standard_error
+)
+
+quality_upper_bound = (
+    estimated_quality_logit
+    + z_value
+    * quality_standard_error
+)</code></pre>
+<p>Oracle probabilities:</p>
+<pre class="code python"><code class="language-python">exact_first_win_probability = torch.sigmoid(
+    true_quality_logit
+    + true_position_bias
+)
+
+exact_second_win_probability = torch.sigmoid(
+    true_quality_logit
+    - true_position_bias
+)
+
+exact_neutral_win_probability = torch.sigmoid(
+    true_quality_logit
+)
+
+exact_naive_win_probability = (
+    candidate_first_probability
+    * exact_first_win_probability
+    + (
+        1.0
+        - candidate_first_probability
+    )
+    * exact_second_win_probability
+)</code></pre>
+<p>The exact position-specific probabilities are:</p>
+<p><span class="math display">\[p_F
+=
+\sigma(-0.2+1.0)
+=
+\sigma(0.8)
+\approx0.690\]</span></p>
+<p><span class="math display">\[p_S
+=
+\sigma(-0.2-1.0)
+=
+\sigma(-1.2)
+\approx0.231\]</span></p>
+<p>With candidate first 90% of the time:</p>
+<p><span class="math display">\[p_{\text{naive}}
+=
+0.9(0.690)+0.1(0.231)
+\approx0.644\]</span></p>
+<p>The naive analysis therefore declares the worse candidate a strong winner.</p>
+<p>The position-adjusted calculation recovers approximately:</p>
+<p><span class="math display">\[\hat\delta\approx-0.20,
+\qquad
+\hat b\approx1.00\]</span></p>
+<p>and the neutral-position preference probability is:</p>
+<p><span class="math display">\[\sigma(-0.20)\approx0.450\]</span></p>
+<p>The balanced arithmetic rate is approximately:</p>
+<p><span class="math display">\[\frac{0.690+0.231}{2}
+\approx0.461\]</span></p>
+<p>It is useful descriptively but differs from <span style="background-color: codeinlinebg"><code> 0.450</code></span> because averaging probabilities outside a nonlinear sigmoid is not the same as averaging logits inside it.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Random assignment supplies observations under both positions, allowing position-specific logits to separate into their sum and difference.</p></li>
+<li><p>The smaller second-position stratum dominates uncertainty in the adjusted estimate.</p></li>
+<li><p>Because <span class="math inline">\(\sigma\)</span> is nonlinear:</p></li>
+</ol>
+<p><span class="math display">\[\frac{\sigma(\delta+b)+\sigma(\delta-b)}2
+\neq\sigma(\delta)\]</span></p>
+<p>in general.</p>
+<ol>
+<li><p>Store prompt ID, candidate/control IDs, displayed A/B mapping, randomized position propensity, judge version, judge prompt, decoding settings, raw verdict and retry history.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Positive covariance appears with a minus sign in the variance of the paired difference, cancelling shared prompt difficulty.</p></li>
+<li><p>Zero is a real outcome, not a missing-value marker. Substitution changes the estimand and can create policy-dependent bias.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> always randomize and log A/B order. A pairwise judge can otherwise reward screen position rather than policy quality—and preference optimization will faithfully learn that corrupted signal.</p>

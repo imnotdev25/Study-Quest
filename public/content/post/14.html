@@ -1,0 +1,43 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>The earlier chapters are building blocks. Real models chain them, and the order matters: SFT gives the format, preference tuning gives taste, RL gives skill, and distillation passes everything to smaller models. Here are recipes from published reports.</p>
+</div>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Model</th>
+<th style="text-align: left;">post-training stages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Tulu 3 (AI2, 2024)</td>
+<td style="text-align: left;">SFT on a 939K mix <span class="math inline">\(\to\)</span> DPO on on-policy preference pairs judged by an LLM <span class="math inline">\(\to\)</span> RLVR on math and instruction-following with exact checkers</td>
+</tr>
+<tr>
+<td style="text-align: left;">DeepSeek-R1 (2025)</td>
+<td style="text-align: left;">small “cold-start” SFT of long reasoning <span class="math inline">\(\to\)</span> GRPO with rule rewards <span class="math inline">\(\to\)</span> rejection-sample <span class="math inline">\(\approx\)</span>600K reasoning + 200K general SFT examples from that model <span class="math inline">\(\to\)</span> SFT again <span class="math inline">\(\to\)</span> a second RL stage for helpfulness and harmlessness; distilled into Qwen and Llama students</td>
+</tr>
+<tr>
+<td style="text-align: left;">SmolLM3 (HF, 2025)</td>
+<td style="text-align: left;">mid-training on reasoning traces <span class="math inline">\(\to\)</span> SFT with <code>/think</code> and <code>/no_think</code> modes <span class="math inline">\(\to\)</span> preference optimization (APO) <span class="math inline">\(\to\)</span> model merging</td>
+</tr>
+<tr>
+<td style="text-align: left;">DeepSeek-V4 (2026)</td>
+<td style="text-align: left;">per-domain expert models, each trained with SFT and GRPO <span class="math inline">\(\to\)</span> merged into one model with on-policy distillation (model card)</td>
+</tr>
+<tr>
+<td style="text-align: left;">DeepSeek-V4.1-Flash (2026)</td>
+<td style="text-align: left;">SFT <span class="math inline">\(\to\)</span> RL <span class="math inline">\(\to\)</span> on-policy distillation, with reasoning effort adjustable from 1 to 100 (model card)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The two DeepSeek-V4 rows are from the model cards I read in October 2026; the others are from the published reports as I remember them.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Recipes converge: SFT <span class="math inline">\(\to\)</span> preference <span class="math inline">\(\to\)</span> RLVR, then distill. The newest add on-policy distillation to merge specialists.</p></li>
+<li><p>Each stage’s data is mostly synthetic and filtered by the previous stage’s model.</p></li>
+</ul>
+</div>

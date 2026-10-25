@@ -1,0 +1,302 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: “make coffee” is one decision</div>
+<p>You decide “make coffee” once. Then a dozen small actions happen (grind, pour, wait) without you re-deciding to make coffee each second. Options are multi-step actions like that: a high-level policy picks a routine (“research this topic”), and a low-level policy runs it until it decides to stop.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/e42c5911c984.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What does the duration-aware factor <span class="math inline">\(\gamma^{\tau_t}\)</span> represent?</p></li>
+<li><p>Why must the time unit used by <span class="math inline">\(\tau_t\)</span> be documented?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-complete-tool-routine-can-be-one-high-level-action">2. A complete tool routine can be one high-level action</h3>
+<p>A tool agent may repeatedly execute recognizable routines:</p>
+<ul>
+<li><p>search, open result, extract evidence;</p></li>
+<li><p>write code, run tests, inspect failure;</p></li>
+<li><p>query database, validate rows, summarize;</p></li>
+<li><p>request approval, wait, continue.</p></li>
+</ul>
+<p>Hierarchical RL represents such a routine as an <strong>option</strong>. An option has:</p>
+<ul>
+<li><p>an initiation rule: where it can start;</p></li>
+<li><p>an internal policy <span class="math inline">\(\pi_o(a\mid s)\)</span>;</p></li>
+<li><p>a termination rule <span class="math inline">\(\beta_o(s)\)</span>.</p></li>
+</ul>
+<p>The high-level policy chooses:</p>
+<p><span class="math display">\[o_t\sim\mu_\theta(o\mid s_t)\]</span></p>
+<p>The option then executes <span class="math inline">\(k\)</span> primitive actions before returning control.</p>
+<p>Its accumulated discounted reward is:</p>
+<p><span class="math display">\[R_t^{(o)}
+=
+\sum_{j=0}^{k-1}
+\gamma^j r_{t+j}\]</span></p>
+<p>The high-level SMDP target is:</p>
+<p><span class="math display">\[y_t^{(o)}
+=
+R_t^{(o)}
++
+\gamma^k
+(1-\text{terminated})
+V(s_{t+k})\]</span></p>
+<p>Using only <span class="math inline">\(\gamma\)</span> for every option treats a one-step calculation and a ten-step research routine as having equal temporal distance from the next decision.</p>
+<p>The high-level option log-probability occurs once:</p>
+<p><span class="math display">\[L_{\text{high}}
+=
+-\log\mu_\theta(o_t\mid s_t)
+\hat A_t^{(o)}\]</span></p>
+<p>Repeating this same log-probability at every internal tool step weights long options more heavily. Internal actions need their own log-probabilities and credit if their policy is also trained with RL.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>primitive rewards and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>;</p></li>
+<li><p>option durations: <span style="background-color: codeinlinebg"><code> [B]</code></span>;</p></li>
+<li><p>option rewards and targets: <span style="background-color: codeinlinebg"><code> [B]</code></span>;</p></li>
+<li><p>selected-option log-probabilities: <span style="background-color: codeinlinebg"><code> [B]</code></span>;</p></li>
+<li><p>primitive-action log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>.</p></li>
+</ul>
+<p>DPO can rank complete option traces, but it remains fixed-data preference optimization. Online hierarchical RL can explore which option to choose, how to execute it and when to terminate it.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: options and their targets</div>
+<p>An option is <span class="math inline">\(o=(I_o,\pi_o,\beta_o)\)</span>: where it can start, its internal policy, and its termination probability. For an option that ran <span class="math inline">\(k\)</span> steps from <span class="math inline">\(s\)</span> to <span class="math inline">\(s&#39;\)</span>: <span class="math display">\[Q_\Omega(s,o)\leftarrow Q_\Omega(s,o)+\alpha\Big[\textstyle\sum_{i=0}^{k-1}\gamma^ir_{t+i+1}+\gamma^kV_\Omega(s&#39;)-Q_\Omega(s,o)\Big].\]</span> This is SMDP Q-learning (Topic 68) with <span class="math inline">\(\tau=k\)</span>. Aggregate the inner rewards <em>once</em> and bootstrap across the whole duration.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Choose an option once, aggregate its rewards once, bootstrap across its duration.</p></li>
+<li><p>Keep high-level and primitive credit paths separate.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: option target</div>
+<p>Option ran 4 steps with rewards <span class="math inline">\((0,0,1,0)\)</span>, <span class="math inline">\(\gamma=0.9\)</span>, <span class="math inline">\(V_\Omega(s&#39;)=2\)</span>. Inner sum <span class="math inline">\(=0.9^2=0.81\)</span>. Target <span class="math inline">\(=0.81+0.9^4\cdot2=0.81+1.312=2.12\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Bootstrapping with <span class="math inline">\(\gamma\)</span> instead of <span class="math inline">\(\gamma^k\)</span>.</p></li>
+<li><p>Updating <span class="math inline">\(Q_\Omega\)</span> at every primitive step as if the option were re-chosen.</p></li>
+<li><p>Letting an option run forever (no termination).</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-aggregate-primitive-rewards-into-option-targets">3. PyTorch exercise — aggregate primitive rewards into option targets</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.9
+
+# Three completed option executions.
+# Values of 99 are padding and must be ignored.
+primitive_rewards = torch.tensor([
+    [0.2, 0.3, 99.0, 99.0],  # length 2
+    [0.2, 0.1,  0.1,  0.1],  # length 4
+    [0.0, 0.0,  1.0, 99.0],  # terminal, length 3
+])
+
+primitive_mask = torch.tensor([
+    [True, True,  False, False],
+    [True, True,  True,  True ],
+    [True, True,  True,  False],
+])
+
+terminated = torch.tensor([
+    False,
+    False,
+    True,
+])
+
+next_values = torch.tensor([
+    4.0,
+    4.0,
+    99.0,
+])
+
+option_values = torch.tensor([
+    3.0,
+    3.0,
+    1.0,
+])
+
+# TODO 1: Duration of each option [B].
+durations = ...
+
+# TODO 2: Discount each reward by its position
+# inside the option.
+positions = torch.arange(
+    primitive_rewards.shape[1],
+    dtype=primitive_rewards.dtype,
+)
+
+within_option_discounts = ...
+
+safe_rewards = ...
+
+option_rewards = ...
+
+# TODO 3: Discount from the option boundary
+# using gamma ** duration.
+boundary_discounts = ...
+
+# TODO 4: Correct and buggy high-level targets.
+correct_targets = ...
+buggy_targets = ...
+
+# TODO 5: High-level advantages and the effective
+# weights caused by incorrectly repeating each
+# high-level decision once per primitive step.
+option_advantages = ...
+
+correct_high_level_weights = ...
+repeated_high_level_weights = ...
+
+print(&quot;Option durations:&quot;, durations)
+print(&quot;Option rewards:&quot;, option_rewards)
+
+print(
+    &quot;Boundary discounts:&quot;,
+    boundary_discounts,
+)
+
+print(
+    &quot;Correct option targets:&quot;,
+    correct_targets,
+)
+
+print(
+    &quot;Buggy one-step targets:&quot;,
+    buggy_targets,
+)
+
+print(
+    &quot;Correct high-level weights:&quot;,
+    correct_high_level_weights,
+)
+
+print(
+    &quot;Weights if repeated by duration:&quot;,
+    repeated_high_level_weights,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should the terminal option bootstrap from its <span style="background-color: codeinlinebg"><code> next_value</code></span> of <span style="background-color: codeinlinebg"><code> 99</code></span>?</p></li>
+<li><p>Which nonterminal option is most affected by using <span class="math inline">\(\gamma\)</span> instead of <span class="math inline">\(\gamma^k\)</span>?</p></li>
+<li><p>Should padded primitive rewards affect option rewards?</p></li>
+<li><p>What happens if one high-level option log-probability is repeated <span class="math inline">\(k\)</span> times?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Duration is the mask sum across time.</p></li>
+<li><p>Replace padded rewards with zero before reduction.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> gamma ** positions</code></span> for within-option rewards.</p></li>
+<li><p>Use the logarithmic form for boundary discounts.</p></li>
+<li><p>The buggy target applies only one factor of <span style="background-color: codeinlinebg"><code> gamma</code></span>.</p></li>
+<li><p>Detach targets before using them as critic labels.</p></li>
+<li><p>Repeating a summed high-level loss multiplies its effective weight by the duration.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Remove <span style="background-color: codeinlinebg"><code> safe_rewards</code></span>. The padded values of <span style="background-color: codeinlinebg"><code> 99</code></span> dominate short-option returns.</p>
+<p>Replace <span style="background-color: codeinlinebg"><code> boundary_discounts</code></span> with a scalar <span style="background-color: codeinlinebg"><code> gamma</code></span>. Long options receive excessive bootstrap value.</p>
+<p>Use an undiscounted sum for internal rewards while using discounted boundary value. That defines a different objective and may create inconsistent option comparisons.</p>
+<p>Finally, train a termination policy without logging option duration. A policy that immediately terminates every option can look numerically stable while eliminating all useful temporal abstraction.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What are the three components of an option?</p></li>
+<li><p>Why does the high-level bootstrap use <span class="math inline">\(\gamma^k\)</span>?</p></li>
+<li><p>When should an internal action receive its own policy-gradient term?</p></li>
+<li><p>Which diagnostics help detect collapsed options?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Option durations:</p>
+<pre class="code python"><code class="language-python">durations = primitive_mask.sum(
+    dim=1
+)</code></pre>
+<p>Within-option rewards:</p>
+<pre class="code python"><code class="language-python">within_option_discounts = (
+    gamma ** positions
+)
+
+safe_rewards = torch.where(
+    primitive_mask,
+    primitive_rewards,
+    torch.zeros_like(primitive_rewards),
+)
+
+option_rewards = (
+    safe_rewards
+    * within_option_discounts[None, :]
+).sum(dim=1)</code></pre>
+<p>Boundary discounts:</p>
+<pre class="code python"><code class="language-python">boundary_discounts = torch.exp(
+    math.log(gamma)
+    * durations.to(
+        primitive_rewards.dtype
+    )
+)</code></pre>
+<p>Targets:</p>
+<pre class="code python"><code class="language-python">correct_targets = (
+    option_rewards
+    + boundary_discounts
+    * (~terminated).to(
+        primitive_rewards.dtype
+    )
+    * next_values.detach()
+)
+
+buggy_targets = (
+    option_rewards
+    + gamma
+    * (~terminated).to(
+        primitive_rewards.dtype
+    )
+    * next_values.detach()
+)</code></pre>
+<p>High-level weights:</p>
+<pre class="code python"><code class="language-python">option_advantages = (
+    correct_targets
+    - option_values
+)
+
+correct_high_level_weights = (
+    option_advantages.detach()
+)
+
+repeated_high_level_weights = (
+    option_advantages.detach()
+    * durations
+)</code></pre>
+<p>The option rewards are:</p>
+<p><span class="math display">\[R_0^{(o)}
+=
+0.2+0.9(0.3)
+=
+0.47\]</span></p>
+<p><span class="math display">\[R_1^{(o)}
+=
+0.2+0.9(0.1)+0.9^2(0.1)+0.9^3(0.1)
+=
+0.4439\]</span></p>
+<p>The first nonterminal target is:</p>
+<p><span class="math display">\[0.47+0.9^2(4)=3.71\]</span></p>
+<p>The four-step option target is:</p>
+<p><span class="math display">\[0.4439+0.9^4(4)
+\approx3.0683\]</span></p>
+<p>Using a single discount incorrectly gives approximately <span class="math inline">\(4.04\)</span> for the four-step option.</p>
+<p>The terminal option receives no bootstrap value:</p>
+<p><span class="math display">\[y_2^{(o)}
+=
+0+0+0.9^2(1)
+=
+0.81\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Initiation set, internal policy and termination rule.</p></li>
+<li><p>The next high-level decision occurs <span class="math inline">\(k\)</span> primitive transitions later.</p></li>
+<li><p>When the internal policy is trainable and its actions were sampled from that policy.</p></li>
+<li><p>Log duration, termination rate, option-selection entropy, success and cost per option, option transitions and performance by initiation state.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>It is the remaining future-value multiplier after the action’s elapsed duration.</p></li>
+<li><p>The same numerical duration means different elapsed time in seconds, minutes or environment ticks, changing the effective objective.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> choose an option once, aggregate its internal rewards once and bootstrap across its full duration. Keep high-level and primitive-level credit paths distinct.</p>

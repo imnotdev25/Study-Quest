@@ -1,0 +1,430 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why is the highest checkpoint score usually optimistic?</p></li>
+<li><p>What must be locked before an independent confirmation evaluation?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="give-both-policies-the-same-exam-questions">2. Give both policies the same exam questions</h3>
+<p>Prompts differ greatly in difficulty. If candidate and control receive unrelated prompt samples, this variation becomes evaluation noise.</p>
+<p>Instead, evaluate both policies on prompt <span class="math inline">\(i\)</span>, then form:</p>
+<p><span class="math display">\[D_i=Y_i^{\text{candidate}}-Y_i^{\text{control}}\]</span></p>
+<p>The paired effect estimator is:</p>
+<p><span class="math display">\[\hat\tau_{\text{paired}}
+=
+\frac1N\sum_{i=1}^{N}D_i\]</span></p>
+<p>Its variance is:</p>
+<p><span class="math display">\[\operatorname{Var}(\hat\tau_{\text{paired}})
+=
+\frac{
+\sigma_1^2+\sigma_0^2
+-2\operatorname{Cov}(Y_1,Y_0)
+}{N}\]</span></p>
+<p>Both outputs usually rise on easy prompts and fall on difficult prompts, creating positive covariance. Subtraction cancels much of this shared difficulty.</p>
+<p>For independent prompt sets, that covariance is absent:</p>
+<p><span class="math display">\[\operatorname{Var}(\hat\tau_{\text{independent}})
+=
+\frac{\sigma_1^2}{N}
++
+\frac{\sigma_0^2}{N}\]</span></p>
+<p>Pairing means sharing the same pre-treatment prompt or task—not necessarily forcing identical token-level RNG. Different models can diverge immediately even with the same random seed.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>outcomes and prompt effects: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>paired differences: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>estimates and standard errors: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>For LLM judges, randomize candidate/control presentation order to avoid position bias. Preserve stable prompt IDs; one accidental row shuffle destroys the pairing.</p>
+<p>DPO also uses two completions for one prompt, but its pairwise loss optimizes preference likelihood. It does not directly estimate the candidate’s online reward improvement.</p>
+<h3 class="unnumbered" id="pytorch-exercise-pairing-turns-35-power-into-about-88">3. PyTorch exercise — pairing turns 35% power into about 88%</h3>
+<p>Each prompt has a large shared difficulty effect. The candidate’s real improvement is <span style="background-color: codeinlinebg"><code> 0.40</code></span>.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 2_000
+num_prompts = 100
+
+true_effect = 0.40
+
+prompt_difficulty_sd = 2.0
+response_noise_sd = 1.0
+
+one_sided_z = 1.645
+
+# TODO 1: Generate a paired experiment.
+shared_prompt_difficulty = ...
+
+paired_control_noise = ...
+paired_candidate_noise = ...
+
+paired_control_outcomes = ...
+
+paired_candidate_outcomes = ...
+
+# TODO 2: Generate an independent-prompt experiment.
+independent_control_difficulty = ...
+independent_candidate_difficulty = ...
+
+independent_control_noise = ...
+independent_candidate_noise = ...
+
+independent_control_outcomes = ...
+
+independent_candidate_outcomes = ...
+
+# TODO 3: Calculate effect estimates.
+paired_differences = ...
+
+paired_effects = ...
+
+paired_effects_as_difference_of_means = ...
+
+independent_effects = ...
+
+maximum_paired_identity_error = ...
+
+# TODO 4: Calculate design-appropriate standard errors.
+paired_standard_errors = ...
+
+# Incorrectly ignores covariance in paired data.
+wrong_unpaired_standard_errors = ...
+
+independent_standard_errors = ...
+
+# TODO 5: Compare detection rates and diagnostics.
+paired_lower_bounds = ...
+
+wrong_unpaired_lower_bounds = ...
+
+independent_lower_bounds = ...
+
+paired_detection_rate = ...
+wrong_unpaired_detection_rate = ...
+independent_detection_rate = ...
+
+paired_empirical_sd = ...
+independent_empirical_sd = ...
+
+mean_paired_se = ...
+mean_wrong_unpaired_se = ...
+mean_independent_se = ...
+
+paired_outcome_correlation = ...
+
+print(
+    &quot;Maximum paired identity error:&quot;,
+    maximum_paired_identity_error.item(),
+)
+print(
+    &quot;Paired outcome correlation:&quot;,
+    paired_outcome_correlation.item(),
+)
+
+print(
+    &quot;Empirical effect SDs: paired, independent&quot;,
+    paired_empirical_sd.item(),
+    independent_empirical_sd.item(),
+)
+
+print(
+    &quot;Mean estimated SEs: paired, &quot;
+    &quot;wrong-unpaired-on-paired, independent&quot;
+)
+print(
+    mean_paired_se.item(),
+    mean_wrong_unpaired_se.item(),
+    mean_independent_se.item(),
+)
+
+print(
+    &quot;Detection rates: paired, &quot;
+    &quot;wrong-unpaired-on-paired, independent&quot;
+)
+print(
+    paired_detection_rate.item(),
+    wrong_unpaired_detection_rate.item(),
+    independent_detection_rate.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What correlation should shared prompt difficulty create between candidate and control outcomes?</p></li>
+<li><p>Will the two algebraic paired-effect calculations agree?</p></li>
+<li><p>Which design should have the smallest empirical effect variance?</p></li>
+<li><p>What happens if paired data are analyzed with an unpaired standard error?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Broadcast no extra dimensions: every simulated tensor is <span style="background-color: codeinlinebg"><code> [R, N]</code></span>.</p></li>
+<li><p>Paired outcomes share one difficulty tensor but use independent response noise.</p></li>
+<li><p>Independent outcomes use separate difficulty tensors.</p></li>
+<li><p>A paired standard error uses <span style="background-color: codeinlinebg"><code> paired_differences.std(dim=1) / sqrt(N)</code></span>.</p></li>
+<li><p>An unpaired standard error adds the two sample variances divided by <span class="math inline">\(N\)</span>.</p></li>
+<li><p>Detect improvement when the one-sided lower bound exceeds zero.</p></li>
+<li><p>Flatten both paired outcome matrices before <span style="background-color: codeinlinebg"><code> torch.corrcoef</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Shuffle only the candidate rows before differencing.</p></li>
+<li><p>Match outputs by batch position rather than stable prompt ID.</p></li>
+<li><p>Fill a missing candidate outcome with zero to preserve tensor shape.</p></li>
+<li><p>Drop pairs with policy-dependent timeouts without analyzing missingness.</p></li>
+<li><p>Treat paraphrases as independent when they share one underlying template.</p></li>
+<li><p>Present the candidate first to the judge every time.</p></li>
+<li><p>Force matching token seeds and assume this guarantees comparable trajectories.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does positive candidate/control covariance help?</p></li>
+<li><p>Does pairing change the target effect?</p></li>
+<li><p>When might pairing provide little benefit?</p></li>
+<li><p>How should missing outcomes be handled?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Paired experiment:</p>
+<pre class="code python"><code class="language-python">shared_prompt_difficulty = (
+    prompt_difficulty_sd
+    * torch.randn(
+        num_repetitions,
+        num_prompts,
+    )
+)
+
+paired_control_noise = (
+    response_noise_sd
+    * torch.randn(
+        num_repetitions,
+        num_prompts,
+    )
+)
+
+paired_candidate_noise = (
+    response_noise_sd
+    * torch.randn(
+        num_repetitions,
+        num_prompts,
+    )
+)
+
+paired_control_outcomes = (
+    shared_prompt_difficulty
+    + paired_control_noise
+)
+
+paired_candidate_outcomes = (
+    true_effect
+    + shared_prompt_difficulty
+    + paired_candidate_noise
+)</code></pre>
+<p>Independent-prompt experiment:</p>
+<pre class="code python"><code class="language-python">independent_control_difficulty = (
+    prompt_difficulty_sd
+    * torch.randn(
+        num_repetitions,
+        num_prompts,
+    )
+)
+
+independent_candidate_difficulty = (
+    prompt_difficulty_sd
+    * torch.randn(
+        num_repetitions,
+        num_prompts,
+    )
+)
+
+independent_control_noise = (
+    response_noise_sd
+    * torch.randn(
+        num_repetitions,
+        num_prompts,
+    )
+)
+
+independent_candidate_noise = (
+    response_noise_sd
+    * torch.randn(
+        num_repetitions,
+        num_prompts,
+    )
+)
+
+independent_control_outcomes = (
+    independent_control_difficulty
+    + independent_control_noise
+)
+
+independent_candidate_outcomes = (
+    true_effect
+    + independent_candidate_difficulty
+    + independent_candidate_noise
+)</code></pre>
+<p>Effect estimates:</p>
+<pre class="code python"><code class="language-python">paired_differences = (
+    paired_candidate_outcomes
+    - paired_control_outcomes
+)
+
+paired_effects = (
+    paired_differences.mean(dim=1)
+)
+
+paired_effects_as_difference_of_means = (
+    paired_candidate_outcomes.mean(dim=1)
+    - paired_control_outcomes.mean(dim=1)
+)
+
+independent_effects = (
+    independent_candidate_outcomes.mean(
+        dim=1
+    )
+    - independent_control_outcomes.mean(
+        dim=1
+    )
+)
+
+maximum_paired_identity_error = (
+    paired_effects
+    - paired_effects_as_difference_of_means
+).abs().max()</code></pre>
+<p>Standard errors:</p>
+<pre class="code python"><code class="language-python">paired_standard_errors = (
+    paired_differences.std(
+        dim=1,
+        correction=1,
+    )
+    / math.sqrt(num_prompts)
+)
+
+wrong_unpaired_standard_errors = torch.sqrt(
+    paired_candidate_outcomes.var(
+        dim=1,
+        correction=1,
+    ) / num_prompts
+    +
+    paired_control_outcomes.var(
+        dim=1,
+        correction=1,
+    ) / num_prompts
+)
+
+independent_standard_errors = torch.sqrt(
+    independent_candidate_outcomes.var(
+        dim=1,
+        correction=1,
+    ) / num_prompts
+    +
+    independent_control_outcomes.var(
+        dim=1,
+        correction=1,
+    ) / num_prompts
+)</code></pre>
+<p>Detection rates and diagnostics:</p>
+<pre class="code python"><code class="language-python">paired_lower_bounds = (
+    paired_effects
+    - one_sided_z
+    * paired_standard_errors
+)
+
+wrong_unpaired_lower_bounds = (
+    paired_effects
+    - one_sided_z
+    * wrong_unpaired_standard_errors
+)
+
+independent_lower_bounds = (
+    independent_effects
+    - one_sided_z
+    * independent_standard_errors
+)
+
+paired_detection_rate = (
+    (paired_lower_bounds &gt; 0.0)
+    .to(torch.float64)
+    .mean()
+)
+
+wrong_unpaired_detection_rate = (
+    (wrong_unpaired_lower_bounds &gt; 0.0)
+    .to(torch.float64)
+    .mean()
+)
+
+independent_detection_rate = (
+    (independent_lower_bounds &gt; 0.0)
+    .to(torch.float64)
+    .mean()
+)
+
+paired_empirical_sd = paired_effects.std(
+    correction=1
+)
+
+independent_empirical_sd = (
+    independent_effects.std(
+        correction=1
+    )
+)
+
+mean_paired_se = (
+    paired_standard_errors.mean()
+)
+
+mean_wrong_unpaired_se = (
+    wrong_unpaired_standard_errors.mean()
+)
+
+mean_independent_se = (
+    independent_standard_errors.mean()
+)
+
+paired_outcome_correlation = torch.corrcoef(
+    torch.stack([
+        paired_candidate_outcomes.flatten(),
+        paired_control_outcomes.flatten(),
+    ])
+)[0, 1]</code></pre>
+<p>Each paired outcome has variance:</p>
+<p><span class="math display">\[2^2+1^2=5\]</span></p>
+<p>Their shared difficulty gives covariance:</p>
+<p><span class="math display">\[\operatorname{Cov}(Y_1,Y_0)=2^2=4\]</span></p>
+<p>so their correlation is approximately:</p>
+<p><span class="math display">\[\rho=\frac45=0.8\]</span></p>
+<p>The paired difference cancels difficulty:</p>
+<p><span class="math display">\[D_i
+=
+0.40+\epsilon_{1,i}-\epsilon_{0,i}\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[SE_{\text{paired}}
+=
+\sqrt{\frac{1^2+1^2}{100}}
+\approx0.141\]</span></p>
+<p>Independent prompts retain difficulty noise:</p>
+<p><span class="math display">\[SE_{\text{independent}}
+=
+\sqrt{\frac{2(2^2+1^2)}{100}}
+\approx0.316\]</span></p>
+<p>Typical detection rates are roughly:</p>
+<ul>
+<li><p>correct paired analysis: <span style="background-color: codeinlinebg"><code> 0.88</code></span>;</p></li>
+<li><p>paired data with an unpaired SE: <span style="background-color: codeinlinebg"><code> 0.20</code></span>;</p></li>
+<li><p>genuinely independent prompts: <span style="background-color: codeinlinebg"><code> 0.35</code></span>.</p></li>
+</ul>
+<p>The unpaired formula applied to paired data does not change the point estimate. It discards the known covariance reduction and becomes severely conservative.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It enters the paired variance with a minus sign, cancelling prompt-level variation shared by both policies.</p></li>
+<li><p>No. It changes precision and experimental design, not the estimand.</p></li>
+<li><p>Pairing helps little when within-prompt stochasticity dominates or candidate/control outcomes have weak correlation.</p></li>
+<li><p>Preserve an explicit pair mask. Do not substitute zeros; investigate policy-dependent failures and use missing-data corrections or sensitivity bounds when complete pairs are not missing randomly.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Selecting the maximum conditions on positive estimation noise, so the winning observed score exceeds its true value on average.</p></li>
+<li><p>Lock the checkpoint, decoding settings, evaluator, aggregation rule, target population, primary metric and stopping rule.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> compare policies on the same prompts and analyze the differences. Prompt difficulty then becomes shared context to subtract away instead of noise you must overcome with more samples.</p>

@@ -1,0 +1,388 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can a bootstrap return <span style="background-color: codeinlinebg"><code> [0, 0]</code></span> when an important action has positive behavior-policy probability?</p></li>
+<li><p>Why can observed ESS equal the full sample size even when important target mass is missing?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="clipping-controls-variance-by-changing-the-estimator">2. Clipping controls variance by changing the estimator</h3>
+<p>An IPS contribution is:</p>
+<p><span class="math display">\[Z_i
+=
+\underbrace{w_i}_{\pi(A_i)/\mu(A_i)}
+\underbrace{R_i}_{\text{observed reward}}\]</span></p>
+<p>A large <span class="math inline">\(w_i\)</span> makes one episode dominate. Weight clipping replaces it with:</p>
+<p><span class="math display">\[\tilde w_i(c)
+=
+\underbrace{\min(w_i,c)}_{\text{importance weight capped at }c}\]</span></p>
+<p>giving:</p>
+<p><span class="math display">\[\hat V_c
+=
+\underbrace{
+\frac1N\sum_{i=1}^{N}\tilde w_i(c)R_i
+}_{\text{clipped importance-sampling estimate}}\]</span></p>
+<p>For nonnegative rewards:</p>
+<p><span class="math display">\[V^\pi-E_\mu[\hat V_c]
+=
+\underbrace{
+E_\mu[(w-c)_+R]
+}_{\text{expected reward contribution removed by clipping}}
+\ge 0\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[(w-c)_+
+=
+\underbrace{\max(w-c,0)}_{\text{weight mass above the threshold}}\]</span></p>
+<p>If <span class="math inline">\(0\le R\le R_{\max}\)</span>, the bias has the bound:</p>
+<p><span class="math display">\[0
+\le
+V^\pi-E_\mu[\hat V_c]
+\le
+\underbrace{
+R_{\max}E_\mu[(w-c)_+]
+}_{\text{worst-case omitted tail value}}\]</span></p>
+<p>Lower <span class="math inline">\(c\)</span> usually means lower variance but greater bias. Therefore, always report a threshold-sensitivity curve rather than one convenient threshold.</p>
+<p>This clipping has a different purpose from:</p>
+<ul>
+<li><p><strong>PPO clipping:</strong> limits policy-update size; it is not unbiased OPE.</p></li>
+<li><p><strong>DPO’s <span class="math inline">\(\beta\)</span>:</strong> controls preference strength relative to a reference model; it is not an importance-weight threshold.</p></li>
+<li><p><strong>Reward clipping:</strong> changes reward scale and possibly the optimized task.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions, rewards and weights: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>clipped weights and estimates: <span style="background-color: codeinlinebg"><code> [R, N, C]</code></span> and <span style="background-color: codeinlinebg"><code> [R, C]</code></span></p></li>
+<li><p>threshold diagnostics: <span style="background-color: codeinlinebg"><code> [C]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-clipping-1-of-rows-removes-80-of-value">3. PyTorch exercise — clipping 1% of rows removes 80% of value</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 5_000
+episodes_per_repetition = 100
+
+behavior_policy = torch.tensor([
+    0.99,
+    0.01,
+])
+
+target_policy = torch.tensor([
+    0.50,
+    0.50,
+])
+
+reward_by_action = torch.tensor([
+    0.0,
+    1.0,
+])
+
+clip_thresholds = torch.tensor([
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    50.0,  # Unclipped maximum weight
+])
+
+
+# TODO 1: Generate behavior-policy data.
+actions = ...
+
+rewards = ...
+
+importance_weights = ...
+
+exact_target_value = ...
+
+
+# TODO 2: Construct every clipped estimator.
+clipped_weights = ...
+
+clipped_contributions = ...
+
+clipped_estimates = ...
+
+
+# TODO 3: Compare repeated-sampling behavior.
+mean_estimates = ...
+
+biases = ...
+
+standard_deviations = ...
+
+rmses = ...
+
+clipped_fractions = ...
+
+
+# TODO 4: Calculate oracle expectations.
+action_importance_weights = ...
+
+oracle_clipped_action_weights = ...
+
+oracle_clipped_values = ...
+
+oracle_downward_biases = ...
+
+
+# TODO 5: Calculate reward-range bias bounds.
+reward_upper_bound = 1.0
+
+tail_bias_upper_bounds = ...
+
+results = torch.stack([
+    clip_thresholds,
+    mean_estimates,
+    biases,
+    standard_deviations,
+    rmses,
+    clipped_fractions,
+    tail_bias_upper_bounds,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+
+print(
+    &quot;Columns: threshold, mean, bias, SD, RMSE, &quot;
+    &quot;fraction clipped, tail-bias bound&quot;
+)
+print(results)
+
+print(&quot;Oracle clipped values:&quot;, oracle_clipped_values)
+print(&quot;Oracle downward biases:&quot;, oracle_downward_biases)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Does threshold <span style="background-color: codeinlinebg"><code> 50</code></span> reproduce ordinary IPS?</p></li>
+<li><p>Will threshold <span style="background-color: codeinlinebg"><code> 10</code></span> estimate approximately <span style="background-color: codeinlinebg"><code> 0.10</code></span> or <span style="background-color: codeinlinebg"><code> 0.50</code></span>?</p></li>
+<li><p>What fraction of rows will threshold <span style="background-color: codeinlinebg"><code> 10</code></span> modify?</p></li>
+<li><p>Can a biased clipped estimator have lower RMSE than unbiased IPS?</p></li>
+<li><p>Which threshold should be reported: only the best-looking one or the full sensitivity curve?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>Broadcast the thresholds over the final dimension:</p>
+<pre class="code python"><code class="language-python">importance_weights[..., None]
+clip_thresholds[None, None, :]</code></pre>
+<p>The oracle clipped value is:</p>
+<p><span class="math display">\[V_c
+=
+\underbrace{
+\sum_a
+\mu(a)
+\min\left(
+\frac{\pi(a)}{\mu(a)},c
+\right)
+R(a)
+}_{\text{population expectation of the clipped estimator}}\]</span></p>
+<p>The RMSE is:</p>
+<p><span class="math display">\[\operatorname{RMSE}
+=
+\underbrace{
+\sqrt{
+E[(\hat V_c-V^\pi)^2]
+}
+}_{\text{combined bias and variance}}\]</span></p>
+<p>For the tail bound, calculate the behavior expectation of <span style="background-color: codeinlinebg"><code> (weight - threshold).clamp_min(0)</code></span>.</p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Clip weights and label the result “unbiased IPS.”</p></li>
+<li><p>Choose <span class="math inline">\(c\)</span> after inspecting which threshold gives the preferred conclusion.</p></li>
+<li><p>Report the fraction clipped without reporting how much target mass those rows carry.</p></li>
+<li><p>Normalize clipped weights and assume this removes clipping bias.</p></li>
+<li><p>Backpropagate through an OPE computation that should be a detached evaluation.</p></li>
+<li><p>Compare PPO’s clipped loss directly with a clipped OPE estimate.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Logged data:</p>
+<pre class="code python"><code class="language-python">actions = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_repetition,
+    )
+    &lt; behavior_policy[1]
+).to(torch.long)
+
+rewards = reward_by_action[actions]
+
+importance_weights = (
+    target_policy[actions]
+    / behavior_policy[actions]
+)
+
+exact_target_value = (
+    target_policy * reward_by_action
+).sum()</code></pre>
+<p>Clipped estimates:</p>
+<pre class="code python"><code class="language-python">clipped_weights = torch.minimum(
+    importance_weights[..., None],
+    clip_thresholds[None, None, :],
+)
+
+clipped_contributions = (
+    clipped_weights
+    * rewards[..., None]
+)
+
+clipped_estimates = (
+    clipped_contributions.mean(dim=1)
+)</code></pre>
+<p>Repeated-sampling diagnostics:</p>
+<pre class="code python"><code class="language-python">mean_estimates = clipped_estimates.mean(
+    dim=0
+)
+
+biases = (
+    mean_estimates
+    - exact_target_value
+)
+
+standard_deviations = (
+    clipped_estimates.std(
+        dim=0,
+        correction=1,
+    )
+)
+
+rmses = (
+    (
+        clipped_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)
+
+clipped_fractions = (
+    (
+        importance_weights[..., None]
+        &gt; clip_thresholds
+    )
+    .to(torch.float64)
+    .mean(dim=(0, 1))
+)</code></pre>
+<p>Oracle expectations:</p>
+<pre class="code python"><code class="language-python">action_importance_weights = (
+    target_policy
+    / behavior_policy
+)
+
+oracle_clipped_action_weights = torch.minimum(
+    action_importance_weights[:, None],
+    clip_thresholds[None, :],
+)
+
+oracle_clipped_values = (
+    behavior_policy[:, None]
+    * oracle_clipped_action_weights
+    * reward_by_action[:, None]
+).sum(dim=0)
+
+oracle_downward_biases = (
+    exact_target_value
+    - oracle_clipped_values
+)</code></pre>
+<p>Bias bounds:</p>
+<pre class="code python"><code class="language-python">tail_bias_upper_bounds = (
+    behavior_policy[:, None]
+    * (
+        action_importance_weights[:, None]
+        - clip_thresholds[None, :]
+    ).clamp_min(0.0)
+    * reward_upper_bound
+).sum(dim=0)</code></pre>
+<p>Expected results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Threshold <span class="math inline">\(c\)</span></strong></th>
+<th style="text-align: left;"><strong>Mean</strong></th>
+<th style="text-align: left;"><strong>Bias</strong></th>
+<th style="text-align: left;"><strong>SD</strong></th>
+<th style="text-align: left;"><strong>RMSE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Threshold <span class="math inline">\(c\)</span></strong></td>
+<td style="text-align: left;"><strong>Mean</strong></td>
+<td style="text-align: left;"><strong>Bias</strong></td>
+<td style="text-align: left;"><strong>SD</strong></td>
+<td style="text-align: left;"><strong>RMSE</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 2</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.02</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.48</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.020</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.480</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 5</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.05</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.45</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.050</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.453</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 10</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.10</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.40</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.100</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.412</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 20</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.20</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.30</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.199</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.360</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 30</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.30</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.20</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.299</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.359</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 50</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.50</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.498</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.498</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>For <span class="math inline">\(c=10\)</span>:</p>
+<p><span class="math display">\[E[\hat V_{10}]
+=
+\underbrace{0.01(10)(1)}_{\text{rare action contribution}}
+=
+0.10\]</span></p>
+<p>Only about <span style="background-color: codeinlinebg"><code> 1%</code></span> of logged rows are clipped, but they represent:</p>
+<p><span class="math display">\[\underbrace{50\%}_{\text{target probability of rare action}}\]</span></p>
+<p>of the true policy value. Row fraction is therefore a poor measure of clipping impact.</p>
+<p>Thresholds near <span style="background-color: codeinlinebg"><code> 20–30</code></span> have lower RMSE in this finite-sample simulation. That does not make them unbiased, and the best threshold cannot normally be identified because the true value is unknown.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Yes. The maximum possible weight is <span style="background-color: codeinlinebg"><code> 50</code></span>, so threshold <span style="background-color: codeinlinebg"><code> 50</code></span> leaves every weight unchanged.</p></li>
+<li><p>Approximately <span style="background-color: codeinlinebg"><code> 0.10</code></span>; clipping removes four-fifths of the rare action’s contribution.</p></li>
+<li><p>About <span style="background-color: codeinlinebg"><code> 1%</code></span>, despite those observations carrying half the target-policy value.</p></li>
+<li><p>Yes. A deliberate bias can reduce variance enough to lower finite-sample MSE.</p></li>
+<li><p>Pre-specify thresholds and report the sensitivity curve. Selecting one using final outcomes introduces another layer of selection bias.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A bootstrap samples from the empirical distribution. If the rare event is absent, every bootstrap sample also omits it.</p></li>
+<li><p>ESS measures concentration among observed weights. When all observed episodes are common-action episodes, their identical weights produce maximal ESS even though target mass is missing.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> clipping can make OPE numerically calmer, but it does not create information. Treat the threshold as an explicit bias–variance choice, report sensitivity, and collect targeted data when conclusions depend on the clipped tail.</p>

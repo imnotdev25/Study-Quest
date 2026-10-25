@@ -1,0 +1,150 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How to represent graphs (including implicit ones like grids and state spaces), BFS and DFS and what each guarantees, multi-source BFS, cycle detection, bipartite checks, topological sorting (Kahn and DFS), strongly connected components, and bridges. In ML, graphs are computation graphs, data pipelines, knowledge graphs, and the input to graph neural networks.</p>
+</div>
+<h1 id="representing-graphs">Representing Graphs</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Representation</th>
+<th style="text-align: left;">Space</th>
+<th style="text-align: left;">Edge check</th>
+<th style="text-align: left;">Iterate neighbors</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Adjacency list</td>
+<td style="text-align: left;"><span class="math inline">\(O(V+E)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(\deg)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(\deg)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Adjacency matrix</td>
+<td style="text-align: left;"><span class="math inline">\(O(V^2)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(V)\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Edge list</td>
+<td style="text-align: left;"><span class="math inline">\(O(E)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(E)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(E)\)</span> (good for Kruskal, Bellman–Ford)</td>
+</tr>
+</tbody>
+</table>
+<p>Use adjacency lists by default (most graphs are sparse). <strong>Implicit graphs</strong> are not stored at all: a grid (neighbors are the 4 or 8 adjacent cells), a word ladder (neighbors differ by one letter), a lock combination, or a puzzle state. Recognizing that a problem is a graph search over states is often the whole trick.</p>
+</div>
+<h1 id="breadth-first-search">Breadth-First Search</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Drop a stone in a pond. Ripples reach everything 1 step away, then 2 steps, then 3. BFS explores a graph the same way, so the first time it reaches a node, it has found the shortest path in number of edges.</p>
+</div>
+<p><em>BFS shortest path in an unweighted graph</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> graph <span class="math inline">\(G\)</span>, source <span class="math inline">\(s\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(dist[v] \gets \infty\)</span> for all <span class="math inline">\(v\)</span>; <span class="math inline">\(dist[s] \gets 0\)</span>; <span class="math inline">\(Q \gets [s]\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(Q\)</span> not empty <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(u \gets\)</span> dequeue<span class="math inline">\((Q)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each neighbor <span class="math inline">\(v\)</span> of <span class="math inline">\(u\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(dist[v] = \infty\)</span> <strong>then</strong> <em>▷ mark when enqueued, not when dequeued</em></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(dist[v] \gets dist[u] + 1\)</span>; <span class="math inline">\(parent[v] \gets u\)</span>; enqueue <span class="math inline">\(v\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(dist\)</span>, <span class="math inline">\(parent\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Invariant:</strong> the queue always holds nodes with distances <span class="math inline">\(d\)</span> followed by nodes with distance <span class="math inline">\(d+1\)</span>, never more than two consecutive values. So nodes are dequeued in non-decreasing distance order, and the first discovery of a node comes from a node at minimum distance. <strong>Time:</strong> <span class="math inline">\(O(V+E)\)</span> <strong>Space:</strong> <span class="math inline">\(O(V)\)</span>. Marking at enqueue time matters: marking at dequeue time lets the same node be enqueued many times, blowing up time and memory on dense graphs.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Multi-source BFS:</strong> start with <em>all</em> sources in the queue at distance 0. Solves “rotting oranges,” “distance to nearest gate,” “01 matrix” in <span class="math inline">\(O(V+E)\)</span> instead of one BFS per source. <strong>Bidirectional BFS</strong> searches from both ends and stops when the frontiers meet; with branching factor <span class="math inline">\(b\)</span> and distance <span class="math inline">\(d\)</span>, it explores about <span class="math inline">\(2b^{d/2}\)</span> nodes instead of <span class="math inline">\(b^d\)</span> (word ladder). <strong>0-1 BFS:</strong> edges weigh 0 or 1; use a deque, push 0-weight neighbors to the front and 1-weight to the back. <span class="math inline">\(O(V+E)\)</span> shortest paths without a heap.</p>
+</div>
+<h1 id="depth-first-search">Depth-First Search</h1>
+<p><em>DFS with three colors (detects cycles in directed graphs)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(color[v] \gets\)</span> WHITE for all <span class="math inline">\(v\)</span> <em>▷ WHITE unvisited, GRAY on stack, BLACK done</em></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Visit(<span class="math inline">\(u\)</span>)</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(color[u] \gets\)</span> GRAY</div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each neighbor <span class="math inline">\(v\)</span> of <span class="math inline">\(u\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(color[v] =\)</span> GRAY <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><strong>return</strong> CYCLE <em>▷ back edge to an ancestor</em></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(color[v] =\)</span> WHITE <strong>and</strong> <span class="math inline">\(=\)</span> CYCLE <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><strong>return</strong> CYCLE</div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(color[u] \gets\)</span> BLACK; append <span class="math inline">\(u\)</span> to <span class="math inline">\(finished\)</span></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> OK</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>In a directed graph, a cycle exists exactly when DFS finds an edge to a node that is still on the recursion stack (GRAY): that node is an ancestor, so the edge closes a loop. An edge to a BLACK node only reaches finished work and is not a cycle. In an <em>undirected</em> graph, a simpler rule applies: any visited neighbor other than the parent indicates a cycle (or use union-find).</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>What DFS is good at:</strong> connected components (count how many times you start a new DFS), flood fill and islands, path existence, cycle detection, topological order (reverse finishing order), and backtracking (Chapter 11). DFS does <em>not</em> find shortest paths. On large grids, use an explicit stack to avoid recursion limits.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Bipartite check:</strong> BFS or DFS coloring with two colors; the graph is bipartite iff no edge joins two nodes of the same color, equivalently iff it has no odd cycle. Applications: “possible bipartition,” two-team assignment, detecting conflicts.</p>
+</div>
+<h1 id="topological-sort">Topological Sort</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>To get dressed, socks before shoes, shirt before jacket. A topological order lists tasks so every task comes after everything it depends on. It exists only if the dependencies have no cycle.</p>
+</div>
+<figure class="tikz"><img src="figs/dsa/1924a243e5aa.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A DAG and a topological order.</em></p>
+<p><em>Kahn’s algorithm (BFS topological sort)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0">compute <span class="math inline">\(indeg[v]\)</span> for all <span class="math inline">\(v\)</span>; <span class="math inline">\(Q \gets\)</span> all <span class="math inline">\(v\)</span> with <span class="math inline">\(indeg[v] = 0\)</span>; <span class="math inline">\(order \gets []\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(Q\)</span> not empty <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(u \gets\)</span> dequeue<span class="math inline">\((Q)\)</span>; append <span class="math inline">\(u\)</span> to <span class="math inline">\(order\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each edge <span class="math inline">\(u \to v\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(indeg[v] \gets indeg[v] - 1\)</span></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(indeg[v] = 0\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3">enqueue <span class="math inline">\(v\)</span> <em>▷ all prerequisites done</em></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> <span class="math inline">\(|order| &lt; V\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> CYCLE <em>▷ remaining nodes are on or behind a cycle</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(order\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>A node enters the queue only when all its predecessors are already in <code>order</code>, so every edge points forward. If a cycle exists, no node on it ever reaches in-degree zero, so fewer than <span class="math inline">\(V\)</span> nodes are output: Kahn’s algorithm detects cycles for free. The DFS alternative outputs nodes in reverse finishing order: a node finishes only after everything reachable from it, so reversing puts it before all of them. <strong>Time:</strong> <span class="math inline">\(O(V+E)\)</span> <strong>Space:</strong> <span class="math inline">\(O(V)\)</span>.</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>Prerequisites, build order, course schedule, “alien dictionary” (derive edges from adjacent words’ first differing letter; watch for the invalid case where a word is a prefix of an earlier, longer word), “parallel courses” (BFS levels = minimum semesters), longest path in a DAG (DP in topological order), “sequence reconstruction” (unique order iff the queue never holds more than one node).</p>
+</div>
+<h1 id="strongly-connected-components">Strongly Connected Components</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>In a directed graph, an SCC is a maximal set of nodes that can all reach each other. <strong>Kosaraju</strong>: DFS to get finishing order; reverse all edges; DFS in decreasing finish order on the reversed graph; each tree is one SCC. <strong>Tarjan</strong>: one DFS tracking discovery index and <code>low</code> (the lowest index reachable via the subtree plus one back edge); a node with <span class="math inline">\(low = index\)</span> is the root of an SCC, popped from a stack. Both <span class="math inline">\(O(V+E)\)</span>. Collapsing SCCs gives a DAG (the <em>condensation</em>), which turns cyclic problems into DAG DP. Used in 2-SAT, deadlock detection, and dependency analysis.</p>
+</div>
+<h1 id="bridges-and-articulation-points">Bridges and Articulation Points</h1>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>In an undirected graph, a <strong>bridge</strong> is an edge whose removal disconnects the graph, and an <strong>articulation point</strong> is such a vertex. Tarjan’s DFS computes <span class="math inline">\(disc[u]\)</span> and <span class="math inline">\(low[u]\)</span> = the smallest discovery time reachable from <span class="math inline">\(u\)</span>’s subtree using at most one back edge. Tree edge <span class="math inline">\((u, v)\)</span> is a bridge iff <span class="math inline">\(low[v] &gt; disc[u]\)</span> (the subtree of <span class="math inline">\(v\)</span> cannot reach <span class="math inline">\(u\)</span> or above any other way). Non-root <span class="math inline">\(u\)</span> is an articulation point iff some child has <span class="math inline">\(low[v] \ge disc[u]\)</span>; the root is one iff it has two or more DFS children. “Critical connections in a network” is exactly this. <span class="math inline">\(O(V+E)\)</span>.</p>
+</div>
+<h1 id="state-space-search">State-Space Search</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Many puzzles are BFS on states. <strong>Shortest path visiting all nodes:</strong> state = (current node, bitmask of visited nodes), <span class="math inline">\(n\cdot 2^n\)</span> states, BFS from every start simultaneously. <strong>Sliding puzzle:</strong> state = board as a string. <strong>Open the lock:</strong> state = 4-digit string, 8 neighbors, BFS avoiding dead ends. <strong>Keys and rooms / grid with keys:</strong> state = (row, col, keys held). The cost is the number of states times the branching factor; estimate it before coding.</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<ul>
+<li><p><strong>Autograd</strong> builds a DAG of operations; backpropagation visits it in reverse topological order so every node’s gradient is complete before it is pushed to its inputs (Chapter 18).</p></li>
+<li><p><strong>Pipelines and orchestrators</strong> (Airflow, Kubeflow, ML training DAGs, agent workflows) schedule tasks in topological order and detect cycles at definition time.</p></li>
+<li><p><strong>Graph neural networks</strong> aggregate neighbor features layer by layer, like a <span class="math inline">\(k\)</span>-hop BFS; neighbor sampling (GraphSAGE) bounds the fan-out.</p></li>
+<li><p><strong>Knowledge graphs</strong> for RAG use BFS/DFS over entity relations (multi-hop retrieval, GraphRAG).</p></li>
+<li><p><strong>Web crawling</strong> for training data is BFS over links with deduplication and politeness constraints.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Course schedule II</div>
+<p>“Return an order to take <span class="math inline">\(n\)</span> courses given prerequisite pairs, or empty if impossible.” This is topological sort with cycle detection. Build an adjacency list from prerequisite to course and in-degree counts. Run Kahn’s algorithm; if the output has fewer than <span class="math inline">\(n\)</span> courses, there is a cycle. <span class="math inline">\(O(V+E)\)</span>. Edge cases: courses with no prerequisites (start in the queue), duplicate pairs (in-degree counts handle them if consistent), self-loop (immediate cycle). Follow-ups: minimum number of semesters if you can take any number per semester (count BFS levels); at most <span class="math inline">\(k\)</span> per semester (becomes NP-hard in general; bitmask DP for small <span class="math inline">\(n\)</span>); find <em>which</em> courses form the cycle (DFS with colors, track the stack).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>BFS gives shortest paths in unweighted graphs; mark nodes when enqueued.</p></li>
+<li><p>DFS gives components, cycles (gray nodes), and finishing order.</p></li>
+<li><p>Topological sort via Kahn detects cycles; it powers autograd and pipelines.</p></li>
+<li><p>Recognize implicit graphs and state spaces; estimate the number of states first.</p></li>
+</ul>
+</div>

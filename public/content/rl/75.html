@@ -1,0 +1,313 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a dice roll vs a doctor’s first rare case</div>
+<p>A fair die is unpredictable, but you know <em>exactly</em> how unpredictable: that’s <strong>aleatoric</strong> noise, and more data won’t reduce it. A doctor seeing a rare disease for the first time is uncertain because they haven’t seen enough: that’s <strong>epistemic</strong> ignorance, and data fixes it. An ensemble of critics can tell the two apart: they agree on a die, and they disagree on the rare disease.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What does a distributional critic retain that a scalar mean critic discards?</p></li>
+<li><p>Why should bootstrapped target quantiles be detached?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-wide-return-distribution-does-not-always-mean-ignorance">2. A wide return distribution does not always mean ignorance</h3>
+<p>Suppose a search tool sometimes finds excellent evidence and sometimes finds nothing. Even with unlimited training data, its outcome remains variable. This is <strong>aleatoric uncertainty</strong>: randomness inherent in the environment.</p>
+<p>Now suppose a database tool has barely appeared in training. Different critics predict very different values for it. This is <strong>epistemic uncertainty</strong>: uncertainty caused by limited knowledge.</p>
+<p>A distributional critic estimates outcome variability:</p>
+<p><span class="math display">\[Z_m(s,a)\]</span></p>
+<p>An ensemble of <span class="math inline">\(M\)</span> critics estimates model disagreement. Using the law of total variance:</p>
+<p><span class="math display">\[\operatorname{Var}(Z)
+=
+\underbrace{
+\mathbb E_m[
+\operatorname{Var}(Z_m)
+]}_{\text{aleatoric}}
++
+\underbrace{
+\operatorname{Var}_m[
+\mathbb E[Z_m]
+]}_{\text{epistemic}}\]</span></p>
+<p>Think of weather:</p>
+<ul>
+<li><p>every forecast predicts variable rain: aleatoric uncertainty;</p></li>
+<li><p>forecasters disagree with each other: epistemic uncertainty.</p></li>
+</ul>
+<p>For conservative deployment, use a lower-confidence score:</p>
+<p><span class="math display">\[Q_{\text{LCB}}(s,a)
+=
+\bar Q(s,a)
+-
+\beta\sigma_{\text{epistemic}}(s,a)\]</span></p>
+<p>For exploration, the sign may be reversed:</p>
+<p><span class="math display">\[Q_{\text{UCB}}(s,a)
+=
+\bar Q(s,a)
++
+\beta\sigma_{\text{epistemic}}(s,a)\]</span></p>
+<p>High disagreement is not proof that an action is bad. It means the system lacks evidence.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>ensemble quantiles: <span style="background-color: codeinlinebg"><code> [M, A, N]</code></span></p></li>
+<li><p>per-model means and variances: <span style="background-color: codeinlinebg"><code> [M, A]</code></span></p></li>
+<li><p>aleatoric and epistemic variances: <span style="background-color: codeinlinebg"><code> [A]</code></span></p></li>
+</ul>
+<p>DPO does not perform online uncertainty-directed exploration. Ensembles of preference or reward models can reveal disagreement, but missing failure modes shared by every model remain invisible.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: law of total variance</div>
+<p>For an ensemble of <span class="math inline">\(M\)</span> critics, each predicting a mean <span class="math inline">\(\mu_m\)</span> and variance <span class="math inline">\(\sigma^2_m\)</span>: <span class="math display">\[\operatorname{Var}[Z]=\underbrace{\tfrac1M\textstyle\sum_m\sigma_m^2}_{\text{aleatoric}}+\underbrace{\tfrac1M\textstyle\sum_m(\mu_m-\bar\mu)^2}_{\text{epistemic}} .\]</span> <strong>Use them differently:</strong> aleatoric risk calls for risk-aware objectives (CVaR). Epistemic uncertainty calls for exploration during training, or pessimism (<span class="math inline">\(\bar\mu-k\cdot\text{sd}\)</span>) at deployment. <strong>Caveat:</strong> members trained on the same data with the same biases can agree confidently and all be wrong (Topic 131).</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Outcome noise and model ignorance need different responses.</p></li>
+<li><p>Ensemble agreement is not proof of correctness.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: decompose by action</div>
+<p>Seen action: means <span class="math inline">\((1.0,1.1,0.9)\)</span>, variances <span class="math inline">\((4,4,4)\)</span>. Aleatoric 4, epistemic 0.0067: noisy but understood. Unseen action: means <span class="math inline">\((1.0,3.0,-1.0)\)</span>, variances <span class="math inline">\((0.5,0.5,0.5)\)</span>. Aleatoric 0.5, epistemic 2.67: the critics simply don’t know.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Adding the two uncertainties and treating the sum one way.</p></li>
+<li><p>An ensemble with identical seeds and data.</p></li>
+<li><p>Reading low ensemble spread as calibrated confidence.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-decompose-uncertainty-by-action">3. PyTorch exercise — decompose uncertainty by action</h3>
+<p>There are two actions:</p>
+<ul>
+<li><p>action <span style="background-color: codeinlinebg"><code> 0</code></span>: known but inherently variable;</p></li>
+<li><p>action <span style="background-color: codeinlinebg"><code> 1</code></span>: individually confident critics that strongly disagree.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+# Shape: [ensemble=3, actions=2, quantiles=3]
+quantile_predictions = torch.tensor([
+    [
+        [-1.0, 1.0, 3.0],  # action 0
+        [ 0.9, 1.0, 1.1],  # action 1
+    ],
+    [
+        [-1.0, 1.0, 3.0],
+        [ 2.9, 3.0, 3.1],
+    ],
+    [
+        [-1.0, 1.0, 3.0],
+        [ 4.9, 5.0, 5.1],
+    ],
+])
+
+num_models, num_actions, num_quantiles = (
+    quantile_predictions.shape
+)
+
+# TODO 1: Mean return from each model,
+# then ensemble-average return per action.
+model_means = ...
+ensemble_means = ...
+
+# TODO 2: Approximate outcome variance within
+# each model, then average across models.
+within_model_variances = ...
+aleatoric_variances = ...
+
+# TODO 3: Variance of model means.
+epistemic_variances = ...
+
+# TODO 4: Verify the total-variance decomposition.
+decomposed_total_variances = ...
+
+flattened_predictions = ...
+
+direct_total_variances = ...
+
+maximum_decomposition_error = ...
+
+# TODO 5: Mean, conservative and exploratory choices.
+beta = 1.5
+
+epistemic_standard_deviations = ...
+
+pessimistic_scores = ...
+optimistic_scores = ...
+
+mean_choice = ...
+pessimistic_choice = ...
+optimistic_choice = ...
+
+print(&quot;Model means:\n&quot;, model_means)
+
+print(
+    &quot;Ensemble means:&quot;,
+    ensemble_means,
+)
+
+print(
+    &quot;Aleatoric variances:&quot;,
+    aleatoric_variances,
+)
+
+print(
+    &quot;Epistemic variances:&quot;,
+    epistemic_variances,
+)
+
+print(
+    &quot;Decomposed total variance:&quot;,
+    decomposed_total_variances,
+)
+
+print(
+    &quot;Direct total variance:&quot;,
+    direct_total_variances,
+)
+
+print(
+    &quot;Maximum decomposition error:&quot;,
+    maximum_decomposition_error.item(),
+)
+
+print(&quot;Mean choice:&quot;, mean_choice.item())
+
+print(
+    &quot;Pessimistic choice:&quot;,
+    pessimistic_choice.item(),
+)
+
+print(
+    &quot;Optimistic choice:&quot;,
+    optimistic_choice.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action has greater aleatoric uncertainty?</p></li>
+<li><p>Which action has greater epistemic uncertainty?</p></li>
+<li><p>Which action does the raw ensemble mean select?</p></li>
+<li><p>Should pessimistic and exploratory selection necessarily choose the same action?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Quantiles are on the final dimension.</p></li>
+<li><p>Models are on dimension <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+<li><p>Use population variance with <span style="background-color: codeinlinebg"><code> correction=0</code></span> everywhere.</p></li>
+<li><p>To compute direct variance, rearrange to <span style="background-color: codeinlinebg"><code> [A, M*N]</code></span>.</p></li>
+<li><p>Clamp variance before <span style="background-color: codeinlinebg"><code> sqrt</code></span> to guard against tiny negative round-off.</p></li>
+<li><p>Conservative scoring subtracts epistemic standard deviation.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Compute variance across the action dimension. The code runs, but the result compares different decisions instead of uncertainty within one decision.</p>
+<p>Use <span style="background-color: codeinlinebg"><code> correction=1</code></span> in only part of the calculation. Mixed variance conventions break the decomposition.</p>
+<p>Create an “ensemble” by copying the same checkpoint three times. Epistemic variance becomes zero even though no independent uncertainty estimate exists.</p>
+<p>Multiply all returns by <span style="background-color: codeinlinebg"><code> 100</code></span>. Uncertainty bonuses scale too; <span class="math inline">\(\beta\)</span> cannot be transferred blindly between reward scales.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Which uncertainty can usually be reduced by collecting more relevant data?</p></li>
+<li><p>Why doesn’t a distributional critic alone measure epistemic uncertainty?</p></li>
+<li><p>Why might deployment use an LCB while exploration uses a UCB?</p></li>
+<li><p>What can make ensemble disagreement falsely small?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Per-model and ensemble means:</p>
+<pre class="code python"><code class="language-python">model_means = (
+    quantile_predictions.mean(dim=-1)
+)
+
+ensemble_means = (
+    model_means.mean(dim=0)
+)</code></pre>
+<p>Aleatoric uncertainty:</p>
+<pre class="code python"><code class="language-python">within_model_variances = (
+    quantile_predictions.var(
+        dim=-1,
+        correction=0,
+    )
+)
+
+aleatoric_variances = (
+    within_model_variances.mean(dim=0)
+)</code></pre>
+<p>Epistemic uncertainty:</p>
+<pre class="code python"><code class="language-python">epistemic_variances = (
+    model_means.var(
+        dim=0,
+        correction=0,
+    )
+)</code></pre>
+<p>Total-variance verification:</p>
+<pre class="code python"><code class="language-python">decomposed_total_variances = (
+    aleatoric_variances
+    + epistemic_variances
+)
+
+flattened_predictions = (
+    quantile_predictions
+    .permute(1, 0, 2)
+    .reshape(num_actions, -1)
+)
+
+direct_total_variances = (
+    flattened_predictions.var(
+        dim=1,
+        correction=0,
+    )
+)
+
+maximum_decomposition_error = (
+    decomposed_total_variances
+    - direct_total_variances
+).abs().max()</code></pre>
+<p>Risk-sensitive choices:</p>
+<pre class="code python"><code class="language-python">epistemic_standard_deviations = (
+    epistemic_variances
+    .clamp_min(0.0)
+    .sqrt()
+)
+
+pessimistic_scores = (
+    ensemble_means
+    - beta
+    * epistemic_standard_deviations
+)
+
+optimistic_scores = (
+    ensemble_means
+    + beta
+    * epistemic_standard_deviations
+)
+
+mean_choice = ensemble_means.argmax()
+
+pessimistic_choice = (
+    pessimistic_scores.argmax()
+)
+
+optimistic_choice = (
+    optimistic_scores.argmax()
+)</code></pre>
+<p>The model means are:</p>
+<p><span class="math display">\[\begin{bmatrix}
+1&amp;1\\
+1&amp;3\\
+1&amp;5
+\end{bmatrix}\]</span></p>
+<p>For action <span style="background-color: codeinlinebg"><code> 0</code></span>, all critics agree on mean <span style="background-color: codeinlinebg"><code> 1</code></span>, but each predicts a wide outcome distribution:</p>
+<p><span class="math display">\[\sigma^2_{\text{aleatoric}}\approx2.667,
+\qquad
+\sigma^2_{\text{epistemic}}=0\]</span></p>
+<p>For action <span style="background-color: codeinlinebg"><code> 1</code></span>, each critic predicts a narrow distribution, but their means disagree:</p>
+<p><span class="math display">\[\sigma^2_{\text{aleatoric}}\approx0.0067,
+\qquad
+\sigma^2_{\text{epistemic}}\approx2.667\]</span></p>
+<p>The raw mean and UCB select action <span style="background-color: codeinlinebg"><code> 1</code></span>. With <span class="math inline">\(\beta=1.5\)</span>, the LCB penalizes its disagreement enough to select action <span style="background-color: codeinlinebg"><code> 0</code></span>.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Epistemic uncertainty; targeted data can make models agree. Aleatoric randomness may remain.</p></li>
+<li><p>One critic estimates possible outcomes under its learned model, not uncertainty about whether that model is correct.</p></li>
+<li><p>Deployment may avoid unsupported actions, while exploration deliberately visits them to gain information.</p></li>
+<li><p>Shared initialization, identical bootstrap data, correlated model errors, insufficient ensemble diversity and common misspecification.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A distributional critic retains spread, skew, multimodality and tail behavior.</p></li>
+<li><p>Otherwise the critic can move its own bootstrap target, creating a coupled and unstable regression objective.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> outcome variance and model ignorance require different responses. Penalize disagreement for conservative deployment, investigate it during exploration, and never interpret ensemble agreement as proof of correctness.</p>

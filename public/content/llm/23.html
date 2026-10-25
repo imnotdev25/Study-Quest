@@ -1,0 +1,161 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Computation graph:</strong> each operation is a node, and each tensor is an edge. Two facts make backprop work. (1) <em>Local derivatives:</em> each node only needs to know its own derivative, e.g. <span class="math inline">\(\tanh&#39;(h)=1-\tanh^2(h)\)</span>. (2) <em>Branching:</em> when a tensor feeds several nodes, its gradient is the <em>sum</em> over all paths, because <span class="math inline">\(L\)</span> changes through each path at once.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Before reading further, recall from Session 1:</p>
+<p><span class="math display">\[z=Xw+b\]</span></p>
+<p>What are <span class="math inline">\(\partial L/\partial w\)</span> and <span class="math inline">\(\partial L/\partial b\)</span> if <span class="math inline">\(\delta=\partial L/\partial z\)</span>?</p>
+<p>Now consider a graph with a shared intermediate:</p>
+<p><span class="math display">\[h=XW,\qquad a=\tanh(h)\]</span></p>
+<p>Two branches consume <span class="math inline">\(a\)</span>:</p>
+<p><span class="math display">\[L_{\text{main}}=\operatorname{mean}(av)\]</span></p>
+<p><span class="math display">\[L_{\text{reg}}=\lambda\operatorname{mean}(a^2)\]</span></p>
+<p><span class="math display">\[L=L_{\text{main}}+L_{\text{reg}}\]</span></p>
+<p>Because <span class="math inline">\(a\)</span> influences both branches, its total gradient is the sum:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial a}
+=
+\frac{\partial L_{\text{main}}}{\partial a}
++
+\frac{\partial L_{\text{reg}}}{\partial a}\]</span></p>
+<p>Then propagate backward:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial h}
+=
+\frac{\partial L}{\partial a}
+\odot(1-a^2)\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial W}
+=
+X^\top\frac{\partial L}{\partial h}\]</span></p>
+<p>Reverse-mode autodiff repeatedly computes <strong>vector–Jacobian products</strong>, without constructing full Jacobian matrices. This is why backpropagation is efficient when a large computation produces one scalar loss.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: a shared activation feeding two losses</div>
+<p>Setup: <span class="math inline">\(h=XW\in\mathbb R^{B\times H}\)</span>, <span class="math inline">\(a=\tanh(h)\)</span>, <span class="math inline">\(L_{\text{main}}=\frac1B\sum_i(av)_i\)</span>, <span class="math inline">\(L_{\text{reg}}=\frac{\lambda}{BH}\sum_{ij}a_{ij}^2\)</span>.</p>
+<p><strong>Step 1.</strong> <span class="math inline">\(\tanh&#39;\)</span>: <span class="math inline">\(\frac{d}{dh}\frac{e^h-e^{-h}}{e^h+e^{-h}}=\frac{(e^h+e^{-h})^2-(e^h-e^{-h})^2}{(e^h+e^{-h})^2}=1-\tanh^2h\)</span>.</p>
+<p><strong>Step 2.</strong> Main branch: <span class="math inline">\((av)_i=\sum_ja_{ij}v_j\)</span>, so <span class="math inline">\(\frac{\partial L_{\text{main}}}{\partial a_{ij}}=\frac{v_j}{B}\)</span>.</p>
+<p><strong>Step 3.</strong> Regularizer: <span class="math inline">\(\frac{\partial L_{\text{reg}}}{\partial a_{ij}}=\frac{2\lambda a_{ij}}{BH}\)</span> (the mean is over all <span class="math inline">\(BH\)</span> entries).</p>
+<p><strong>Step 4.</strong> Branching rule: <span class="math inline">\(\frac{\partial L}{\partial a}=\frac{\mathbf 1v^\top}{B}+\frac{2\lambda a}{BH}\)</span>.</p>
+<p><strong>Step 5.</strong> Elementwise node: <span class="math inline">\(\frac{\partial L}{\partial h}=\frac{\partial L}{\partial a}\odot(1-a^2)\)</span>.</p>
+<p><strong>Step 6.</strong> Linear node (Part 0 identity): <span class="math inline">\(\frac{\partial L}{\partial W}=X^\top\frac{\partial L}{\partial h}\)</span>.</p>
+<p><strong>Step 7.</strong> <strong>Why reverse mode:</strong> each step multiplied a gradient <em>vector</em> by a local derivative, and no <span class="math inline">\(BH\times BH\)</span> Jacobian was ever built. That’s a vector–Jacobian product.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: reverse-mode automatic differentiation</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> graph with nodes in topological order <span class="math inline">\(v_1,\dots,v_n=L\)</span></div>
+<div class="algo-line" style="--d:0">run the forward pass, saving what each node needs for its derivative</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\bar v_n\gets1\)</span>; <span class="math inline">\(\bar v_k\gets0\)</span> for <span class="math inline">\(k&lt;n\)</span> <em>▷ <span class="math inline">\(\bar v=\partial L/\partial v\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(k=n\)</span> <strong>down to</strong> <span class="math inline">\(1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each input <span class="math inline">\(u\)</span> of node <span class="math inline">\(v_k\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\bar u\gets\bar u+\big(\tfrac{\partial v_k}{\partial u}\big)^\top\bar v_k\)</span> <em>▷ VJP; <span class="math inline">\(+\)</span> implements branching</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Complete the manual backward pass.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(11)
+
+B, D, H = 4, 3, 5
+lam = 0.1
+
+X = torch.randn(B, D, requires_grad=True)  # [B, D]
+W = torch.randn(D, H, requires_grad=True)  # [D, H]
+v = torch.randn(H)                         # [H]
+
+# Forward graph
+h = X @ W                                  # [B, H]
+a = torch.tanh(h)                          # [B, H]
+scores = a @ v                             # [B]
+
+main_loss = scores.mean()                  # scalar
+reg_loss = lam * a.square().mean()         # scalar
+loss = main_loss + reg_loss
+
+# Manual backward
+d_scores = ...                             # TODO 1: [B]
+da_main = ...                              # TODO 2: [B, H]
+da_reg = ...                               # TODO 3: [B, H]
+da = ...                                   # TODO 4: combine branches
+
+dh = ...                                   # TODO 5: through tanh
+manual_dW = ...                            # TODO 6: [D, H]
+manual_dX = ...                            # TODO 7: [B, D]
+
+# Autograd
+loss.backward()
+
+print(&quot;W gradient match:&quot;, torch.allclose(manual_dW, W.grad, atol=1e-6))
+print(&quot;X gradient match:&quot;, torch.allclose(manual_dX, X.grad, atol=1e-6))
+print(&quot;manual dW norm:&quot;, manual_dW.norm().item())
+print(&quot;autograd dW norm:&quot;, W.grad.norm().item())
+
+assert torch.allclose(manual_dW, W.grad, atol=1e-6)
+assert torch.allclose(manual_dX, X.grad, atol=1e-6)</code></pre>
+<p>Debugging extension: try printing <code>a.grad</code>.</p>
+<pre class="code python"><code class="language-python">print(a.grad)</code></pre>
+<p>Predict the result. Then rerun the forward pass with:</p>
+<pre class="code python"><code class="language-python">a.retain_grad()</code></pre>
+<p>Call <code>backward()</code> and compare <code>a.grad</code> with your manually calculated <code>da</code>.</p>
+<p>Hints:</p>
+<ul>
+<li><p><code>scores.mean()</code> contributes <code>1 / B</code> to each score.</p></li>
+<li><p>Broadcasting can turn <span><code>[</code></span><code>H</code><span><code>]</code></span> into <span><code>[</code></span><code>B, H</code><span><code>]</code></span>.</p></li>
+<li><p><code>a.square().mean()</code> averages over all <span class="math inline">\(B\times H\)</span> elements.</p></li>
+<li><p>Matrix multiplication reverses as:</p></li>
+</ul>
+<p><span class="math display">\[dX=dH\,W^\top,\qquad dW=X^\top dH\]</span></p>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why are <code>da_main</code> and <code>da_reg</code> added instead of multiplied?</p></li>
+<li><p>What are the shapes of the conceptual Jacobians <span class="math inline">\(\partial a/\partial h\)</span> and <span class="math inline">\(\partial h/\partial W\)</span>? Why does PyTorch avoid materializing them?</p></li>
+<li><p>If <code>tanh(h)</code> is saturated near <span class="math inline">\(1\)</span> or <span class="math inline">\(-1\)</span>, what happens to <code>dh</code>?</p></li>
+<li><p>Debugging: <code>W.grad</code> is finite, but its norm is almost zero. Name two plausible causes visible in this graph.</p></li>
+<li><p>Prediction: if <code>main_loss</code> changes from <code>.mean()</code> to <code>.sum()</code>, which gradient contribution changes, and by what factor?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">d_scores = torch.ones_like(scores) / B
+
+da_main = d_scores[:, None] * v[None, :]
+da_reg = 2 * lam * a / a.numel()
+da = da_main + da_reg
+
+dh = da * (1 - a.square())
+manual_dW = X.T @ dh
+manual_dX = dh @ W.T</code></pre>
+<p>For the debugging extension, <code>a.grad</code> is initially <code>None</code>. By default, PyTorch stores gradients for leaf tensors such as <code>X</code> and <code>W</code>, but not intermediate non-leaf tensors such as <code>a</code>.</p>
+<p>Use:</p>
+<pre class="code python"><code class="language-python"># Recompute the graph because the old graph was freed
+h = X @ W
+a = torch.tanh(h)
+a.retain_grad()
+
+scores = a @ v
+loss = scores.mean() + lam * a.square().mean()
+
+X.grad = None
+W.grad = None
+loss.backward()
+
+print(torch.allclose(a.grad, da, atol=1e-6))</code></pre>
+<p>Check answers:</p>
+<ol>
+<li><p>Both branches independently influence the same value, so the multivariable chain rule sums their gradient contributions.</p></li>
+<li><p>The full Jacobians would be extremely large and mostly structured or sparse. Reverse-mode computes only the products needed to propagate the loss gradient.</p></li>
+<li><p><span class="math inline">\(1-a^2\)</span> approaches zero, producing vanishing gradients through the <code>tanh</code>.</p></li>
+<li><p>Likely causes include saturated <code>tanh</code>, small upstream values in <code>v</code>, cancellation between examples, or cancellation between the main and regularization branches.</p></li>
+<li><p>Only <code>da_main</code> changes. It becomes <span class="math inline">\(B\)</span> times larger; the regularization gradient is unchanged.</p></li>
+</ol>
+<p>Session 1 retrieval answer:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial w}=X^\top\delta,
+\qquad
+\frac{\partial L}{\partial b}=\sum_i\delta_i\]</span></p>

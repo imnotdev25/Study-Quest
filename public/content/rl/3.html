@@ -1,0 +1,301 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a stock price</div>
+<p>A stock price squeezes years of uncertain future profits into one number today. <span class="math inline">\(V(s)\)</span> does the same for a situation: “how good is it to be here, given how I’ll behave?” <span class="math inline">\(Q(s,a)\)</span> is more specific: “how good is it to be here <em>and</em> do this?”</p>
+<p>Being at the gym door has a high <span class="math inline">\(V\)</span>. Being at the gym door <em>and</em> turning around to go home has a low <span class="math inline">\(Q\)</span>.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/240ce85e5181.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Backup diagram for <span class="math inline">\(V^\pi\)</span>. Open circles are states, black dots are actions.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What is the recursive equation for return?</p></li>
+<li><p>What does the Markov property require from a state representation?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="why-value-functions-exist">2. Why value functions exist</h3>
+<p>Suppose you are choosing between two flats. You do not judge a flat only by today’s rent. You summarize its likely future consequences—commute, repairs and comfort—into an overall value.</p>
+<p>RL does something similar.</p>
+<h4 class="unnumbered" id="state-value">State value</h4>
+<p>Under policy <span class="math inline">\(\pi\)</span>, the value of state <span class="math inline">\(s\)</span> is the expected return starting there:</p>
+<p><span class="math display">\[V^\pi(s)
+=
+\mathbb E_\pi[G_t\mid S_t=s]\]</span></p>
+<p>This answers:</p>
+<blockquote>
+<p>How good is this situation if I continue following policy <span class="math inline">\(\pi\)</span>?</p>
+</blockquote>
+<h4 class="unnumbered" id="action-value">Action value</h4>
+<p>The action value fixes the first action before returning to the policy:</p>
+<p><span class="math display">\[Q^\pi(s,a)
+=
+\mathbb E_\pi[G_t\mid S_t=s,A_t=a]\]</span></p>
+<p>This answers:</p>
+<blockquote>
+<p>How good is taking this particular action here, then following <span class="math inline">\(\pi\)</span>?</p>
+</blockquote>
+<p>The relationship is:</p>
+<p><span class="math display">\[V^\pi(s)
+=
+\sum_a \pi(a\mid s)Q^\pi(s,a)\]</span></p>
+<p>So <span class="math inline">\(V^\pi(s)\)</span> is the policy-weighted average of the available action values.</p>
+<h3 class="unnumbered" id="the-bellman-expectation-equation">The Bellman expectation equation</h3>
+<p>From the previous session:</p>
+<p><span class="math display">\[G_t=R_{t+1}+\gamma G_{t+1}\]</span></p>
+<p>Take its expectation:</p>
+<p><span class="math display">\[V^\pi(s)
+=
+\sum_a \pi(a\mid s)
+\sum_{s&#39;}P(s&#39;\mid s,a)
+\left[
+R(s,a,s&#39;)+\gamma V^\pi(s&#39;)
+\right]\]</span></p>
+<p>Despite its size, it says only:</p>
+<p><span class="math display">\[\boxed{\text{value now}
+=
+\mathbb E[\text{reward now}
++
+\gamma\text{ value next}]}\]</span></p>
+<p>For an action value:</p>
+<p><span class="math display">\[Q^\pi(s,a)
+=
+\sum_{s&#39;}P(s&#39;\mid s,a)
+\left[
+R(s,a,s&#39;)+\gamma V^\pi(s&#39;)
+\right]\]</span></p>
+<p>This is called <strong>bootstrapping</strong>: we update one estimate using another estimate.</p>
+<p>The equation looks circular because <span class="math inline">\(V\)</span> appears on both sides. Dynamic programming resolves this by repeatedly applying a <strong>Bellman backup</strong>:</p>
+<p><span class="math display">\[V_{k+1}=r_\pi+\gamma P_\pi V_k\]</span></p>
+<p>Eventually the estimates converge to a fixed point:</p>
+<p><span class="math display">\[V_{k+1}\approx V_k\]</span></p>
+<p>This requires a known environment model <span class="math inline">\(P\)</span> and <span class="math inline">\(R\)</span>. Later, Monte Carlo and TD learning will estimate values from experience instead.</p>
+<h3 class="unnumbered" id="example-mdp">Example MDP</h3>
+<p>There are three states:</p>
+<ul>
+<li><p>State 0: starting area</p></li>
+<li><p>State 1: near the goal</p></li>
+<li><p>State 2: terminal</p></li>
+</ul>
+<p>At states 0 and 1:</p>
+<ul>
+<li><p>Action 0 means progress.</p></li>
+<li><p>Action 1 means wait and receive <span class="math inline">\(-1\)</span>.</p></li>
+</ul>
+<p>Progressing from state 1 reaches the terminal state and gives <span class="math inline">\(+5\)</span>.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>For an LLM:</p>
+<ul>
+<li><p><span class="math inline">\(V(\text{prefix})\)</span>: predicted quality of completing the current prefix.</p></li>
+<li><p><span class="math inline">\(Q(\text{prefix},\text{next token})\)</span>: predicted quality after choosing a particular next token.</p></li>
+</ul>
+<p>A critic used in LLM RL approximates values because enumerating every possible continuation is impossible.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the Bellman equation is a linear system</div>
+<p><span class="math inline">\(V^\pi(s)=\sum_a\pi(a|s)\sum_{s&#39;}P(s&#39;|s,a)\big[r(s,a,s&#39;)+\gamma V^\pi(s&#39;)\big]\)</span> and <span class="math inline">\(V^\pi(s)=\sum_a\pi(a|s)\,Q^\pi(s,a)\)</span>.</p>
+<p>In vector form, <span class="math inline">\(\mathbf v=\mathbf r_\pi+\gamma P_\pi\mathbf v\)</span>, so <span class="math display">\[\mathbf v=(I-\gamma P_\pi)^{-1}\mathbf r_\pi .\]</span> The inverse always exists for <span class="math inline">\(\gamma&lt;1\)</span>, because <span class="math inline">\(P_\pi\)</span>’s eigenvalues have magnitude at most 1.</p>
+<p><strong>Worked example.</strong> Two states that always swap: <span class="math inline">\(A\to B\)</span> pays 1 and <span class="math inline">\(B\to A\)</span> pays 0, with <span class="math inline">\(\gamma=0.9\)</span>. <span class="math inline">\(V_A=1+0.9V_B\)</span> and <span class="math inline">\(V_B=0.9V_A\)</span>, so <span class="math inline">\(V_A=1+0.81V_A\)</span>, which gives <span class="math inline">\(V_A=1/0.19\approx5.26\)</span> and <span class="math inline">\(V_B\approx4.74\)</span>. Check: from <span class="math inline">\(A\)</span> the rewards are <span class="math inline">\(1,0,1,0,\dots\)</span>, so <span class="math inline">\(V_A=1+0.81+0.81^2+\dots=1/(1-0.81)\)</span>.</p>
+<p><strong>Why iterating works:</strong> each sweep <span class="math inline">\(V_{k+1}=\mathbf r_\pi+\gamma P_\pi V_k\)</span> shrinks the error by at least a factor of <span class="math inline">\(\gamma\)</span>, so <span class="math inline">\(\|V_k-V^\pi\|_\infty\le\gamma^k\|V_0-V^\pi\|_\infty\)</span>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p><span class="math inline">\(V\)</span> scores a state, <span class="math inline">\(Q\)</span> scores a state-action pair, and <span class="math inline">\(V=\mathbb E_{a\sim\pi}[Q]\)</span>.</p></li>
+<li><p>Small problems can be solved exactly with one matrix inverse. Big ones need iteration, and then learning.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: three sweeps on the swap MDP</div>
+<p><span class="math inline">\(A\to B\)</span> pays 1, <span class="math inline">\(B\to A\)</span> pays 0, <span class="math inline">\(\gamma=0.9\)</span>, synchronous updates from <span class="math inline">\(V=0\)</span>:</p>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: center;">sweep</th>
+<th style="text-align: center;"><span class="math inline">\(V_A\)</span></th>
+<th style="text-align: center;"><span class="math inline">\(V_B\)</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;">0</td>
+<td style="text-align: center;">0</td>
+<td style="text-align: center;">0</td>
+</tr>
+<tr>
+<td style="text-align: center;">1</td>
+<td style="text-align: center;">1.00</td>
+<td style="text-align: center;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: center;">2</td>
+<td style="text-align: center;">1.00</td>
+<td style="text-align: center;">0.90</td>
+</tr>
+<tr>
+<td style="text-align: center;">3</td>
+<td style="text-align: center;">1.81</td>
+<td style="text-align: center;">0.90</td>
+</tr>
+<tr>
+<td style="text-align: center;"><span class="math inline">\(\infty\)</span></td>
+<td style="text-align: center;">5.26</td>
+<td style="text-align: center;">4.74</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The error shrinks by about <span class="math inline">\(\gamma\)</span> per sweep, so reaching <span class="math inline">\(10^{-3}\)</span> takes roughly 70 sweeps.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Mixing old and new values by accident (decide: synchronous or in-place).</p></li>
+<li><p>Forgetting to weight by <span class="math inline">\(\pi(a|s)\)</span> when the policy is stochastic.</p></li>
+<li><p>Giving terminal states a nonzero value.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Iterative policy evaluation</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> transitions <span class="math inline">\(P(s&#39;|s,a)\)</span>, rewards <span class="math inline">\(r(s,a,s&#39;)\)</span>, policy <span class="math inline">\(\pi\)</span>, discount <span class="math inline">\(\gamma\)</span>, tolerance <span class="math inline">\(\theta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(V(s)\gets0\)</span> for every state</div>
+<div class="algo-line" style="--d:0"><strong>repeat</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\Delta\gets0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each state <span class="math inline">\(s\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(v\gets V(s)\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(V(s)\gets\sum_a\pi(a|s)\sum_{s&#39;}P(s&#39;|s,a)\big[r(s,a,s&#39;)+\gamma V(s&#39;)\big]\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\Delta\gets\max(\Delta,|v-V(s)|)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>until</strong> <span class="math inline">\(\Delta&lt;\theta\)</span></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(V\approx V^\pi\)</span></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-iterative-policy-evaluation">3. PyTorch exercise — iterative policy evaluation</h3>
+<p>Complete the TODOs:</p>
+<pre class="code python"><code class="language-python">import torch
+
+gamma = 0.9
+
+# transitions[state, action, next_state]
+transitions = torch.zeros(3, 2, 3)
+
+transitions[0, 0, 1] = 1.0  # start --progress--&gt; near goal
+transitions[0, 1, 0] = 1.0  # start --wait--&gt; start
+
+transitions[1, 0, 2] = 1.0  # near goal --progress--&gt; terminal
+transitions[1, 1, 1] = 1.0  # near goal --wait--&gt; near goal
+
+transitions[2, :, 2] = 1.0  # terminal remains terminal
+
+# rewards[state, action]
+rewards = torch.tensor([
+    [0.0, -1.0],
+    [5.0, -1.0],
+    [0.0,  0.0],
+])  # [states=3, actions=2]
+
+policy = torch.tensor([
+    [0.8, 0.2],
+    [0.7, 0.3],
+    [0.5, 0.5],
+])  # [states=3, actions=2]
+
+# TODO 1:
+# Expected immediate reward under the policy.
+r_pi = ...
+
+# TODO 2:
+# Transition matrix under the policy.
+# Expected shape: [states, next_states]
+p_pi = ...
+
+values = torch.zeros(3)
+
+for iteration in range(100):
+    # TODO 3: synchronous Bellman update
+    new_values = ...
+
+    delta = (new_values - values).abs().max()
+    values = new_values
+
+    if delta &lt; 1e-6:
+        break
+
+# TODO 4:
+# Calculate Q(s,a) using the converged state values.
+q_values = ...
+
+print(&quot;Iterations:&quot;, iteration + 1)
+print(&quot;V:&quot;, values)
+print(&quot;Q:\n&quot;, q_values)
+
+# This identity should approximately hold.
+print(&quot;Policy-weighted Q:&quot;, (policy * q_values).sum(dim=1))</code></pre>
+<p>Before running, predict:</p>
+<ol>
+<li><p>Should state 1 or state 0 have greater value?</p></li>
+<li><p>Should “progress” or “wait” have greater <span class="math inline">\(Q\)</span> in state 1?</p></li>
+<li><p>What should the terminal state’s value be?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> r_pi</code></span>: multiply policy probabilities by rewards and sum over actions.</p></li>
+<li><p>Add a final dimension to policy before weighting transitions.</p></li>
+<li><p>Matrix-vector multiplication: <span style="background-color: codeinlinebg"><code> [S, S] @ [S] -&gt; [S]</code></span>.</p></li>
+<li><p>For every state-action pair:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">expected_next_value = transitions @ values</code></pre>
+<p>This produces shape <span style="background-color: codeinlinebg"><code> [S, A]</code></span>.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Can the same state have different values under two policies?</p></li>
+<li><p>Why is <span class="math inline">\(V^\pi(s)\)</span> an average of <span class="math inline">\(Q^\pi(s,a)\)</span>?</p></li>
+<li><p>Does a high immediate reward guarantee a high action value?</p></li>
+<li><p>A researcher computes <span style="background-color: codeinlinebg"><code> policy * q_values</code></span> but forgets <span style="background-color: codeinlinebg"><code> .sum(dim=1)</code></span>. What does the resulting tensor represent?</p></li>
+<li><p>Why can’t ordinary dynamic programming be applied directly to a large LLM environment?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">r_pi = (policy * rewards).sum(dim=1)
+
+p_pi = (
+    policy.unsqueeze(-1) * transitions
+).sum(dim=1)
+
+values = torch.zeros(3)
+
+for iteration in range(100):
+    new_values = r_pi + gamma * (p_pi @ values)
+
+    delta = (new_values - values).abs().max()
+    values = new_values
+
+    if delta &lt; 1e-6:
+        break
+
+expected_next_value = transitions @ values
+q_values = rewards + gamma * expected_next_value</code></pre>
+<p>Approximate result:</p>
+<pre class="code text"><code class="language-plaintext">V:
+tensor([3.6051, 4.3836, 0.0000])
+
+Q:
+tensor([
+    [3.9452, 2.2446],
+    [5.0000, 2.9452],
+    [0.0000, 0.0000]
+])</code></pre>
+<p>And:</p>
+<pre class="code text"><code class="language-plaintext">Policy-weighted Q:
+tensor([3.6051, 4.3836, 0.0000])</code></pre>
+<p>This confirms:</p>
+<p><span class="math display">\[V^\pi(s)=\sum_a\pi(a\mid s)Q^\pi(s,a)\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Yes. Value includes the future actions selected by the policy.</p></li>
+<li><p>The policy samples among actions, so expected state value must weight each action value by its selection probability.</p></li>
+<li><p>No. The action may transition into a poor future state.</p></li>
+<li><p>It contains each action’s weighted contribution, shape <span style="background-color: codeinlinebg"><code> [states, actions]</code></span>, rather than one value per state.</p></li>
+<li><p>We do not know a tractable transition model over all prefixes and continuations, and the state and action spaces are enormous.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(G_t=R_{t+1}+\gamma G_{t+1}\)</span>.</p></li>
+<li><p>The current state must contain the history information needed to predict the next state and reward.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> <span class="math inline">\(V\)</span> evaluates a situation, <span class="math inline">\(Q\)</span> evaluates a situation-plus-action, and a Bellman backup converts future value into present value.</p>

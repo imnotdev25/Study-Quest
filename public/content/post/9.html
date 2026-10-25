@@ -1,0 +1,154 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>RLVR</strong>: sample several answers per problem, check each with a program (exact match, unit tests), and reinforce the ones that pass. <strong>GRPO</strong> compares answers to the same prompt instead of training a critic. TRL’s <code>GRPOTrainer</code> implements it, with options for every fix from the RL book’s Part XVIII: <code>loss_type="dapo"</code> (the default), <code>"dr_grpo"</code>, <code>"cispo"</code>; <code>epsilon_high</code> (clip-higher); <code>importance_sampling_level="sequence"</code> (GSPO); <code>scale_rewards="batch"</code> (REINFORCE++-style).</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/e88a9bf2637d.svg" alt="diagram" loading="lazy"></figure>
+<p><em>One GRPO iteration. With <code>vllm_mode="colocate"</code>, generation and training share the same GPU and weights are synced in memory.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: what makes a good RLVR dataset</div>
+<p><strong>Step 1.</strong> A group gives signal only if its rewards differ (RL book, Topic 32): <span class="math inline">\(P(\text{signal})=1-p^G-(1-p)^G\)</span> for solve rate <span class="math inline">\(p\)</span>.</p>
+<p><strong>Step 2.</strong> So filter prompts to the model’s frontier: <span class="math inline">\(0.1\lesssim p\lesssim0.9\)</span>. Estimate <span class="math inline">\(p\)</span> with 8 samples per prompt before training and drop the rest.</p>
+<p><strong>Step 3.</strong> The verifier is the objective. <code>boxed()</code> takes the <em>last</em> <code>\boxed{}</code> and compares numbers, not strings, so “72”, “72.0” and “7,2”-style formatting are handled consistently (see the verifier output below).</p>
+<p><strong>Step 4.</strong> The small format reward keeps early training from stalling when no answer is boxed yet. Keep it small: it’s a shaping term (RL book, Topic 62).</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;RL with verifiable rewards: GRPO on GSM8K with TRL and vLLM.
+
+Local smoke test:  python grpo.py                   (tiny model, CPU, reward functions checked first)
+On Modal:          modal run grpo.py::train_remote  (Qwen3-1.7B, 1x H100, vLLM colocated)
+&quot;&quot;&quot;
+import re
+
+import modal
+
+SYSTEM = &quot;Solve the problem. Think step by step, then give the final answer as \\boxed{number}.&quot;
+
+
+def text_of(c):
+    return c if isinstance(c, str) else c[0][&quot;content&quot;]          # standard vs conversational format
+
+
+def boxed(text: str) -&gt; str | None:
+    m = re.findall(r&quot;\\boxed\{([^{}]*)\}&quot;, text)
+    return m[-1].replace(&quot;,&quot;, &quot;&quot;).strip() if m else None
+
+
+def correctness_reward(completions, answer, **kwargs) -&gt; list[float]:
+    &quot;&quot;&quot;1 if the last \\boxed{} matches the reference number, else 0. This is the verifier.&quot;&quot;&quot;
+    out = []
+    for c, ref in zip(completions, answer):
+        pred = boxed(text_of(c))
+        try:
+            out.append(1.0 if pred is not None and abs(float(pred) - float(ref)) &lt; 1e-6 else 0.0)
+        except ValueError:
+            out.append(0.0)
+    return out
+
+
+def format_reward(completions, **kwargs) -&gt; list[float]:
+    &quot;&quot;&quot;A small bonus for producing exactly one \\boxed{} answer.&quot;&quot;&quot;
+    return [0.1 if text_of(c).count(&quot;\\boxed{&quot;) == 1 else 0.0 for c in completions]
+
+
+def gsm8k_prompts(split=&quot;train&quot;):
+    from datasets import load_dataset
+
+    ds = load_dataset(&quot;openai/gsm8k&quot;, &quot;main&quot;, split=split)
+    return ds.map(lambda x: {
+        &quot;prompt&quot;: [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: SYSTEM}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: x[&quot;question&quot;]}],
+        &quot;answer&quot;: x[&quot;answer&quot;].split(&quot;####&quot;)[-1].replace(&quot;,&quot;, &quot;&quot;).strip(),   # reference after &#x27;####&#x27;
+    }, remove_columns=ds.column_names)
+
+
+def run_grpo(model, dataset, output_dir, **overrides):
+    from trl import GRPOConfig, GRPOTrainer
+
+    defaults = dict(
+        output_dir=output_dir,
+        num_generations=8,                   # G responses per prompt -&gt; group-relative advantages
+        max_completion_length=512,
+        per_device_train_batch_size=16,      # must be divisible by num_generations
+        gradient_accumulation_steps=4,
+        learning_rate=1e-6,
+        beta=0.0,                            # no KL term, no reference model (TRL default)
+        loss_type=&quot;dapo&quot;,                    # token-level normalization (TRL default)
+        epsilon=0.2, epsilon_high=0.28,      # DAPO clip-higher
+        logging_steps=5,
+        save_strategy=&quot;no&quot;,
+        report_to=&quot;none&quot;,
+    )
+    args = GRPOConfig(**{**defaults, **overrides})   # smoke tests override some defaults
+    trainer = GRPOTrainer(model=model, reward_funcs=[correctness_reward, format_reward],
+                          args=args, train_dataset=dataset)
+    trainer.train()
+    return trainer
+
+
+app = modal.App(&quot;pt-book-grpo&quot;)
+image = modal.Image.debian_slim(python_version=&quot;3.12&quot;).uv_pip_install(
+    &quot;trl[vllm]==1.16.0&quot;, &quot;transformers==5.20.2&quot;, &quot;datasets==5.1.0&quot;, &quot;accelerate==1.15.0&quot;
+)
+models = modal.Volume.from_name(&quot;pt-book-models&quot;, create_if_missing=True)
+
+
+@app.function(gpu=&quot;H100&quot;, image=image, volumes={&quot;/models&quot;: models},
+              secrets=[modal.Secret.from_name(&quot;huggingface-secret&quot;)], timeout=8 * 60 * 60)
+def train_remote(max_steps: int = 500):
+    trainer = run_grpo(&quot;Qwen/Qwen3-1.7B&quot;, gsm8k_prompts(), &quot;/models/qwen3-1.7b-grpo&quot;, bf16=True,
+                       max_steps=max_steps, use_vllm=True, vllm_mode=&quot;colocate&quot;)
+    trainer.save_model(&quot;/models/qwen3-1.7b-grpo&quot;)
+    models.commit()
+
+
+if __name__ == &quot;__main__&quot;:
+    print(&quot;verifier:&quot;, correctness_reward([&quot;so it is \\boxed{72}&quot;, &quot;\\boxed{7,2}&quot;, &quot;the answer is 72&quot;], [&quot;72&quot;] * 3))
+    print(&quot;format:  &quot;, format_reward([&quot;\\boxed{1}&quot;, &quot;\\boxed{1} \\boxed{2}&quot;]))
+
+    from datasets import Dataset
+
+    ds = Dataset.from_list([{&quot;prompt&quot;: f&quot;What is {a} + {a}? Answer as \\boxed{{n}}.&quot;, &quot;answer&quot;: str(2 * a)}
+                            for a in range(16)])
+    trainer = run_grpo(&quot;trl-internal-testing/tiny-Qwen2ForCausalLM-2.5&quot;, ds, &quot;/tmp/grpo_smoke&quot;,
+                       num_generations=4, per_device_train_batch_size=4, gradient_accumulation_steps=1,
+                       max_completion_length=16, max_steps=3, logging_steps=1, bf16=False, use_cpu=True)
+    steps = [h for h in trainer.state.log_history if &quot;reward&quot; in h]
+    print(&quot;GRPO smoke test steps logged:&quot;, len(steps), &quot; keys include:&quot;,
+          sorted(k for k in steps[0] if k.startswith((&quot;reward&quot;, &quot;clip&quot;, &quot;entropy&quot;)))[:6])</code></pre>
+<p>Local output: the reward functions first, then three GRPO steps on the random test model. It never writes <code>\boxed{}</code>, so every reward is 0, every group is degenerate (<code>frac_reward_zero_std</code> = 1) and the loss is exactly 0. That’s the zero-signal case from the derivation above, and why you start GRPO from an SFT’d model:</p>
+<pre class="code output"><code class="output">verifier: [1.0, 1.0, 0.0]
+format:   [0.1, 0.0]
+GRPO smoke test steps logged: 3  keys include: [&#x27;clip_ratio/high_max&#x27;, &#x27;clip_ratio/high_mean&#x27;, &#x27;clip_ratio/low_mean&#x27;, &#x27;clip_ratio/low_min&#x27;, &#x27;clip_ratio/region_mean&#x27;, &#x27;entropy&#x27;]</code></pre>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">RLVR dataset</th>
+<th style="text-align: left;">size</th>
+<th style="text-align: left;">notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>openai/gsm8k</code></td>
+<td style="text-align: left;">7.5K train</td>
+<td style="text-align: left;">grade-school math, numeric answers after <code>####</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>trl-lib/DeepMath-103K</code></td>
+<td style="text-align: left;">103K</td>
+<td style="text-align: left;">harder math with verified answers; TRL’s GRPO quick start</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>HuggingFaceH4/MATH-500</code></td>
+<td style="text-align: left;">500</td>
+<td style="text-align: left;">standard held-out evaluation set (don’t train on it)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>open-thoughts/OpenThoughts-114k</code></td>
+<td style="text-align: left;">114K</td>
+<td style="text-align: left;">math, code, science with reference answers and traces</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>On Modal:</strong> <code>modal run grpo.py::train_remote</code> trains Qwen3-1.7B for 500 steps (each step: 16 prompts <span class="math inline">\(\times\)</span> 8 samples <span class="math inline">\(\times\)</span> 4 accumulation). Watch <code>reward</code> rise and <code>completions/mean_length</code> for sudden growth (RL book, Topics 46 and 171).</p>

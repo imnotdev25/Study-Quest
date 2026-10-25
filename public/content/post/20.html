@@ -1,0 +1,130 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Safety post-training uses the same trainers as everything else, with safety data in the mix: <strong>harmful requests with good refusals or safe completions</strong>, <strong>benign requests that look risky with helpful answers</strong> (to prevent over-refusal), and <strong>preference pairs</strong> where the safer response wins. A <strong>safe completion</strong> helps with the legitimate part of a request (“how do I store medication safely around kids”) instead of refusing everything near the topic.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Safe RLHF: helpfulness subject to a harm budget</div>
+<p><strong>Step 1.</strong> Train two models (Chapter 12): reward <span class="math inline">\(R(x,y)\)</span> for helpfulness and cost <span class="math inline">\(C(x,y)\)</span> for harm.</p>
+<p><strong>Step 2.</strong> Objective: <span class="math inline">\(\max_\pi\ \mathbb E[R]\)</span> subject to <span class="math inline">\(\mathbb E[C]\le d\)</span>. A single blended reward <span class="math inline">\(R-\lambda C\)</span> with a fixed <span class="math inline">\(\lambda\)</span> can’t guarantee the constraint.</p>
+<p><strong>Step 3.</strong> Lagrangian: <span class="math inline">\(\mathcal L(\pi,\lambda)=\mathbb E[R]-\lambda(\mathbb E[C]-d)\)</span>, <span class="math inline">\(\lambda\ge0\)</span>. Alternate a policy step on <span class="math inline">\(R-\lambda C\)</span> with <span class="math inline">\(\lambda\gets\max(0,\lambda+\eta(\hat C-d))\)</span> (RL book, Topic 151).</p>
+<p><strong>Step 4.</strong> <span class="math inline">\(\lambda\)</span> rises while the policy is too harmful and falls once it’s within budget, so the exchange rate between helpfulness and harmlessness is set by the data, not guessed.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Constitutional AI data: draft -&gt; critique against a principle -&gt; revise.
+Produces SFT rows (prompt, revision) and preference rows (revision chosen over draft).
+
+Local test of the prompt builders:  python constitution.py
+On Modal (Qwen3-8B with vLLM):       modal run constitution.py::critique_revise
+&quot;&quot;&quot;
+import random
+
+import modal
+
+CONSTITUTION = [
+    &quot;Identify ways the response could help someone cause serious harm, and rewrite it to remove that help &quot;
+    &quot;while still addressing any legitimate need behind the request.&quot;,
+    &quot;Identify any part of the response that refuses or lectures unnecessarily when the request is harmless, &quot;
+    &quot;and rewrite it to be directly helpful.&quot;,
+    &quot;Identify claims in the response that are inaccurate or overconfident, and rewrite it to be honest about uncertainty.&quot;,
+    &quot;Identify anything disrespectful, demeaning or biased in the response, and rewrite it to be respectful.&quot;,
+]
+
+
+def critique_prompt(request, draft, principle):
+    return (f&quot;Request: {request}\n\nResponse: {draft}\n\nCritique the response with this principle in mind: &quot;
+            f&quot;{principle.split(&#x27;, and rewrite&#x27;)[0]}. Be specific and brief.&quot;)
+
+
+def revise_prompt(request, draft, critique, principle):
+    return (f&quot;Request: {request}\n\nResponse: {draft}\n\nCritique: {critique}\n\n&quot;
+            f&quot;Rewrite the response following this principle: {principle} Output only the new response.&quot;)
+
+
+def rows(request, draft, revision):
+    sft = {&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: request}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: revision}]}
+    pref = {&quot;prompt&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: request}],
+            &quot;chosen&quot;: [{&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: revision}],
+            &quot;rejected&quot;: [{&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: draft}]}
+    return sft, pref
+
+
+app = modal.App(&quot;pt-book-constitution&quot;)
+image = (modal.Image.debian_slim(python_version=&quot;3.12&quot;).uv_pip_install(&quot;vllm==0.32.0&quot;, &quot;datasets==5.1.0&quot;)
+         .add_local_python_source(&quot;constitution&quot;))
+data = modal.Volume.from_name(&quot;pt-book-data&quot;, create_if_missing=True)
+
+
+@app.function(gpu=&quot;H100&quot;, image=image, volumes={&quot;/data&quot;: data}, timeout=3 * 60 * 60,
+              secrets=[modal.Secret.from_name(&quot;huggingface-secret&quot;)])
+def critique_revise(n: int = 5000, teacher: str = &quot;Qwen/Qwen3-8B&quot;):
+    from datasets import Dataset, load_dataset
+    from vllm import LLM, SamplingParams
+
+    prompts = load_dataset(&quot;PKU-Alignment/PKU-SafeRLHF&quot;, split=&quot;train&quot;).shuffle(seed=0).select(range(n))[&quot;prompt&quot;]
+    llm, sp = LLM(teacher, max_model_len=8192), SamplingParams(temperature=0.7, max_tokens=768)
+    chat = lambda msgs: [o.outputs[0].text for o in llm.chat([[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: m}] for m in msgs], sp,
+                                                              chat_template_kwargs={&quot;enable_thinking&quot;: False})]
+    rng = random.Random(0)
+    principles = [rng.choice(CONSTITUTION) for _ in prompts]
+    drafts = chat(prompts)
+    critiques = chat([critique_prompt(r, d, p) for r, d, p in zip(prompts, drafts, principles)])
+    revisions = chat([revise_prompt(r, d, c, p) for r, d, c, p in zip(prompts, drafts, critiques, principles)])
+    pairs = [rows(r, d, v) for r, d, v in zip(prompts, drafts, revisions)]
+    Dataset.from_list([s for s, _ in pairs]).save_to_disk(&quot;/data/cai_sft&quot;)
+    Dataset.from_list([p for _, p in pairs]).save_to_disk(&quot;/data/cai_pref&quot;)
+    data.commit()
+
+
+if __name__ == &quot;__main__&quot;:
+    req, draft = &quot;Is it safe to mix bleach and vinegar for cleaning?&quot;, &quot;Sure, mix them for a stronger cleaner.&quot;
+    print(critique_prompt(req, draft, CONSTITUTION[0]))
+    print(&quot;---&quot;)
+    sft, pref = rows(req, draft, &quot;No. Mixing them releases chlorine gas, which is toxic. Use them separately and ventilate.&quot;)
+    print(&quot;SFT keys:&quot;, list(sft), &quot;| preference keys:&quot;, list(pref), &quot;| chosen starts:&quot;, pref[&quot;chosen&quot;][0][&quot;content&quot;][:30])</code></pre>
+<p>Local output (prompt builders and row formats; the generation runs on Modal):</p>
+<pre class="code output"><code class="output">Request: Is it safe to mix bleach and vinegar for cleaning?
+Response: Sure, mix them for a stronger cleaner.
+Critique the response with this principle in mind: Identify ways the response could help someone cause serious harm. Be specific and brief.
+---
+SFT keys: [&#x27;messages&#x27;] | preference keys: [&#x27;prompt&#x27;, &#x27;chosen&#x27;, &#x27;rejected&#x27;] | chosen starts: No. Mixing them releases chlor</code></pre>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Safety training data (HF id)</th>
+<th style="text-align: left;">access</th>
+<th style="text-align: left;">what it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>PKU-Alignment/PKU-SafeRLHF</code></td>
+<td style="text-align: left;">open</td>
+<td style="text-align: left;">74K pairs, separate helpful/safe labels, 19 harm categories</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>PKU-Alignment/BeaverTails</code></td>
+<td style="text-align: left;">open</td>
+<td style="text-align: left;">QA pairs labeled safe/unsafe by harm category</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>Anthropic/hh-rlhf</code></td>
+<td style="text-align: left;">open</td>
+<td style="text-align: left;">169K human-preference pairs, helpful and harmless splits</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>allenai/wildjailbreak</code></td>
+<td style="text-align: left;">gated</td>
+<td style="text-align: left;">262K synthetic vanilla and adversarial prompts, harmful and benign contrasts</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>allenai/wildguardmix</code></td>
+<td style="text-align: left;">gated</td>
+<td style="text-align: left;">training and test data for prompt/response harm and refusal detection</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>nvidia/Aegis-AI-Content-Safety-Dataset-2.0</code></td>
+<td style="text-align: left;">open</td>
+<td style="text-align: left;">human-annotated prompts and responses across 12 hazard categories</td>
+</tr>
+</tbody>
+</table>
+</div>

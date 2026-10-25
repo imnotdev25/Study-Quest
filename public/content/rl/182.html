@@ -1,0 +1,12 @@
+
+<p>This part covers methods that are already widely used. The field moves fast, and new methods appear weekly. Below are directions from recent papers (titles from arXiv, September–October 2026) that look important but are too new to have settled. Treat them as reading, not as recipes: check whether they’re reproduced and adopted before relying on them.</p>
+<ul>
+<li><p><strong>On-policy and self-distillation</strong> keeps growing: teacher preparation (Prep-OPD), difficulty-gated teacher guidance (DiffGate), and studies of whether self-distillation improves reasoning at all. Start with Topic 180.</p></li>
+<li><p><strong>Off-policy and asynchronous correction</strong> for RLVR: off-policy objectives (e.g. GGPO), coupled off-policy correction for async training (COPC), and rollout-replay decoupling systems (ReFlow). Start with Topic 182.</p></li>
+<li><p><strong>Token credit without group sampling</strong>, e.g. single-rollout credit assignment (HP-RLVR). Start with Topics 176 and 181.</p></li>
+<li><p><strong>Variance and trust-region control</strong>, e.g. ESS-targeted tempering of importance weights (TETPO), extending Topics 37 and 173.</p></li>
+<li><p><strong>Low-precision RL</strong> (FP4/NVFP4 training, e.g. TRACE, TRIAGE): the train–inference mismatch of Topic 182 gets worse at low precision.</p></li>
+<li><p><strong>Exploration as its own problem</strong>, e.g. decoupling exploration from optimization in RLVR, extending Topic 174.</p></li>
+</ul>
+<p><strong>How to keep up:</strong> the verl and OpenRLHF READMEs list the algorithms people actually run. arXiv searches for “RLVR” and “policy optimization reasoning” show what’s new. Before adopting a method, look for an independent reproduction or framework support.</p>
+<p><strong>Also in practical use but not covered here:</strong> VAPO (value-model PPO for long reasoning), SPPO (self-play preference optimization) and PF-PPO (filtering noisy rewards), all supported in verl. They’re good next reads once this part feels familiar.</p>

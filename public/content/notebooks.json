@@ -1,0 +1,338 @@
+[
+ {
+  "file": "interactive/bandit_casino.py",
+  "title": "Bandit Casino",
+  "emoji": "🎰",
+  "kind": "interactive",
+  "desc": "Play three slot machines yourself, then race epsilon-greedy, greedy and UCB.",
+  "topic": "bandit"
+ },
+ {
+  "file": "interactive/softmax_temperature.py",
+  "title": "Softmax and Temperature",
+  "emoji": "🌡️",
+  "kind": "interactive",
+  "desc": "See how temperature reshapes next-token probabilities and entropy.",
+  "topic": "softmax"
+ },
+ {
+  "file": "interactive/ppo_clip.py",
+  "title": "PPO Clipping",
+  "emoji": "✂️",
+  "kind": "interactive",
+  "desc": "Drag epsilon and see where PPO's gradient switches off.",
+  "topic": "PPO"
+ },
+ {
+  "file": "interactive/kv_cache_calculator.py",
+  "title": "KV Cache Calculator",
+  "emoji": "🧮",
+  "kind": "interactive",
+  "desc": "How many users fit on one GPU? Weights, KV cache and precision.",
+  "topic": "KV cache"
+ },
+ {
+  "file": "interactive/speculative_decoding.py",
+  "title": "Speculative Decoding",
+  "emoji": "🏎️",
+  "kind": "interactive",
+  "desc": "Acceptance rate, draft length and the real speedup.",
+  "topic": "speculative decoding"
+ },
+ {
+  "file": "interactive/gradient_descent.py",
+  "title": "Gradient Descent Valley",
+  "emoji": "⛰️",
+  "kind": "interactive",
+  "desc": "Condition number vs learning rate on a quadratic bowl.",
+  "topic": "optimisation"
+ },
+ {
+  "file": "interactive/bayes_coin.py",
+  "title": "Bayesian Coin",
+  "emoji": "🪙",
+  "kind": "interactive",
+  "desc": "Prior + flips = posterior. Watch the Beta distribution sharpen.",
+  "topic": "Bayes"
+ },
+ {
+  "file": "code/ag_context.py",
+  "title": "ag_context",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Agents ch. 'Context Engineering': BM25 retrieval, budget packing, compaction, and prompt-cache cost",
+  "topic": ""
+ },
+ {
+  "file": "code/ag_eval.py",
+  "title": "ag_eval",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Agents ch. 'Benchmarks': pass@k and pass^k estimators, compounding errors, benchmark noise,",
+  "topic": ""
+ },
+ {
+  "file": "code/ag_harness.py",
+  "title": "ag_harness",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Agents ch. 'Harnesses': a minimal coding-agent harness. Tool registry with schemas, a ReAct loop,",
+  "topic": ""
+ },
+ {
+  "file": "code/ag_prompting.py",
+  "title": "ag_prompting",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Agents ch. 'Prompting Patterns': prompt builders, answer parsing, and why voting helps or hurts",
+  "topic": ""
+ },
+ {
+  "file": "code/attn_kernels.py",
+  "title": "attn_kernels",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference ch. 'Attention Optimization': tiled online-softmax attention (FlashAttention), split-KV decode",
+  "topic": ""
+ },
+ {
+  "file": "code/distributed.py",
+  "title": "distributed",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference chs. 'Multi-GPU', 'MoE Inference', 'Long Context', 'Disaggregation': simulated parallelism",
+  "topic": ""
+ },
+ {
+  "file": "code/inf_memory.py",
+  "title": "inf_memory",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference ch. 'Prefill, Decode, KV Cache and Memory': memory math, the roofline, and timing a cache",
+  "topic": ""
+ },
+ {
+  "file": "code/intuitions.py",
+  "title": "intuitions",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Toolkit ch. 2: dot products, softmax temperature, broadcasting",
+  "topic": ""
+ },
+ {
+  "file": "code/jt_gauss.py",
+  "title": "jt_gauss",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Joint RVs: covariance matrices and Gaussian combinations (sums, linear maps, conditioning)",
+  "topic": ""
+ },
+ {
+  "file": "code/jt_joint.py",
+  "title": "jt_joint",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Joint RVs: two discrete, two continuous, moments of joint distributions, covariance and correlation",
+  "topic": ""
+ },
+ {
+  "file": "code/llm_blocks.py",
+  "title": "llm_blocks",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Toolkit ch. 6: the distinctive blocks of Llama 4, DeepSeek-V3 and Qwen3, at toy size",
+  "topic": ""
+ },
+ {
+  "file": "code/lora_qlora.py",
+  "title": "lora_qlora",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Toolkit ch. 7: LoRA from scratch, and the NF4 quantisation inside QLoRA",
+  "topic": ""
+ },
+ {
+  "file": "code/math_kit.py",
+  "title": "math_kit",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Toolkit ch. 1-2: the math fundamentals, each checked numerically",
+  "topic": ""
+ },
+ {
+  "file": "code/mf_integrals.py",
+  "title": "mf_integrals",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Math I: Riemann sums, double integrals, Fubini, polar change of variables, Monte Carlo",
+  "topic": ""
+ },
+ {
+  "file": "code/mf_jacobian.py",
+  "title": "mf_jacobian",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Math I: vector-valued maps, Jacobians and local (Taylor) approximation",
+  "topic": ""
+ },
+ {
+  "file": "code/mf_matcalc.py",
+  "title": "mf_matcalc",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Math I: matrix calculus identities, each checked against autograd",
+  "topic": ""
+ },
+ {
+  "file": "code/mf_optim.py",
+  "title": "mf_optim",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Math I: unconstrained and constrained optimisation, with the two constrained problems behind",
+  "topic": ""
+ },
+ {
+  "file": "code/mini_engine.py",
+  "title": "mini_engine",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference ch. 'Build a Mini Inference Engine': paged KV, continuous batching with a token budget,",
+  "topic": ""
+ },
+ {
+  "file": "code/nn_scratch.py",
+  "title": "nn_scratch",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Toolkit ch. 4: a neural network from scratch in NumPy, with RMSNorm, Adam and an LR schedule",
+  "topic": ""
+ },
+ {
+  "file": "code/paged_kv.py",
+  "title": "paged_kv",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference chs. 'PagedAttention' and 'Prefix Optimization': fragmentation, sharing, prefix-cache hit rates",
+  "topic": ""
+ },
+ {
+  "file": "code/pr_continuous.py",
+  "title": "pr_continuous",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Probability: continuous random variables and transformations (inverse CDF, Box-Muller,",
+  "topic": ""
+ },
+ {
+  "file": "code/pr_dists.py",
+  "title": "pr_dists",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Probability: the standard discrete and continuous distributions, theory vs simulation",
+  "topic": ""
+ },
+ {
+  "file": "code/pr_moments.py",
+  "title": "pr_moments",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Probability: expectation, variance, Jensen, tail bounds, moment generating functions",
+  "topic": ""
+ },
+ {
+  "file": "code/pr_rules.py",
+  "title": "pr_rules",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Probability: the rules, Bayes' theorem, and Bayesian updating",
+  "topic": ""
+ },
+ {
+  "file": "code/prod.py",
+  "title": "prod",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference chs. 'Routing and Autoscaling', 'Economics': prefix-aware routing simulation and cost math",
+  "topic": ""
+ },
+ {
+  "file": "code/quant.py",
+  "title": "quant",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference ch. 'Quantization and KV Compression': int8/int4, outliers, AWQ scaling, FP8, KV quantisation",
+  "topic": ""
+ },
+ {
+  "file": "code/rl_bridge.py",
+  "title": "rl_bridge",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Toolkit ch. 5: agents and environments, REINFORCE, DQN, and the PPO/GRPO/GSPO ratios",
+  "topic": ""
+ },
+ {
+  "file": "code/serving_sim.py",
+  "title": "serving_sim",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference chs. 'Benchmark', 'Break One GPU', 'Continuous Batching': a discrete-time server simulator",
+  "topic": ""
+ },
+ {
+  "file": "code/spec_decode.py",
+  "title": "spec_decode",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference ch. 'Speculative Decoding': exactness of speculative sampling, expected speedup,",
+  "topic": ""
+ },
+ {
+  "file": "code/specialized.py",
+  "title": "specialized",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference ch. 'Specialized Workloads': constrained decoding, multi-LoRA batching, batch-invariant numerics",
+  "topic": ""
+ },
+ {
+  "file": "code/st_estimators.py",
+  "title": "st_estimators",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference: sampling behaviour (LLN, CLT), bias, variance and MSE of estimators",
+  "topic": ""
+ },
+ {
+  "file": "code/st_intervals.py",
+  "title": "st_intervals",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference: confidence intervals and whether they really cover 95%",
+  "topic": ""
+ },
+ {
+  "file": "code/st_likelihood.py",
+  "title": "st_likelihood",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference: maximum likelihood, Fisher information, MAP, and logistic regression by Newton's method",
+  "topic": ""
+ },
+ {
+  "file": "code/st_tests.py",
+  "title": "st_tests",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Inference: comparing two models on one eval set, multiple comparisons, Hoeffding, importance sampling",
+  "topic": ""
+ },
+ {
+  "file": "code/tensors.py",
+  "title": "tensors",
+  "emoji": "📓",
+  "kind": "code",
+  "desc": "Toolkit ch. 3: PyTorch tensor operations, plus seven transformer-flavoured tasks",
+  "topic": ""
+ }
+]

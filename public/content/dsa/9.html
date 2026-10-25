@@ -1,0 +1,198 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Merge sort, quicksort, and heap sort with their invariants; stability; the linear-time sorts; quickselect and median-of-medians; and binary search done properly, including binary search on the answer, which solves a large family of optimization problems.</p>
+</div>
+<h1 id="the-sorting-algorithms-you-must-know">The Sorting Algorithms You Must Know</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Algorithm</th>
+<th style="text-align: left;">Best / Average / Worst</th>
+<th style="text-align: left;">Space</th>
+<th style="text-align: left;">Stable</th>
+<th style="text-align: left;">Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Insertion sort</td>
+<td style="text-align: left;"><span class="math inline">\(n\)</span> / <span class="math inline">\(n^2\)</span> / <span class="math inline">\(n^2\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">fast for tiny or nearly sorted input</td>
+</tr>
+<tr>
+<td style="text-align: left;">Merge sort</td>
+<td style="text-align: left;"><span class="math inline">\(n\log n\)</span> (all)</td>
+<td style="text-align: left;"><span class="math inline">\(O(n)\)</span></td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">predictable; external sorting</td>
+</tr>
+<tr>
+<td style="text-align: left;">Quicksort</td>
+<td style="text-align: left;"><span class="math inline">\(n\log n\)</span> / <span class="math inline">\(n\log n\)</span> / <span class="math inline">\(n^2\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">fastest in practice in memory</td>
+</tr>
+<tr>
+<td style="text-align: left;">Heap sort</td>
+<td style="text-align: left;"><span class="math inline">\(n\log n\)</span> (all)</td>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">in place, guaranteed</td>
+</tr>
+<tr>
+<td style="text-align: left;">Counting sort</td>
+<td style="text-align: left;"><span class="math inline">\(n + k\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(n+k)\)</span></td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">small integer range <span class="math inline">\(k\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Radix sort</td>
+<td style="text-align: left;"><span class="math inline">\(d(n + b)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(n+b)\)</span></td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;"><span class="math inline">\(d\)</span> digits in base <span class="math inline">\(b\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Timsort</td>
+<td style="text-align: left;"><span class="math inline">\(n\)</span> / <span class="math inline">\(n\log n\)</span> / <span class="math inline">\(n\log n\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(n)\)</span></td>
+<td style="text-align: left;">yes</td>
+<td style="text-align: left;">Python, Java objects: merges natural runs</td>
+</tr>
+</tbody>
+</table>
+<h1 id="merge-sort">Merge Sort</h1>
+<p><em>Merge sort</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> MergeSort(<span class="math inline">\(A, l, r\)</span>) <em>▷ sorts <span class="math inline">\(A[l..r)\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(r - l \le 1\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(m \gets \lfloor (l + r)/2 \rfloor\)</span></div>
+<div class="algo-line" style="--d:1">;</div>
+<div class="algo-line" style="--d:1">merge the sorted halves into a buffer: repeatedly take the smaller front</div>
+<div class="algo-line" style="--d:1">element, taking from the <em>left</em> half on ties (keeps it stable); copy back</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><span class="math inline">\(T(n) = 2T(n/2) + O(n) = O(n\log n)\)</span> in every case. <strong>Counting inversions</strong> during the merge: when an element from the right half is taken while <span class="math inline">\(k\)</span> elements remain in the left half, it forms <span class="math inline">\(k\)</span> inversions. The same merge-with-counting trick solves “count of smaller numbers after self” and “reverse pairs.” <strong>External sort</strong>: sort chunks that fit in memory, write them as runs, then <span class="math inline">\(k\)</span>-way merge the runs with a heap (Chapter 6). This is how databases and MapReduce sort data larger than RAM.</p>
+</div>
+<h1 id="quicksort-and-partitioning">Quicksort and Partitioning</h1>
+<p><em>Lomuto partition and quicksort</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Partition(<span class="math inline">\(A, l, r\)</span>) <em>▷ pivot <span class="math inline">\(A[r]\)</span>; returns its final index</em></div>
+<div class="algo-line" style="--d:1">swap a uniformly random element of <span class="math inline">\(A[l..r]\)</span> into <span class="math inline">\(A[r]\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(p \gets A[r]\)</span>; <span class="math inline">\(i \gets l\)</span> <em>▷ <span class="math inline">\(A[l..i)\)</span> <span class="math inline">\(&lt; p\)</span> ; <span class="math inline">\(A[i..j)\)</span> <span class="math inline">\(\ge p\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(j \gets l\)</span> <strong>to</strong> <span class="math inline">\(r-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(A[j] &lt; p\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3">swap <span class="math inline">\(A[i], A[j]\)</span>; <span class="math inline">\(i \gets i + 1\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">swap <span class="math inline">\(A[i], A[r]\)</span>; <strong>return</strong> <span class="math inline">\(i\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> QuickSort(<span class="math inline">\(A, l, r\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(l &lt; r\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(q \gets\)</span></div>
+<div class="algo-line" style="--d:2">;</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>The comment is the invariant: everything before <span class="math inline">\(i\)</span> is smaller than the pivot, everything between <span class="math inline">\(i\)</span> and <span class="math inline">\(j\)</span> is at least the pivot. When <span class="math inline">\(j\)</span> reaches <span class="math inline">\(r\)</span>, placing the pivot at <span class="math inline">\(i\)</span> puts it in its final sorted position. <strong>Expected <span class="math inline">\(O(n\log n)\)</span></strong> with a random pivot: any two elements are compared at most once, and elements of rank <span class="math inline">\(i\)</span> and <span class="math inline">\(j\)</span> are compared with probability <span class="math inline">\(2/(j-i+1)\)</span> (only if one of them is the first pivot chosen from the range between them); summing gives <span class="math inline">\(\approx 2n\ln n\)</span>. The <strong>worst case</strong> <span class="math inline">\(O(n^2)\)</span> happens with consistently bad pivots (sorted input with a fixed first or last pivot). <strong>Many duplicates</strong>: Lomuto degrades to <span class="math inline">\(O(n^2)\)</span> on all-equal input; three-way (Dutch flag) partitioning fixes it.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Production sorts are hybrids. <strong>Introsort</strong> (C++ <code>std::sort</code>) runs quicksort, switches to heap sort if recursion gets too deep (guaranteeing <span class="math inline">\(O(n\log n)\)</span>), and uses insertion sort for small ranges. <strong>pdqsort</strong> adds pattern detection. <strong>Timsort</strong> finds already-sorted runs and merges them, giving <span class="math inline">\(O(n)\)</span> on nearly sorted data, which is common in practice. Recurse on the smaller partition first to bound stack depth at <span class="math inline">\(O(\log n)\)</span>.</p>
+</div>
+<h1 id="linear-time-sorting">Linear-Time Sorting</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Counting sort</strong>: count occurrences of each key in <span class="math inline">\([0,k)\)</span>, prefix-sum the counts to get positions, place items (iterating backward keeps it stable). <strong>Radix sort</strong>: stable-sort by each digit from least significant to most; stability ensures earlier digit orders are preserved. <strong>Bucket sort</strong>: for uniformly distributed reals, put each into one of <span class="math inline">\(n\)</span> buckets and sort each, <span class="math inline">\(O(n)\)</span> expected. These beat the <span class="math inline">\(\Omega(n\log n)\)</span> comparison bound by examining key structure, not just comparing. “Top <span class="math inline">\(k\)</span> frequent elements” uses bucket sort by frequency.</p>
+</div>
+<h1 id="selection-quickselect">Selection: Quickselect</h1>
+<p><em>Quickselect: <span class="math inline">\(k\)</span>-th smallest (0-indexed)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(l \gets 0\)</span>; <span class="math inline">\(r \gets n - 1\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> true <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(q \gets\)</span> <em>▷ random pivot</em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(q = k\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> <span class="math inline">\(A[q]\)</span></div>
+<div class="algo-line" style="--d:1"><strong>else if</strong> <span class="math inline">\(q &lt; k\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(l \gets q + 1\)</span></div>
+<div class="algo-line" style="--d:1"><strong>else</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(r \gets q - 1\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Unlike quicksort it recurses into <em>one</em> side only. Expected work is <span class="math inline">\(n + n/2 + n/4 + \dots \approx 2n\)</span>, so <span class="math inline">\(O(n)\)</span> expected. The worst case is <span class="math inline">\(O(n^2)\)</span>. <strong>Median of medians</strong> picks a pivot guaranteed to be between the 30th and 70th percentile (medians of groups of 5, then the median of those recursively), giving worst-case <span class="math inline">\(T(n) \le T(n/5) + T(7n/10) + O(n) = O(n)\)</span>. It is rarely used in practice because constants are large, but it is a common “can you guarantee linear time?” follow-up.</p>
+</div>
+<h1 id="binary-search-properly">Binary Search, Properly</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Guessing a number between 1 and 1<span>,</span>000 with “higher/lower” hints needs at most 10 guesses if you always guess the middle. Binary search works on anything where a yes/no question splits the possibilities into “all no” then “all yes.”</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The general form: find the first index (or value) where a monotone predicate <span class="math inline">\(P\)</span> becomes true: <span class="math inline">\(P = \text{false}, \dots, \text{false}, \text{true}, \dots,
+\text{true}\)</span>. The lower-bound algorithm in Chapter 2 is this with <span class="math inline">\(P(i) = (A[i]
+\ge x)\)</span>. Every binary search variant is a choice of predicate:</p>
+<ul>
+<li><p>First occurrence of <span class="math inline">\(x\)</span>: <span class="math inline">\(P(i) = A[i] \ge x\)</span>, then check equality.</p></li>
+<li><p>Last occurrence: first index with <span class="math inline">\(A[i] &gt; x\)</span>, minus one.</p></li>
+<li><p><strong>Rotated sorted array</strong>: at each step, one half is sorted; check whether the target lies in that sorted half’s range to decide the direction. Minimum of a rotated array: <span class="math inline">\(P(i) = A[i] \le A[n-1]\)</span>.</p></li>
+<li><p><strong>Peak element</strong>: <span class="math inline">\(P(i) = A[i] &gt; A[i+1]\)</span>; moving toward the higher neighbor always leads to a peak.</p></li>
+<li><p><strong>Median of two sorted arrays</strong> in <span class="math inline">\(O(\log\min(m,n))\)</span>: binary search the partition of the smaller array so that left parts total half the elements and every left element <span class="math inline">\(\le\)</span> every right element.</p></li>
+</ul>
+</div>
+<h1 id="binary-search-on-the-answer">Binary Search on the Answer</h1>
+<p><em>Minimum capacity to ship packages within <span class="math inline">\(D\)</span> days</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Feasible(<span class="math inline">\(cap\)</span>) <em>▷ greedy: fill each day until the next package does not fit</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(days \gets 1\)</span>; <span class="math inline">\(load \gets 0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each weight <span class="math inline">\(w\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(load + w &gt; cap\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(days \gets days + 1\)</span>; <span class="math inline">\(load \gets 0\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(load \gets load + w\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(days \le D\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(lo \gets \max(w)\)</span>; <span class="math inline">\(hi \gets \sum w\)</span> <em>▷ answer lies in <span class="math inline">\([lo, hi]\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(lo &lt; hi\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(mid \gets \lfloor (lo + hi)/2 \rfloor\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(hi \gets mid\)</span></div>
+<div class="algo-line" style="--d:1"><strong>else</strong>  </div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(lo \gets mid + 1\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(lo\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Feasibility is monotone: if capacity <span class="math inline">\(c\)</span> works, any larger capacity works. So the predicate “feasible” flips once from false to true, and binary search finds the smallest feasible value with <span class="math inline">\(O(\log(\text{range}))\)</span> calls to an <span class="math inline">\(O(n)\)</span> check. <strong>Time:</strong> <span class="math inline">\(O(n\log(\sum w))\)</span> <strong>Space:</strong> <span class="math inline">\(O(1)\)</span>.</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“Minimize the maximum” or “maximize the minimum,” “smallest <span class="math inline">\(x\)</span> such that…,” a feasibility check that is easy given a candidate answer, and a huge answer range. Examples: Koko eating bananas, split array largest sum, minimum days to make bouquets, aggressive cows / magnetic balls (maximize minimum distance), <span class="math inline">\(k\)</span>-th smallest in a multiplication table (count entries <span class="math inline">\(\le x\)</span>), smallest divisor. On real numbers, iterate a fixed number of times (e.g. 100) instead of using <span class="math inline">\(lo &lt; hi\)</span>.</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<ul>
+<li><p><strong>ROC-AUC</strong> is computed by sorting scores; AUC equals the fraction of positive-negative pairs ranked correctly, computable from ranks in <span class="math inline">\(O(n\log n)\)</span> (Chapter 17).</p></li>
+<li><p><strong>Quantiles and percentile features</strong> use selection or sorting; streaming quantiles use sketches (Chapter 15).</p></li>
+<li><p><strong>Weighted sampling</strong>: binary search a uniform random number in the prefix-sum CDF, <span class="math inline">\(O(\log n)\)</span> per sample (Chapter 15).</p></li>
+<li><p><strong>Threshold tuning</strong>: binary search the decision threshold for a target precision or false-positive rate on a sorted score list.</p></li>
+<li><p><strong>Batch size and learning-rate search</strong>: find the largest batch that fits in GPU memory by binary search on a monotone “fits” predicate.</p></li>
+<li><p><strong>Bucketized features</strong> (binning continuous values) use binary search over bucket boundaries.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Split array largest sum</div>
+<p>“Split an array of non-negative integers into <span class="math inline">\(k\)</span> contiguous parts minimizing the largest part sum.” Brute force over split points is exponential; DP is <span class="math inline">\(O(kn^2)\)</span>. Observation: if the largest sum can be at most <span class="math inline">\(S\)</span>, a greedy pass determines the minimum number of parts needed, and that number decreases as <span class="math inline">\(S\)</span> grows: monotone. Binary search <span class="math inline">\(S\)</span> in <span class="math inline">\([\max A, \sum A]\)</span>; the greedy check counts parts. <span class="math inline">\(O(n\log\sum A)\)</span>. Explain why the greedy check is optimal: extending the current part as long as possible never increases the number of parts (exchange argument). Edge cases: <span class="math inline">\(k = n\)</span> (answer is <span class="math inline">\(\max A\)</span>), <span class="math inline">\(k = 1\)</span> (answer is <span class="math inline">\(\sum A\)</span>).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Merge sort: stable, <span class="math inline">\(O(n\log n)\)</span> always, foundation of external sorting and inversion counting.</p></li>
+<li><p>Quicksort and quickselect rely on partition invariants and random pivots.</p></li>
+<li><p>Binary search = find where a monotone predicate flips; write the invariant first.</p></li>
+<li><p>“Minimize the maximum” with an easy check means binary search on the answer.</p></li>
+</ul>
+</div>

@@ -1,0 +1,429 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: changing a recipe gradually</div>
+<p>Instead of switching to a brand-new recipe overnight, a cautious chef changes 20% of the dishes, checks reviews, then 40%, and so on. Conservative policy mixing blends the deployed policy with a candidate, and moves only as far as the logs can still vouch for.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/51ab4d6e8e78.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The lower bound peaks at a moderate <span class="math inline">\(\alpha\)</span> (0.4 here): further steps gain estimate but lose evidence.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What does unsupported target-policy mass measure?</p></li>
+<li><p>Why is <span style="background-color: codeinlinebg"><code> ensemble mean - 2 × std</code></span> not automatically a calibrated confidence bound?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="interpolate-between-the-deployed-and-candidate-policies">2. Interpolate between the deployed and candidate policies</h3>
+<p>Suppose behavior policy <span class="math inline">\(\mu\)</span> produced the logs, while candidate policy <span class="math inline">\(\pi\)</span> is more aggressive. Instead of immediately deploying <span class="math inline">\(\pi\)</span>, define:</p>
+<p><span class="math display">\[\pi_\alpha(a\mid s)
+=
+(1-\alpha)\mu(a\mid s)
++
+\alpha\pi(a\mid s),
+\qquad
+0\leq\alpha\leq1\]</span></p>
+<p>Here:</p>
+<ul>
+<li><p><span class="math inline">\(\alpha=0\)</span>: unchanged behavior policy;</p></li>
+<li><p><span class="math inline">\(\alpha=1\)</span>: complete candidate policy;</p></li>
+<li><p>intermediate <span class="math inline">\(\alpha\)</span>: conservative movement toward the candidate.</p></li>
+</ul>
+<p>For a logged decision, its importance ratio is:</p>
+<p><span class="math display">\[\rho_i(\alpha)
+=
+\frac{\pi_\alpha(a_i\mid s_i)}
+{\mu(a_i\mid s_i)}
+=
+1+\alpha
+\left[
+\frac{\pi(a_i\mid s_i)}
+{\mu(a_i\mid s_i)}
+-1
+\right]\]</span></p>
+<p>Estimate the mixture’s value with:</p>
+<p><span class="math display">\[\hat J(\pi_\alpha)
+=
+\frac1N\sum_i\rho_i(\alpha)r_i\]</span></p>
+<p>Use paired improvement contributions because every policy is evaluated on the same rows:</p>
+<p><span class="math display">\[D_i(\alpha)
+=
+\rho_i(\alpha)r_i-r_i\]</span></p>
+<p><span class="math display">\[\hat\Delta_\alpha=\bar D_\alpha,
+\qquad
+\operatorname{SE}_\alpha
+=
+\frac{s_{D_\alpha}}{\sqrt N}\]</span></p>
+<p>If searching <span class="math inline">\(K\)</span> fixed mixture strengths, a conservative simultaneous lower bound uses:</p>
+<p><span class="math display">\[z=
+\Phi^{-1}\left(1-\frac{\delta}{K}\right)\]</span></p>
+<p><span class="math display">\[\operatorname{LCB}_\alpha
+=
+\hat\Delta_\alpha-z\operatorname{SE}_\alpha\]</span></p>
+<p>Also require adequate effective sample size:</p>
+<p><span class="math display">\[N_{\text{eff}}(\alpha)
+=
+\frac{\left(\sum_i\rho_i\right)^2}
+{\sum_i\rho_i^2}\]</span></p>
+<p>Mixing weakens distribution shift; it cannot repair missing support. If <span class="math inline">\(\mu(a\mid s)=0\)</span> while <span class="math inline">\(\pi(a\mid s)&gt;0\)</span>, every <span class="math inline">\(\alpha&gt;0\)</span> remains unevaluable for that action.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>mixture strengths: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+<li><p>logged actions and rewards: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>mixture probabilities, weights and contributions: <span style="background-color: codeinlinebg"><code> [K, N]</code></span></p></li>
+<li><p>estimates, lower bounds and ESS: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+</ul>
+<p>For an LLM agent, distinguish:</p>
+<ul>
+<li><p><strong>stepwise mixing:</strong> blend token or tool probabilities at every decision;</p></li>
+<li><p><strong>episode routing:</strong> randomly select one complete policy per prompt.</p></li>
+</ul>
+<p>These define different trajectory probabilities and require different propensity calculations.</p>
+<p>DPO may produce the candidate from fixed preference pairs. Policy mixing and environmental OPE are deployment controls; DPO’s preference loss does not certify online reward improvement.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: why mixing helps</div>
+<p><span class="math inline">\(\pi_\alpha=(1-\alpha)\pi_0+\alpha\pi_1\)</span>. The ratio against the logger <span class="math inline">\(\pi_0\)</span> is <span class="math inline">\(\frac{\pi_\alpha}{\pi_0}=1-\alpha+\alpha\frac{\pi_1}{\pi_0}\)</span>, so small <span class="math inline">\(\alpha\)</span> keeps weights near 1 and the ESS high. <strong>Procedure:</strong> for a grid of <span class="math inline">\(\alpha\)</span>, compute an OPE estimate and its lower bound, then choose the largest <span class="math inline">\(\alpha\)</span> with LCB above the baseline (with multiple-testing correction across the grid).</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Interpolate toward a candidate and stop when evidence or coverage weakens.</p></li>
+<li><p>A smaller supported improvement is more deployable than a big unsupported one.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: choose <span class="math inline">\(\alpha\)</span></div>
+<p>Estimates (gain over baseline, LCB): <span class="math inline">\(\alpha=0.2\)</span>: <span class="math inline">\((0.04,0.03)\)</span>; <span class="math inline">\(0.4\)</span>: <span class="math inline">\((0.08,0.04)\)</span>; <span class="math inline">\(0.6\)</span>: <span class="math inline">\((0.12,0.03)\)</span>; <span class="math inline">\(1.0\)</span>: <span class="math inline">\((0.20,-0.05)\)</span>. The best LCB is at <span class="math inline">\(\alpha=0.4\)</span>. Full switching has the biggest estimate and a negative lower bound.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Picking <span class="math inline">\(\alpha\)</span> by point estimate.</p></li>
+<li><p>No correction for trying several <span class="math inline">\(\alpha\)</span> values.</p></li>
+<li><p>Assuming the LCB is monotone in <span class="math inline">\(\alpha\)</span>.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-choose-the-largest-supported-step">3. PyTorch exercise — choose the largest supported step</h3>
+<p>The behavior policy chooses action <span style="background-color: codeinlinebg"><code> 1</code></span> with probability <span style="background-color: codeinlinebg"><code> 0.10</code></span>; the candidate uses <span style="background-color: codeinlinebg"><code> 0.90</code></span>. Mean rewards are <span style="background-color: codeinlinebg"><code> 0.40</code></span> and <span style="background-color: codeinlinebg"><code> 0.80</code></span>.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_samples = 5_000
+
+behavior_one_probability = 0.10
+candidate_one_probability = 0.90
+
+reward_means = torch.tensor([
+    0.40, 0.80
+])
+
+actions = (
+    torch.rand(num_samples)
+    &lt; behavior_one_probability
+).long()
+
+rewards = (
+    torch.rand(num_samples)
+    &lt; reward_means[actions]
+).to(torch.float64)
+
+# Eleven fixed deployment candidates.
+alphas = torch.linspace(0.0, 1.0, 11)
+num_candidates = alphas.numel()
+
+# TODO 1: Construct every mixture and the probability
+# assigned to each logged action.
+mixed_one_probabilities = ...
+
+behavior_action_probabilities = ...
+
+mixed_action_probabilities = ...
+
+# TODO 2: Importance weights and paired improvements.
+log_weights = ...
+weights = ...
+
+mixture_contributions = ...
+behavior_contributions = ...
+
+estimated_values = ...
+paired_differences = ...
+estimated_improvements = ...
+
+# TODO 3: Simultaneous one-sided lower bounds.
+paired_standard_errors = ...
+
+family_delta = 0.05
+num_tests = num_candidates - 1
+
+standard_normal = torch.distributions.Normal(
+    torch.tensor(0.0),
+    torch.tensor(1.0),
+)
+
+simultaneous_z = ...
+
+simultaneous_lcbs = ...
+
+# TODO 4: Coverage diagnostics.
+effective_sample_sizes = ...
+effective_sample_fractions = ...
+
+maximum_weights = ...
+
+# TODO 5: Select the largest acceptable mixture.
+minimum_improvement = 0.0
+minimum_ess_fraction = 0.25
+
+feasible = ...
+
+chosen_index = ...
+chosen_alpha = ...
+
+# Oracle values exist only for this simulation.
+exact_behavior_value = ...
+
+exact_mixture_values = ...
+
+results = torch.stack([
+    alphas,
+    estimated_values,
+    estimated_improvements,
+    simultaneous_lcbs,
+    effective_sample_fractions,
+    maximum_weights,
+    exact_mixture_values,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: alpha, estimate, improvement, &quot;
+    &quot;simultaneous LCB, ESS fraction, &quot;
+    &quot;maximum weight, exact value&quot;
+)
+print(results)
+
+print(
+    &quot;Exact behavior value:&quot;,
+    exact_behavior_value.item(),
+)
+
+print(
+    &quot;Chosen alpha:&quot;,
+    chosen_alpha.item(),
+)
+
+print(
+    &quot;Chosen exact value:&quot;,
+    exact_mixture_values[
+        chosen_index
+    ].item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What are the exact behavior and candidate values?</p></li>
+<li><p>Does ESS rise or fall as <span class="math inline">\(\alpha\)</span> increases?</p></li>
+<li><p>With an ESS-fraction minimum of <span style="background-color: codeinlinebg"><code> 0.25</code></span>, will the largest feasible grid value be near <span style="background-color: codeinlinebg"><code> 0.3</code></span>, <span style="background-color: codeinlinebg"><code> 0.6</code></span>, or <span style="background-color: codeinlinebg"><code> 1.0</code></span>?</p></li>
+<li><p>Would mixing fix the problem if the behavior probability of action <span style="background-color: codeinlinebg"><code> 1</code></span> were exactly zero?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>The mixture probability is <span style="background-color: codeinlinebg"><code> (1 - alpha) * behavior + alpha * candidate</code></span>.</p></li>
+<li><p>Select probability <span class="math inline">\(p\)</span> for action <span style="background-color: codeinlinebg"><code> 1</code></span> and <span class="math inline">\(1-p\)</span> for action <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+<li><p>Compute ratios through log-probability differences.</p></li>
+<li><p>Paired differences are <span style="background-color: codeinlinebg"><code> mixture_contribution - behavior_contribution</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> 1 - family_delta / num_tests</code></span> inside the normal quantile.</p></li>
+<li><p>Select the final index satisfying both evidence and ESS requirements.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use the probability of action <span style="background-color: codeinlinebg"><code> 1</code></span> for every logged row, including action <span style="background-color: codeinlinebg"><code> 0</code></span>. The ratios become wrong.</p></li>
+<li><p>Recompute behavior probabilities using current model weights. Logged denominators must remain frozen snapshots.</p></li>
+<li><p>Use a pointwise <span style="background-color: codeinlinebg"><code> 1.645</code></span> bound while searching all mixture strengths. The claimed confidence ignores selection.</p></li>
+<li><p>Scale rewards by <span style="background-color: codeinlinebg"><code> 100</code></span> but leave a nonzero minimum-improvement threshold unchanged.</p></li>
+<li><p>Implement episode-level routing but calculate probabilities as if the policies were mixed at every token.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does moving toward the candidate reduce effective sample size?</p></li>
+<li><p>Why use paired improvement contributions?</p></li>
+<li><p>What does the Bonferroni correction cover—and what does it not cover?</p></li>
+<li><p>Which diagnostics should accompany the selected mixture?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Mixture and selected-action probabilities:</p>
+<pre class="code python"><code class="language-python">mixed_one_probabilities = (
+    (1.0 - alphas)
+    * behavior_one_probability
+    + alphas
+    * candidate_one_probability
+)
+
+behavior_action_probabilities = torch.where(
+    actions == 1,
+    torch.tensor(
+        behavior_one_probability
+    ),
+    torch.tensor(
+        1.0 - behavior_one_probability
+    ),
+)
+
+mixed_action_probabilities = torch.where(
+    actions[None, :] == 1,
+    mixed_one_probabilities[:, None],
+    1.0 - mixed_one_probabilities[:, None],
+)</code></pre>
+<p>Weights and paired contributions:</p>
+<pre class="code python"><code class="language-python">log_weights = (
+    mixed_action_probabilities.log()
+    - behavior_action_probabilities[
+        None, :
+    ].log()
+)
+
+weights = log_weights.exp()
+
+mixture_contributions = (
+    weights * rewards[None, :]
+)
+
+behavior_contributions = (
+    rewards[None, :].expand(
+        num_candidates,
+        -1,
+    )
+)
+
+estimated_values = (
+    mixture_contributions.mean(dim=1)
+)
+
+paired_differences = (
+    mixture_contributions
+    - behavior_contributions
+)
+
+estimated_improvements = (
+    paired_differences.mean(dim=1)
+)</code></pre>
+<p>Simultaneous lower bounds:</p>
+<pre class="code python"><code class="language-python">paired_standard_errors = (
+    paired_differences.std(
+        dim=1,
+        correction=1,
+    )
+    / math.sqrt(num_samples)
+)
+
+simultaneous_z = standard_normal.icdf(
+    torch.tensor(
+        1.0
+        - family_delta / num_tests
+    )
+)
+
+simultaneous_lcbs = (
+    estimated_improvements
+    - simultaneous_z
+    * paired_standard_errors
+)</code></pre>
+<p>ESS diagnostics:</p>
+<pre class="code python"><code class="language-python">effective_sample_sizes = (
+    weights.sum(dim=1).square()
+    / weights.square().sum(dim=1)
+)
+
+effective_sample_fractions = (
+    effective_sample_sizes
+    / num_samples
+)
+
+maximum_weights = (
+    weights.max(dim=1).values
+)</code></pre>
+<p>Selection and oracle values:</p>
+<pre class="code python"><code class="language-python">feasible = (
+    (
+        simultaneous_lcbs
+        &gt; minimum_improvement
+    )
+    &amp; (
+        effective_sample_fractions
+        &gt;= minimum_ess_fraction
+    )
+)
+
+chosen_index = torch.where(
+    feasible
+)[0][-1]
+
+chosen_alpha = alphas[
+    chosen_index
+]
+
+behavior_policy = torch.tensor([
+    1.0 - behavior_one_probability,
+    behavior_one_probability,
+])
+
+exact_behavior_value = (
+    behavior_policy * reward_means
+).sum()
+
+exact_mixture_values = (
+    (
+        1.0
+        - mixed_one_probabilities
+    ) * reward_means[0]
+    + mixed_one_probabilities
+    * reward_means[1]
+)</code></pre>
+<p>The mixture chooses action <span style="background-color: codeinlinebg"><code> 1</code></span> with probability:</p>
+<p><span class="math display">\[p_\alpha=0.1+0.8\alpha\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[J(\pi_\alpha)
+=
+(1-p_\alpha)0.4+p_\alpha0.8
+=
+0.44+0.32\alpha\]</span></p>
+<p>The endpoints are:</p>
+<p><span class="math display">\[J(\mu)=0.44,
+\qquad
+J(\pi)=0.76\]</span></p>
+<p>The two possible importance weights are:</p>
+<p><span class="math display">\[\rho(1)=1+8\alpha\]</span></p>
+<p><span class="math display">\[\rho(0)=1-\frac89\alpha\]</span></p>
+<p>Their second moment under the behavior policy is:</p>
+<p><span class="math display">\[\mathbb E_\mu[\rho^2]
+=
+1+\frac{64}{9}\alpha^2\]</span></p>
+<p>Thus the approximate ESS fraction is:</p>
+<p><span class="math display">\[\frac{N_{\text{eff}}}{N}
+\approx
+\frac{1}{
+1+\frac{64}{9}\alpha^2
+}\]</span></p>
+<p>Requiring this to be at least <span style="background-color: codeinlinebg"><code> 0.25</code></span> gives:</p>
+<p><span class="math display">\[\alpha\lesssim0.6495\]</span></p>
+<p>The largest grid value should therefore be <span style="background-color: codeinlinebg"><code> 0.6</code></span>, with exact value:</p>
+<p><span class="math display">\[J(\pi_{0.6})
+=
+0.44+0.32(0.6)
+=
+0.632\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Larger <span class="math inline">\(\alpha\)</span> places more probability on actions rare under the behavior policy, concentrating importance weights on fewer logged rows.</p></li>
+<li><p>Pairing preserves shared reward noise and directly estimates the deployment-relevant difference <span class="math inline">\(J(\pi_\alpha)-J(\mu)\)</span>.</p></li>
+<li><p>It covers the fixed grid’s repeated comparisons under the normal approximation. It does not correct candidate training on evaluation data, support failure, distribution shift or invalid propensity logs.</p></li>
+<li><p>Report <span class="math inline">\(\alpha\)</span>, value improvement, simultaneous LCB, ESS, weight quantiles and maximum, action support, behavior-policy version, reward scale, safety costs and subgroup results.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Unsupported target mass is the probability the target policy assigns to actions with no logged coverage.</p></li>
+<li><p>Ensemble members share data and modeling assumptions, so their spread need not have any stated statistical coverage.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> interpolate toward a candidate and stop when either evidence or coverage becomes weak. A smaller supported improvement is more deployable than a large estimate dominated by a handful of unlikely logged actions.</p>

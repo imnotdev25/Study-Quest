@@ -1,0 +1,328 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: grading on a curve</div>
+<p>Your exam score means more next to your classmates’ scores on the <em>same</em> exam. 60% on a brutal exam might top the class. GRPO grades each response against other responses to the same prompt: no critic needed, just compare. But if everyone scores 100%, or everyone scores 0%, the curve tells you nothing.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/19776e7881d1.svg" alt="diagram" loading="lazy"></figure>
+<p><em>One prompt, <span class="math inline">\(G=4\)</span> samples, standardized within the group (sample std, <span class="math inline">\(n-1\)</span>).</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can sparse verifiable rewards produce zero policy gradient?</p></li>
+<li><p>In PPO, what does the old policy represent?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="replace-the-critic-with-group-comparisons">2. Replace the critic with group comparisons</h3>
+<p>PPO commonly trains a critic <span class="math inline">\(V_\phi(x)\)</span> to estimate a baseline. For LLM reasoning tasks, critic training adds memory, computation and another possible source of instability.</p>
+<p>Group Relative Policy Optimization samples <span class="math inline">\(G\)</span> responses for each prompt:</p>
+<p><span class="math display">\[y_{i,1},\ldots,y_{i,G}
+\sim
+\pi_{\text{old}}(\cdot\mid x_i)\]</span></p>
+<p>Each response receives reward <span class="math inline">\(R_{i,j}\)</span>. GRPO forms advantages by comparing responses generated for the same prompt:</p>
+<p><span class="math display">\[\mu_i
+=
+\frac1G\sum_{j=1}^{G}R_{i,j}\]</span></p>
+<p><span class="math display">\[\sigma_i
+=
+\sqrt{
+\frac1G\sum_j(R_{i,j}-\mu_i)^2
+}\]</span></p>
+<p><span class="math display">\[\hat A_{i,j}
+=
+\frac{R_{i,j}-\mu_i}
+{\sigma_i+\epsilon}\]</span></p>
+<p>A response need not have positive absolute reward. It receives positive advantage when it performs better than its prompt’s group.</p>
+<p>GRPO then uses a PPO-style ratio:</p>
+<p><span class="math display">\[r_{i,j}(\theta)
+=
+\exp\left(
+\log\pi_\theta(y_{i,j}\mid x_i)
+-
+\log\pi_{\text{old}}(y_{i,j}\mid x_i)
+\right)\]</span></p>
+<p>and clipped objective:</p>
+<p><span class="math display">\[J
+=
+\frac1{BG}
+\sum_{i,j}
+\min\left(
+r_{i,j}\hat A_{i,j},
+\operatorname{clip}(r_{i,j},1-\epsilon,1+\epsilon)
+\hat A_{i,j}
+\right)\]</span></p>
+<h3 class="unnumbered" id="why-normalize-within-each-prompt">Why normalize within each prompt?</h3>
+<p>Suppose an easy prompt produces rewards <span style="background-color: codeinlinebg"><code> [1, 1, 1, 1]</code></span>, while a hard prompt produces <span style="background-color: codeinlinebg"><code> [0, 0, 0, 1]</code></span>.</p>
+<p>Global normalization mixes prompt difficulty with response quality. Group normalization asks the more useful local question:</p>
+<blockquote>
+<p>Which sampled response was better than the alternatives for this same prompt?</p>
+</blockquote>
+<h3 class="unnumbered" id="important-limits">Important limits</h3>
+<ul>
+<li><p>If every group reward is identical, every advantage is zero.</p></li>
+<li><p>Group size <span style="background-color: codeinlinebg"><code> 1</code></span> always produces zero centered advantage.</p></li>
+<li><p>Small groups give noisy means and standard deviations.</p></li>
+<li><p>One extreme reward can strongly affect the whole group.</p></li>
+<li><p>GRPO removes the learned critic, not the need for reliable rewards.</p></li>
+<li><p>Reference-model KL is commonly added to control policy drift.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>policy logits: <span style="background-color: codeinlinebg"><code> [prompts, responses]</code></span></p></li>
+<li><p>sampled responses: <span style="background-color: codeinlinebg"><code> [prompts, group]</code></span></p></li>
+<li><p>rewards and advantages: <span style="background-color: codeinlinebg"><code> [prompts, group]</code></span></p></li>
+<li><p>old/current log-probabilities: <span style="background-color: codeinlinebg"><code> [prompts, group]</code></span></p></li>
+</ul>
+<p>DPO differs fundamentally: it learns from fixed chosen/rejected pairs. GRPO generates groups from the current policy and performs online reward-based updates.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: group-relative advantages</div>
+<p><span class="math inline">\(\hat A_i=\dfrac{R_i-\operatorname{mean}(R_{1:G})}{\operatorname{std}(R_{1:G})+\varepsilon}\)</span>, shared by every token of response <span class="math inline">\(i\)</span>. Example: <span class="math inline">\(R=(1,0,1,0)\)</span>, mean 0.5, sample std 0.577, so <span class="math inline">\(\hat A=\pm0.87\)</span>.</p>
+<p><strong>When does a group carry signal?</strong> Only if the rewards differ. With binary rewards and solve rate <span class="math inline">\(p\)</span>: <span class="math inline">\(P(\text{useful})=1-p^G-(1-p)^G\)</span>.</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/9223524e0f6a.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<p>Bigger groups rescue hard (<span class="math inline">\(p\approx0.05\)</span>) and easy (<span class="math inline">\(p\approx0.95\)</span>) prompts. DAPO’s “dynamic sampling” simply drops zero-signal groups and refills the batch.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>GRPO replaces the critic with same-prompt competition.</p></li>
+<li><p>No variation within the group means no gradient.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: one failure among successes</div>
+<p><span class="math inline">\(R=(1,1,1,0)\)</span>. Mean <span class="math inline">\(0.75\)</span>, sample std <span class="math inline">\(0.5\)</span>. <span class="math inline">\(\hat A=(0.5,0.5,0.5,-1.5)\)</span>. The single failure gets a large negative push, three times the size of each success’s positive push, and the advantages sum to 0.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Using <span class="math inline">\(\varepsilon=0\)</span> (division by zero when all rewards are equal).</p></li>
+<li><p>Normalizing across prompts instead of within each prompt’s group.</p></li>
+<li><p>Forgetting to share <span class="math inline">\(\hat A_i\)</span> across all tokens of response <span class="math inline">\(i\)</span>.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Group Relative Policy Optimization (GRPO)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy <span class="math inline">\(\pi_\theta\)</span>, reference <span class="math inline">\(\pi_{\text{ref}}\)</span>, group size <span class="math inline">\(G\)</span>, clip <span class="math inline">\(\epsilon\)</span>, KL weight <span class="math inline">\(\beta\)</span>, inner steps <span class="math inline">\(\mu\)</span></div>
+<div class="algo-line" style="--d:0"><strong>repeat</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\pi_{\text{old}}\gets\pi_\theta\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each prompt <span class="math inline">\(x\)</span> in the batch <strong>do</strong></div>
+<div class="algo-line" style="--d:2">sample <span class="math inline">\(y_1,\dots,y_G\sim\pi_{\text{old}}(\cdot|x)\)</span>; score <span class="math inline">\(R_1,\dots,R_G\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\hat A_i\gets(R_i-\operatorname{mean}R)/(\operatorname{std}R+\varepsilon)\)</span> <em>▷ every token of <span class="math inline">\(y_i\)</span> shares <span class="math inline">\(\hat A_i\)</span></em></div>
+<div class="algo-line" style="--d:2">drop the group if <span class="math inline">\(\operatorname{std}R=0\)</span> <em>▷ no signal</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(\mu\)</span> gradient steps <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\rho_{i,t}\gets\pi_\theta(y_{i,t}|\cdot)/\pi_{\text{old}}(y_{i,t}|\cdot)\)</span>; <span class="math inline">\(k_{i,t}\gets\frac{\pi_{\text{ref}}}{\pi_\theta}-\log\frac{\pi_{\text{ref}}}{\pi_\theta}-1\)</span></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\mathcal L\gets-\frac1G\sum_i\frac{1}{|y_i|}\sum_t\Big[\min\big(\rho_{i,t}\hat A_i,\operatorname{clip}(\rho_{i,t},1\pm\epsilon)\hat A_i\big)-\beta k_{i,t}\Big]\)</span></div>
+<div class="algo-line" style="--d:2">gradient step on <span class="math inline">\(\mathcal L\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>until</strong> done</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-train-with-group-relative-advantages">3. PyTorch exercise — train with group-relative advantages</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+num_prompts = 3
+num_responses = 4
+group_size = 8
+
+num_updates = 100
+ppo_epochs = 4
+clip_epsilon = 0.2
+
+# Verifiable reward for each prompt-response combination.
+reward_table = torch.tensor([
+    [0.0, 0.0, 1.0, 2.0],   # prompt 0: response 3 is best
+    [1.0, 0.0, 2.0, -1.0],  # prompt 1: response 2 is best
+    [0.0, 0.0, 0.0, 0.0],   # prompt 2: verifier cannot distinguish
+])  # [prompts, responses]
+
+policy_logits = torch.nn.Parameter(
+    torch.zeros(num_prompts, num_responses)
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.05,
+)
+
+for update in range(num_updates):
+    # Freeze the rollout policy for this group.
+    old_policy = Categorical(
+        logits=policy_logits.detach()
+    )
+
+    with torch.no_grad():
+        # sample() returns [group, prompts], so transpose it.
+        # TODO 1: Sample [prompts, group] response IDs.
+        sampled_responses = ...
+
+        # TODO 2: Gather each sampled response&#x27;s reward.
+        rewards = ...
+
+        # TODO 3: Normalize rewards independently per prompt.
+        group_means = ...
+        group_stds = ...
+        advantages = ...
+
+        # TODO 4: Store rollout-policy log-probabilities.
+        old_log_probs = ...
+
+    for epoch in range(ppo_epochs):
+        current_policy = Categorical(
+            logits=policy_logits
+        )
+
+        # TODO 5: Evaluate sampled responses under current policy.
+        current_log_probs = ...
+
+        # TODO 6: PPO ratios and clipped objective.
+        ratios = ...
+        unclipped = ...
+        clipped = ...
+
+        objective = ...
+        policy_loss = ...
+
+        optimizer.zero_grad()
+        policy_loss.backward()
+        optimizer.step()
+
+    if update in [0, 1, 9, 49, 99]:
+        with torch.no_grad():
+            probabilities = policy_logits.softmax(dim=-1)
+
+            zero_signal_fraction = (
+                group_stds.squeeze(-1) &lt; 1e-8
+            ).float().mean()
+
+        print(
+            f&quot;update={update:3d}&quot;,
+            f&quot;loss={policy_loss.item(): .4f}&quot;,
+            f&quot;zero_signal={zero_signal_fraction.item():.2f}&quot;,
+            f&quot;probs={probabilities.tolist()}&quot;,
+        )
+
+print(
+    &quot;Final probabilities:\n&quot;,
+    policy_logits.softmax(dim=-1).detach(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which response should dominate for prompts <span style="background-color: codeinlinebg"><code> 0</code></span> and <span style="background-color: codeinlinebg"><code> 1</code></span>?</p></li>
+<li><p>Should prompt <span style="background-color: codeinlinebg"><code> 2</code></span> change from its uniform policy?</p></li>
+<li><p>What happens if <span style="background-color: codeinlinebg"><code> group_size = 1</code></span>?</p></li>
+<li><p>Are GRPO advantages comparable across prompts before normalization?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample with <span style="background-color: codeinlinebg"><code> old_policy.sample((group_size,)).transpose(0, 1)</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> reward_table.gather(dim=1, index=sampled_responses)</code></span>.</p></li>
+<li><p>Keep the group dimension with <span style="background-color: codeinlinebg"><code> keepdim=True</code></span>.</p></li>
+<li><p>Use population standard deviation: <span style="background-color: codeinlinebg"><code> unbiased=False</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> Categorical.log_prob</code></span> expects the prompt batch dimension last here, so transpose before and after.</p></li>
+<li><p>Detach old log-probabilities and advantages.</p></li>
+<li><p>The optimizer minimizes, so negate the objective.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Normalize across every prompt and response:</p>
+<pre class="code python"><code class="language-python">advantages = (
+    rewards - rewards.mean()
+) / (
+    rewards.std(unbiased=False) + 1e-8
+)</code></pre>
+<p>Now absolute prompt reward levels influence the comparison. If one prompt systematically has larger rewards, it can dominate updates even when the within-prompt ranking quality is similar.</p>
+<p>Also remove <span style="background-color: codeinlinebg"><code> 1e-8</code></span>. Prompt <span style="background-color: codeinlinebg"><code> 2</code></span> has zero reward variance, causing division by zero and <span style="background-color: codeinlinebg"><code> nan</code></span> advantages.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can GRPO avoid training a value network?</p></li>
+<li><p>Why does a zero-variance group produce no learning signal?</p></li>
+<li><p>Does critic-free mean variance-free?</p></li>
+<li><p>Why should reward hacking remain a concern?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Sample responses:</p>
+<pre class="code python"><code class="language-python">sampled_responses = old_policy.sample(
+    (group_size,)
+).transpose(0, 1)</code></pre>
+<p>Gather rewards:</p>
+<pre class="code python"><code class="language-python">rewards = reward_table.gather(
+    dim=1,
+    index=sampled_responses,
+)</code></pre>
+<p>Group-relative advantages:</p>
+<pre class="code python"><code class="language-python">group_means = rewards.mean(
+    dim=1,
+    keepdim=True,
+)
+
+group_stds = rewards.std(
+    dim=1,
+    keepdim=True,
+    unbiased=False,
+)
+
+advantages = (
+    rewards - group_means
+) / (
+    group_stds + 1e-8
+)</code></pre>
+<p>Old-policy log-probabilities:</p>
+<pre class="code python"><code class="language-python">old_log_probs = old_policy.log_prob(
+    sampled_responses.transpose(0, 1)
+).transpose(0, 1)</code></pre>
+<p>Current log-probabilities:</p>
+<pre class="code python"><code class="language-python">current_log_probs = current_policy.log_prob(
+    sampled_responses.transpose(0, 1)
+).transpose(0, 1)</code></pre>
+<p>Clipped objective:</p>
+<pre class="code python"><code class="language-python">ratios = (
+    current_log_probs
+    - old_log_probs.detach()
+).exp()
+
+unclipped = (
+    ratios * advantages.detach()
+)
+
+clipped = (
+    ratios.clamp(
+        1.0 - clip_epsilon,
+        1.0 + clip_epsilon,
+    )
+    * advantages.detach()
+)
+
+objective = torch.minimum(
+    unclipped,
+    clipped,
+).mean()
+
+policy_loss = -objective</code></pre>
+<p>Prompts <span style="background-color: codeinlinebg"><code> 0</code></span> and <span style="background-color: codeinlinebg"><code> 1</code></span> should eventually prefer:</p>
+<pre class="code text"><code class="language-plaintext">prompt 0 → response 3
+prompt 1 → response 2</code></pre>
+<p>Prompt <span style="background-color: codeinlinebg"><code> 2</code></span> always receives:</p>
+<p><span class="math display">\[R=[0,\ldots,0]\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[R_{2,j}-\mu_2=0\]</span></p>
+<p>and every advantage is zero. Its logits receive no expected gradient and should remain uniform:</p>
+<p><span class="math display">\[[0.25,0.25,0.25,0.25]\]</span></p>
+<p>If <span style="background-color: codeinlinebg"><code> group_size = 1</code></span>, then for every prompt:</p>
+<p><span class="math display">\[\mu_i=R_{i,1}\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[R_{i,1}-\mu_i=0\]</span></p>
+<p>No learning occurs.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The group reward mean provides a prompt-dependent baseline without learning <span class="math inline">\(V_\phi(x)\)</span>.</p></li>
+<li><p>No sampled response is better or worse than its group, so all centered advantages are zero.</p></li>
+<li><p>No. Finite sampled groups can make relative advantages noisy, especially for small groups or sparse rewards.</p></li>
+<li><p>GRPO optimizes the supplied verifier or reward model aggressively; removing the critic does not correct a flawed objective.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>When every sampled reward is identical, subtracting the baseline produces zero advantages.</p></li>
+<li><p>It is the frozen snapshot that generated the current response group and supplies the denominator of the PPO ratio.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> GRPO replaces a learned critic with same-prompt competition. It is attractive when several responses can be sampled and checked, but its signal disappears without within-group reward variation—and it remains only as trustworthy as the reward being compared.</p>

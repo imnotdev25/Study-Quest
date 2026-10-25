@@ -1,0 +1,275 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a hospital’s average improves</div>
+<p>A hospital reports better average recovery rates. Great news, until you find the children’s ward got <em>worse</em> and the average only rose because more easy adult cases came in. Statisticians call related effects Simpson’s paradox. An RL-trained model can win overall while quietly breaking one capability.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/c3a73f740575.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A hypothetical eval: the headline <span class="math inline">\(+2.1\)</span> hides a <span class="math inline">\(-8\)</span> safety regression.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What pattern indicates reward hacking rather than an optimization failure?</p></li>
+<li><p>Why can GRPO produce no update for a prompt even when every response is poor?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="training-reward-is-not-evaluation">2. Training reward is not evaluation</h3>
+<p>An RL run directly optimizes training reward:</p>
+<p><span class="math display">\[\max_\theta\;
+\mathbb E[R_{\text{train}}(x,y)]\]</span></p>
+<p>Therefore, increasing <span class="math inline">\(R_{\text{train}}\)</span> mainly confirms that the optimizer found behaviour rewarded by that signal.</p>
+<p>Evaluation should use independent measurements:</p>
+<p><span class="math display">\[M_1(x,y),M_2(x,y),\ldots,M_k(x,y)\]</span></p>
+<p>For an LLM, these might measure:</p>
+<ul>
+<li><p>task success;</p></li>
+<li><p>factual accuracy;</p></li>
+<li><p>safety or false-acceptance rate;</p></li>
+<li><p>calibration;</p></li>
+<li><p>tool execution success;</p></li>
+<li><p>response length and latency;</p></li>
+<li><p>KL from the reference policy;</p></li>
+<li><p>reward–evaluation correlation.</p></li>
+</ul>
+<h3 class="unnumbered" id="paired-policy-comparison">Paired policy comparison</h3>
+<p>Evaluate the baseline and RL policy on the same prompts. For prompt <span class="math inline">\(i\)</span>:</p>
+<p><span class="math display">\[d_i=M_i^{\text{RL}}-M_i^{\text{base}}\]</span></p>
+<p>The estimated improvement is:</p>
+<p><span class="math display">\[\bar d=\frac1N\sum_i d_i\]</span></p>
+<p>with standard error:</p>
+<p><span class="math display">\[\operatorname{SE}(\bar d)
+=
+\frac{s_d}{\sqrt N}\]</span></p>
+<p>A rough 95% confidence interval is:</p>
+<p><span class="math display">\[\bar d\pm1.96\operatorname{SE}(\bar d)\]</span></p>
+<p>Pairing removes some variation caused by evaluating different prompt sets.</p>
+<h3 class="unnumbered" id="aggregate-versus-slice-metrics">Aggregate versus slice metrics</h3>
+<p>Suppose routine prompts are 60% of the benchmark and safety prompts are only 10%. A large routine improvement can hide a severe safety regression.</p>
+<p>Always compare:</p>
+<ul>
+<li><p>micro average: every example has equal weight;</p></li>
+<li><p>macro average: every category has equal weight;</p></li>
+<li><p>worst-category performance;</p></li>
+<li><p>category-level deltas.</p></li>
+</ul>
+<p>Also keep generation settings fixed: temperature, decoding method, maximum tokens, tool budget and number of samples.</p>
+<p>For <span class="math inline">\(P\)</span> policies, <span class="math inline">\(C\)</span> categories and <span class="math inline">\(N\)</span> prompts:</p>
+<ul>
+<li><p>success outcomes: <span style="background-color: codeinlinebg"><code> [P, N]</code></span></p></li>
+<li><p>category IDs: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>category scores: <span style="background-color: codeinlinebg"><code> [P, C]</code></span></p></li>
+<li><p>paired differences: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+</ul>
+<p>The same evaluation requirements apply to PPO, GRPO and DPO. The training method does not validate its own outcome.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: paired comparisons and slices</div>
+<p>Evaluate both models on the <em>same</em> prompts and work with the differences <span class="math inline">\(d_i=s^{\text{new}}_i-s^{\text{old}}_i\)</span>: <span class="math inline">\(\bar d\pm1.96\,\dfrac{\operatorname{sd}(d)}{\sqrt n}\)</span>. Pairing removes prompt difficulty from the noise, which gives much tighter intervals than comparing two independent averages.</p>
+<p><strong>The aggregate is a weighted sum:</strong> <span class="math inline">\(\Delta_{\text{all}}=\sum_kw_k\Delta_k\)</span>. A big regression in a slice with small weight <span class="math inline">\(w_k\)</span> barely moves the total. Set a minimum bar for every critical slice, not just for the total.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Training reward is not evaluation. Use independent metrics on matched settings.</p></li>
+<li><p>Check paired differences, confidence intervals and every critical slice.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: a paired CI on five prompts</div>
+<p>Differences <span class="math inline">\(d=(0.10,-0.05,0.20,0.00,0.15)\)</span>. Mean <span class="math inline">\(0.08\)</span>, sd <span class="math inline">\(0.104\)</span>, SE <span class="math inline">\(0.046\)</span>. 95% CI <span class="math inline">\(\approx0.08\pm1.96(0.046)=[-0.011,0.171]\)</span>. It includes 0, so this isn’t evidence yet.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Comparing models on different prompt samples.</p></li>
+<li><p>Selecting the checkpoint and reporting its score on the same set.</p></li>
+<li><p>Reporting only the aggregate, with no slices.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-find-the-hidden-regression">3. PyTorch exercise — find the hidden regression</h3>
+<p>The RL policy improves common prompts but becomes much worse on safety prompts.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+
+category_names = [
+    &quot;routine&quot;,
+    &quot;reasoning&quot;,
+    &quot;safety&quot;,
+    &quot;tool_use&quot;,
+]
+
+# Unequal benchmark composition.
+category_counts = torch.tensor([
+    2400, 800, 400, 400
+])
+
+# [policies=2, categories=4]
+# policy 0 = baseline, policy 1 = RL
+success_probabilities = torch.tensor([
+    [0.65, 0.55, 0.75, 0.60],
+    [0.82, 0.72, 0.40, 0.62],
+])
+
+num_categories = len(category_names)
+
+# TODO 1: Construct one category ID per prompt.
+category_ids = ...
+
+num_prompts = category_ids.numel()
+
+# Select the appropriate probability for each
+# policy and each prompt: [policies, prompts].
+prompt_probabilities = success_probabilities[
+    :, category_ids
+]
+
+# Simulated one-sample evaluation outcomes.
+outcomes = (
+    torch.rand_like(prompt_probabilities)
+    &lt; prompt_probabilities
+).float()
+
+# TODO 2: Micro success rate for each policy.
+micro_scores = ...
+
+# TODO 3: Per-category success rates [policies, categories].
+category_scores = torch.stack([
+    ...
+    for category in range(num_categories)
+], dim=1)
+
+# TODO 4: Macro score and category deltas.
+macro_scores = ...
+category_deltas = ...
+
+# TODO 5: Paired overall delta and rough 95% CI.
+paired_differences = ...
+mean_delta = ...
+standard_error = ...
+ci_low = ...
+ci_high = ...
+
+largest_regression_index = category_deltas.argmin()
+
+print(&quot;Micro scores:&quot;, micro_scores)
+print(&quot;Macro scores:&quot;, macro_scores)
+print(&quot;Overall RL delta:&quot;, mean_delta.item())
+print(
+    &quot;Approximate 95% CI:&quot;,
+    (ci_low.item(), ci_high.item()),
+)
+
+for index, name in enumerate(category_names):
+    print(
+        f&quot;{name:10s}&quot;,
+        f&quot;base={category_scores[0, index].item():.3f}&quot;,
+        f&quot;RL={category_scores[1, index].item():.3f}&quot;,
+        f&quot;delta={category_deltas[index].item():+.3f}&quot;,
+    )
+
+print(
+    &quot;Largest regression:&quot;,
+    category_names[largest_regression_index],
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the RL policy’s micro average improve?</p></li>
+<li><p>Which category should show the largest regression?</p></li>
+<li><p>Will macro improvement be as large as micro improvement?</p></li>
+<li><p>If the overall confidence interval excludes zero, does that prove every capability improved?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.arange(num_categories).repeat_interleave(category_counts)</code></span>.</p></li>
+<li><p>Micro averaging is <span style="background-color: codeinlinebg"><code> mean(dim=1)</code></span>.</p></li>
+<li><p>Select a category with <span style="background-color: codeinlinebg"><code> category_ids == category</code></span>.</p></li>
+<li><p>Macro-average the category scores.</p></li>
+<li><p>Policy delta is <span style="background-color: codeinlinebg"><code> RL - baseline</code></span>.</p></li>
+<li><p>Use population standard deviation here with <span style="background-color: codeinlinebg"><code> unbiased=False</code></span>.</p></li>
+<li><p>Convert the prompt count to its square root with <span style="background-color: codeinlinebg"><code> num_prompts ** 0.5</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Report only:</p>
+<pre class="code python"><code class="language-python">print(micro_scores)</code></pre>
+<p>The RL run now looks unambiguously successful because routine prompts dominate the dataset.</p>
+<p>Then accidentally reverse the paired difference:</p>
+<pre class="code python"><code class="language-python">paired_differences = outcomes[0] - outcomes[1]</code></pre>
+<p>Every reported improvement changes sign. This is a simple but consequential evaluation-pipeline bug; keep policy ordering explicit in metric names.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why should the evaluator be independent of the training reward?</p></li>
+<li><p>When is macro averaging more informative than micro averaging?</p></li>
+<li><p>Why must inference budgets match between policies?</p></li>
+<li><p>What should be inspected when reward rises but an important slice falls?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Category IDs:</p>
+<pre class="code python"><code class="language-python">category_ids = torch.arange(
+    num_categories
+).repeat_interleave(category_counts)</code></pre>
+<p>Micro scores:</p>
+<pre class="code python"><code class="language-python">micro_scores = outcomes.mean(dim=1)</code></pre>
+<p>Category scores:</p>
+<pre class="code python"><code class="language-python">category_scores = torch.stack([
+    outcomes[
+        :, category_ids == category
+    ].mean(dim=1)
+    for category in range(num_categories)
+], dim=1)</code></pre>
+<p>Macro scores and deltas:</p>
+<pre class="code python"><code class="language-python">macro_scores = category_scores.mean(dim=1)
+
+category_deltas = (
+    category_scores[1]
+    - category_scores[0]
+)</code></pre>
+<p>Paired comparison:</p>
+<pre class="code python"><code class="language-python">paired_differences = (
+    outcomes[1] - outcomes[0]
+)
+
+mean_delta = paired_differences.mean()
+
+standard_error = (
+    paired_differences.std(unbiased=False)
+    / num_prompts**0.5
+)
+
+ci_low = mean_delta - 1.96 * standard_error
+ci_high = mean_delta + 1.96 * standard_error</code></pre>
+<p>Before sampling noise, the expected micro scores are approximately:</p>
+<p><span class="math display">\[M_{\text{base}}
+=
+0.6(0.65)+0.2(0.55)+0.1(0.75)+0.1(0.60)
+=
+0.635\]</span></p>
+<p><span class="math display">\[M_{\text{RL}}
+=
+0.6(0.82)+0.2(0.72)+0.1(0.40)+0.1(0.62)
+=
+0.738\]</span></p>
+<p>So the aggregate improvement is about:</p>
+<p><span class="math display">\[0.738-0.635=0.103\]</span></p>
+<p>But safety changes by:</p>
+<p><span class="math display">\[0.40-0.75=-0.35\]</span></p>
+<p>The expected macro scores are:</p>
+<p><span class="math display">\[M_{\text{base,macro}}
+=
+\frac{0.65+0.55+0.75+0.60}{4}
+=
+0.6375\]</span></p>
+<p><span class="math display">\[M_{\text{RL,macro}}
+=
+\frac{0.82+0.72+0.40+0.62}{4}
+=
+0.64\]</span></p>
+<p>The macro improvement is nearly zero because categories receive equal weight. The micro score looked much better because routine prompts dominated the benchmark.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Otherwise, the “evaluation” may reproduce the same blind spots or exploitable correlations used during training.</p></li>
+<li><p>When rare categories matter independently of their dataset frequency, especially safety or robustness slices.</p></li>
+<li><p>More samples, tokens or tool calls can increase success independently of model quality.</p></li>
+<li><p>Inspect high-reward outputs, reward–metric correlations, prompt slices, decoding settings and possible evaluator exploitation.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Training reward rises while an independent measure of intended utility falls.</p></li>
+<li><p>If all responses receive identical rewards, subtracting the group mean gives every response zero advantage.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> a statistically significant aggregate win can coexist with a severe capability regression. Evaluate RL-trained models using independent metrics, matched settings, paired prompts and explicit slices—not training reward alone.</p>

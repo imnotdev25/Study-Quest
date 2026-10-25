@@ -1,0 +1,276 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>A value function</strong> <span class="math inline">\(V(s)\)</span> predicts the expected future return from state <span class="math inline">\(s\)</span>. <strong>The TD error</strong> <span class="math inline">\(\delta_t=r_t+\gamma V(s_{t+1})-V(s_t)\)</span> is the surprise: what actually happened over one step, plus the predicted future, minus what we predicted. <strong>GAE</strong> averages these surprises over many steps to estimate how much better an action was than expected.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>In REINFORCE, what effect does subtracting an action-independent baseline have?</p></li>
+<li><p>Why must the advantage be detached when used in the actor loss?</p></li>
+</ol>
+<p>Monte Carlo return from time <span class="math inline">\(t\)</span> is:</p>
+<p><span class="math display">\[G_t=\sum_{k=0}^{T-t-1}\gamma^k r_{t+k}\]</span></p>
+<p>It is unbiased when episodes are complete, but it can have high variance.</p>
+<p>One-step temporal-difference error is:</p>
+<p><span class="math display">\[\delta_t
+=
+r_t+\gamma(1-d_t)V(s_{t+1})-V(s_t)\]</span></p>
+<p>where <span class="math inline">\(d_t=1\)</span> means a genuine terminal transition. The factor <span class="math inline">\(1-d_t\)</span> prevents bootstrapping beyond a terminal state.</p>
+<p>Generalized Advantage Estimation uses:</p>
+<p><span class="math display">\[A_t^{\mathrm{GAE}}
+=
+\delta_t+
+\gamma\lambda(1-d_t)A_{t+1}^{\mathrm{GAE}}\]</span></p>
+<p>Compute it backward through time.</p>
+<p>For a batch of trajectories:</p>
+<p><span class="math display">\[r,V,A,d\in\mathbb{R}^{B\times T}\]</span></p>
+<p>while values commonly include one additional bootstrap value:</p>
+<p><span class="math display">\[V_{\text{all}}\in\mathbb{R}^{B\times(T+1)}\]</span></p>
+<p>The value-function target is:</p>
+<p><span class="math display">\[\hat G_t=A_t+V(s_t)\]</span></p>
+<p>Interpretation of <span class="math inline">\(\lambda\)</span>:</p>
+<ul>
+<li><p><span class="math inline">\(\lambda=0\)</span>: one-step TD advantage; lower variance, more bootstrap bias.</p></li>
+<li><p><span class="math inline">\(\lambda\approx1\)</span>: long-horizon return; lower bootstrap bias, higher variance.</p></li>
+</ul>
+<p>A time-limit truncation is not necessarily a terminal state. Incorrectly setting <code>done=True</code> at every rollout boundary discards valid bootstrap information.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: from TD errors to GAE</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(n\)</span>-step advantage: <span class="math inline">\(A^{(n)}_t=r_t+\gamma r_{t+1}+\dots+\gamma^{n-1}r_{t+n-1}+\gamma^nV(s_{t+n})-V(s_t)\)</span>.</p>
+<p><strong>Step 2.</strong> Telescoping: substituting <span class="math inline">\(\delta_{t+k}\)</span> gives <span class="math inline">\(A^{(n)}_t=\sum_{k=0}^{n-1}\gamma^k\delta_{t+k}\)</span>, since every intermediate <span class="math inline">\(V\)</span> appears once with <span class="math inline">\(+\)</span> and once with <span class="math inline">\(-\)</span>.</p>
+<p><strong>Step 3.</strong> GAE is the exponentially weighted mix: <span class="math inline">\(A^{\mathrm{GAE}}_t=(1-\lambda)\sum_{n\ge1}\lambda^{n-1}A^{(n)}_t\)</span>.</p>
+<p><strong>Step 4.</strong> Swap the sums: <span class="math inline">\(\delta_{t+k}\)</span> appears in every <span class="math inline">\(A^{(n)}\)</span> with <span class="math inline">\(n&gt;k\)</span>, with total weight <span class="math inline">\((1-\lambda)\sum_{n&gt;k}\lambda^{n-1}=\lambda^k\)</span>. So <span class="math inline">\(A^{\mathrm{GAE}}_t=\sum_k(\gamma\lambda)^k\delta_{t+k}\)</span>.</p>
+<p><strong>Step 5.</strong> Recursive form: <span class="math inline">\(A_t=\delta_t+\gamma\lambda(1-d_t)A_{t+1}\)</span>. <span class="math inline">\(\lambda=0\)</span> gives <span class="math inline">\(\delta_t\)</span> (low variance, biased by <span class="math inline">\(V\)</span>), and <span class="math inline">\(\lambda=1\)</span> gives <span class="math inline">\(G_t-V(s_t)\)</span> (unbiased, high variance).</p>
+<p><strong>Step 6.</strong> The factor <span class="math inline">\((1-d_t)\)</span> stops both bootstrapping and recursion at a true terminal step.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: GAE, computed backward</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> rewards <span class="math inline">\(r_{0:T-1}\)</span>, values <span class="math inline">\(V_{0:T}\)</span>, dones <span class="math inline">\(d_{0:T-1}\)</span>, <span class="math inline">\(\gamma,\lambda\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(A\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t=T-1\)</span> <strong>down to</strong> <span class="math inline">\(0\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\delta\gets r_t+\gamma(1-d_t)V_{t+1}-V_t\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(A\gets\delta+\gamma\lambda(1-d_t)A\)</span>; <span class="math inline">\(A_t\gets A\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">critic targets <span class="math inline">\(\hat R_t\gets A_t+V_t\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement GAE and inspect the effects of <span class="math inline">\(\lambda\)</span> and terminal masking.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(221)
+
+B, T = 2, 5
+gamma = 0.99
+
+rewards = torch.tensor([
+    [1.0, 0.5, -0.2, 1.5, 2.0],
+    [0.2, 0.3,  0.4, 0.5, 0.6],
+])                                               # [B,T]
+
+# Includes V(s_T) for bootstrapping.
+values = torch.tensor([
+    [0.8, 0.7, 0.9, 0.6, 0.4, 5.0],
+    [0.1, 0.2, 0.3, 0.4, 0.5, 0.7],
+])                                               # [B,T+1]
+
+# Trajectory 0 truly terminates after the final reward.
+# Trajectory 1 is merely truncated and may bootstrap.
+terminated = torch.tensor([
+    [0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0],
+], dtype=torch.bool)                              # [B,T]
+
+
+def compute_gae(rewards, values, terminated, gamma, gae_lambda):
+    B, T = rewards.shape
+
+    advantages = ...                              # TODO 1: [B,T]
+    next_advantage = ...                          # TODO 2: [B]
+
+    for t in reversed(range(T)):
+        nonterminal = ...                         # TODO 3: [B]
+
+        delta = ...                               # TODO 4: [B]
+
+        next_advantage = ...                      # TODO 5: [B]
+        advantages[:, t] = ...                    # TODO 6
+
+    returns = ...                                 # TODO 7: [B,T]
+    return advantages, returns
+
+
+advantages_0, returns_0 = compute_gae(
+    rewards,
+    values,
+    terminated,
+    gamma,
+    gae_lambda=0.0,
+)
+
+advantages_95, returns_95 = compute_gae(
+    rewards,
+    values,
+    terminated,
+    gamma,
+    gae_lambda=0.95,
+)
+
+advantages_1, returns_1 = compute_gae(
+    rewards,
+    values,
+    terminated,
+    gamma,
+    gae_lambda=1.0,
+)
+
+print(&quot;lambda=0 advantages:\n&quot;, advantages_0)
+print(&quot;\nlambda=0.95 advantages:\n&quot;, advantages_95)
+print(&quot;\nlambda=1 advantages:\n&quot;, advantages_1)
+
+# λ=0 should equal the one-step TD residual.
+nonterminal = (~terminated).float()
+
+td_errors = (
+    rewards
+    + gamma * nonterminal * values[:, 1:]
+    - values[:, :-1]
+)
+
+print(
+    &quot;\nlambda=0 matches TD errors:&quot;,
+    torch.allclose(advantages_0, td_errors),
+)
+
+assert torch.allclose(advantages_0, td_errors)
+assert torch.allclose(
+    returns_95,
+    advantages_95 + values[:, :-1],
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Does trajectory 0’s final advantage depend on <code>values</code><span><code>[</code></span><code>0, -1</code><span><code>]</code></span>?</p></li>
+<li><p>Does trajectory 1’s final advantage depend on <code>values</code><span><code>[</code></span><code>1, -1</code><span><code>]</code></span>?</p></li>
+</ul>
+<p>Now reproduce a truncation bug:</p>
+<pre class="code python"><code class="language-python">wrong_terminated = terminated.clone()
+
+# Incorrectly treat every rollout boundary as terminal.
+wrong_terminated[:, -1] = True
+
+wrong_advantages, _ = compute_gae(
+    rewards,
+    values,
+    wrong_terminated,
+    gamma,
+    gae_lambda=0.95,
+)
+
+print(&quot;\ncorrect trajectory-1 advantages:&quot;)
+print(advantages_95[1])
+
+print(&quot;wrong trajectory-1 advantages:&quot;)
+print(wrong_advantages[1])
+
+print(
+    &quot;difference propagated backward:&quot;,
+    advantages_95[1] - wrong_advantages[1],
+)</code></pre>
+<p>Explain why the error affects more than the final timestep.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Initialize with <code>torch.zeros_like(rewards)</code>.</p></li>
+<li><p><code>nonterminal = (~terminated</code><span><code>[</code></span><code>:, t</code><span><code>]</code></span><code>).float()</code>.</p></li>
+<li><p>Use <code>values</code><span><code>[</code></span><code>:, t</code><span><code>]</code></span> and <code>values</code><span><code>[</code></span><code>:, t + 1</code><span><code>]</code></span>.</p></li>
+<li><p>The recurrence coefficient is <code>gamma * gae_lambda</code>.</p></li>
+<li><p>Value targets use <code>advantages + values</code><span><code>[</code></span><code>:, :-1</code><span><code>]</code></span>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does GAE require values with shape <span><code>[</code></span><code>B,T+1</code><span><code>]</code></span>?</p></li>
+<li><p>What does <span class="math inline">\(\lambda=0\)</span> reduce the advantage estimate to?</p></li>
+<li><p>Prediction: if <code>terminated</code><span><code>[</code></span><code>:, t</code><span><code>]</code></span> is true, can rewards or advantages after <span class="math inline">\(t\)</span> influence <span class="math inline">\(A_t\)</span>?</p></li>
+<li><p>Debugging: advantages near every rollout boundary are systematically too small. Which terminal/truncation mistake is likely?</p></li>
+<li><p>Why are GAE advantages usually normalized before the policy update but value targets are not normalized identically?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def compute_gae(
+    rewards,
+    values,
+    terminated,
+    gamma,
+    gae_lambda,
+):
+    B, T = rewards.shape
+
+    advantages = torch.zeros_like(rewards)
+    next_advantage = torch.zeros(
+        B,
+        dtype=rewards.dtype,
+        device=rewards.device,
+    )
+
+    for t in reversed(range(T)):
+        nonterminal = (
+            ~terminated[:, t]
+        ).to(rewards.dtype)
+
+        delta = (
+            rewards[:, t]
+            + gamma
+            * nonterminal
+            * values[:, t + 1]
+            - values[:, t]
+        )
+
+        next_advantage = (
+            delta
+            + gamma
+            * gae_lambda
+            * nonterminal
+            * next_advantage
+        )
+
+        advantages[:, t] = next_advantage
+
+    returns = advantages + values[:, :-1]
+    return advantages, returns</code></pre>
+<p>For trajectory 0, the final transition is terminal:</p>
+<p><span class="math display">\[1-d_{T-1}=0\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\delta_{T-1}
+=
+r_{T-1}-V(s_{T-1})\]</span></p>
+<p>and <code>values</code><span><code>[</code></span><code>0, -1</code><span><code>]</code></span> is ignored.</p>
+<p>Trajectory 1 is truncated but not terminal, so:</p>
+<p><span class="math display">\[\delta_{T-1}
+=
+r_{T-1}
++\gamma V(s_T)
+-V(s_{T-1})\]</span></p>
+<p>Its bootstrap value matters.</p>
+<p>The truncation bug changes the final TD error. Because GAE recursively includes later advantages:</p>
+<p><span class="math display">\[A_t=\delta_t+\gamma\lambda A_{t+1}\]</span></p>
+<p>that final error propagates backward, decaying approximately by a factor of <span class="math inline">\(\gamma\lambda\)</span> at each step.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Computing the final TD residual requires both <span class="math inline">\(V(s_{T-1})\)</span> and the bootstrap value <span class="math inline">\(V(s_T)\)</span>.</p></li>
+<li><p>It becomes: <span class="math display">\[A_t=\delta_t\]</span> the one-step TD error.</p></li>
+<li><p>No. The <code>nonterminal</code> factor becomes zero, cutting the recurrence at the terminal transition.</p></li>
+<li><p>Rollout truncations are probably being marked as true environmental terminations, incorrectly eliminating bootstrapping.</p></li>
+<li><p>Advantage normalization rescales the actor’s update for optimization stability. Value targets retain the reward scale because the critic must predict returns in that scale.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>A baseline preserves the expected policy gradient but can reduce its variance.</p></li>
+<li><p>Detaching the advantage prevents the actor loss from optimizing through the reward or value-estimation path.</p></li>
+</ul>

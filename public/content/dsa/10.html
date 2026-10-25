@@ -1,0 +1,138 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How to trust recursion (the “leap of faith”), the choose–explore–unchoose template behind subsets, permutations, combinations, and constraint puzzles, pruning and branch-and-bound, meet in the middle, and divide-and-conquer beyond sorting.</p>
+</div>
+<h1 id="trusting-recursion">Trusting Recursion</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>To climb a staircase of 100 steps, you do not plan all 100. You trust that you know how to climb 99, and you take one step. Recursion is that trust: solve the smallest case directly, and assume the function already works on anything smaller.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Every recursive function needs three things:</p>
+<ol>
+<li><p>A <strong>base case</strong> that is answered directly.</p></li>
+<li><p>A <strong>reduction</strong>: each call works on a strictly smaller input.</p></li>
+<li><p>A <strong>combination</strong>: build this answer from the smaller answers.</p></li>
+</ol>
+<p>Prove it correct by induction: the base case is right, and if the calls on smaller inputs are right, the combination is right. Cost = (number of calls) <span class="math inline">\(\times\)</span> (work per call). Draw the recursion tree to count calls; if the same arguments appear in many branches, memoize (Chapter 12).</p>
+</div>
+<h1 id="the-backtracking-template">The Backtracking Template</h1>
+<figure class="tikz"><img src="figs/dsa/7118e85ac61a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The decision tree for subsets of {1,2,3}.</em></p>
+<p><em>Backtracking template</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Backtrack(<span class="math inline">\(state\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(state\)</span> is a complete solution <strong>then</strong></div>
+<div class="algo-line" style="--d:2">record a copy of <span class="math inline">\(state\)</span>; <strong>return</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each choice <span class="math inline">\(c\)</span> available in <span class="math inline">\(state\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(c\)</span> is invalid <strong>or</strong> cannot lead to a solution <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><strong>continue</strong> <em>▷ prune</em></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2">apply <span class="math inline">\(c\)</span> to <span class="math inline">\(state\)</span> <em>▷ choose</em></div>
+<div class="algo-line" style="--d:2"><em>▷ explore</em></div>
+<div class="algo-line" style="--d:2">undo <span class="math inline">\(c\)</span> <em>▷ unchoose</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The three canonical problems differ only in what a “choice” is:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Problem</th>
+<th style="text-align: left;">Choice at each step</th>
+<th style="text-align: left;">Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Subsets</td>
+<td style="text-align: left;">include or skip element <span class="math inline">\(i\)</span> (or: pick the next element from index <span class="math inline">\(\ge start\)</span>)</td>
+<td style="text-align: left;"><span class="math inline">\(2^n\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Combinations (<span class="math inline">\(k\)</span> of <span class="math inline">\(n\)</span>)</td>
+<td style="text-align: left;">pick the next element from index <span class="math inline">\(\ge start\)</span>; stop at size <span class="math inline">\(k\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(\binom{n}{k}\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Permutations</td>
+<td style="text-align: left;">pick any unused element</td>
+<td style="text-align: left;"><span class="math inline">\(n!\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Combination sum (reuse allowed)</td>
+<td style="text-align: left;">pick element <span class="math inline">\(\ge\)</span> current index (same index allowed)</td>
+<td style="text-align: left;">varies</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Duplicates in the input</strong> (“subsets II,” “permutations II”): sort first, and at the same tree level skip an element equal to the previous one that was not used in this branch: <code>if i &gt; start and A[i] == A[i-1]: continue</code>. That prevents generating the same multiset twice.</p>
+</div>
+<p><em>N-Queens with <span class="math inline">\(O(1)\)</span> conflict checks</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Place(<span class="math inline">\(row\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(row = n\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">record board; <strong>return</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(col \gets 0\)</span> <strong>to</strong> <span class="math inline">\(n-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(col \in cols\)</span> <strong>or</strong> <span class="math inline">\((row - col) \in diag\)</span> <strong>or</strong> <span class="math inline">\((row + col) \in anti\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><strong>continue</strong></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2">add <span class="math inline">\(col\)</span>, <span class="math inline">\(row-col\)</span>, <span class="math inline">\(row+col\)</span> to their sets; <span class="math inline">\(board[row] \gets col\)</span></div>
+<p>XXIND2XX</p>
+<div class="algo-line" style="--d:2">remove them from the sets</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Placing exactly one queen per row removes row conflicts by construction. Cells on the same diagonal share <span class="math inline">\(row - col\)</span>; on the same anti-diagonal they share <span class="math inline">\(row +
+col\)</span>, so three sets make each check <span class="math inline">\(O(1)\)</span>. Pruning at each row cuts the search from <span class="math inline">\(n^n\)</span> to far fewer nodes (still exponential; there is no known polynomial algorithm for counting all solutions).</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“Return <em>all</em>” combinations, permutations, partitions, or paths; constraint puzzles (Sudoku, N-Queens, word search); <span class="math inline">\(n \le 15\)</span>–20; “generate valid parentheses” (choose <code>(</code> if opens remain, <code>)</code> if it would not exceed opens). If the question asks for a <em>count</em> or <em>best</em> value rather than all solutions, check for overlapping subproblems: it is probably DP.</p>
+</div>
+<h1 id="pruning-and-branch-and-bound">Pruning and Branch and Bound</h1>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<ul>
+<li><p><strong>Feasibility pruning</strong>: stop when the partial solution already breaks a constraint (sum exceeds target, with sorted candidates you can <code>break</code> instead of <code>continue</code>).</p></li>
+<li><p><strong>Ordering</strong>: try the most constrained choice first (Sudoku: the cell with the fewest candidates). This often shrinks the tree by orders of magnitude.</p></li>
+<li><p><strong>Branch and bound</strong> for optimization: keep the best solution so far and an optimistic bound for each partial solution; prune when the bound cannot beat the best. Used for TSP, knapsack, and integer programming solvers.</p></li>
+<li><p><strong>Memoize failure</strong>: in word break or “partition to <span class="math inline">\(k\)</span> equal sum subsets,” remember states (e.g., a bitmask of used items) that are known to fail.</p></li>
+</ul>
+</div>
+<h1 id="meet-in-the-middle">Meet in the Middle</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>For <span class="math inline">\(n \approx 40\)</span>, <span class="math inline">\(2^{40}\)</span> subsets are too many, but <span class="math inline">\(2^{20} \approx 10^6\)</span> is fine. Split the items into halves, enumerate all subset sums of each half, sort one list, and for each sum in the other list binary search for a complement. <span class="math inline">\(O(2^{n/2}\, n)\)</span>. Solves subset sum, “closest subsequence sum,” and partition into two equal-sized halves with minimum difference.</p>
+</div>
+<h1 id="divide-and-conquer">Divide and Conquer</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Split into independent subproblems, solve recursively, combine. The combine step is where the cleverness is:</p>
+<ul>
+<li><p><strong>Merge sort and inversion counting</strong> (Chapter 10).</p></li>
+<li><p><strong>Closest pair of points</strong>: sort by <span class="math inline">\(x\)</span>, solve halves, then check only points within distance <span class="math inline">\(\delta\)</span> of the dividing line, sorted by <span class="math inline">\(y\)</span>; each needs comparing to at most a constant number (7) of neighbors. <span class="math inline">\(O(n\log n)\)</span>.</p></li>
+<li><p><strong>Karatsuba multiplication</strong>: three half-size multiplications instead of four, <span class="math inline">\(O(n^{1.585})\)</span>.</p></li>
+<li><p><strong>Fast exponentiation</strong>: <span class="math inline">\(x^n = (x^{n/2})^2\)</span>, <span class="math inline">\(O(\log n)\)</span> multiplications; with matrices, <span class="math inline">\(n\)</span>-th Fibonacci in <span class="math inline">\(O(\log n)\)</span>.</p></li>
+<li><p><strong>Strassen matrix multiplication</strong>: 7 instead of 8 sub-multiplications, <span class="math inline">\(O(n^{2.81})\)</span>; numerically less stable, rarely used for ML (GPUs use blocked classical multiplication).</p></li>
+</ul>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<ul>
+<li><p><strong>Grid search</strong> over hyperparameters is exhaustive enumeration (a Cartesian product); random search and Bayesian optimization exist because the tree is too large.</p></li>
+<li><p><strong>Beam search</strong> is backtracking with a width limit: keep only the best <span class="math inline">\(B\)</span> partial sequences instead of exploring everything.</p></li>
+<li><p><strong>Tree-of-thoughts and agent planning</strong> explore a tree of partial reasoning steps with pruning by a value estimate: branch and bound with an LLM as the heuristic.</p></li>
+<li><p><strong>Constrained decoding</strong> prunes tokens that would violate a grammar, the same “prune invalid choices early” idea.</p></li>
+<li><p><strong>Divide and conquer</strong> underlies parallel reductions on GPUs (tree reductions for sums and softmax) and distributed all-reduce.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Word search II</div>
+<p>“Find all dictionary words on a letter grid (adjacent cells, no reuse).” Naive: run a DFS for each word, <span class="math inline">\(O(W\cdot RC\cdot 4^L)\)</span>. Better: insert all words into a trie, then DFS from each cell while walking the trie in parallel; stop as soon as the current path is not a prefix (pruning). Mark cells visited in place and restore on return (choose/unchoose). When a word is found, record it and remove its end marker to avoid duplicates; delete trie nodes that become leaves to prune further. Complexity is bounded by <span class="math inline">\(RC\cdot 4\cdot 3^{L-1}\)</span> in the worst case but is far smaller in practice thanks to prefix pruning.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Recursion = base case + smaller subproblem + combine; prove it by induction.</p></li>
+<li><p>Backtracking = choose, explore, unchoose; prune early and skip duplicates after sorting.</p></li>
+<li><p>“All solutions” suggests backtracking; “count” or “best” suggests DP.</p></li>
+<li><p>Meet in the middle turns <span class="math inline">\(2^n\)</span> into <span class="math inline">\(2^{n/2}\)</span>; divide and conquer hinges on a clever combine.</p></li>
+</ul>
+</div>

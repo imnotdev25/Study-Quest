@@ -1,0 +1,495 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What are sequential doubly robust evaluation’s two rescue routes?</p></li>
+<li><p>Why must bootstrapping stop at a genuine terminal transition?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="learn-the-value-model-needed-for-offline-evaluation">2. Learn the value model needed for offline evaluation</h3>
+<p>Fitted Q Evaluation—FQE—estimates the value of one fixed target policy <span class="math inline">\(\pi\)</span> from logged transitions:</p>
+<p><span class="math display">\[(s_i,a_i,r_i,s&#39;_i,d_i)\]</span></p>
+<p>Its Bellman target is:</p>
+<p><span class="math display">\[y_i
+=
+\underbrace{r_i}_{\text{observed immediate reward}}
++
+\underbrace{
+\gamma(1-d_i)
+\sum_{a&#39;}\pi(a&#39;\mid s&#39;_i)
+Q_{\bar\phi}(s&#39;_i,a&#39;)
+}_{\text{target-policy continuation value}}\]</span></p>
+<p>Then regress:</p>
+<p><span class="math display">\[\mathcal L_{\mathrm{FQE}}(\phi)
+=
+\underbrace{
+\frac1B\sum_i
+\left(
+Q_\phi(s_i,a_i)
+-
+\operatorname{stopgrad}(y_i)
+\right)^2
+}_{\text{Bellman error on logged state–action pairs}}\]</span></p>
+<p>Finally:</p>
+<p><span class="math display">\[\hat V^\pi
+=
+\underbrace{
+\frac1{N_0}\sum_{i=1}^{N_0}
+\sum_a\pi(a\mid s_{0,i})
+Q_\phi(s_{0,i},a)
+}_{\text{estimated target-policy return from initial states}}\]</span></p>
+<p>The expectation over <span class="math inline">\(\pi\)</span> is crucial. Replacing it with:</p>
+<p><span class="math display">\[\max_{a&#39;}Q(s&#39;,a&#39;)\]</span></p>
+<p>turns the target into Q-learning: it evaluates a greedy policy, not the specified policy.</p>
+<p>FQE can provide the <span class="math inline">\(Q\)</span>-model used by sequential doubly robust evaluation. But its accuracy depends on logged support. An unseen target action receives no direct regression loss; a neural network may assign it an arbitrary value while achieving tiny logged Bellman error.</p>
+<p>Practical details:</p>
+<ul>
+<li><p>Detach Bellman targets or use a target network.</p></li>
+<li><p>Mask terminal transitions with <span class="math inline">\(1-d_i\)</span>.</p></li>
+<li><p>Audit state–action counts and target-policy coverage.</p></li>
+<li><p>Use held-out trajectories to diagnose Bellman error.</p></li>
+<li><p>Preference pairs used by DPO are not sufficient FQE data; FQE needs environment transitions and outcome rewards.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>states, actions, rewards and terminals: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p><span class="math inline">\(Q\)</span>-table: <span style="background-color: codeinlinebg"><code> [S, A]</code></span></p></li>
+<li><p>target policy: <span style="background-color: codeinlinebg"><code> [S, A]</code></span></p></li>
+<li><p>Bellman targets and predictions: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-zero-bellman-loss-can-hide-missing-support">3. PyTorch exercise — zero Bellman loss can hide missing support</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 4_000
+num_states = 3
+num_actions = 2
+gamma = 0.90
+
+# Rows are nonterminal states; columns are actions.
+reward_table = torch.tensor([
+    [0.00, 0.10],
+    [0.00, 0.20],
+    [0.00, 1.00],
+])
+
+target_policy = torch.tensor([
+    [0.20, 0.80],
+    [0.20, 0.80],
+    [0.20, 0.80],
+])
+
+supported_behavior_probabilities = torch.tensor([
+    0.25,
+    0.25,
+    0.25,
+])
+
+# The logger never takes action 1 in the final state.
+unsupported_behavior_probabilities = torch.tensor([
+    0.25,
+    0.25,
+    0.00,
+])
+
+
+# TODO 1: Calculate the exact target-policy Q and V values.
+def exact_policy_evaluation():
+    q_values = ...
+    v_values = ...
+
+    for state in reversed(range(num_states)):
+        q_values[state] = ...
+
+        v_values[state] = ...
+
+    return q_values, v_values
+
+
+exact_q, exact_v = ...
+
+
+# TODO 2: Generate an offline transition dataset.
+def generate_dataset(
+    action_one_probabilities,
+):
+    states = ...
+
+    action_one_probability = ...
+
+    actions = ...
+
+    next_states = ...
+    terminals = ...
+
+    rewards = ...
+
+    return (
+        states,
+        actions,
+        rewards,
+        next_states,
+        terminals,
+    )
+
+
+supported_data = ...
+unsupported_data = ...
+
+
+# TODO 3: Implement FQE with a target Q-table.
+def fitted_q_evaluation(
+    dataset,
+    num_updates=600,
+    target_update_period=20,
+):
+    (
+        states,
+        actions,
+        rewards,
+        next_states,
+        terminals,
+    ) = dataset
+
+    q_values = torch.nn.Parameter(
+        torch.zeros(num_states, num_actions)
+    )
+
+    optimizer = torch.optim.Adam(
+        [q_values],
+        lr=0.05,
+    )
+
+    target_q = ...
+
+    losses = []
+
+    for update in range(num_updates):
+        with torch.no_grad():
+            next_values = torch.zeros_like(
+                rewards
+            )
+
+            nonterminal = ...
+
+            next_values[nonterminal] = ...
+
+            bellman_targets = ...
+
+        predictions = ...
+
+        loss = ...
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if (
+            update + 1
+        ) % target_update_period == 0:
+            target_q = ...
+
+        losses.append(loss.detach())
+
+    estimated_initial_value = ...
+
+    state_action_indices = ...
+
+    counts = torch.bincount(
+        state_action_indices,
+        minlength=num_states * num_actions,
+    ).reshape(num_states, num_actions)
+
+    return (
+        q_values.detach(),
+        estimated_initial_value.detach(),
+        torch.stack(losses),
+        counts,
+    )
+
+
+supported_result = ...
+unsupported_result = ...
+
+
+print(&quot;Exact Q:&quot;)
+print(exact_q)
+print(&quot;Exact initial value:&quot;, exact_v[0].item())
+
+print(&quot;\nSupported learned Q/value/counts:&quot;)
+print(supported_result[0])
+print(supported_result[1].item())
+print(supported_result[3])
+print(&quot;Final loss:&quot;, supported_result[2][-1].item())
+
+print(&quot;\nUnsupported learned Q/value/counts:&quot;)
+print(unsupported_result[0])
+print(unsupported_result[1].item())
+print(unsupported_result[3])
+print(&quot;Final loss:&quot;, unsupported_result[2][-1].item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the exact target-policy value?</p></li>
+<li><p>Should supported FQE recover that value?</p></li>
+<li><p>What happens to <span class="math inline">\(Q(2,1)\)</span> when action <span style="background-color: codeinlinebg"><code> 1</code></span> is never logged in state <span style="background-color: codeinlinebg"><code> 2</code></span>?</p></li>
+<li><p>Can unsupported FQE achieve nearly zero training loss?</p></li>
+<li><p>What policy would using <span style="background-color: codeinlinebg"><code> max</code></span> instead of the target-policy expectation evaluate?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>The backward recursion is:</p>
+<p><span class="math display">\[Q^\pi(s,a)
+=
+\underbrace{r(s,a)}_{\text{current reward}}
++
+\underbrace{\gamma V^\pi(s+1)}_{\text{remaining return}}\]</span></p>
+<p><span class="math display">\[V^\pi(s)
+=
+\underbrace{
+\sum_a\pi(a\mid s)Q^\pi(s,a)
+}_{\text{target-policy action average}}\]</span></p>
+<ul>
+<li><p>Construct states as <span style="background-color: codeinlinebg"><code> 0, 1, 2</code></span> for every episode, then flatten.</p></li>
+<li><p>The terminal state has no <span class="math inline">\(Q\)</span>-row; assign its continuation value zero.</p></li>
+<li><p>Initialize the target table with <span style="background-color: codeinlinebg"><code> q_values.detach().clone()</code></span>.</p></li>
+<li><p>Only index <span style="background-color: codeinlinebg"><code> target_q[next_states]</code></span> for nonterminal rows.</p></li>
+<li><p>Encode a state–action pair as <span style="background-color: codeinlinebg"><code> state * num_actions + action</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Let gradients flow through <span style="background-color: codeinlinebg"><code> bellman_targets</code></span>.</p></li>
+<li><p>Replace the policy expectation with <span style="background-color: codeinlinebg"><code> .max(dim=-1).values</code></span>.</p></li>
+<li><p>Bootstrap after terminal transitions.</p></li>
+<li><p>Report only training Bellman loss, without action counts.</p></li>
+<li><p>Evaluate actions absent from the logs and call the result identified.</p></li>
+<li><p>Use rewards from a changing judge without recording its version.</p></li>
+<li><p>Train FQE on the final audit set and report the same set as validation.</p></li>
+<li><p>Treat a DPO preference margin as an environment return.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>How does FQE differ from Q-learning?</p></li>
+<li><p>Why can FQE have low variance yet substantial bias?</p></li>
+<li><p>Why does zero logged Bellman error not prove correct target value?</p></li>
+<li><p>How can FQE and sequential DR be combined?</p></li>
+<li><p>What should you do when an important target action has no logged support?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Exact dynamic programming:</p>
+<pre class="code python"><code class="language-python">def exact_policy_evaluation():
+    q_values = torch.zeros(
+        num_states,
+        num_actions,
+    )
+
+    v_values = torch.zeros(
+        num_states + 1
+    )
+
+    for state in reversed(range(num_states)):
+        q_values[state] = (
+            reward_table[state]
+            + gamma * v_values[state + 1]
+        )
+
+        v_values[state] = (
+            target_policy[state]
+            * q_values[state]
+        ).sum()
+
+    return q_values, v_values
+
+
+exact_q, exact_v = exact_policy_evaluation()</code></pre>
+<p>Dataset generation:</p>
+<pre class="code python"><code class="language-python">def generate_dataset(
+    action_one_probabilities,
+):
+    states = (
+        torch.arange(num_states)
+        [None, :]
+        .expand(num_episodes, -1)
+        .reshape(-1)
+    )
+
+    action_one_probability = (
+        action_one_probabilities[states]
+    )
+
+    actions = (
+        torch.rand(states.shape[0])
+        &lt; action_one_probability
+    ).to(torch.long)
+
+    next_states = states + 1
+
+    terminals = (
+        next_states == num_states
+    )
+
+    rewards = reward_table[
+        states,
+        actions,
+    ]
+
+    return (
+        states,
+        actions,
+        rewards,
+        next_states,
+        terminals,
+    )
+
+
+supported_data = generate_dataset(
+    supported_behavior_probabilities
+)
+
+unsupported_data = generate_dataset(
+    unsupported_behavior_probabilities
+)</code></pre>
+<p>FQE:</p>
+<pre class="code python"><code class="language-python">def fitted_q_evaluation(
+    dataset,
+    num_updates=600,
+    target_update_period=20,
+):
+    (
+        states,
+        actions,
+        rewards,
+        next_states,
+        terminals,
+    ) = dataset
+
+    q_values = torch.nn.Parameter(
+        torch.zeros(num_states, num_actions)
+    )
+
+    optimizer = torch.optim.Adam(
+        [q_values],
+        lr=0.05,
+    )
+
+    target_q = q_values.detach().clone()
+
+    losses = []
+
+    for update in range(num_updates):
+        with torch.no_grad():
+            next_values = torch.zeros_like(
+                rewards
+            )
+
+            nonterminal = ~terminals
+
+            next_values[nonterminal] = (
+                target_policy[
+                    next_states[nonterminal]
+                ]
+                * target_q[
+                    next_states[nonterminal]
+                ]
+            ).sum(dim=-1)
+
+            bellman_targets = (
+                rewards
+                + gamma * next_values
+            )
+
+        predictions = q_values[
+            states,
+            actions,
+        ]
+
+        loss = F.mse_loss(
+            predictions,
+            bellman_targets,
+        )
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if (
+            update + 1
+        ) % target_update_period == 0:
+            target_q = (
+                q_values.detach().clone()
+            )
+
+        losses.append(loss.detach())
+
+    estimated_initial_value = (
+        target_policy[0]
+        * q_values.detach()[0]
+    ).sum()
+
+    state_action_indices = (
+        states * num_actions + actions
+    )
+
+    counts = torch.bincount(
+        state_action_indices,
+        minlength=num_states * num_actions,
+    ).reshape(num_states, num_actions)
+
+    return (
+        q_values.detach(),
+        estimated_initial_value.detach(),
+        torch.stack(losses),
+        counts,
+    )
+
+
+supported_result = fitted_q_evaluation(
+    supported_data
+)
+
+unsupported_result = fitted_q_evaluation(
+    unsupported_data
+)</code></pre>
+<p>Exact values:</p>
+<p><span class="math display">\[Q^\pi
+=
+\begin{bmatrix}
+0.792 &amp; 0.892\\
+0.720 &amp; 0.920\\
+0.000 &amp; 1.000
+\end{bmatrix}\]</span></p>
+<p><span class="math display">\[V^\pi(0)
+=
+\underbrace{
+0.2(0.792)+0.8(0.892)
+}_{0.872}\]</span></p>
+<p>With support, learned <span class="math inline">\(Q\)</span> and value should approach these numbers.</p>
+<p>Without final-state action-1 support:</p>
+<p><span class="math display">\[\hat Q(2,1)
+=
+\underbrace{0}_{\text{zero initialization; never directly updated}}\]</span></p>
+<p>This propagates backward:</p>
+<p><span class="math display">\[\hat V(2)=0\]</span></p>
+<p><span class="math display">\[\hat V(1)=0.8(0.20)=0.16\]</span></p>
+<p><span class="math display">\[\hat V(0)
+=
+\underbrace{
+0.2(0.144)+0.8(0.244)
+}_{0.224}\]</span></p>
+<p>The unsupported estimate can therefore converge near <span style="background-color: codeinlinebg"><code> 0.224</code></span> with almost zero training loss, despite the true value being <span style="background-color: codeinlinebg"><code> 0.872</code></span>.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>FQE evaluates the specified policy by averaging over <span class="math inline">\(\pi\)</span>; Q-learning uses a maximizing target and moves toward a greedy policy.</p></li>
+<li><p>Bootstrapping replaces noisy returns with model predictions, reducing variance but propagating approximation or extrapolation errors.</p></li>
+<li><p>The loss checks only logged pairs. Unsupported target actions can have arbitrary values without increasing it.</p></li>
+<li><p>Use FQE as the <span class="math inline">\(Q\)</span>-baseline, then apply importance-weighted TD-residual corrections from sequential DR.</p></li>
+<li><p>Collect targeted data, narrow the evaluated policy, or report partial bounds. Function approximation cannot manufacture identification.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Sequential DR is consistent when either its cumulative propensity ratios are correct or its <span class="math inline">\(Q\)</span>-model is correct throughout the trajectory.</p></li>
+<li><p>A terminal transition has no future environment return; bootstrapping beyond it invents reward and biases every predecessor.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> FQE asks, “How would this fixed policy perform?”—not “Which action looks best?” Always inspect target-policy support, because a perfect fit to logged transitions can coexist with a badly wrong deployment value.</p>

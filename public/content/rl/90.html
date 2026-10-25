@@ -1,0 +1,443 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: betting against the safety hypothesis</div>
+<p>Start with $1 and bet, observation by observation, against the claim “the canary is safe.” If the claim is true, your wealth can’t grow on average. If your wealth ever reaches $20, you have strong evidence against it, and that’s true <em>whenever</em> you choose to look. That’s an e-process. Ordinary confidence intervals break if you keep peeking and stop when they look good.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/c43675017b1f.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Illustrative. The alarm fires at the first crossing, at any time, with error at most 5%.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does randomized canary assignment remove the need for importance sampling?</p></li>
+<li><p>Why can reward improvement be established before a rare safety rate is sufficiently precise?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="ordinary-confidence-intervals-assume-a-planned-stopping-time">2. Ordinary confidence intervals assume a planned stopping time</h3>
+<p>Suppose the unacceptable incident-rate boundary is:</p>
+<p><span class="math display">\[p_0=0.04\]</span></p>
+<p>Checking an ordinary 95% interval after every batch and stopping when it first falls below <span class="math inline">\(p_0\)</span> creates many chances for a lucky fluctuation.</p>
+<p>An e-value provides evidence that remains valid under continuous monitoring. Think of it as betting wealth against:</p>
+<p><span class="math display">\[H_0:p\ge p_0\]</span></p>
+<p>Choose a prespecified safer alternative <span class="math inline">\(q&lt;p_0\)</span>. After <span class="math inline">\(S_n\)</span> incidents in <span class="math inline">\(n\)</span> episodes:</p>
+<p><span class="math display">\[E_n(q)
+=
+\left(\frac q{p_0}\right)^{S_n}
+\left(
+\frac{1-q}{1-p_0}
+\right)^{n-S_n}\]</span></p>
+<p>Each incident multiplies wealth by <span class="math inline">\(q/p_0&lt;1\)</span>. Each non-incident multiplies it by <span class="math inline">\((1-q)/(1-p_0)&gt;1\)</span>.</p>
+<p>Under any unsafe rate <span class="math inline">\(p\ge p_0\)</span>, this wealth is a nonnegative supermartingale. Ville’s inequality gives:</p>
+<p><span class="math display">\[P_{H_0}
+\left(
+\sup_n E_n\ge\frac1\delta
+\right)
+\le\delta\]</span></p>
+<p>Thus, with <span class="math inline">\(\delta=0.05\)</span>, certify the rate as below the limit whenever:</p>
+<p><span class="math display">\[E_n\ge20\]</span></p>
+<p>You may check after every episode without invalidating this guarantee.</p>
+<p>A single <span class="math inline">\(q\)</span> can be underpowered when the true safe rate differs from it. Prespecify several alternatives and average their e-values:</p>
+<p><span class="math display">\[E_n^{\text{mix}}
+=
+\frac1M\sum_{m=1}^{M}E_n(q_m)\]</span></p>
+<p>The average remains valid. Compute it in log-space:</p>
+<p><span class="math display">\[\log E_n^{\text{mix}}
+=
+\operatorname{logsumexp}_m
+\log E_n(q_m)
+-\log M\]</span></p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>simulated incidents: <span style="background-color: codeinlinebg"><code> [conditions, repetitions, time]</code></span></p></li>
+<li><p>checkpoint counts: <span style="background-color: codeinlinebg"><code> [conditions, repetitions, looks]</code></span></p></li>
+<li><p>component log e-values: <span style="background-color: codeinlinebg"><code> [conditions, alternatives, repetitions, looks]</code></span></p></li>
+<li><p>mixture log e-values: <span style="background-color: codeinlinebg"><code> [conditions, repetitions, looks]</code></span></p></li>
+</ul>
+<p>An e-value answers “Is there anytime-valid evidence against the unsafe boundary?” It does not estimate the incident rate or effect size. Continue reporting rates, counts, subgroup results and practical severity.</p>
+<p>A DPO checkpoint may be the candidate being monitored, but preference optimization supplies no guarantee about deployment incidents. The e-process uses actual online outcomes.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: Ville’s inequality</div>
+<p>An e-process <span class="math inline">\(E_t\)</span> is a nonnegative process with <span class="math inline">\(\mathbb E[E_t]\le1\)</span> under the null at every stopping time. Ville: <span class="math inline">\(P_{H_0}(\exists t:E_t\ge1/\alpha)\le\alpha\)</span>. <strong>Likelihood-ratio example</strong> for incidents <span class="math inline">\(X_i\in\{0,1\}\)</span>, null rate <span class="math inline">\(p_0\)</span>, alternative <span class="math inline">\(p_1&gt;p_0\)</span>: <span class="math inline">\(\log E_t=\sum_i\big[X_i\log\frac{p_1}{p_0}+(1-X_i)\log\frac{1-p_1}{1-p_0}\big]\)</span>. Compute it in log space, fix <span class="math inline">\(p_1\)</span> <em>before</em> the canary, and keep estimating the effect separately from testing the safety boundary.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Ordinary intervals assume one look. E-processes let you keep watching.</p></li>
+<li><p>Prespecify the alternative, and work in log space.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: per-observation updates</div>
+<p><span class="math inline">\(p_0=0.01\)</span>, <span class="math inline">\(p_1=0.02\)</span>. An incident adds <span class="math inline">\(\ln2=0.693\)</span>. A clean request adds <span class="math inline">\(\ln(0.98/0.99)=-0.0102\)</span>. Alarm at <span class="math inline">\(\ln20=3.0\)</span>: about 5 incidents in the first 50 requests would trigger it (<span class="math inline">\(5(0.693)-45(0.0102)=3.0\)</span>).</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Choosing <span class="math inline">\(p_1\)</span> after seeing data.</p></li>
+<li><p>Multiplying raw probabilities (underflow).</p></li>
+<li><p>Reading the e-value as an effect size.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Anytime-valid canary safety monitor</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> null incident rate <span class="math inline">\(p_0\)</span>, alternative <span class="math inline">\(p_1&gt;p_0\)</span> (both fixed in advance), level <span class="math inline">\(\alpha\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each canary request with incident flag <span class="math inline">\(X\in\{0,1\}\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(L\gets L+X\log\frac{p_1}{p_0}+(1-X)\log\frac{1-p_1}{1-p_0}\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(L\ge\log(1/\alpha)\)</span> <strong>then</strong> <strong>stop the canary</strong>: evidence the rate exceeds <span class="math inline">\(p_0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-repeated-intervals-versus-an-anytime-valid-test">3. PyTorch exercise — repeated intervals versus an anytime-valid test</h3>
+<p>Simulate two conditions:</p>
+<ul>
+<li><p>boundary: <span class="math inline">\(p=0.04\)</span>, where declaring safety is a false positive;</p></li>
+<li><p>safe: <span class="math inline">\(p=0.02\)</span>.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 1_000
+horizon = 2_000
+checkpoint_every = 20
+
+safety_limit = 0.04
+family_delta = 0.05
+pointwise_z = 1.645
+
+true_rates = torch.tensor([
+    0.04,  # null boundary
+    0.02,  # genuinely safer
+])
+
+condition_names = [
+    &quot;Boundary p=0.04&quot;,
+    &quot;Safe p=0.02&quot;,
+]
+
+checkpoint_indices = torch.arange(
+    checkpoint_every - 1,
+    horizon,
+    checkpoint_every,
+)
+
+sample_sizes = (
+    checkpoint_indices
+    + 1
+).to(torch.float64)
+
+# TODO 1: Simulate incidents and obtain cumulative
+# counts at every checkpoint.
+incidents = ...
+
+incident_counts = ...
+
+empirical_rates = ...
+
+# TODO 2: Pointwise 95% Wilson upper bounds.
+# These are valid for one planned look, not repeated
+# stopping at the first favorable look.
+wilson_denominator = ...
+
+wilson_center = ...
+
+wilson_radius = ...
+
+pointwise_upper_bounds = ...
+
+pointwise_certificates = ...
+
+# Prespecified alternatives below the unsafe boundary.
+alternative_rates = torch.tensor([
+    0.005,
+    0.010,
+    0.020,
+    0.030,
+    0.035,
+])
+
+num_alternatives = (
+    alternative_rates.numel()
+)
+
+# TODO 3: Component likelihood-ratio e-processes
+# in log-space.
+expanded_counts = ...
+
+expanded_sample_sizes = ...
+
+expanded_alternatives = ...
+
+component_log_e_values = ...
+
+# TODO 4: Equal-weight mixture e-process and
+# anytime-valid certification.
+mixture_log_e_values = ...
+
+log_e_threshold = ...
+
+anytime_certificates = ...
+
+# TODO 5: Compare probability of ever certifying.
+pointwise_ever_certified = ...
+
+anytime_ever_certified = ...
+
+pointwise_certification_rates = ...
+
+anytime_certification_rates = ...
+
+# First anytime-valid crossing for safe simulations.
+safe_crossings = anytime_certificates[1]
+safe_ever_crossed = ...
+
+safe_first_indices = ...
+
+safe_median_crossing = sample_sizes[
+    safe_first_indices[safe_ever_crossed]
+].median()
+
+results = torch.stack([
+    true_rates,
+    pointwise_certification_rates,
+    anytime_certification_rates,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: true rate, ever-pointwise, &quot;
+    &quot;ever-anytime&quot;
+)
+print(results)
+
+print(
+    &quot;Anytime threshold:&quot;,
+    math.exp(log_e_threshold),
+)
+
+print(
+    &quot;Safe simulations certified:&quot;,
+    safe_ever_crossed.sum().item(),
+)
+
+print(
+    &quot;Median safe crossing episode:&quot;,
+    safe_median_crossing.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Under <span class="math inline">\(p=0.04\)</span>, can repeatedly inspected pointwise intervals exceed their nominal 5% false-clearance rate?</p></li>
+<li><p>Should the e-process’s boundary false-clearance rate remain near or below 5%?</p></li>
+<li><p>Under <span class="math inline">\(p=0.02\)</span>, will evidence generally grow until it crosses 20?</p></li>
+<li><p>Why should the mixture be computed with <span style="background-color: codeinlinebg"><code> logsumexp</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Broadcast <span style="background-color: codeinlinebg"><code> true_rates[:, None, None]</code></span> over repetitions and time.</p></li>
+<li><p>Take a cumulative sum before selecting checkpoint columns.</p></li>
+<li><p>Broadcast sample sizes as <span style="background-color: codeinlinebg"><code> [1, 1, looks]</code></span>.</p></li>
+<li><p>Expand counts to <span style="background-color: codeinlinebg"><code> [conditions, 1, repetitions, looks]</code></span>.</p></li>
+<li><p>Each component contains incident and non-incident log-ratio terms.</p></li>
+<li><p>Average e-values by subtracting <span style="background-color: codeinlinebg"><code> log(num_alternatives)</code></span> after <span style="background-color: codeinlinebg"><code> logsumexp</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> argmax</code></span> on an integer crossing mask finds the first crossing for runs that crossed.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Compute long products directly rather than summing log-ratios. Expect underflow or overflow.</p></li>
+<li><p>Add an alternative <span class="math inline">\(q&gt;p_0\)</span>. The process no longer supports the stated composite safety test.</p></li>
+<li><p>Choose the best <span class="math inline">\(q\)</span> after examining outcomes instead of prespecifying or mixing alternatives.</p></li>
+<li><p>Treat thousands of correlated tokens as independent safety observations.</p></li>
+<li><p>Change the candidate policy midway without resetting and versioning the evidence.</p></li>
+<li><p>Monitor ten safety metrics independently at 5% without correcting the expanded decision rule.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why may an e-process be inspected continuously?</p></li>
+<li><p>What is the purpose of mixing several alternative rates?</p></li>
+<li><p>Does crossing the e-value threshold prove the incident rate is exactly one of those alternatives?</p></li>
+<li><p>What assumptions can invalidate the result?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Simulation and cumulative counts:</p>
+<pre class="code python"><code class="language-python">incidents = (
+    torch.rand(
+        true_rates.numel(),
+        num_repetitions,
+        horizon,
+    )
+    &lt; true_rates[:, None, None]
+)
+
+incident_counts = (
+    incidents
+    .to(torch.float64)
+    .cumsum(dim=-1)[
+        :,
+        :,
+        checkpoint_indices,
+    ]
+)
+
+empirical_rates = (
+    incident_counts
+    / sample_sizes[None, None, :]
+)</code></pre>
+<p>Repeated pointwise Wilson bounds:</p>
+<pre class="code python"><code class="language-python">wilson_denominator = (
+    1.0
+    + pointwise_z ** 2
+    / sample_sizes[None, None, :]
+)
+
+wilson_center = (
+    empirical_rates
+    + pointwise_z ** 2
+    / (
+        2.0
+        * sample_sizes[None, None, :]
+    )
+)
+
+wilson_radius = (
+    pointwise_z
+    * torch.sqrt(
+        empirical_rates
+        * (
+            1.0 - empirical_rates
+        )
+        / sample_sizes[None, None, :]
+        + pointwise_z ** 2
+        / (
+            4.0
+            * sample_sizes[
+                None, None, :
+            ].square()
+        )
+    )
+)
+
+pointwise_upper_bounds = (
+    wilson_center + wilson_radius
+) / wilson_denominator
+
+pointwise_certificates = (
+    pointwise_upper_bounds
+    &lt; safety_limit
+)</code></pre>
+<p>Component log e-processes:</p>
+<pre class="code python"><code class="language-python">expanded_counts = (
+    incident_counts[:, None, :, :]
+)
+
+expanded_sample_sizes = (
+    sample_sizes[
+        None, None, None, :
+    ]
+)
+
+expanded_alternatives = (
+    alternative_rates[
+        None, :, None, None
+    ]
+)
+
+component_log_e_values = (
+    expanded_counts
+    * torch.log(
+        expanded_alternatives
+        / safety_limit
+    )
+    + (
+        expanded_sample_sizes
+        - expanded_counts
+    )
+    * torch.log(
+        (
+            1.0
+            - expanded_alternatives
+        )
+        / (
+            1.0 - safety_limit
+        )
+    )
+)</code></pre>
+<p>Mixture and threshold:</p>
+<pre class="code python"><code class="language-python">mixture_log_e_values = (
+    torch.logsumexp(
+        component_log_e_values,
+        dim=1,
+    )
+    - math.log(num_alternatives)
+)
+
+log_e_threshold = math.log(
+    1.0 / family_delta
+)
+
+anytime_certificates = (
+    mixture_log_e_values
+    &gt;= log_e_threshold
+)</code></pre>
+<p>Certification summaries:</p>
+<pre class="code python"><code class="language-python">pointwise_ever_certified = (
+    pointwise_certificates.any(
+        dim=-1
+    )
+)
+
+anytime_ever_certified = (
+    anytime_certificates.any(
+        dim=-1
+    )
+)
+
+pointwise_certification_rates = (
+    pointwise_ever_certified
+    .to(torch.float64)
+    .mean(dim=1)
+)
+
+anytime_certification_rates = (
+    anytime_ever_certified
+    .to(torch.float64)
+    .mean(dim=1)
+)
+
+safe_ever_crossed = (
+    safe_crossings.any(dim=-1)
+)
+
+safe_first_indices = (
+    safe_crossings
+    .to(torch.long)
+    .argmax(dim=-1)
+)</code></pre>
+<p>For the component with <span class="math inline">\(q=0.02\)</span>, each incident multiplies wealth by:</p>
+<p><span class="math display">\[\frac{0.02}{0.04}=0.5\]</span></p>
+<p>Each non-incident multiplies it by:</p>
+<p><span class="math display">\[\frac{0.98}{0.96}\approx1.0208\]</span></p>
+<p>When the true rate is <span class="math inline">\(0.02\)</span>, expected log-growth per episode is:</p>
+<p><span class="math display">\[0.02\log(0.5)
++
+0.98\log\left(\frac{0.98}{0.96}\right)
+\approx0.00634\]</span></p>
+<p>Evidence therefore tends to grow. At the null boundary, expected log-growth is negative, although random paths can temporarily rise. Ville’s inequality controls the probability that any such path ever crosses the threshold.</p>
+<p>The equal mixture pays an initial <span class="math inline">\(\log 5\)</span> penalty relative to selecting the best component in advance, but it avoids having to know the true safe rate.</p>
+<p>The repeatedly inspected Wilson procedure will generally show an inflated false-clearance rate. Its intervals were constructed for one fixed checkpoint, not the event “any interval across 100 checkpoints clears the limit.”</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Its nonnegative supermartingale structure lets Ville’s inequality bound the probability of crossing at any stopping time.</p></li>
+<li><p>Different alternatives provide power against different genuinely safe rates while preserving validity through a prespecified average.</p></li>
+<li><p>No. Crossing rejects <span class="math inline">\(p\ge p_0\)</span>; it does not identify the true rate or eliminate the need to report an effect estimate.</p></li>
+<li><p>Correlated observations treated as independent, unlogged policy changes, selective outcome removal, nonstationary traffic, post-hoc alternative selection, interference between users, or an incorrect incident definition can invalidate the interpretation.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Random assignment makes candidate and control traffic comparable, so their direct on-policy sample means estimate their respective deployment outcomes.</p></li>
+<li><p>Rare-event uncertainty shrinks with the number of independent candidate episodes, not with token count or total control traffic.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> ordinary intervals answer “What if I inspect once?” An e-process answers “May I keep watching?” Compute it in log-space, prespecify the alternatives, and keep effect estimation separate from evidence against the safety boundary.</p>

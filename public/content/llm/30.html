@@ -1,0 +1,232 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Permutation equivariance:</strong> a function <span class="math inline">\(f\)</span> is equivariant if shuffling the inputs just shuffles the outputs the same way: <span class="math inline">\(f(PX)=Pf(X)\)</span> for any permutation matrix <span class="math inline">\(P\)</span>. Attention without positions has this property, so “dog bites man” and “man bites dog” look the same up to order. <strong>Positional encodings</strong> add order information to each token.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="concept-refresh-5-minutes">1. Concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>What layout should multi-head <span class="math inline">\(Q,K,V\)</span> use before calculating attention?</p></li>
+<li><p>How does attention-score memory scale with sequence length <span class="math inline">\(T\)</span>?</p></li>
+</ol>
+<p>For input embeddings:</p>
+<p><span class="math display">\[X\in\mathbb{R}^{B\times T\times D}\]</span></p>
+<p>self-attention has no inherent knowledge of token order. Without positional information, unmasked attention is permutation equivariant:</p>
+<p><span class="math display">\[\operatorname{Attn}(PX)=P\operatorname{Attn}(X)\]</span></p>
+<p>Reordering the input tokens merely reorders the corresponding outputs.</p>
+<p>A causal mask blocks future information, but positional information is still needed to represent order-rich relationships. A classic sinusoidal encoding is:</p>
+<p><span class="math display">\[\operatorname{PE}(p,2i)
+=
+\sin\left(\frac{p}{10000^{2i/D}}\right)\]</span></p>
+<p><span class="math display">\[\operatorname{PE}(p,2i+1)
+=
+\cos\left(\frac{p}{10000^{2i/D}}\right)\]</span></p>
+<p>Its shape is:</p>
+<p><span class="math display">\[\operatorname{PE}\in\mathbb{R}^{T\times D}\]</span></p>
+<p>It broadcasts across the batch:</p>
+<p><span class="math display">\[X_{\text{model}}
+=
+X_{\text{token}}+\operatorname{PE}[None,:,:]
+\in\mathbb{R}^{B\times T\times D}\]</span></p>
+<p>Practical concern: incorrect position IDs frequently cause generation errors with padding, sequence packing, and KV caching.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: attention is permutation-equivariant, and sinusoids encode offsets linearly</div>
+<p><strong>Step 1.</strong> Inputs shuffled: <span class="math inline">\(X\to PX\)</span>. Then <span class="math inline">\(Q\to PQ\)</span>, <span class="math inline">\(K\to PK\)</span>, <span class="math inline">\(V\to PV\)</span>.</p>
+<p><strong>Step 2.</strong> Scores: <span class="math inline">\((PQ)(PK)^\top=P\,QK^\top P^\top\)</span>: rows and columns permuted the same way.</p>
+<p><strong>Step 3.</strong> Row-wise softmax commutes with that: <span class="math inline">\(\operatorname{softmax}(PSP^\top)=P\operatorname{softmax}(S)P^\top\)</span>, since each row’s entries are just reordered.</p>
+<p><strong>Step 4.</strong> Output: <span class="math inline">\(PAP^\top\cdot PV=PA(P^\top P)V=PAV\)</span>, using <span class="math inline">\(P^\top P=I\)</span>. So <span class="math inline">\(\operatorname{Attn}(PX)=P\operatorname{Attn}(X)\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Sinusoids:</strong> for frequency <span class="math inline">\(\omega_i=10000^{-2i/D}\)</span>, the pair <span class="math inline">\(\big(\sin\omega_ip,\cos\omega_ip\big)\)</span> at position <span class="math inline">\(p+k\)</span> equals <span class="math inline">\(\begin{bmatrix}\cos\omega_ik&amp;\sin\omega_ik\\-\sin\omega_ik&amp;\cos\omega_ik\end{bmatrix}\begin{bmatrix}\sin\omega_ip\\\cos\omega_ip\end{bmatrix}\)</span> (angle-addition formulas). A fixed linear map shifts any position by <span class="math inline">\(k\)</span>, so “<span class="math inline">\(k\)</span> tokens back” is easy to learn.</p>
+<p><strong>Step 6.</strong> Multiple frequencies act like the hands of a clock: fast ones resolve nearby positions, slow ones distinguish far-apart ones.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: sinusoidal positional encoding</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> positions <span class="math inline">\(p=0,\dots,T-1\)</span> (offset by the cache length when decoding), width <span class="math inline">\(D\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i=0,\dots,D/2-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\omega_i\gets10000^{-2i/D}\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\operatorname{PE}[p,2i]\gets\sin(\omega_ip)\)</span>; <span class="math inline">\(\operatorname{PE}[p,2i+1]\gets\cos(\omega_ip)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(X\gets\operatorname{Embed}(\text{tokens})+\operatorname{PE}\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement sinusoidal positions and demonstrate how they break attention’s permutation equivariance.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(61)
+
+B, T, D = 2, 6, 8
+X = torch.randn(B, T, D)
+
+W_q = torch.randn(D, D) / math.sqrt(D)
+W_k = torch.randn(D, D) / math.sqrt(D)
+W_v = torch.randn(D, D) / math.sqrt(D)
+
+
+def sinusoidal_positions(T, D, offset=0):
+    assert D % 2 == 0
+
+    positions = ...                           # TODO 1: [T, 1]
+    frequencies = ...                         # TODO 2: [D/2]
+    angles = ...                              # TODO 3: [T, D/2]
+
+    pe = torch.zeros(T, D)
+    pe[:, 0::2] = ...                         # TODO 4
+    pe[:, 1::2] = ...                         # TODO 5
+
+    return pe                                 # [T, D]
+
+
+def self_attention(x):
+    q = ...                                   # TODO 6: [B, T, D]
+    k = ...                                   # TODO 7
+    v = ...                                   # TODO 8
+
+    scores = ...                              # TODO 9: [B, T, T]
+    weights = ...                             # TODO 10
+
+    return ...                                # TODO 11: [B, T, D]
+
+
+permutation = torch.tensor([2, 0, 5, 1, 4, 3])
+
+# Test 1: content only
+output = self_attention(X)
+permuted_output = self_attention(X[:, permutation])
+
+equivariant_error = (
+    permuted_output - output[:, permutation]
+).abs().max()
+
+print(&quot;without positions:&quot;, equivariant_error.item())
+
+
+# Test 2: tokens move, but positional slots remain fixed
+pe = sinusoidal_positions(T, D)
+
+positioned_output = self_attention(X + pe[None, :, :])
+
+positioned_permuted_output = self_attention(
+    X[:, permutation] + pe[None, :, :]
+)
+
+positioned_error = (
+    positioned_permuted_output
+    - positioned_output[:, permutation]
+).abs().max()
+
+print(&quot;with fixed positions:&quot;, positioned_error.item())</code></pre>
+<p>Before running, predict which error should be approximately zero.</p>
+<p>Now simulate cached generation:</p>
+<pre class="code python"><code class="language-python">next_chunk_length = 2
+
+correct_positions = sinusoidal_positions(
+    next_chunk_length,
+    D,
+    offset=T,
+)
+
+restarted_positions = sinusoidal_positions(
+    next_chunk_length,
+    D,
+    offset=0,
+)
+
+print(
+    &quot;position-ID error:&quot;,
+    (correct_positions - restarted_positions).abs().max().item(),
+)</code></pre>
+<p>Why would restarting from zero damage continuation even if the KV cache is correct?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Positions:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">torch.arange(offset, offset + T)[:, None]</code></pre>
+<ul>
+<li><p>Frequencies:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">torch.exp(
+    -math.log(10000.0)
+    * torch.arange(0, D, 2)
+    / D
+)</code></pre>
+<ul>
+<li><p>Use sine in even feature dimensions and cosine in odd dimensions.</p></li>
+<li><p>Scores are <code>q @ k.transpose(-2, -1) / sqrt(D)</code>.</p></li>
+<li><p>Softmax operates over the key dimension.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>What positional-encoding shapes broadcast correctly across <span><code>[</code></span><code>B,T,D</code><span><code>]</code></span>?</p></li>
+<li><p>Why is content-only attention permutation equivariant?</p></li>
+<li><p>If all token embeddings are identical but their positional encodings differ, can their outputs differ?</p></li>
+<li><p>Debugging: prompt processing works, but cached continuation deteriorates immediately. What position-ID error should you inspect?</p></li>
+<li><p>Does adding positional encodings change attention’s <span class="math inline">\(O(T^2)\)</span> complexity?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="session-9-solution-open-after-attempting">Session 9 solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def sinusoidal_positions(T, D, offset=0):
+    assert D % 2 == 0
+
+    positions = torch.arange(
+        offset,
+        offset + T,
+        dtype=torch.float32,
+    )[:, None]
+
+    frequencies = torch.exp(
+        -math.log(10000.0)
+        * torch.arange(0, D, 2, dtype=torch.float32)
+        / D
+    )
+
+    angles = positions * frequencies[None, :]
+
+    pe = torch.zeros(T, D)
+    pe[:, 0::2] = torch.sin(angles)
+    pe[:, 1::2] = torch.cos(angles)
+
+    return pe
+
+
+def self_attention(x):
+    q = x @ W_q
+    k = x @ W_k
+    v = x @ W_v
+
+    scores = q @ k.transpose(-2, -1)
+    scores = scores / math.sqrt(D)
+
+    weights = torch.softmax(scores, dim=-1)
+    return weights @ v</code></pre>
+<p>Expected behavior:</p>
+<ul>
+<li><p>Without positions, the permutation error is approximately zero.</p></li>
+<li><p>With fixed positional slots, the permutation error is nonzero.</p></li>
+</ul>
+<p>During cached generation, new tokens must use positions:</p>
+<p><span class="math display">\[T,T+1,T+2,\ldots\]</span></p>
+<p>Restarting at zero assigns positions already used by cached tokens, making position-dependent queries and keys inconsistent.</p>
+<p>Check answers:</p>
+<ol>
+<li><p><span><code>[</code></span><code>T,D</code><span><code>]</code></span> and <span><code>[</code></span><code>1,T,D</code><span><code>]</code></span> both broadcast correctly.</p></li>
+<li><p>The same projections are applied at every position, and queries, keys, and values all permute consistently.</p></li>
+<li><p>Yes. Position-dependent queries, keys, and values can produce different outputs.</p></li>
+<li><p>Check whether continuation position IDs restart at zero instead of beginning at the cached length.</p></li>
+<li><p>No. Positional addition is <span class="math inline">\(O(BTD)\)</span>; attention remains <span class="math inline">\(O(BT^2)\)</span>.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Multi-head <span class="math inline">\(Q,K,V\)</span> use <span><code>[</code></span><code>B,H,T,d_h</code><span><code>]</code></span>.</p></li>
+<li><p>Explicit attention-score memory scales quadratically with <span class="math inline">\(T\)</span>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>

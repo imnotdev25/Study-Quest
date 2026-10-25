@@ -1,0 +1,279 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a comedian testing new jokes</div>
+<p>A comedian tries new jokes (sample), watches the audience’s laughter (score), and keeps more of what gets laughs (update). But if they only chase laughs from one rowdy person, the act drifts somewhere weird. So they stay close to their own style. Those are RLHF’s three parts: sample, score with a reward model, update with a KL leash.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/28fe8c3e3e65.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>How does a reward model convert two scalar scores into a preference probability?</p></li>
+<li><p>Why must padding tokens have zero policy-gradient contribution?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="where-reinforcement-learning-enters-rlhf">2. Where reinforcement learning enters RLHF</h3>
+<p>A typical reward-model-based RLHF pipeline has three learned components:</p>
+<ul>
+<li><p><strong>SFT/reference model:</strong> provides a capable starting policy.</p></li>
+<li><p><strong>Reward model:</strong> predicts human preference for a response.</p></li>
+<li><p><strong>RL policy:</strong> generates new responses and is optimized using their predicted rewards.</p></li>
+</ul>
+<p>The recurring policy-training loop is:</p>
+<ol>
+<li><p>sample prompts <span class="math inline">\(x\)</span>;</p></li>
+<li><p>generate responses <span class="math inline">\(y\sim\pi_\theta(\cdot\mid x)\)</span>;</p></li>
+<li><p>calculate <span class="math inline">\(R=r_\phi(x,y)\)</span>;</p></li>
+<li><p>estimate advantages;</p></li>
+<li><p>update <span class="math inline">\(\pi_\theta\)</span>;</p></li>
+<li><p>discard or carefully limit reuse of stale rollouts;</p></li>
+<li><p>repeat with newly generated responses.</p></li>
+</ol>
+<p>The central objective is:</p>
+<p><span class="math display">\[J(\theta)
+=
+\mathbb E_{
+x\sim\mathcal D,\,
+y\sim\pi_\theta(\cdot\mid x)
+}
+[r_\phi(x,y)]\]</span></p>
+<p>A simple policy loss is:</p>
+<p><span class="math display">\[L_{\text{policy}}
+=
+-\frac1B
+\sum_b
+\hat A_b
+\log\pi_\theta(y_b\mid x_b)\]</span></p>
+<p>In a real LLM:</p>
+<p><span class="math display">\[\log\pi_\theta(y_b\mid x_b)
+=
+\sum_t M_{b,t}
+\log\pi_\theta(y_{b,t}\mid x_b,y_{b,&lt;t})\]</span></p>
+<h3 class="unnumbered" id="why-this-is-online-rl">Why this is online RL</h3>
+<p>The reward model may be frozen, but the policy repeatedly generates fresh responses. As the policy changes, the training distribution changes:</p>
+<p><span class="math display">\[y\sim\pi_{\theta_{\text{new}}}
+\neq
+y\sim\pi_{\theta_{\text{old}}}\]</span></p>
+<p>Here, “online” means policy-generated interaction during training. It does not mean a human must label every new response immediately.</p>
+<h3 class="unnumbered" id="do-not-backpropagate-through-reward">Do not backpropagate through reward</h3>
+<p>The reward model’s score is supervision for a sampled discrete response:</p>
+<pre class="code python"><code class="language-python">reward = reward_model(prompt, response)</code></pre>
+<p>The policy gradient does not differentiate through the sampled token IDs or through the reward model. It uses:</p>
+<p><span class="math display">\[R\,\nabla_\theta\log\pi_\theta(y\mid x)\]</span></p>
+<p>Therefore, rewards and advantages should be detached from the policy loss.</p>
+<h3 class="unnumbered" id="what-is-missing-from-the-basic-objective">What is missing from the basic objective?</h3>
+<p>Maximizing a learned reward alone commonly causes:</p>
+<ul>
+<li><p>entropy collapse;</p></li>
+<li><p>large movement away from the SFT model;</p></li>
+<li><p>reward-model exploitation;</p></li>
+<li><p>repetitive high-scoring patterns;</p></li>
+<li><p>degraded capabilities not measured by reward.</p></li>
+</ul>
+<p>Practical RLHF therefore adds KL control, critic/value training, PPO-style update limits and independent evaluations. We will add KL control next.</p>
+<p>Tensor shapes in today’s response-level abstraction:</p>
+<ul>
+<li><p>response logits: <span style="background-color: codeinlinebg"><code> [responses]</code></span></p></li>
+<li><p>sampled response IDs: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>log-probabilities, rewards and advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>loss: scalar</p></li>
+</ul>
+<h3 class="unnumbered" id="dpo-distinction">DPO distinction</h3>
+<p>DPO trains on fixed chosen/rejected pairs. Reward-model RLHF generates fresh responses, scores them and improves the current policy using RL.</p>
+<p>Both originate from preference data, but only the second contains an online rollout-and-reward loop.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the RLHF objective</div>
+<p><span class="math display">\[\max_\theta\ \mathbb E_{x\sim\mathcal D,\,y\sim\pi_\theta(\cdot|x)}\big[r_\phi(x,y)\big]-\beta\,\mathbb E_x\big[\mathrm{KL}\big(\pi_\theta(\cdot|x)\,\|\,\pi_{\text{ref}}(\cdot|x)\big)\big].\]</span> In practice the KL term is folded into a per-token reward: <span class="math inline">\(r_t=-\beta\big(\log\pi_\theta(y_t|\cdot)-\log\pi_{\text{ref}}(y_t|\cdot)\big)+\mathbb 1[t=T]\,r_\phi(x,y)\)</span>.</p>
+<p><strong>It’s on-policy:</strong> the expectation is over <span class="math inline">\(y\sim\pi_\theta\)</span>. After each update, the old samples describe a slightly different policy. That’s why the loop keeps regenerating, and why PPO’s ratios appear.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>RLHF = sample <span class="math inline">\(\to\)</span> score <span class="math inline">\(\to\)</span> update, repeated, with a KL leash.</p></li>
+<li><p>The reward model is frozen, but the data distribution keeps moving.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: shaped per-token rewards</div>
+<p>Response of 3 tokens, <span class="math inline">\(\log\pi_\theta-\log\pi_{\text{ref}}=(0.2,-0.1,0.3)\)</span>, <span class="math inline">\(\beta=0.1\)</span>, RM score <span class="math inline">\(1.0\)</span>. <span class="math inline">\(r=(-0.02,\ +0.01,\ -0.03+1.0)=(-0.02,0.01,0.97)\)</span>. Sequence KL penalty <span class="math inline">\(=0.1\cdot0.4=0.04\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Applying KL to prompt tokens.</p></li>
+<li><p>Computing <span class="math inline">\(\log\pi_{\text{ref}}-\log\pi_\theta\)</span> (the wrong sign).</p></li>
+<li><p>Adding the RM score to every token instead of once at the end.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: RLHF with PPO</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> SFT model <span class="math inline">\(\pi_{\text{ref}}\)</span> (frozen), reward model <span class="math inline">\(r_\phi\)</span> (frozen), KL coefficient <span class="math inline">\(\beta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\pi_\theta\gets\pi_{\text{ref}}\)</span>; initialize value head <span class="math inline">\(V_\psi\)</span></div>
+<div class="algo-line" style="--d:0"><strong>repeat</strong></div>
+<div class="algo-line" style="--d:1">sample prompts <span class="math inline">\(x\)</span> and responses <span class="math inline">\(y\sim\pi_\theta(\cdot|x)\)</span></div>
+<div class="algo-line" style="--d:1">score each response: <span class="math inline">\(s\gets r_\phi(x,y)\)</span></div>
+<div class="algo-line" style="--d:1">per-token reward <span class="math inline">\(r_t\gets-\beta\big(\log\pi_\theta(y_t|\cdot)-\log\pi_{\text{ref}}(y_t|\cdot)\big)+\mathbb 1[t=T]\,s\)</span></div>
+<div class="algo-line" style="--d:1">compute GAE advantages over response tokens; run the LLM PPO update (Topic 30)</div>
+<div class="algo-line" style="--d:0"><strong>until</strong> the reward model and independent evals stop improving</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-run-a-tiny-rlhf-loop">3. PyTorch exercise — run a tiny RLHF loop</h3>
+<p>Treat three complete responses as three categorical actions:</p>
+<pre class="code text"><code class="language-plaintext">0: weak response
+1: acceptable response
+2: reward-model favourite</code></pre>
+<p>This isolates the loop without loading an LLM.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+num_responses = 3
+batch_size = 256
+num_updates = 150
+
+# Frozen reward-model scores for complete responses.
+reward_model_scores = torch.tensor([
+    0.0, 1.0, 2.0
+])
+
+# Start from a uniform SFT policy.
+policy_logits = torch.nn.Parameter(
+    torch.zeros(num_responses)
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.05,
+)
+
+for update in range(num_updates):
+    policy = Categorical(logits=policy_logits)
+
+    # TODO 1: Generate a fresh batch from the current policy.
+    sampled_responses = ...
+
+    # Frozen evaluator: no gradient path into its scores.
+    with torch.no_grad():
+        rewards = (
+            reward_model_scores[sampled_responses]
+            + 0.2 * torch.randn(batch_size)
+        )
+
+        # TODO 2: Baseline and normalized advantages.
+        advantages = ...
+        advantages = ...
+
+    # TODO 3: Log-probabilities of sampled responses.
+    log_probs = ...
+
+    # TODO 4: Reward-weighted policy loss.
+    policy_loss = ...
+
+    optimizer.zero_grad()
+    policy_loss.backward()
+
+    gradient_norm = policy_logits.grad.norm().item()
+
+    optimizer.step()
+
+    with torch.no_grad():
+        updated_policy = Categorical(
+            logits=policy_logits
+        )
+
+        mean_reward = rewards.mean()
+        entropy = updated_policy.entropy()
+
+        # TODO 5: Fraction selecting the RM-favourite response.
+        favourite_rate = ...
+
+    if update in [0, 1, 9, 49, 149]:
+        print(
+            f&quot;update={update:3d}&quot;,
+            f&quot;reward={mean_reward.item():.3f}&quot;,
+            f&quot;favourite={favourite_rate.item():.3f}&quot;,
+            f&quot;entropy={entropy.item():.3f}&quot;,
+            f&quot;grad_norm={gradient_norm:.3f}&quot;,
+            f&quot;probs={updated_policy.probs.tolist()}&quot;,
+        )
+
+print(
+    &quot;Final probabilities:&quot;,
+    policy_logits.softmax(dim=-1).detach(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which response probability should become largest?</p></li>
+<li><p>Must sampled mean reward increase every update?</p></li>
+<li><p>What should happen to policy entropy?</p></li>
+<li><p>Why are responses resampled after every update?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample using <span style="background-color: codeinlinebg"><code> policy.sample((batch_size,))</code></span>.</p></li>
+<li><p>Baseline: subtract the batch’s mean reward.</p></li>
+<li><p>Normalize with population standard deviation and <span style="background-color: codeinlinebg"><code> 1e-8</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> policy.log_prob(sampled_responses)</code></span>.</p></li>
+<li><p>Optimizers minimize, so use a leading negative sign.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> favourite_rate</code></span> tests whether the sampled ID equals <span style="background-color: codeinlinebg"><code> 2</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>First, remove the negative sign:</p>
+<pre class="code python"><code class="language-python">policy_loss = (
+    log_probs * advantages
+).mean()</code></pre>
+<p>Gradient descent now reduces the probability of above-average responses.</p>
+<p>Then move response sampling outside the update loop. Every update reuses actions generated by the initial policy without importance ratios or PPO controls. The data becomes increasingly off-policy as <span style="background-color: codeinlinebg"><code> policy_logits</code></span> changes.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Where does human feedback enter this RLHF pipeline?</p></li>
+<li><p>Why is reward-model output treated as detached supervision?</p></li>
+<li><p>Why can reward rise while actual response quality falls?</p></li>
+<li><p>What roles do a critic and a baseline play in full RLHF?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Generate fresh policy responses:</p>
+<pre class="code python"><code class="language-python">sampled_responses = policy.sample(
+    (batch_size,)
+)</code></pre>
+<p>Calculate normalized advantages:</p>
+<pre class="code python"><code class="language-python">advantages = rewards - rewards.mean()
+
+advantages = advantages / (
+    advantages.std(unbiased=False) + 1e-8
+)</code></pre>
+<p>Selected log-probabilities:</p>
+<pre class="code python"><code class="language-python">log_probs = policy.log_prob(
+    sampled_responses
+)</code></pre>
+<p>Policy loss:</p>
+<pre class="code python"><code class="language-python">policy_loss = -(
+    log_probs * advantages.detach()
+).mean()</code></pre>
+<p>Favourite-response rate:</p>
+<pre class="code python"><code class="language-python">favourite_rate = (
+    sampled_responses == 2
+).float().mean()</code></pre>
+<p>Initially:</p>
+<p><span class="math display">\[\pi=[1/3,1/3,1/3]\]</span></p>
+<p>The average reward is initially near:</p>
+<p><span class="math display">\[\frac{0+1+2}{3}=1\]</span></p>
+<p>Response <span style="background-color: codeinlinebg"><code> 2</code></span> usually receives a positive advantage, response <span style="background-color: codeinlinebg"><code> 0</code></span> a negative advantage, and response <span style="background-color: codeinlinebg"><code> 1</code></span> an advantage near zero. Training therefore shifts probability toward response <span style="background-color: codeinlinebg"><code> 2</code></span>.</p>
+<p>The policy should approach:</p>
+<pre class="code text"><code class="language-plaintext">P(response 0) → near 0
+P(response 1) → near 0
+P(response 2) → near 1</code></pre>
+<p>Entropy begins at:</p>
+<p><span class="math display">\[\mathcal H(\pi)=\log3\approx1.099\]</span></p>
+<p>and falls as the policy collapses toward the reward-model favourite.</p>
+<p>The mean reward need not rise monotonically because both responses and reward noise are sampled. Track moving averages rather than interpreting individual batches.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Humans provide the preference comparisons used to train the reward model; they may also provide later evaluations or updated preference data.</p></li>
+<li><p>Sampling is discrete, and the policy-gradient estimator uses reward as a fixed weight on the sampled response’s log-probability.</p></li>
+<li><p>The policy may exploit reward-model errors or sacrifice qualities absent from its training labels.</p></li>
+<li><p>A baseline reduces policy-gradient variance; a critic learns a prompt- or prefix-dependent baseline and supports token-level advantage estimation.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(P(y_w\succ y_l)=\sigma(r_w-r_l)\)</span>.</p></li>
+<li><p>Padding is not a generated action, so it must contribute neither rewards nor gradients.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> reward-model RLHF is a changing-data loop: generate with the current policy, score those generations, then update their likelihoods. A frozen reward model can guide learning, but optimizing it without policy constraints invites collapse and exploitation.</p>

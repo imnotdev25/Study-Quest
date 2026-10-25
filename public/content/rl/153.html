@@ -1,0 +1,389 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does constrained actor–critic need separate reward and cost critics?</p></li>
+<li><p>Why should the safety multiplier use episode cost rather than cost TD errors?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="gae-for-both-reward-and-cost">2. GAE for both reward and cost</h3>
+<p>One-step TD errors provide short-range credit:</p>
+<p><span class="math display">\[\delta_t^R
+=
+\underbrace{r_t+\gamma m_tV_R(s_{t+1})}_{\text{reward target}}
+-
+\underbrace{V_R(s_t)}_{\text{current prediction}}\]</span></p>
+<p><span class="math display">\[\delta_t^C
+=
+\underbrace{c_t+\gamma m_tV_C(s_{t+1})}_{\text{cost target}}
+-
+\underbrace{V_C(s_t)}_{\text{current prediction}}\]</span></p>
+<p>Here <span class="math inline">\(m_t=0\)</span> after termination and <span class="math inline">\(1\)</span> otherwise.</p>
+<p>GAE propagates each TD error backward:</p>
+<p><span class="math display">\[\hat A_t^R
+=
+\underbrace{\delta_t^R}_{\text{current surprise}}
++
+\underbrace{\gamma\lambda_Rm_t\hat A_{t+1}^R}_{\text{later reward surprises}}\]</span></p>
+<p><span class="math display">\[\hat A_t^C
+=
+\underbrace{\delta_t^C}_{\text{current cost surprise}}
++
+\underbrace{\gamma\lambda_Cm_t\hat A_{t+1}^C}_{\text{later cost surprises}}\]</span></p>
+<p>The actor receives:</p>
+<p><span class="math display">\[\hat A_t^{\text{actor}}
+=
+\underbrace{\hat A_t^R}_{\text{reward credit}}
+-
+\underbrace{\nu}_{\text{safety price}}
+\underbrace{\hat A_t^C}_{\text{cost credit}}\]</span></p>
+<p>Do not confuse the coefficients:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Symbol</strong></th>
+<th style="text-align: left;"><strong>Meaning</strong></th>
+<th style="text-align: left;"><strong>Behaviour</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Symbol</strong></td>
+<td style="text-align: left;"><strong>Meaning</strong></td>
+<td style="text-align: left;"><strong>Behaviour</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\lambda_{\text{GAE}}\in[0,1]\)</span></td>
+<td style="text-align: left;">Trace length</td>
+<td style="text-align: left;">Fixed hyperparameter</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\nu\ge0\)</span></td>
+<td style="text-align: left;">Safety multiplier</td>
+<td style="text-align: left;">Learns from constraint violation</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(\beta_{\text{DPO}}\)</span></td>
+<td style="text-align: left;">DPO reference strength</td>
+<td style="text-align: left;">Fixed offline-loss coefficient</td>
+</tr>
+</tbody>
+</table>
+<p>The GAE extremes are:</p>
+<p><span class="math display">\[\lambda_{\text{GAE}}=0
+\Rightarrow
+\underbrace{\hat A_t=\delta_t}_{\text{one-step TD; lower variance}}\]</span></p>
+<p><span class="math display">\[\lambda_{\text{GAE}}=1
+\Rightarrow
+\underbrace{\hat A_t+V(s_t)=G_t}_{\text{full return for terminal trajectories}}\]</span></p>
+<p>Larger <span class="math inline">\(\lambda_{\text{GAE}}\)</span> propagates terminal outcomes farther but usually increases variance. It does not automatically make the policy safer.</p>
+<p>For LLM rollouts, a sequence-level reward or safety cost can therefore influence earlier generated tokens. Prompt and padding tokens must remain masked.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>signals and advantages: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>critic values including the next state: <span style="background-color: codeinlinebg"><code> [B, T+1]</code></span></p></li>
+<li><p>valid and continuation masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>safety multiplier: scalar <span style="background-color: codeinlinebg"><code> []</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-masked-reward-and-cost-gae">3. PyTorch exercise — masked reward and cost GAE</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 3
+horizon = 5
+
+gamma = 0.90
+reward_trace_lambda = 0.80
+cost_trace_lambda = 0.80
+safety_multiplier = 1.50
+
+# Episode lengths: 5, 3 and 4.
+valid_mask = torch.tensor([
+    [1, 1, 1, 1, 1],
+    [1, 1, 1, 0, 0],
+    [1, 1, 1, 1, 0],
+], dtype=torch.float64)
+
+# Zero on each episode&#x27;s terminal transition.
+continuation_mask = torch.tensor([
+    [1, 1, 1, 1, 0],
+    [1, 1, 0, 0, 0],
+    [1, 1, 1, 0, 0],
+], dtype=torch.float64)
+
+rewards = torch.tensor([
+    [0.2, 0.0, 0.5, 0.0, 1.0],
+    [0.1, 0.3, 0.8, 0.0, 0.0],
+    [0.0, 0.2, 0.0, 0.7, 0.0],
+])
+
+costs = torch.tensor([
+    [0.0, 0.1, 0.0, 0.4, 0.2],
+    [0.0, 0.5, 0.1, 0.0, 0.0],
+    [0.2, 0.0, 0.3, 0.1, 0.0],
+])
+
+# One value for each state plus the possible next state.
+reward_values = torch.tensor([
+    [0.70, 0.65, 0.70, 0.55, 0.80, 0.0],
+    [0.60, 0.65, 0.75, 0.00, 0.00, 0.0],
+    [0.50, 0.55, 0.60, 0.65, 0.00, 0.0],
+])
+
+cost_values = torch.tensor([
+    [0.50, 0.55, 0.50, 0.55, 0.35, 0.0],
+    [0.45, 0.50, 0.35, 0.00, 0.00, 0.0],
+    [0.40, 0.40, 0.45, 0.30, 0.00, 0.0],
+])
+
+
+def compute_gae(
+    signals,
+    values,
+    gamma,
+    trace_lambda,
+    continuation_mask,
+    valid_mask,
+):
+    current_values = values[:, :-1]
+    next_values = values[:, 1:]
+
+    # TODO 1: One-step TD errors.
+    deltas = ...
+
+    advantages = torch.zeros_like(signals)
+    running_advantage = torch.zeros(
+        signals.shape[0]
+    )
+
+    # TODO 2: Reverse GAE recursion.
+    for t in reversed(range(signals.shape[1])):
+        running_advantage = ...
+
+        running_advantage = ...
+
+        advantages[:, t] = ...
+
+    # TODO 3: Targets for critic regression.
+    return_targets = ...
+
+    return advantages, return_targets, deltas
+
+
+reward_advantages, reward_targets, reward_deltas = (
+    compute_gae(
+        rewards,
+        reward_values,
+        gamma,
+        reward_trace_lambda,
+        continuation_mask,
+        valid_mask,
+    )
+)
+
+cost_advantages, cost_targets, cost_deltas = (
+    compute_gae(
+        costs,
+        cost_values,
+        gamma,
+        cost_trace_lambda,
+        continuation_mask,
+        valid_mask,
+    )
+)
+
+# TODO 4: Combine only after computing separate GAE.
+actor_advantages = ...
+
+
+def discounted_returns(
+    signals,
+    gamma,
+    continuation_mask,
+    valid_mask,
+):
+    returns = torch.zeros_like(signals)
+    running_return = torch.zeros(
+        signals.shape[0]
+    )
+
+    for t in reversed(range(signals.shape[1])):
+        # TODO 5
+        running_return = ...
+
+        running_return = ...
+
+        returns[:, t] = running_return
+
+    return returns
+
+
+# Verify both GAE endpoints.
+reward_advantages_td, _, reward_deltas_again = (
+    compute_gae(
+        rewards,
+        reward_values,
+        gamma,
+        trace_lambda=0.0,
+        continuation_mask=continuation_mask,
+        valid_mask=valid_mask,
+    )
+)
+
+_, reward_targets_mc, _ = compute_gae(
+    rewards,
+    reward_values,
+    gamma,
+    trace_lambda=1.0,
+    continuation_mask=continuation_mask,
+    valid_mask=valid_mask,
+)
+
+direct_reward_returns = discounted_returns(
+    rewards,
+    gamma,
+    continuation_mask,
+    valid_mask,
+)
+
+td_identity_error = (
+    valid_mask
+    * (
+        reward_advantages_td
+        - reward_deltas_again
+    )
+).abs().max()
+
+mc_identity_error = (
+    valid_mask
+    * (
+        reward_targets_mc
+        - direct_reward_returns
+    )
+).abs().max()
+
+print(&quot;Reward advantages:\n&quot;, reward_advantages)
+print(&quot;Cost advantages:\n&quot;, cost_advantages)
+print(&quot;Actor advantages:\n&quot;, actor_advantages)
+
+print(
+    &quot;lambda_GAE=0 identity error:&quot;,
+    td_identity_error.item(),
+)
+print(
+    &quot;lambda_GAE=1 return error:&quot;,
+    mc_identity_error.item(),
+)
+print(
+    &quot;Largest padded advantage:&quot;,
+    (
+        (1.0 - valid_mask)
+        * actor_advantages
+    ).abs().max().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should both identity errors be near zero?</p></li>
+<li><p>Can an early action receive negative actor advantage because of a later cost?</p></li>
+<li><p>What happens if the continuation mask stays <span style="background-color: codeinlinebg"><code> 1</code></span> across an episode boundary?</p></li>
+<li><p>Does increasing <span class="math inline">\(\lambda_{\text{GAE}}\)</span> increase the safety penalty <span class="math inline">\(\nu\)</span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>TD error: <span style="background-color: codeinlinebg"><code> signal + gamma * continuation * next_value - current_value</code></span>.</p></li>
+<li><p>Multiply TD errors by the valid mask.</p></li>
+<li><p>Reverse recursion: <span style="background-color: codeinlinebg"><code> delta + gamma * lambda * continuation * running</code></span>.</p></li>
+<li><p>Reset the running result to zero on padding.</p></li>
+<li><p>Critic target: <span style="background-color: codeinlinebg"><code> (advantage + current_value).detach()</code></span>.</p></li>
+<li><p>Combine reward and cost advantages before any optional normalization.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Reverse the trajectory along the batch dimension instead of time.</p></li>
+<li><p>Use only <span style="background-color: codeinlinebg"><code> valid_mask</code></span> and bootstrap through terminal states.</p></li>
+<li><p>Use only <span style="background-color: codeinlinebg"><code> continuation_mask</code></span> and train on padded positions.</p></li>
+<li><p>Normalize reward and cost advantages separately, silently changing the meaning of <span class="math inline">\(\nu\)</span>.</p></li>
+<li><p>Let critic-target gradients flow back through the GAE recursion.</p></li>
+<li><p>Treat prompt tokens as generated actions in an LLM policy loss.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why might cost GAE need a long trace when safety cost appears only at sequence end?</p></li>
+<li><p>Why should the dual update still use raw episode cost?</p></li>
+<li><p>What does <span class="math inline">\(\lambda_{\text{GAE}}=0\)</span> depend on most strongly?</p></li>
+<li><p>When does <span class="math inline">\(\lambda_{\text{GAE}}=1\)</span> fail to equal a pure Monte Carlo return?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>TD errors:</p>
+<pre class="code python"><code class="language-python">deltas = (
+    signals
+    + gamma
+    * continuation_mask
+    * next_values.detach()
+    - current_values
+) * valid_mask</code></pre>
+<p>Reverse recursion:</p>
+<pre class="code python"><code class="language-python">running_advantage = (
+    deltas[:, t]
+    + gamma
+    * trace_lambda
+    * continuation_mask[:, t]
+    * running_advantage
+)
+
+running_advantage = (
+    running_advantage
+    * valid_mask[:, t]
+)
+
+advantages[:, t] = running_advantage</code></pre>
+<p>Critic targets:</p>
+<pre class="code python"><code class="language-python">return_targets = (
+    advantages + current_values
+).detach() * valid_mask</code></pre>
+<p>Combined actor advantage:</p>
+<pre class="code python"><code class="language-python">actor_advantages = (
+    reward_advantages
+    - safety_multiplier
+    * cost_advantages
+).detach() * valid_mask</code></pre>
+<p>Direct return recursion:</p>
+<pre class="code python"><code class="language-python">running_return = (
+    signals[:, t]
+    + gamma
+    * continuation_mask[:, t]
+    * running_return
+)
+
+running_return = (
+    running_return
+    * valid_mask[:, t]
+)
+
+returns[:, t] = running_return</code></pre>
+<p>Both diagnostic errors should be at floating-point zero:</p>
+<p><span class="math display">\[\lambda_{\text{GAE}}=0
+\Rightarrow
+\underbrace{\hat A_t-\delta_t}_{\text{identity error}}
+\approx0\]</span></p>
+<p><span class="math display">\[\lambda_{\text{GAE}}=1
+\Rightarrow
+\underbrace{\hat A_t+V_t-G_t}_{\text{return identity error}}
+\approx0\]</span></p>
+<p>All padded actor advantages should also be exactly zero.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Long cost traces propagate delayed safety consequences to the earlier actions that helped cause them.</p></li>
+<li><p>GAE centers cost around critic predictions. The dual variable instead needs absolute constraint violation.</p></li>
+<li><p>The one-step critic estimate; inaccurate bootstrapping therefore creates more bias.</p></li>
+<li><p>For truncated nonterminal rollouts, it ends with a bootstrapped value rather than an observed terminal return.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The multiplier changes during training. Separate critics remain meaningful and expose reward and cost diagnostics independently.</p></li>
+<li><p>Accurate TD errors average near zero even when the critic correctly predicts an excessive total cost.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> propagate reward and cost credit separately, then combine them using the learned safety price. GAE’s trace parameter controls credit length—not how strongly safety is enforced.</p>

@@ -1,0 +1,252 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>A catalog mapping problem signals to patterns, eight full interview walkthroughs that mix DSA and ML, a taxonomy of mistakes for reviewing mock interviews, and a 12-week study plan.</p>
+</div>
+<h1 id="pattern-catalog">Pattern Catalog</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">If the problem says…</th>
+<th style="text-align: left;">Think</th>
+<th style="text-align: left;">Canonical problems</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">pair / complement / “seen before”</td>
+<td style="text-align: left;">hash map</td>
+<td style="text-align: left;">two sum, group anagrams</td>
+</tr>
+<tr>
+<td style="text-align: left;">range sum, “subarray sums to <span class="math inline">\(k\)</span>,” negatives allowed</td>
+<td style="text-align: left;">prefix sums + hash map</td>
+<td style="text-align: left;">subarray sum equals <span class="math inline">\(k\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">sorted input, pairs or triples</td>
+<td style="text-align: left;">two pointers</td>
+<td style="text-align: left;">3sum, container with most water</td>
+</tr>
+<tr>
+<td style="text-align: left;">longest/shortest contiguous window with a condition</td>
+<td style="text-align: left;">sliding window</td>
+<td style="text-align: left;">longest substring without repeats, min window</td>
+</tr>
+<tr>
+<td style="text-align: left;">next greater / smaller, spans, histogram</td>
+<td style="text-align: left;">monotonic stack</td>
+<td style="text-align: left;">daily temperatures, largest rectangle</td>
+</tr>
+<tr>
+<td style="text-align: left;">window max/min, windowed DP</td>
+<td style="text-align: left;">monotonic deque</td>
+<td style="text-align: left;">sliding window maximum</td>
+</tr>
+<tr>
+<td style="text-align: left;">nested structure, undo, expression</td>
+<td style="text-align: left;">stack</td>
+<td style="text-align: left;">valid parentheses, calculator</td>
+</tr>
+<tr>
+<td style="text-align: left;">cycle, middle, <span class="math inline">\(k\)</span>-th from end in a list</td>
+<td style="text-align: left;">fast/slow pointers</td>
+<td style="text-align: left;">linked list cycle II</td>
+</tr>
+<tr>
+<td style="text-align: left;">tree property from children</td>
+<td style="text-align: left;">post-order DFS returning a summary</td>
+<td style="text-align: left;">diameter, max path sum</td>
+</tr>
+<tr>
+<td style="text-align: left;">constraint from ancestors</td>
+<td style="text-align: left;">DFS passing bounds down</td>
+<td style="text-align: left;">validate BST</td>
+</tr>
+<tr>
+<td style="text-align: left;">levels, nearest, fewest steps unweighted</td>
+<td style="text-align: left;">BFS (multi-source, bidirectional)</td>
+<td style="text-align: left;">rotting oranges, word ladder</td>
+</tr>
+<tr>
+<td style="text-align: left;">dependencies, ordering, cycle in directed graph</td>
+<td style="text-align: left;">topological sort</td>
+<td style="text-align: left;">course schedule, alien dictionary</td>
+</tr>
+<tr>
+<td style="text-align: left;">dynamic connectivity, merging groups</td>
+<td style="text-align: left;">union-find</td>
+<td style="text-align: left;">accounts merge, redundant connection</td>
+</tr>
+<tr>
+<td style="text-align: left;">weighted shortest path, non-negative</td>
+<td style="text-align: left;">Dijkstra</td>
+<td style="text-align: left;">network delay time</td>
+</tr>
+<tr>
+<td style="text-align: left;">connect everything at minimum cost</td>
+<td style="text-align: left;">MST (Kruskal / Prim)</td>
+<td style="text-align: left;">min cost to connect points</td>
+</tr>
+<tr>
+<td style="text-align: left;">top <span class="math inline">\(k\)</span>, <span class="math inline">\(k\)</span>-th largest, merge <span class="math inline">\(k\)</span> sorted, running median</td>
+<td style="text-align: left;">heap</td>
+<td style="text-align: left;"><span class="math inline">\(k\)</span> closest points, median of stream</td>
+</tr>
+<tr>
+<td style="text-align: left;">prefix lookup, autocomplete, many words on a grid</td>
+<td style="text-align: left;">trie</td>
+<td style="text-align: left;">word search II</td>
+</tr>
+<tr>
+<td style="text-align: left;">range query with updates</td>
+<td style="text-align: left;">Fenwick / segment tree</td>
+<td style="text-align: left;">range sum query mutable, count smaller after self</td>
+</tr>
+<tr>
+<td style="text-align: left;">minimize the max / maximize the min, monotone check</td>
+<td style="text-align: left;">binary search on the answer</td>
+<td style="text-align: left;">split array largest sum, Koko</td>
+</tr>
+<tr>
+<td style="text-align: left;">all combinations / permutations / partitions</td>
+<td style="text-align: left;">backtracking</td>
+<td style="text-align: left;">subsets II, N-queens</td>
+</tr>
+<tr>
+<td style="text-align: left;">count ways / best value with overlapping choices</td>
+<td style="text-align: left;">dynamic programming</td>
+<td style="text-align: left;">coin change, edit distance, LIS</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(n \le 20\)</span>, subsets of items</td>
+<td style="text-align: left;">bitmask DP / meet in middle</td>
+<td style="text-align: left;">TSP, partition to <span class="math inline">\(k\)</span> subsets</td>
+</tr>
+<tr>
+<td style="text-align: left;">intervals: overlap, merge, rooms</td>
+<td style="text-align: left;">sort + greedy / sweep line</td>
+<td style="text-align: left;">merge intervals, meeting rooms II</td>
+</tr>
+<tr>
+<td style="text-align: left;">locally best choice provably safe</td>
+<td style="text-align: left;">greedy + exchange argument</td>
+<td style="text-align: left;">jump game, gas station</td>
+</tr>
+<tr>
+<td style="text-align: left;">unknown-length stream, uniform sample</td>
+<td style="text-align: left;">reservoir sampling</td>
+<td style="text-align: left;">linked list random node</td>
+</tr>
+<tr>
+<td style="text-align: left;">membership / counts / distinct at huge scale</td>
+<td style="text-align: left;">Bloom / count-min / HyperLogLog</td>
+<td style="text-align: left;">design questions</td>
+</tr>
+<tr>
+<td style="text-align: left;">near duplicates at scale</td>
+<td style="text-align: left;">MinHash + LSH</td>
+<td style="text-align: left;">dedup a corpus</td>
+</tr>
+<tr>
+<td style="text-align: left;">pattern in text, repeats</td>
+<td style="text-align: left;">KMP / Z / rolling hash / suffix array</td>
+<td style="text-align: left;">longest duplicate substring</td>
+</tr>
+</tbody>
+</table>
+<h1 id="walkthroughs">Walkthroughs</h1>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: 1. LRU cache (DSA + design)</div>
+<p>Clarify capacity, <code>get</code>/<code>put</code> semantics, <span class="math inline">\(O(1)\)</span> requirement. Hash map from key to node plus a doubly linked list ordered by recency with sentinel head and tail. <code>get</code>: move to front. <code>put</code>: update or insert at front; evict the node before the tail and delete its key from the map. Test capacity 1, overwrite of an existing key, and get of a missing key. Extensions: TTL (store expiry, check on get), LFU (frequency buckets), thread safety (single lock, then striping).</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: 2. Top <span class="math inline">\(k\)</span> frequent words (heap + hashing)</div>
+<p>Count with a hash map (<span class="math inline">\(O(n)\)</span>). Either a size-<span class="math inline">\(k\)</span> min-heap keyed by (count, reverse word order for tie-breaking), <span class="math inline">\(O(n\log k)\)</span>, or bucket sort by count, <span class="math inline">\(O(n)\)</span>. Clarify tie-breaking (lexicographic). For a stream too large for memory: count-min sketch plus a heap of candidates (approximate heavy hitters), or MapReduce counts then global top-<span class="math inline">\(k\)</span>.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: 3. Number of islands, then islands II (BFS/DFS + union-find)</div>
+<p>Static grid: DFS or BFS from each unvisited land cell, counting starts, <span class="math inline">\(O(RC)\)</span>. Follow-up where land is added one cell at a time with the count after each addition: union-find over cells; adding land increments the count, and each union with a land neighbor that succeeds decrements it. <span class="math inline">\(O(k\,\alpha(RC))\)</span> for <span class="math inline">\(k\)</span> additions.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: 4. Implement logistic regression and evaluate it (ML coding)</div>
+<p>Shapes, standardization with training statistics, stable sigmoid and loss from logits, vectorized gradient <span class="math inline">\(X^\top(p - y)/n + \lambda w\)</span>, convergence check. Evaluate with ROC-AUC from ranks and log loss; check calibration. Test: on separable data loss decreases and accuracy approaches 1; with <span class="math inline">\(\lambda &gt; 0\)</span> weights stay bounded. Discuss class imbalance (weights, threshold choice) and why AUC alone is insufficient.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: 5. Top-<span class="math inline">\(p\)</span> sampling with a KV cache (LLM coding)</div>
+<p>Generation loop: prefill the prompt to fill the cache, then each step computes logits for the last token only, applies temperature and top-<span class="math inline">\(p\)</span> (sort, cumulative sum, keep the smallest prefix reaching <span class="math inline">\(p\)</span>, renormalize), samples via CDF, appends to the sequence and cache. Stop on EOS or max tokens. Test that <span class="math inline">\(p \to 0\)</span> equals greedy and that the cache gives the same logits as full recomputation. Discuss batching sequences of different lengths (padding masks), and speculative decoding.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: 6. Leakage-free split and target encoding (data)</div>
+<p>Data: user events with timestamps and a categorical merchant field; predict fraud. Split by time with a gap equal to label delay; within training, out-of-fold target encoding of merchant with smoothing; fit scalers on training only; group by user inside cross-validation folds. Explain each leak these prevent, and how you would detect leakage if results look too good.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: 7. Course schedule with minimum semesters (graphs)</div>
+<p>Kahn’s algorithm by levels: each BFS level is one semester; if not all courses are output, there is a cycle. <span class="math inline">\(O(V+E)\)</span>. Follow-up with at most <span class="math inline">\(k\)</span> courses per semester: the greedy choice is no longer always optimal; for small <span class="math inline">\(n\)</span> use BFS/DP over bitmasks of completed courses.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: 8. Design a dynamic batching inference server (LLD)</div>
+<p>API, bounded queue with backpressure, batcher loop flushing on size <span class="math inline">\(B\)</span> or timeout <span class="math inline">\(T\)</span>, per-request futures, deadline dropping, padding by length buckets, error isolation, metrics. Choosing <span class="math inline">\(B\)</span> and <span class="math inline">\(T\)</span> from a latency budget. Extension to LLMs: continuous batching per decode step and KV cache memory as the admission limit.</p>
+</div>
+<h1 id="reviewing-your-mock-interviews">Reviewing Your Mock Interviews</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>After every timed attempt, label each miss with one category and practice that category next:</p>
+<ul>
+<li><p><strong>Pattern</strong>: did not recognize the technique <span class="math inline">\(\to\)</span> redo problems in that pattern, then mixed sets.</p></li>
+<li><p><strong>Implementation</strong>: knew the idea, code was buggy <span class="math inline">\(\to\)</span> write the invariant first; practice off-by-one-prone patterns (binary search, windows).</p></li>
+<li><p><strong>Complexity</strong>: wrong or missing analysis <span class="math inline">\(\to\)</span> state it before coding.</p></li>
+<li><p><strong>Communication</strong>: long silences <span class="math inline">\(\to\)</span> narrate in practice sessions.</p></li>
+<li><p><strong>Testing</strong>: no edge cases <span class="math inline">\(\to\)</span> always test empty, one element, duplicates, extremes, and one normal case.</p></li>
+</ul>
+<p>Cap stuck time at 15–20 minutes, study the solution, and redo the problem from scratch within 48 hours. Depth beats count: 300 problems understood well beat 400 seen once.</p>
+</div>
+<h1 id="a-12-week-study-plan">A 12-Week Study Plan</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Weeks</th>
+<th style="text-align: left;">DSA (about 25–30 problems/week)</th>
+<th style="text-align: left;">ML / design</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">1–2</td>
+<td style="text-align: left;">Ch. 2–4: arrays, hashing, prefix sums, windows, stacks</td>
+<td style="text-align: left;">Ch. 17: regression, softmax, metrics; implement 3 from scratch</td>
+</tr>
+<tr>
+<td style="text-align: left;">3–4</td>
+<td style="text-align: left;">Ch. 5–7: trees, heaps, tries, union-find</td>
+<td style="text-align: left;">Ch. 17: k-means, kNN, trees, AUC; Ch. 16 data and leakage</td>
+</tr>
+<tr>
+<td style="text-align: left;">5–6</td>
+<td style="text-align: left;">Ch. 8–10: graphs, shortest paths, binary search</td>
+<td style="text-align: left;">Ch. 18: backprop, optimizers, attention, decoding</td>
+</tr>
+<tr>
+<td style="text-align: left;">7–8</td>
+<td style="text-align: left;">Ch. 11–12: backtracking, DP families</td>
+<td style="text-align: left;">Ch. 18: KV cache, contrastive/DPO, vector search; Ch. 20 framework + 3 designs</td>
+</tr>
+<tr>
+<td style="text-align: left;">9</td>
+<td style="text-align: left;">Ch. 13–15: greedy, intervals, strings, streaming</td>
+<td style="text-align: left;">Ch. 19: LLD problems (KV store, batcher, rate limiter)</td>
+</tr>
+<tr>
+<td style="text-align: left;">10</td>
+<td style="text-align: left;">Mixed sets by company tag (recent reports)</td>
+<td style="text-align: left;">Two GenAI designs; project deep-dive prep</td>
+</tr>
+<tr>
+<td style="text-align: left;">11</td>
+<td style="text-align: left;">Timed mocks: 2 problems in 45 minutes</td>
+<td style="text-align: left;">ML coding mocks; behavioral stories written out</td>
+</tr>
+<tr>
+<td style="text-align: left;">12</td>
+<td style="text-align: left;">Weak-category review; light practice</td>
+<td style="text-align: left;">Full mock loops; rest before the interview</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Map signals to patterns; practice recognizing the pattern on mixed sets.</p></li>
+<li><p>Mix DSA, ML coding, data, and design every week rather than in separate blocks.</p></li>
+<li><p>Review each mock by mistake category and fix the weakest one first.</p></li>
+</ul>
+</div>

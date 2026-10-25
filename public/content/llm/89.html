@@ -1,0 +1,107 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Why fine-tune?</strong> Prompting changes what the model is asked; fine-tuning changes what it does by default: format, tone, domain vocabulary, tool use. Try prompting and retrieval first. Fine-tune when you need consistent behaviour, lower latency (shorter prompts), or a smaller model to match a bigger one on a narrow task.</p>
+</div>
+<h2 class="unnumbered" id="lora">LoRA</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: LoRA’s update, its initialisation and its cost</div>
+<p><strong>Step 1.</strong> Freeze <span class="math inline">\(W\in\mathbb R^{d_o\times d_i}\)</span> and learn <span class="math inline">\(\Delta W=\frac\alpha rBA\)</span> with <span class="math inline">\(B\in\mathbb R^{d_o\times r}\)</span>, <span class="math inline">\(A\in\mathbb R^{r\times d_i}\)</span>.</p>
+<p><strong>Step 2.</strong> Initialise <span class="math inline">\(B=0\)</span>, <span class="math inline">\(A\)</span> random: at step 0, <span class="math inline">\(\Delta W=0\)</span> and the model is exactly the base model. <span class="math inline">\(B\)</span> still gets a gradient, <span class="math inline">\(\partial L/\partial B=\frac\alpha r\,G^\top(XA^\top)\)</span>, which is nonzero because <span class="math inline">\(A\ne0\)</span>.</p>
+<p><strong>Step 3.</strong> Trainable parameters <span class="math inline">\(r(d_i+d_o)\)</span> instead of <span class="math inline">\(d_id_o\)</span>: for <span class="math inline">\(d=256,r=8\)</span> that is 4<span>,</span>096 vs 65<span>,</span>536; for a 4096-wide layer at <span class="math inline">\(r=16\)</span>, 0.8%.</p>
+<p><strong>Step 4.</strong> After training, merge <span class="math inline">\(W&#39;=W+\frac\alpha rBA\)</span>: zero extra inference cost.</p>
+</div>
+<h2 class="unnumbered" id="qlora-and-nf4">QLoRA and NF4</h2>
+<p>QLoRA stores the frozen <span class="math inline">\(W\)</span> in 4 bits and trains LoRA adapters in bf16 on top; the forward pass dequantises each block on the fly. Pretrained weights are roughly normal, so NF4 puts its 16 levels at quantiles of <span class="math inline">\(\mathcal N(0,1)\)</span> (each level gets about equal probability mass), scaled to <span class="math inline">\([-1,1]\)</span>, with an exact zero. Each block of 64 weights stores one absmax scale. <em>Double quantisation</em> stores those scales in 8 bits with one fp32 scale per 256 blocks: <span class="math display">\[4+\tfrac{32}{64}=4.5\ \text{bits/param}\quad\longrightarrow\quad4+\tfrac{8}{64}+\tfrac{32}{64\cdot256}\approx4.127\ \text{bits/param}.\]</span></p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Toolkit ch. 7: LoRA from scratch, and the NF4 quantisation inside QLoRA.&quot;&quot;&quot;
+import math
+import torch
+
+torch.manual_seed(0)
+
+
+class LoRALinear(torch.nn.Module):
+    &quot;&quot;&quot;y = x W^T + (alpha/r) x A^T B^T, with W frozen, A random, B zero (so it starts as W).&quot;&quot;&quot;
+
+    def __init__(self, base: torch.nn.Linear, r=8, alpha=16):
+        super().__init__()
+        self.base = base.requires_grad_(False)
+        self.A = torch.nn.Parameter(torch.randn(r, base.in_features) / math.sqrt(base.in_features))
+        self.B = torch.nn.Parameter(torch.zeros(base.out_features, r))
+        self.scale = alpha / r
+
+    def forward(self, x):
+        return self.base(x) + self.scale * (x @ self.A.T) @ self.B.T
+
+    def merge(self):
+        return self.base.weight + self.scale * self.B @ self.A
+
+
+d = 256
+base = torch.nn.Linear(d, d, bias=False)
+delta = 0.1 * torch.randn(d, 4) @ torch.randn(4, d) / 2          # the &quot;task&quot; is a rank-4 change
+target = base.weight.detach() + delta
+layer = LoRALinear(base, r=8)
+X = torch.randn(4096, d)
+print(f&quot;[lora] starts equal to base: {torch.allclose(layer(X[:4]), base(X[:4]))}&quot;)
+print(f&quot;[lora] trainable {sum(p.numel() for p in layer.parameters() if p.requires_grad):,}&quot;
+      f&quot; vs full {d * d:,}&quot;)
+opt = torch.optim.Adam([layer.A, layer.B], lr=3e-3)
+for step in range(601):
+    idx = torch.randint(0, len(X), (256,))
+    loss = ((layer(X[idx]) - X[idx] @ target.T) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+    if step % 200 == 0:
+        print(f&quot;[lora] step {step:3d}  loss {loss.item():.5f}&quot;)
+with torch.no_grad():
+    print(f&quot;[lora] merged weight error {(layer.merge() - target).norm() / delta.norm():.3f} (relative to ||delta||)&quot;)
+
+
+# NF4: 16 levels at quantiles of N(0,1), rescaled to [-1, 1], with an exact zero.
+def nf4_levels(offset=0.9677083):
+    icdf = lambda p: math.sqrt(2) * torch.erfinv(2 * p - 1)
+    pos = icdf(torch.linspace(offset, 0.5, 9)[:-1])                # 8 positive levels
+    neg = -icdf(torch.linspace(offset, 0.5, 8)[:-1])               # 7 negative levels
+    v = torch.cat([pos, torch.zeros(1), neg]).sort().values
+    return v / v.abs().max()
+
+
+def quantize(w, levels, block=64):
+    wb = w.reshape(-1, block)
+    absmax = wb.abs().max(1, keepdim=True).values                  # one scale per block
+    codes = ((wb / absmax)[..., None] - levels).abs().argmin(-1)   # 4-bit index per weight
+    return (levels[codes] * absmax).reshape(w.shape)
+
+
+NF4 = nf4_levels()
+INT4 = torch.linspace(-1, 1, 16)
+print(f&quot;[nf4] levels {[round(v, 3) for v in NF4.tolist()]}&quot;)
+W = torch.randn(4096, 4096) * 0.02
+for name, lv in ((&quot;int4 uniform&quot;, INT4), (&quot;nf4&quot;, NF4)):
+    err = (quantize(W, lv) - W).pow(2).mean() / W.pow(2).mean()
+    print(f&quot;[nf4] {name:12s} relative MSE {err:.4f}&quot;)
+
+# Memory: 4 bits per weight + fp32 absmax per 64 weights, or 8-bit absmax with one fp32 per 256 blocks.
+plain = 4 + 32 / 64
+double = 4 + 8 / 64 + 32 / (64 * 256)
+print(f&quot;[nf4] bits/param: single quant {plain:.3f}, double quant {double:.3f}&quot;)
+for name, params in ((&quot;8B&quot;, 8e9), (&quot;70B&quot;, 70e9)):
+    print(f&quot;[mem] {name}: bf16 weights {params * 2 / 2**30:6.1f} GiB  nf4+dq {params * double / 8 / 2**30:5.1f} GiB&quot;)</code></pre>
+<pre class="code output"><code class="output">[lora] starts equal to base: True
+[lora] trainable 4,096 vs full 65,536
+[lora] step   0  loss 2.68905
+[lora] step 200  loss 0.00029
+[lora] step 400  loss 0.00001
+[lora] step 600  loss 0.00000
+[lora] merged weight error 0.000 (relative to ||delta||)
+[nf4] levels [-1.0, -0.696, -0.525, -0.395, -0.284, -0.185, -0.091, 0.0, 0.08, 0.161, 0.246, 0.338, 0.441, 0.563, 0.723, 1.0]
+[nf4] int4 uniform relative MSE 0.0101
+[nf4] nf4          relative MSE 0.0085
+[nf4] bits/param: single quant 4.500, double quant 4.127
+[mem] 8B: bf16 weights   14.9 GiB  nf4+dq   3.8 GiB
+[mem] 70B: bf16 weights  130.4 GiB  nf4+dq  33.6 GiB</code></pre>
+<h2 class="unnumbered" id="data-hyperparameters-and-evaluation">Data, hyperparameters and evaluation</h2>
+<ul>
+<li><p><strong>Data:</strong> a few thousand clean, deduplicated examples beat a large noisy set. Format with the model’s own chat template, and mask the loss to assistant tokens only (Part 0’s masking rules).</p></li>
+<li><p><strong>Hyperparameters:</strong> LoRA learning rates are about 10<span class="math inline">\(\times\)</span> full fine-tuning (<span class="math inline">\(1\text{--}2\times10^{-4}\)</span>); <span class="math inline">\(r=16\)</span>, <span class="math inline">\(\alpha=16\text{--}32\)</span>, adapters on all linear layers; 1–3 epochs; cosine schedule with a short warmup.</p></li>
+<li><p><strong>Evaluation:</strong> hold out a test set before you look at the data; compare against the base model <em>with a good prompt</em>; track a general benchmark too, to catch forgetting; report confidence intervals (Sessions 43–47).</p></li>
+<li><p><strong>Deployment:</strong> merge the adapter, or serve many adapters over one base model (vLLM supports this).</p></li>
+</ul>

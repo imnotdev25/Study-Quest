@@ -1,0 +1,519 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: hearing a whisper in a loud room</div>
+<p>In a loud room you need either a louder whisper or a quieter room to hear it. “Not significant” after a short canary often just means the room was too loud: the test never had the <em>power</em> to detect an effect of the size you care about. Plan the sample size before you start.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/5234d8d1f869.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Approximate power curve for <span class="math inline">\(\delta=0.02\)</span>, <span class="math inline">\(\sigma=0.5\)</span>. 80% power needs about 10<span>,</span>000 users per arm.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What is the cluster design effect?</p></li>
+<li><p>Why can clustering change the standard error without changing the point estimate?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="not-significant-may-simply-mean-underpowered">2. “Not significant” may simply mean “underpowered”</h3>
+<p>Before launching a canary, choose the minimum effect worth detecting:</p>
+<p><span class="math display">\[\Delta_*\]</span></p>
+<p>This is the smallest improvement that would justify deployment—not an optimistic prediction of the candidate’s gain.</p>
+<p>For equal-sized candidate and control arms with <span class="math inline">\(n\)</span> independent units per arm and outcome variance <span class="math inline">\(\sigma^2\)</span>:</p>
+<p><span class="math display">\[\operatorname{SE}(\hat\Delta)
+=
+\sqrt{\frac{2\sigma^2}{n}}\]</span></p>
+<p>For a one-sided improvement test with false-positive probability <span class="math inline">\(\alpha\)</span> and desired power <span class="math inline">\(1-\beta\)</span>:</p>
+<p><span class="math display">\[n
+\approx
+\frac{
+2\sigma^2
+\left(
+z_{1-\alpha}+z_{1-\beta}
+\right)^2
+}{
+\Delta_*^2
+}\]</span></p>
+<p>Power is the probability of successfully detecting <span class="math inline">\(\Delta_*\)</span> when it is real.</p>
+<p>For repeated episodes from each user:</p>
+<p><span class="math display">\[Y_{u,t}
+=
+\tau Z_u+b_u+\epsilon_{u,t}\]</span></p>
+<p>the variance of a user’s mean across <span class="math inline">\(m\)</span> episodes is:</p>
+<p><span class="math display">\[\sigma_{\bar Y}^2
+=
+\sigma_b^2+\frac{\sigma_\epsilon^2}{m}\]</span></p>
+<p>Use this user-level variance and the number of users in the planning equation. Treating all episodes as independent can dramatically underestimate the required traffic.</p>
+<p>Notice the inverse square:</p>
+<p><span class="math display">\[n\propto\frac1{\Delta_*^2}\]</span></p>
+<p>Detecting half the effect requires approximately four times as many independent units.</p>
+<p>This is fixed-horizon planning. If you repeatedly inspect results and stop early, use a prespecified sequential method or anytime-valid evidence instead.</p>
+<p>Tensor shapes in the simulation:</p>
+<ul>
+<li><p>user effects: <span style="background-color: codeinlinebg"><code> [R, 2N]</code></span></p></li>
+<li><p>episode outcomes: <span style="background-color: codeinlinebg"><code> [R, 2N, M]</code></span></p></li>
+<li><p>user means: <span style="background-color: codeinlinebg"><code> [R, 2N]</code></span></p></li>
+<li><p>estimates and standard errors: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>For subgroup gates, calculate power for the rarest important group. If that group is 10% of traffic, obtaining 400 independent group members may require roughly 4,000 total users before accounting for arm allocation.</p>
+<p>DPO dataset size and preference-pair accuracy do not determine online power. The relevant sample size is the number of independent deployment units producing the outcome you intend to claim improved.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: sample size and MDE</div>
+<p>Two-arm comparison, per-arm sample size: <span class="math display">\[n=\frac{2(z_{1-\alpha/2}+z_{1-\beta})^2\sigma^2}{\delta^2}\times\mathrm{DEFF},\]</span> with <span class="math inline">\(z_{0.975}=1.96\)</span> and <span class="math inline">\(z_{0.80}=0.84\)</span>, so <span class="math inline">\(2(2.80)^2=15.7\)</span>. <strong>MDE</strong> (minimum detectable effect) is the same formula solved for <span class="math inline">\(\delta\)</span>. Choose <span class="math inline">\(\delta\)</span> as the smallest effect that would change your decision, not as whatever your budget can detect.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Fix the meaningful effect and the variance at the randomization unit first.</p></li>
+<li><p>More logged rows can’t rescue a canary that lacks independent users.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: size the canary</div>
+<p><span class="math inline">\(\sigma=0.5\)</span>, <span class="math inline">\(\delta=0.02\)</span>: <span class="math inline">\(n=15.7\times0.25/0.0004\approx9800\)</span> users per arm. With DEFF 6.7 for turn-level outcomes and 20 turns per user, measure at the user level, or plan about <span class="math inline">\(9800\times6.7\)</span> turns.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>“Post-hoc power” computed from the observed effect.</p></li>
+<li><p>Counting rows instead of independent users.</p></li>
+<li><p>Picking the MDE to fit the budget.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-naive-planning-buys-only-42-power">3. PyTorch exercise — naive planning buys only 42% power</h3>
+<p>Each user provides five episodes. Plan a canary to detect an improvement of <span style="background-color: codeinlinebg"><code> 0.20</code></span> with 80% power.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 1_000
+episodes_per_user = 5
+
+alpha = 0.05
+target_power = 0.80
+minimum_detectable_effect = 0.20
+
+user_effect_standard_deviation = 1.00
+episode_noise_standard_deviation = 1.00
+
+standard_normal = torch.distributions.Normal(
+    torch.tensor(0.0),
+    torch.tensor(1.0),
+)
+
+# One-sided improvement test.
+z_alpha = standard_normal.icdf(
+    torch.tensor(1.0 - alpha)
+)
+
+z_power = standard_normal.icdf(
+    torch.tensor(target_power)
+)
+
+# TODO 1: Compute row-level and user-mean variances.
+user_variance = ...
+episode_noise_variance = ...
+
+episode_outcome_variance = ...
+
+user_mean_outcome_variance = ...
+
+intraclass_correlation = ...
+
+design_effect = ...
+
+# TODO 2: Compare naive episode-level planning with
+# correct user-level planning.
+z_sum_squared = ...
+
+naive_episodes_per_arm = ...
+
+naive_users_per_arm = ...
+
+correct_users_per_arm = ...
+
+# TODO 3: Simulate a cluster-correct canary.
+def simulate_power(
+    users_per_arm,
+    treatment_effect,
+):
+    total_users = 2 * users_per_arm
+
+    candidate_indicator = torch.zeros(
+        total_users
+    )
+    candidate_indicator[
+        :users_per_arm
+    ] = 1.0
+
+    user_effects = ...
+
+    episode_noise = ...
+
+    outcomes = ...
+
+    user_mean_outcomes = ...
+
+    candidate_user_outcomes = ...
+    control_user_outcomes = ...
+
+    estimated_effects = ...
+
+    standard_errors = ...
+
+    lower_bounds = ...
+
+    declarations = ...
+
+    return (
+        declarations.to(
+            torch.float64
+        ).mean(),
+        estimated_effects.mean(),
+        standard_errors.mean(),
+    )
+
+
+# TODO 4: Measure power under both plans.
+naive_plan_power, naive_mean_effect, naive_mean_se = ...
+
+correct_plan_power, correct_mean_effect, correct_mean_se = ...
+
+# A correctly analyzed null experiment should still
+# have approximately alpha false positives.
+null_false_positive_rate, _, _ = ...
+
+# TODO 5: Calculate the actual MDE delivered by each
+# number of users.
+actual_naive_mde = ...
+
+actual_correct_mde = ...
+
+print(&quot;z_alpha:&quot;, z_alpha.item())
+print(&quot;z_power:&quot;, z_power.item())
+print(&quot;ICC:&quot;, intraclass_correlation)
+print(&quot;Design effect:&quot;, design_effect)
+
+print(
+    &quot;Naive planned episodes per arm:&quot;,
+    naive_episodes_per_arm,
+)
+print(
+    &quot;Naive planned users per arm:&quot;,
+    naive_users_per_arm,
+)
+print(
+    &quot;Correct users per arm:&quot;,
+    correct_users_per_arm,
+)
+
+print(
+    &quot;Naive-plan empirical power:&quot;,
+    naive_plan_power.item(),
+)
+print(
+    &quot;Correct-plan empirical power:&quot;,
+    correct_plan_power.item(),
+)
+print(
+    &quot;Null false-positive rate:&quot;,
+    null_false_positive_rate.item(),
+)
+
+print(
+    &quot;Naive-plan actual MDE:&quot;,
+    actual_naive_mde.item(),
+)
+print(
+    &quot;Correct-plan actual MDE:&quot;,
+    actual_correct_mde.item(),
+)
+
+print(
+    &quot;Naive mean estimate and SE:&quot;,
+    naive_mean_effect.item(),
+    naive_mean_se.item(),
+)
+print(
+    &quot;Correct mean estimate and SE:&quot;,
+    correct_mean_effect.item(),
+    correct_mean_se.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will naive planning request closer to 120 or 370 users per arm?</p></li>
+<li><p>Will that naive plan achieve 80% power?</p></li>
+<li><p>Does an underpowered but correctly analyzed experiment inflate its false-positive rate?</p></li>
+<li><p>If the target effect doubles, how does the required sample size change?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Episode variance is <span style="background-color: codeinlinebg"><code> user_variance + episode_noise_variance</code></span>.</p></li>
+<li><p>User-mean variance divides only episode noise by <span style="background-color: codeinlinebg"><code> episodes_per_user</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> math.ceil</code></span> for planned sample sizes.</p></li>
+<li><p>Generate candidate and control users together; only candidate users receive the treatment effect.</p></li>
+<li><p>Average episodes before computing the arm difference.</p></li>
+<li><p>Improvement is declared when the one-sided lower bound exceeds zero.</p></li>
+<li><p>MDE rearranges the sample-size equation.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Plan using the total token or turn count.</p></li>
+<li><p>Choose the MDE after seeing the observed effect.</p></li>
+<li><p>Use a two-sided critical value in planning but a one-sided value in reporting—or vice versa.</p></li>
+<li><p>Estimate variance from a tiny unusually clean pilot.</p></li>
+<li><p>Rescale rewards but leave an absolute MDE unchanged.</p></li>
+<li><p>Plan only for the aggregate metric while deployment requires rare-subgroup gates.</p></li>
+<li><p>Inspect a fixed-horizon interval repeatedly and stop at the first success.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does halving the MDE require roughly four times the sample?</p></li>
+<li><p>Why do additional users usually help more than additional episodes from existing users?</p></li>
+<li><p>What is the difference between power and the false-positive rate?</p></li>
+<li><p>How should multiple safety or subgroup gates affect planning?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Variance structure:</p>
+<pre class="code python"><code class="language-python">user_variance = (
+    user_effect_standard_deviation ** 2
+)
+
+episode_noise_variance = (
+    episode_noise_standard_deviation ** 2
+)
+
+episode_outcome_variance = (
+    user_variance
+    + episode_noise_variance
+)
+
+user_mean_outcome_variance = (
+    user_variance
+    + episode_noise_variance
+    / episodes_per_user
+)
+
+intraclass_correlation = (
+    user_variance
+    / episode_outcome_variance
+)
+
+design_effect = (
+    1.0
+    + (
+        episodes_per_user - 1
+    ) * intraclass_correlation
+)</code></pre>
+<p>Sample-size plans:</p>
+<pre class="code python"><code class="language-python">z_sum_squared = (
+    z_alpha + z_power
+).square()
+
+naive_episodes_per_arm = math.ceil(
+    (
+        2.0
+        * episode_outcome_variance
+        * z_sum_squared
+        / minimum_detectable_effect ** 2
+    ).item()
+)
+
+naive_users_per_arm = math.ceil(
+    naive_episodes_per_arm
+    / episodes_per_user
+)
+
+correct_users_per_arm = math.ceil(
+    (
+        2.0
+        * user_mean_outcome_variance
+        * z_sum_squared
+        / minimum_detectable_effect ** 2
+    ).item()
+)</code></pre>
+<p>Simulation:</p>
+<pre class="code python"><code class="language-python">def simulate_power(
+    users_per_arm,
+    treatment_effect,
+):
+    total_users = 2 * users_per_arm
+
+    candidate_indicator = torch.zeros(
+        total_users
+    )
+    candidate_indicator[
+        :users_per_arm
+    ] = 1.0
+
+    user_effects = (
+        user_effect_standard_deviation
+        * torch.randn(
+            num_repetitions,
+            total_users,
+        )
+    )
+
+    episode_noise = (
+        episode_noise_standard_deviation
+        * torch.randn(
+            num_repetitions,
+            total_users,
+            episodes_per_user,
+        )
+    )
+
+    outcomes = (
+        treatment_effect
+        * candidate_indicator[
+            None, :, None
+        ]
+        + user_effects[:, :, None]
+        + episode_noise
+    )
+
+    user_mean_outcomes = outcomes.mean(
+        dim=-1
+    )
+
+    candidate_user_outcomes = (
+        user_mean_outcomes[
+            :, :users_per_arm
+        ]
+    )
+
+    control_user_outcomes = (
+        user_mean_outcomes[
+            :, users_per_arm:
+        ]
+    )
+
+    estimated_effects = (
+        candidate_user_outcomes.mean(
+            dim=1
+        )
+        - control_user_outcomes.mean(
+            dim=1
+        )
+    )
+
+    standard_errors = torch.sqrt(
+        candidate_user_outcomes.var(
+            dim=1,
+            correction=1,
+        ) / users_per_arm
+        +
+        control_user_outcomes.var(
+            dim=1,
+            correction=1,
+        ) / users_per_arm
+    )
+
+    lower_bounds = (
+        estimated_effects
+        - z_alpha * standard_errors
+    )
+
+    declarations = (
+        lower_bounds &gt; 0.0
+    )
+
+    return (
+        declarations.to(
+            torch.float64
+        ).mean(),
+        estimated_effects.mean(),
+        standard_errors.mean(),
+    )</code></pre>
+<p>Empirical power:</p>
+<pre class="code python"><code class="language-python">(
+    naive_plan_power,
+    naive_mean_effect,
+    naive_mean_se,
+) = simulate_power(
+    naive_users_per_arm,
+    minimum_detectable_effect,
+)
+
+(
+    correct_plan_power,
+    correct_mean_effect,
+    correct_mean_se,
+) = simulate_power(
+    correct_users_per_arm,
+    minimum_detectable_effect,
+)
+
+null_false_positive_rate, _, _ = (
+    simulate_power(
+        correct_users_per_arm,
+        0.0,
+    )
+)</code></pre>
+<p>Actual MDEs:</p>
+<pre class="code python"><code class="language-python">actual_naive_mde = (
+    (z_alpha + z_power)
+    * torch.sqrt(
+        torch.tensor(
+            2.0
+            * user_mean_outcome_variance
+            / naive_users_per_arm
+        )
+    )
+)
+
+actual_correct_mde = (
+    (z_alpha + z_power)
+    * torch.sqrt(
+        torch.tensor(
+            2.0
+            * user_mean_outcome_variance
+            / correct_users_per_arm
+        )
+    )
+)</code></pre>
+<p>The intraclass correlation is:</p>
+<p><span class="math display">\[\rho
+=
+\frac{1}{1+1}
+=
+0.5\]</span></p>
+<p>With five episodes per user:</p>
+<p><span class="math display">\[D
+=
+1+4(0.5)
+=
+3\]</span></p>
+<p>The variance of one user’s average outcome is:</p>
+<p><span class="math display">\[\sigma_{\bar Y}^2
+=
+1+\frac15
+=
+1.2\]</span></p>
+<p>For a one-sided 5% test and 80% power:</p>
+<p><span class="math display">\[z_{0.95}\approx1.645,
+\qquad
+z_{0.80}\approx0.842\]</span></p>
+<p>Correct planning therefore needs:</p>
+<p><span class="math display">\[n
+\approx
+\frac{
+2(1.2)(1.645+0.842)^2
+}{
+0.2^2
+}
+\approx371\]</span></p>
+<p>users per arm.</p>
+<p>The naive planner treats episodes as independent and requests only about 124 users per arm. With correct cluster-aware analysis, that plan’s real MDE is approximately:</p>
+<p><span class="math display">\[0.346\]</span></p>
+<p>Its power for a true <span style="background-color: codeinlinebg"><code> 0.20</code></span> effect is only about 42%. The correctly planned canary should achieve approximately 80% power.</p>
+<p>A correctly analyzed underpowered test still has approximately a 5% false-positive rate. Its problem is excessive false negatives—not invented positive effects. Naive row-level analysis, as seen in Session 124, can inflate false positives too.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The effect appears squared in the denominator, so replacing <span class="math inline">\(\Delta\)</span> with <span class="math inline">\(\Delta/2\)</span> multiplies the requirement by four.</p></li>
+<li><p>New users add new independent user effects. Extra episodes mostly average down episode noise while leaving shared user variation.</p></li>
+<li><p>Power is the probability of detecting a real target effect; the false-positive rate is the probability of declaring improvement when the null is true.</p></li>
+<li><p>Plan for the hardest prespecified gate, incorporate multiplicity into its critical value, and ensure rare groups receive enough independent units. Oversampling is possible, but aggregate estimates must then restore deployment weights.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>For <span class="math inline">\(m\)</span> equally sized observations per cluster, <span class="math inline">\(D=1+(m-1)\rho\)</span>.</p></li>
+<li><p>Equal cluster sizes preserve the same weighted mean difference, while clustering reduces the number of independent units used to estimate uncertainty.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> choose the smallest practically meaningful effect, estimate variance at the randomization unit, and commit to the sample size before seeing outcomes. More logged rows cannot rescue a canary that lacks independent users.</p>

@@ -1,0 +1,247 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Pre-training data starts as <strong>Common Crawl</strong>: petabytes of raw HTML, mostly boilerplate, spam and near-copies. A data pipeline turns it into clean text in five steps: <strong>extract</strong> main text from HTML, <strong>identify language</strong>, apply <strong>heuristic filters</strong>, <strong>deduplicate</strong>, and <strong>filter by quality</strong> with a model. Data quality moves benchmark scores more than almost any architecture change.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/e32befc082a5.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The data funnel. FineWeb (HuggingFace, 2024) applies steps 1–5 to 96 Common Crawl snapshots to get 15T tokens; FineWeb-Edu adds step 6 and keeps 1.3T.</em></p>
+</div>
+<h2 class="unnumbered" id="heuristic-filters">Heuristic filters</h2>
+<p>Simple rules remove most garbage cheaply: too short or too long, mostly symbols, mostly bullet lists, almost no common English words. These are from the Gopher paper (Rae et al., 2021). FineWeb adds C4-style rules and its own (e.g. fraction of lines ending in punctuation).</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Quality filtering: Gopher-style heuristic rules, plus a model-based educational-quality scorer.
+
+Run:  python quality.py      (heuristics run anywhere; the classifier part runs on Modal)
+&quot;&quot;&quot;
+import re
+
+import modal
+
+STOPWORDS = {&quot;the&quot;, &quot;be&quot;, &quot;to&quot;, &quot;of&quot;, &quot;and&quot;, &quot;that&quot;, &quot;have&quot;, &quot;with&quot;}
+
+
+def gopher_rules(text: str) -&gt; dict[str, bool]:
+    &quot;&quot;&quot;A subset of the Gopher (Rae et al., 2021) quality rules. A doc is kept only if every rule passes.&quot;&quot;&quot;
+    words = text.split()
+    n = len(words)
+    alpha = [w for w in words if re.search(r&quot;[a-zA-Z]&quot;, w)]
+    lines = [l for l in text.splitlines() if l.strip()]
+    return {
+        &quot;length_50_to_100k_words&quot;: 50 &lt;= n &lt;= 100_000,
+        &quot;mean_word_length_3_to_10&quot;: n &gt; 0 and 3 &lt;= sum(map(len, words)) / n &lt;= 10,
+        &quot;symbol_to_word_ratio_lt_0.1&quot;: n &gt; 0 and (text.count(&quot;#&quot;) + text.count(&quot;...&quot;)) / n &lt; 0.1,
+        &quot;80pct_words_alphabetic&quot;: n &gt; 0 and len(alpha) / n &gt;= 0.8,
+        &quot;at_least_2_stopwords&quot;: len(STOPWORDS &amp; {w.lower() for w in words}) &gt;= 2,
+        &quot;lt_90pct_lines_bulleted&quot;: not lines or sum(l.lstrip().startswith((&quot;-&quot;, &quot;*&quot;, &quot;•&quot;)) for l in lines) / len(lines) &lt; 0.9,
+    }
+
+
+def keep(text: str) -&gt; bool:
+    return all(gopher_rules(text).values())
+
+
+# ---- Model-based filter (FineWeb-Edu style), run on a GPU ----
+app = modal.App(&quot;pt-book-quality&quot;)
+image = modal.Image.debian_slim(python_version=&quot;3.12&quot;).uv_pip_install(
+    &quot;torch==2.14.1&quot;, &quot;transformers==5.20.2&quot;, &quot;datasets==5.1.0&quot;
+)
+
+
+@app.function(gpu=&quot;L4&quot;, image=image, timeout=30 * 60)
+def score_fineweb(n_docs: int = 2000) -&gt; list[tuple[float, str]]:
+    &quot;&quot;&quot;Score raw FineWeb docs 0-5 for educational value with the FineWeb-Edu classifier; FineWeb-Edu keeps &gt;= 3.&quot;&quot;&quot;
+    import torch
+    from datasets import load_dataset
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    name = &quot;HuggingFaceFW/fineweb-edu-classifier&quot;
+    tok = AutoTokenizer.from_pretrained(name)
+    model = AutoModelForSequenceClassification.from_pretrained(name, dtype=torch.bfloat16).cuda().eval()
+    docs = load_dataset(&quot;HuggingFaceFW/fineweb&quot;, name=&quot;sample-10BT&quot;, split=&quot;train&quot;, streaming=True).take(n_docs)
+    out = []
+    for d in docs:
+        x = tok(d[&quot;text&quot;], truncation=True, max_length=512, return_tensors=&quot;pt&quot;).to(&quot;cuda&quot;)
+        with torch.no_grad():
+            score = model(**x).logits.squeeze().float().item()     # a regression head: one number
+        out.append((round(score, 2), d[&quot;text&quot;][:80]))
+    return sorted(out, reverse=True)
+
+
+@app.local_entrypoint()
+def main():
+    scored = score_fineweb.remote()
+    print(&quot;kept (score &gt;= 3):&quot;, sum(s &gt;= 3 for s, _ in scored), &quot;of&quot;, len(scored))
+    for s, t in scored[:3] + scored[-3:]:
+        print(s, t)
+
+
+if __name__ == &quot;__main__&quot;:
+    good = (&quot;The water cycle describes how water evaporates from the surface of the earth, rises into the &quot;
+            &quot;atmosphere, cools and condenses into clouds, and falls again as precipitation. &quot;) * 3
+    spam = &quot;BUY NOW!!! ### $$$ ### click ### here ### &quot; * 20
+    for name, t in ((&quot;textbook paragraph&quot;, good), (&quot;spam page&quot;, spam)):
+        failed = [k for k, ok in gopher_rules(t).items() if not ok]
+        print(f&quot;{name}: keep={keep(t)}  failed={failed}&quot;)</code></pre>
+<p>Output of the local part:</p>
+<pre class="code output"><code class="output">textbook paragraph: keep=True  failed=[]
+spam page: keep=False  failed=[&#x27;symbol_to_word_ratio_lt_0.1&#x27;, &#x27;80pct_words_alphabetic&#x27;, &#x27;at_least_2_stopwords&#x27;]</code></pre>
+<h2 class="unnumbered" id="deduplication-with-minhash">Deduplication with MinHash</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why MinHash estimates Jaccard similarity</div>
+<p><strong>Step 1.</strong> Represent a document as its set of word 5-grams (shingles), <span class="math inline">\(A\)</span>. Similarity of two documents: Jaccard <span class="math inline">\(J(A,B)=\frac{|A\cap B|}{|A\cup B|}\)</span>.</p>
+<p><strong>Step 2.</strong> Take a random permutation <span class="math inline">\(\pi\)</span> of all possible shingles, and define <span class="math inline">\(h(A)=\min_{x\in A}\pi(x)\)</span>.</p>
+<p><strong>Step 3.</strong> Look at the element of <span class="math inline">\(A\cup B\)</span> that comes first under <span class="math inline">\(\pi\)</span>. It’s equally likely to be any element of <span class="math inline">\(A\cup B\)</span>. <span class="math inline">\(h(A)=h(B)\)</span> exactly when that first element is in both sets.</p>
+<p><strong>Step 4.</strong> So <span class="math inline">\(P[h(A)=h(B)]=\frac{|A\cap B|}{|A\cup B|}=J\)</span>. With <span class="math inline">\(K\)</span> independent hash functions (cheap substitutes for permutations, <span class="math inline">\(h_i(x)=(a_ix+b_i)\bmod p\)</span>), the fraction of matching signature entries estimates <span class="math inline">\(J\)</span> with standard error <span class="math inline">\(\sqrt{J(1-J)/K}\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>LSH banding:</strong> comparing every pair of <span class="math inline">\(10^9\)</span> docs is impossible. Split each <span class="math inline">\(K\)</span>-value signature into <span class="math inline">\(b\)</span> bands of <span class="math inline">\(r\)</span> rows, and only compare docs that share an entire band. One band matches with probability <span class="math inline">\(J^r\)</span>, so <span class="math inline">\(P(\text{candidate})=1-(1-J^r)^b\)</span>.</p>
+<p><strong>Step 6.</strong> That’s an S-curve with its steepest point near <span class="math inline">\(J^*\approx(1/b)^{1/r}\)</span>. FineWeb uses <span class="math inline">\(b=14,r=8\)</span> (112 hashes); with <span class="math inline">\(b=16,r=8\)</span>, <span class="math inline">\(J^*=16^{-1/8}=0.707\)</span>.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/da1e7548fd3c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>LSH turns a soft similarity into a sharp threshold. More rows per band move the threshold right; more bands move it left.</em></p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Exact and near-duplicate removal (MinHash + LSH) and benchmark decontamination.
+
+Run:  python dedup.py      (pure Python + NumPy; runs anywhere)
+&quot;&quot;&quot;
+import hashlib
+import re
+
+import numpy as np
+
+PRIME = (1 &lt;&lt; 61) - 1
+
+
+def shingles(text: str, n: int = 5) -&gt; set[int]:
+    &quot;&quot;&quot;Word n-grams, hashed to 64-bit integers.&quot;&quot;&quot;
+    words = re.findall(r&quot;\w+&quot;, text.lower())
+    grams = {&quot; &quot;.join(words[i:i + n]) for i in range(max(1, len(words) - n + 1))}
+    return {int.from_bytes(hashlib.blake2b(g.encode(), digest_size=8).digest(), &quot;little&quot;) for g in grams}
+
+
+class MinHasher:
+    &quot;&quot;&quot;K hash functions h_i(x) = (a_i x + b_i) mod p. A signature keeps the min of each over a doc&#x27;s shingles.&quot;&quot;&quot;
+
+    def __init__(self, num_perm: int = 128, seed: int = 0):
+        rng = np.random.default_rng(seed)
+        self.a = rng.integers(1, PRIME, size=num_perm, dtype=np.uint64)
+        self.b = rng.integers(0, PRIME, size=num_perm, dtype=np.uint64)
+
+    def signature(self, sh: set[int]) -&gt; np.ndarray:
+        x = np.fromiter(sh, dtype=np.uint64)[:, None] % PRIME
+        # Python ints avoid uint64 overflow in a*x; fine for a teaching example.
+        vals = (self.a.astype(object) * x.astype(object) + self.b.astype(object)) % PRIME
+        return vals.min(axis=0).astype(np.uint64)
+
+
+def jaccard(a: set, b: set) -&gt; float:
+    return len(a &amp; b) / len(a | b)
+
+
+def lsh_candidates(sigs: list[np.ndarray], bands: int, rows: int) -&gt; set[tuple[int, int]]:
+    &quot;&quot;&quot;Split each signature into `bands` bands of `rows` values; docs sharing any band are candidates.&quot;&quot;&quot;
+    pairs = set()
+    for band in range(bands):
+        buckets: dict[bytes, list[int]] = {}
+        for i, s in enumerate(sigs):
+            buckets.setdefault(s[band * rows:(band + 1) * rows].tobytes(), []).append(i)
+        for ids in buckets.values():
+            pairs |= {(ids[x], ids[y]) for x in range(len(ids)) for y in range(x + 1, len(ids))}
+    return pairs
+
+
+def lsh_probability(s: float, bands: int, rows: int) -&gt; float:
+    &quot;&quot;&quot;P(two docs with Jaccard s become candidates) = 1 - (1 - s^r)^b.&quot;&quot;&quot;
+    return 1 - (1 - s ** rows) ** bands
+
+
+def contaminated(doc: str, benchmark_ngrams: set[str], n: int = 13) -&gt; bool:
+    &quot;&quot;&quot;Flag a training doc that shares any n-gram with a benchmark (13-grams are a common choice).&quot;&quot;&quot;
+    words = re.findall(r&quot;\w+&quot;, doc.lower())
+    return any(&quot; &quot;.join(words[i:i + n]) in benchmark_ngrams for i in range(len(words) - n + 1))
+
+
+if __name__ == &quot;__main__&quot;:
+    docs = [
+        &quot;The mitochondria is the powerhouse of the cell and produces most of its chemical energy in the form of ATP.&quot;,
+        &quot;The mitochondria is the powerhouse of the cell and produces most of the chemical energy in the form of ATP.&quot;,
+        &quot;Photosynthesis converts light energy into chemical energy stored in glucose inside plant chloroplasts.&quot;,
+        &quot;The mitochondria is the powerhouse of the cell and produces most of its chemical energy in the form of ATP.&quot;,
+    ]
+    exact = {}
+    for i, d in enumerate(docs):
+        exact.setdefault(hashlib.sha256(d.encode()).hexdigest(), []).append(i)
+    print(&quot;exact duplicate groups:&quot;, [v for v in exact.values() if len(v) &gt; 1])
+
+    sh = [shingles(d) for d in docs]
+    mh = MinHasher(num_perm=128)
+    sigs = [mh.signature(s) for s in sh]
+    print(f&quot;true Jaccard(0,1) = {jaccard(sh[0], sh[1]):.3f}   MinHash estimate = {(sigs[0] == sigs[1]).mean():.3f}&quot;)
+    print(f&quot;true Jaccard(0,2) = {jaccard(sh[0], sh[2]):.3f}   MinHash estimate = {(sigs[0] == sigs[2]).mean():.3f}&quot;)
+    print(&quot;LSH candidate pairs (b=16, r=8):&quot;, sorted(lsh_candidates(sigs, bands=16, rows=8)))
+    for s in (0.5, 0.7, 0.8, 0.9):
+        print(f&quot;  P(candidate | Jaccard={s}) = {lsh_probability(s, 16, 8):.3f}&quot;)
+
+    bench = &quot;Natalia sold clips to 48 of her friends in April and then she sold half as many clips in May&quot;
+    words = re.findall(r&quot;\w+&quot;, bench.lower())
+    bench_ngrams = {&quot; &quot;.join(words[i:i + 13]) for i in range(len(words) - 12)}
+    leak = &quot;Practice set: Natalia sold clips to 48 of her friends in April and then she sold half as many clips in May. How many?&quot;
+    print(&quot;contaminated:&quot;, contaminated(leak, bench_ngrams), contaminated(docs[2], bench_ngrams))</code></pre>
+<p>Output:</p>
+<pre class="code output"><code class="output">exact duplicate groups: [[0, 3]]
+true Jaccard(0,1) = 0.524   MinHash estimate = 0.531
+true Jaccard(0,2) = 0.000   MinHash estimate = 0.000
+LSH candidate pairs (b=16, r=8): [(0, 3)]
+  P(candidate | Jaccard=0.5) = 0.061
+  P(candidate | Jaccard=0.7) = 0.613
+  P(candidate | Jaccard=0.8) = 0.947
+  P(candidate | Jaccard=0.9) = 1.000
+contaminated: True False</code></pre>
+<p><strong>Decontamination:</strong> remove training documents that contain benchmark questions, or every evaluation number is inflated. The common check is any shared 13-gram with a test set (last lines of the output above). Run it against every benchmark you plan to report <em>before</em> training.</p>
+<h2 class="unnumbered" id="model-based-quality-filtering">Model-based quality filtering</h2>
+<p><strong>FineWeb-Edu:</strong> Llama-3-70B-Instruct rated 450K web pages 0–5 for educational value; a small classifier (a regression head on a BERT-style encoder) was trained to imitate those ratings and run over all 15T tokens; pages scoring <span class="math inline">\(\ge3\)</span> were kept. Models trained on it beat models trained on full FineWeb on knowledge benchmarks like MMLU and ARC at the same token count. <strong>DCLM</strong> (2024) uses a fastText classifier whose positives are instruction-style text (OpenHermes, r/ExplainLikeImFive), and gets about 4T tokens. The <code>score_fineweb</code> function above runs the FineWeb-Edu classifier on a Modal L4.</p>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Pre-training dataset (HF id)</th>
+<th style="text-align: left;">size</th>
+<th style="text-align: left;">notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>HuggingFaceFW/fineweb</code></td>
+<td style="text-align: left;">15T tokens</td>
+<td style="text-align: left;">English web, filtered and deduplicated per snapshot</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>HuggingFaceFW/fineweb-edu</code></td>
+<td style="text-align: left;">1.3T tokens</td>
+<td style="text-align: left;">score <span class="math inline">\(\ge3\)</span>; configs <code>sample-10BT</code>, <code>sample-100BT</code> fit a GPU budget</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>HuggingFaceFW/fineweb-2</code></td>
+<td style="text-align: left;">multilingual</td>
+<td style="text-align: left;">1000+ languages, same pipeline</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>mlfoundations/dclm-baseline-1.0</code></td>
+<td style="text-align: left;"><span class="math inline">\(\approx\)</span>4T tokens</td>
+<td style="text-align: left;">fastText quality filter</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>allenai/olmo-mix-1124</code></td>
+<td style="text-align: left;"><span class="math inline">\(\approx\)</span>3.9T tokens</td>
+<td style="text-align: left;">OLMo 2’s full mix: web, code, math, papers</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>HuggingFaceTB/smollm-corpus</code></td>
+<td style="text-align: left;"><span class="math inline">\(\approx\)</span>250B tokens</td>
+<td style="text-align: left;">FineWeb-Edu dedup + Cosmopedia v2 (synthetic) + Python-Edu</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>nvidia/Nemotron-CC-v2</code></td>
+<td style="text-align: left;">6.6T tokens</td>
+<td style="text-align: left;">web + large synthetic rephrasings (Chapter 17)</td>
+</tr>
+</tbody>
+</table>
+</div>

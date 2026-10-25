@@ -1,0 +1,110 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> Unconstrained: minimise <span class="math inline">\(f(x)\)</span> over all <span class="math inline">\(x\)</span>. At a minimum the gradient is zero and the Hessian is positive semi-definite. Constrained: minimise <span class="math inline">\(f(x)\)</span> subject to <span class="math inline">\(g(x)=0\)</span> or <span class="math inline">\(h(x)\le0\)</span>. At a constrained minimum the gradient need not vanish; it only has to point straight out of the feasible set. <strong>Real-life version:</strong> the lowest point of a valley is where the ground is flat. The lowest point you can reach while staying on a hiking trail is where the trail runs along a contour line, so the downhill direction is perpendicular to the trail.</p>
+</div>
+<h2 class="unnumbered" id="unconstrained-conditions-and-gradient-descent">Unconstrained: conditions and gradient descent</h2>
+<ul>
+<li><p><strong>First order</strong>: <span class="math inline">\(\nabla f(x^\star)=0\)</span>. <strong>Second order</strong>: <span class="math inline">\(H(x^\star)\succeq0\)</span> (all eigenvalues <span class="math inline">\(\ge0\)</span>) for a minimum; mixed signs mean a saddle. For <span class="math inline">\(f=x^3-3x+y^2\)</span>, <span class="math inline">\((1,0)\)</span> has eigenvalues <span class="math inline">\(\{6,2\}\)</span> (minimum) and <span class="math inline">\((-1,0)\)</span> has <span class="math inline">\(\{-6,2\}\)</span> (saddle).</p></li>
+<li><p><strong>Convexity</strong>: if <span class="math inline">\(H\succeq0\)</span> everywhere, every stationary point is a global minimum. Cross-entropy in the logits is convex (its Hessian is the softmax Jacobian); a neural network’s loss in its weights is not.</p></li>
+</ul>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Gradient descent on a quadratic, and the condition number</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(f(x)=\tfrac12x^\top Ax-b^\top x\)</span>, <span class="math inline">\(A\)</span> symmetric with eigenvalues <span class="math inline">\(\mu=\lambda_{\min}\le\dots\le\lambda_{\max}=L\)</span>. The minimiser is <span class="math inline">\(x^\star=A^{-1}b\)</span>.</p>
+<p><strong>Step 2.</strong> One step <span class="math inline">\(x\leftarrow x-\eta(Ax-b)\)</span> gives <span class="math inline">\(x-x^\star\leftarrow(I-\eta A)(x-x^\star)\)</span>.</p>
+<p><strong>Step 3.</strong> In the eigenbasis each coordinate shrinks by <span class="math inline">\(|1-\eta\lambda_i|\)</span>. With <span class="math inline">\(\eta=1/L\)</span>, the slowest is <span class="math inline">\(1-\mu/L=1-1/\kappa\)</span>.</p>
+<p><strong>Step 4.</strong> Reaching error <span class="math inline">\(\epsilon\)</span> takes <span class="math inline">\(k\approx\kappa\ln(1/\epsilon)\)</span> steps. The code matches this to within 1%: 130, 1375 and 13<span>,</span>809 steps at <span class="math inline">\(\kappa=10,100,1000\)</span>. Newton’s method, <span class="math inline">\(x\leftarrow x-H^{-1}\nabla f\)</span>, rescales every direction by its curvature and solves a quadratic in one step. Adam’s per-coordinate scaling is a cheap diagonal approximation of that idea.</p>
+</div>
+<h2 class="unnumbered" id="equality-constraints-lagrange-multipliers">Equality constraints: Lagrange multipliers</h2>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/8623822e6f01.svg" alt="diagram" loading="lazy"></figure>
+<p><em><span class="math inline">\(f=(x_1-2)^2+(x_2-2)^2\)</span> on the line <span class="math inline">\(x_1+x_2=1\)</span>. At <span class="math inline">\(x^\star\)</span> the line is tangent to a contour, so <span class="math inline">\(\nabla f\)</span> and <span class="math inline">\(\nabla g\)</span> are parallel.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: The Lagrange condition</div>
+<p><strong>Step 1.</strong> Move along the constraint: any feasible direction <span class="math inline">\(d\)</span> has <span class="math inline">\(\nabla g^\top d=0\)</span>. At a constrained minimum <span class="math inline">\(f\)</span> can’t decrease to first order along such <span class="math inline">\(d\)</span>, so <span class="math inline">\(\nabla f^\top d=0\)</span> for every <span class="math inline">\(d\perp\nabla g\)</span>.</p>
+<p><strong>Step 2.</strong> A vector orthogonal to everything orthogonal to <span class="math inline">\(\nabla g\)</span> is a multiple of it: <span class="math inline">\(\nabla f=-\lambda\nabla g\)</span>.</p>
+<p><strong>Step 3.</strong> Equivalently, <span class="math inline">\(x^\star\)</span> is a stationary point of the <em>Lagrangian</em> <span class="math inline">\(\mathcal L(x,\lambda)=f(x)+\lambda g(x)\)</span>: <span class="math inline">\(\partial_x\mathcal L=0\)</span> gives step 2 and <span class="math inline">\(\partial_\lambda\mathcal L=0\)</span> gives the constraint back.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Softmax is the maximum-entropy distribution</div>
+<p><strong>Step 1.</strong> Maximise <span class="math inline">\(H(p)=-\sum_ip_i\log p_i\)</span> subject to <span class="math inline">\(\sum_ip_i=1\)</span> and <span class="math inline">\(\sum_ip_iE_i=\mu\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\mathcal L=-\sum p_i\log p_i+\alpha(\sum p_i-1)-\lambda(\sum p_iE_i-\mu)\)</span>. <span class="math inline">\(\partial/\partial p_i\)</span>: <span class="math inline">\(-\log p_i-1+\alpha-\lambda E_i=0\)</span>.</p>
+<p><strong>Step 3.</strong> So <span class="math inline">\(p_i\propto e^{-\lambda E_i}\)</span>, normalised: <span class="math inline">\(\boxed{p_i=e^{-\lambda E_i}/\sum_je^{-\lambda E_j}}\)</span>, the Gibbs distribution, which is softmax of the logits <span class="math inline">\(-\lambda E\)</span>. <span class="math inline">\(\lambda\)</span> is fixed by the mean constraint (the code finds <span class="math inline">\(\lambda=0.42\)</span> by bisection and checks that every feasible perturbation lowers the entropy). Temperature is <span class="math inline">\(1/\lambda\)</span>.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: The optimal RLHF policy</div>
+<p><strong>Step 1.</strong> Maximise <span class="math inline">\(J(\pi)=\sum_y\pi(y)r(y)-\beta\sum_y\pi(y)\log\frac{\pi(y)}{\pi_{\text{ref}}(y)}\)</span> subject to <span class="math inline">\(\sum_y\pi(y)=1\)</span>.</p>
+<p><strong>Step 2.</strong> Stationarity: <span class="math inline">\(r(y)-\beta\big(\log\frac{\pi(y)}{\pi_{\text{ref}}(y)}+1\big)+\alpha=0\)</span>, so <span class="math inline">\(\log\pi(y)=\log\pi_{\text{ref}}(y)+r(y)/\beta+\text{const}\)</span>.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(\boxed{\pi^\star(y)=\pi_{\text{ref}}(y)e^{r(y)/\beta}/Z}\)</span>, and plugging back in, <span class="math inline">\(J(\pi^\star)=\beta\log Z\)</span>. Solving step 3 for <span class="math inline">\(r\)</span> gives <span class="math inline">\(r=\beta\log\frac{\pi^\star}{\pi_{\text{ref}}}+\beta\log Z\)</span>, the substitution that turns RLHF into DPO (Session 26 onward).</p>
+</div>
+<h2 class="unnumbered" id="inequality-constraints-kkt">Inequality constraints: KKT</h2>
+<p>For <span class="math inline">\(\min f(x)\)</span> subject to <span class="math inline">\(h_k(x)\le0\)</span>, the Karush–Kuhn–Tucker conditions at a (regular) optimum are: stationarity <span class="math inline">\(\nabla f+\sum_k\mu_k\nabla h_k=0\)</span>; primal feasibility <span class="math inline">\(h_k\le0\)</span>; dual feasibility <span class="math inline">\(\mu_k\ge0\)</span>; and <em>complementary slackness</em> <span class="math inline">\(\mu_kh_k=0\)</span>, meaning each constraint is either active (<span class="math inline">\(h_k=0\)</span>) or has zero multiplier. Example: <span class="math inline">\(\min\lVert x-c\rVert^2\)</span> s.t. <span class="math inline">\(x\ge0\)</span> gives <span class="math inline">\(x=\max(c,0)\)</span>, the ReLU, with <span class="math inline">\(\mu_k=2\max(-c_k,0)\)</span>. Projected gradient descent (step, then clip to the feasible set) reaches it. PPO’s clipped objective and trust regions are this kind of problem, solved approximately.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Math I: unconstrained and constrained optimisation, with the two constrained problems behind
+softmax (max entropy) and RLHF (KL-regularised reward maximisation).&quot;&quot;&quot;
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# 1. Gradient descent on f(x) = 1/2 x^T A x - b^T x. Speed is set by the condition number kappa.
+print(&quot;[gd] kappa   GD steps to 1e-6   theory ~ kappa*ln(1e6)   Newton steps&quot;)
+for kappa in (10, 100, 1000):
+    A = np.diag(np.linspace(1, kappa, 10)); b = np.ones(10); x_star = np.linalg.solve(A, b)
+    x = np.zeros(10)
+    for k in range(1, 100_000):
+        x -= (A @ x - b) / kappa                          # step 1/L, L = largest eigenvalue
+        if np.linalg.norm(x - x_star) &lt; 1e-6 * np.linalg.norm(x_star):
+            break
+    xn = np.zeros(10) - np.linalg.solve(A, A @ np.zeros(10) - b)   # one Newton step
+    print(f&quot;[gd] {kappa:5d}   {k:8d}            {kappa * np.log(1e6):8.0f}              &quot;
+          f&quot;{1 if np.allclose(xn, x_star) else &#x27;&gt;1&#x27;}&quot;)
+
+# 2. Second-derivative test: f = x^3 - 3x + y^2 has critical points (1, 0) and (-1, 0).
+for pt in ((1.0, 0.0), (-1.0, 0.0)):
+    ev = np.linalg.eigvalsh(np.diag([6 * pt[0], 2.0]))
+    kind = &quot;minimum&quot; if (ev &gt; 0).all() else &quot;saddle&quot; if (ev &lt; 0).any() and (ev &gt; 0).any() else &quot;maximum&quot;
+    print(f&quot;[hessian] critical point {pt}: Hessian eigenvalues {ev} -&gt; {kind}&quot;)
+
+# 3. Max entropy subject to sum p = 1 and E_p[energy] = mu  -&gt;  Gibbs / softmax p ~ exp(-lam * energy).
+E, mu = np.array([0.0, 1.0, 2.0, 3.0]), 1.0
+gibbs = lambda lam: np.exp(-lam * E) / np.exp(-lam * E).sum()
+lo, hi = -20.0, 20.0
+for _ in range(100):                                       # mean energy decreases in lam: bisect
+    mid = (lo + hi) / 2
+    lo, hi = (mid, hi) if gibbs(mid) @ E &gt; mu else (lo, mid)
+p = gibbs(lo)
+H = lambda q: -(q * np.log(q)).sum()
+null = np.linalg.svd(np.vstack([np.ones(4), E]))[2][2:]   # directions keeping both constraints
+worse = all(H(p + 0.01 * (rng.normal(size=2) @ null)) &lt; H(p) for _ in range(1000))
+print(f&quot;[maxent] lambda = {lo:.4f}, p = {np.round(p, 4)}, mean energy {p @ E:.4f}, entropy {H(p):.4f}&quot;)
+print(f&quot;[maxent] 1000 random feasible perturbations all have lower entropy: {worse}&quot;)
+
+# 4. RLHF objective: max_pi E_pi[r] - beta KL(pi || pi_ref)  -&gt;  pi* ~ pi_ref exp(r / beta).
+K, beta = 6, 0.5
+pi_ref, r = rng.dirichlet(np.ones(K)), rng.normal(size=K)
+J = lambda pi: pi @ r - beta * (pi * np.log(pi / pi_ref)).sum()
+pi_star = pi_ref * np.exp(r / beta); pi_star /= pi_star.sum()
+best_random = max(J(rng.dirichlet(np.ones(K))) for _ in range(20_000))
+print(f&quot;[rlhf] J(pi*) = {J(pi_star):.4f} = beta log Z = {beta * np.log((pi_ref * np.exp(r / beta)).sum()):.4f};&quot;
+      f&quot; best of 20,000 random policies {best_random:.4f}&quot;)
+
+# 5. KKT: min |x - c|^2 s.t. x &gt;= 0. Solution max(c, 0); multipliers mu = 2 max(-c, 0) &gt;= 0, mu * x = 0.
+c = np.array([1.5, -0.7, 0.2, -2.0])
+x = np.zeros(4)
+for _ in range(200):
+    x = np.maximum(x - 0.1 * 2 * (x - c), 0)                 # projected gradient descent
+mu_kkt = 2 * (x - c)                                         # stationarity: 2(x - c) - mu = 0
+print(f&quot;[kkt] projected GD x = {np.round(x, 4)} (= max(c,0)), multipliers {np.round(mu_kkt, 4) + 0.0}, &quot;
+      f&quot;complementary slackness mu*x = {np.round(mu_kkt * x, 6) + 0.0}&quot;)</code></pre>
+<pre class="code output"><code class="output">[gd] kappa   GD steps to 1e-6   theory ~ kappa*ln(1e6)   Newton steps
+[gd]    10        130                 138              1
+[gd]   100       1375                1382              1
+[gd]  1000      13809               13816              1
+[hessian] critical point (1.0, 0.0): Hessian eigenvalues [2. 6.] -&gt; minimum
+[hessian] critical point (-1.0, 0.0): Hessian eigenvalues [-6.  2.] -&gt; saddle
+[maxent] lambda = 0.4196, p = [0.4214 0.277  0.182  0.1197], mean energy 1.0000, entropy 1.2839
+[maxent] 1000 random feasible perturbations all have lower entropy: True
+[rlhf] J(pi*) = 1.5629 = beta log Z = 1.5629; best of 20,000 random policies 1.4417
+[kkt] projected GD x = [1.5 0.  0.2 0. ] (= max(c,0)), multipliers [0.  1.4 0.  4. ], complementary slackness mu*x = [0. 0. 0. 0.]</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Softmax and the RLHF optimum are both answers to constrained optimisation problems; the Lagrange multiplier is the temperature in one and <span class="math inline">\(1/\beta\)</span> in the other.</p></li>
+<li><p>No random policy among 20<span>,</span>000 beats <span class="math inline">\(\pi^\star\)</span>, and <span class="math inline">\(J(\pi^\star)=\beta\log Z\)</span> to four decimals.</p></li>
+<li><p>Ill-conditioning (large <span class="math inline">\(\kappa\)</span>) is why plain gradient descent is slow, and why adaptive optimisers and normalisation layers help.</p></li>
+</ul>
+</div>

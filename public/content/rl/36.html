@@ -1,0 +1,282 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: testing a new price without customers</div>
+<p>A shop wants to know how a new discount policy would perform <em>without</em> trying it on real customers. It looks at last year’s sales under the old policy and reweights them: “customers who happened to get discounts behaved like this.” That works only if the old policy sometimes did what the new one would do.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/162b9db7f8ad.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why must nonexistent actions after termination be masked?</p></li>
+<li><p>What does a low importance-sampling effective sample size indicate?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="evaluate-without-deploying">2. Evaluate without deploying</h3>
+<p>Suppose logged trajectories came from behavior policy <span class="math inline">\(\mu\)</span>, but we want the expected return of target policy <span class="math inline">\(\pi\)</span>.</p>
+<p>For trajectory <span class="math inline">\(i\)</span>, importance sampling assigns the ratio:</p>
+<p><span class="math display">\[w_i
+=
+\prod_t
+\frac{\pi(a_{i,t}\mid s_{i,t})}
+{\mu(a_{i,t}\mid s_{i,t})}\]</span></p>
+<p>The trajectory was sampled with probability <span class="math inline">\(\mu\)</span>, so <span class="math inline">\(w_i\)</span> reweights it as if it came from <span class="math inline">\(\pi\)</span>.</p>
+<p>Compute in log space:</p>
+<p><span class="math display">\[\log w_i
+=
+\sum_t M_{i,t}
+\left[
+\log\pi(a_{i,t}\mid s_{i,t})
+-
+\log\mu(a_{i,t}\mid s_{i,t})
+\right]\]</span></p>
+<p><span class="math display">\[w_i=\exp(\log w_i)\]</span></p>
+<p>The mask <span class="math inline">\(M\)</span> excludes padding and post-termination placeholders.</p>
+<p>The ordinary importance-sampling estimate is:</p>
+<p><span class="math display">\[\hat V_{\text{IS}}
+=
+\frac1N\sum_i w_iG_i\]</span></p>
+<p>It is unbiased when the behavior policy covers every action the target might take:</p>
+<p><span class="math display">\[\pi(a\mid s)&gt;0
+\implies
+\mu(a\mid s)&gt;0\]</span></p>
+<p>Without this support condition, the log contains no evidence about some target-policy behavior.</p>
+<p>A lower-variance alternative is self-normalized IS:</p>
+<p><span class="math display">\[\hat V_{\text{SNIS}}
+=
+\frac{\sum_iw_iG_i}{\sum_iw_i}\]</span></p>
+<p>SNIS is generally biased but often more stable.</p>
+<p>A useful diagnostic is effective sample size:</p>
+<p><span class="math display">\[\operatorname{ESS}
+=
+\frac{(\sum_iw_i)^2}{\sum_iw_i^2}\]</span></p>
+<p>If 10,000 logged trajectories have ESS 100, the estimate behaves roughly as though only 100 similarly weighted examples were informative.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions, selected log-probabilities, mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>returns, log-weights, weights: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>estimates and ESS: scalar</p></li>
+</ul>
+<p>DPO does not perform this evaluation. It optimizes a policy from fixed preference pairs; off-policy evaluation estimates a policy’s return from logged environment trajectories.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: IS estimator and effective sample size</div>
+<p><span class="math inline">\(\hat V_{\text{IS}}(\pi)=\frac1N\sum_i\rho_iG_i\)</span>, with <span class="math inline">\(\rho_i=\prod_t\frac{\pi(a_t|s_t)}{b(a_t|s_t)}\)</span>. Compute it as <span class="math inline">\(\exp\big(\sum_t(\log\pi-\log b)\big)\)</span> to avoid underflow.</p>
+<p><strong>How much data do you really have?</strong> <span class="math inline">\(\text{ESS}=(\sum_iw_i)^2/\sum_iw_i^2\)</span>. If the log-ratio is roughly Gaussian with variance <span class="math inline">\(\sigma^2\)</span> per step, then <span class="math inline">\(\text{ESS}/N\approx e^{-T\sigma^2}\)</span>:</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/a852a43708fb.svg" alt="diagram" loading="lazy"></figure>
+<p><em>10<span>,</span>000 logged trajectories with ESS <span class="math inline">\(=30\)</span> means you effectively have 30.</em></p>
+</div>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>OPE works only where the logging policy explored.</p></li>
+<li><p>Low ESS means don’t trust the number.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: ESS from four trajectories</div>
+<p>Summed log-ratios <span class="math inline">\((0.1,-0.2,1.5,-1.0)\)</span>, so <span class="math inline">\(w=(1.105,0.819,4.482,0.368)\)</span>. ESS <span class="math inline">\(=6.77^2/22.1\approx2.07\)</span> of 4. One trajectory carries most of the weight.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Multiplying probabilities directly (underflow over long trajectories).</p></li>
+<li><p>Using the current policy’s probability as the logging propensity.</p></li>
+<li><p>Trusting the estimate without checking the max weight.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Trajectory-level off-policy evaluation with an ESS check</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logged trajectories with returns <span class="math inline">\(G_i\)</span> and propensities <span class="math inline">\(b(a_t|s_t)\)</span>, target <span class="math inline">\(\pi\)</span>, ESS threshold</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each trajectory <span class="math inline">\(i\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(b(a_t|s_t)=0\)</span> where <span class="math inline">\(\pi(a_t|s_t)&gt;0\)</span> for some <span class="math inline">\(t\)</span> <strong>then</strong> flag as unsupported</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(w_i\gets\exp\Big(\sum_t\big[\log\pi(a_t|s_t)-\log b(a_t|s_t)\big]\Big)\)</span> <em>▷ sum logs, then exponentiate</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\hat V_{\text{IS}}\gets\frac1N\sum_iw_iG_i\)</span>; <span class="math inline">\(\hat V_{\text{WIS}}\gets\sum_iw_iG_i/\sum_iw_i\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\text{ESS}\gets(\sum_iw_i)^2/\sum_iw_i^2\)</span></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> ESS <span class="math inline">\(&lt;\)</span> threshold <strong>then</strong> report “unreliable: logs don’t cover <span class="math inline">\(\pi\)</span>”</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-evaluate-a-more-aggressive-target-policy">3. PyTorch exercise — evaluate a more aggressive target policy</h3>
+<p>Action <span style="background-color: codeinlinebg"><code> 1</code></span> is required at every valid step for success. Half the episodes contain one decision and half contain two.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+batch_size = 4096
+max_steps = 2
+
+# Logged policy rarely chooses action 1.
+behavior_probs = torch.tensor([0.8, 0.2])
+
+# Candidate policy chooses action 1 much more often.
+target_probs = torch.tensor([0.3, 0.7])
+
+behavior = Categorical(probs=behavior_probs)
+
+# Logged actions: [B, T].
+actions = behavior.sample((
+    batch_size,
+    max_steps,
+))
+
+# First half terminates after one action.
+trajectory_mask = torch.ones(
+    batch_size,
+    max_steps,
+)
+
+trajectory_mask[
+    :batch_size // 2,
+    1
+] = 0.0
+
+# Success requires action 1 at every step that occurred.
+returns = (
+    (actions == 1)
+    | (trajectory_mask == 0)
+).all(dim=1).float()
+
+behavior_log_probs = behavior_probs.log()
+target_log_probs = target_probs.log()
+
+# TODO 1: Gather selected log-probabilities: [B, T].
+selected_behavior_log_probs = ...
+selected_target_log_probs = ...
+
+# TODO 2: Masked target-to-behavior trajectory log-ratios.
+log_weights = ...
+
+# TODO 3: Convert to importance weights.
+weights = ...
+
+# TODO 4: Ordinary and self-normalized estimates.
+ordinary_is = ...
+self_normalized_is = ...
+
+# Clipping reduces variance but introduces bias.
+clipped_weights = weights.clamp(max=4.0)
+
+clipped_is = (
+    clipped_weights * returns
+).mean()
+
+# TODO 5: Effective sample size.
+effective_sample_size = ...
+
+# This tiny environment permits an exact answer.
+lengths = trajectory_mask.sum(dim=1)
+
+true_target_value = (
+    target_probs[1] ** lengths
+).mean()
+
+print(&quot;Logged behavior success:&quot;, returns.mean().item())
+print(&quot;True target value:&quot;, true_target_value.item())
+print(&quot;Ordinary IS:&quot;, ordinary_is.item())
+print(&quot;Self-normalized IS:&quot;, self_normalized_is.item())
+print(&quot;Clipped IS:&quot;, clipped_is.item())
+print(
+    &quot;ESS:&quot;,
+    effective_sample_size.item(),
+    &quot;of&quot;,
+    batch_size,
+)
+print(&quot;Maximum weight:&quot;, weights.max().item())
+print(&quot;Mean weight:&quot;, weights.mean().item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the logged success rate closer to <span style="background-color: codeinlinebg"><code> 0.12</code></span> or <span style="background-color: codeinlinebg"><code> 0.60</code></span>?</p></li>
+<li><p>What is the exact target value?</p></li>
+<li><p>Which trajectories receive the largest weight?</p></li>
+<li><p>Will clipping the largest weights preserve unbiasedness?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Index a log-probability vector using the action tensor.</p></li>
+<li><p>Ratio direction is <span style="background-color: codeinlinebg"><code> target - behavior</code></span>.</p></li>
+<li><p>Sum masked log-ratios over time, then exponentiate.</p></li>
+<li><p>SNIS divides the weighted-return sum by the weight sum.</p></li>
+<li><p>ESS uses the square of the weight sum.</p></li>
+<li><p>The target succeeds with probability <span class="math inline">\(0.7^L\)</span> in a length-<span class="math inline">\(L\)</span> episode.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Reverse the ratio:</p>
+<pre class="code python"><code class="language-python">log_weights = (
+    (
+        selected_behavior_log_probs
+        - selected_target_log_probs
+    )
+    * trajectory_mask
+).sum(dim=1)</code></pre>
+<p>This reweights in the wrong direction and no longer estimates the target policy.</p>
+<p>Then omit the mask. The unused second action in one-step episodes changes their weights, even though it never occurred in the environment.</p>
+<p>Finally, set:</p>
+<pre class="code python"><code class="language-python">behavior_probs = torch.tensor([1.0, 0.0])</code></pre>
+<p>The log contains no action-<span style="background-color: codeinlinebg"><code> 1</code></span> trajectories. Adding epsilon might prevent <span style="background-color: codeinlinebg"><code> inf</code></span>, but it cannot invent the missing evidence.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can trajectory importance weights become extreme for long LLM outputs?</p></li>
+<li><p>Why is SNIS biased?</p></li>
+<li><p>Does a mean weight near one guarantee a reliable estimate?</p></li>
+<li><p>What should accompany every off-policy estimate in a report?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Selected log-probabilities:</p>
+<pre class="code python"><code class="language-python">selected_behavior_log_probs = (
+    behavior_log_probs[actions]
+)
+
+selected_target_log_probs = (
+    target_log_probs[actions]
+)</code></pre>
+<p>Masked log-weights and weights:</p>
+<pre class="code python"><code class="language-python">log_weights = (
+    (
+        selected_target_log_probs
+        - selected_behavior_log_probs
+    )
+    * trajectory_mask
+).sum(dim=1)
+
+weights = log_weights.exp()</code></pre>
+<p>Value estimates:</p>
+<pre class="code python"><code class="language-python">ordinary_is = (
+    weights * returns
+).mean()
+
+self_normalized_is = (
+    weights * returns
+).sum() / (
+    weights.sum() + 1e-8
+)</code></pre>
+<p>Effective sample size:</p>
+<pre class="code python"><code class="language-python">effective_sample_size = (
+    weights.sum().square()
+    / (
+        weights.square().sum()
+        + 1e-8
+    )
+)</code></pre>
+<p>The behavior policy succeeds with probability:</p>
+<p><span class="math display">\[\frac12(0.2)+\frac12(0.2^2)=0.12\]</span></p>
+<p>The target policy’s exact value is:</p>
+<p><span class="math display">\[\frac12(0.7)+\frac12(0.7^2)=0.595\]</span></p>
+<p>Two-step trajectories containing <span style="background-color: codeinlinebg"><code> [1, 1]</code></span> receive the largest weight:</p>
+<p><span class="math display">\[\left(\frac{0.7}{0.2}\right)^2
+=
+12.25\]</span></p>
+<p>They are rare under the behavior policy but common under the target policy. Clipping their weight at <span style="background-color: codeinlinebg"><code> 4</code></span> reduces their contribution, so the clipped estimate is biased downward in this example.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Each token ratio enters a product. Small per-token differences can therefore produce exponentially large or small trajectory weights.</p></li>
+<li><p>Its random weight sum appears in the denominator, changing the expectation of the estimator.</p></li>
+<li><p>No. A few enormous weights can balance many tiny weights while ESS remains dangerously low.</p></li>
+<li><p>Report ESS, maximum or percentile weights, support violations, clipping rules, uncertainty intervals and results across seeds.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>They did not occur in the environment; including them creates fictitious probability ratios and rewards.</p></li>
+<li><p>Weight mass is concentrated on a small number of trajectories, so variance and sensitivity to individual samples are high.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> logged trajectories can estimate a new agent only where the logging policy explored. Compute ratios in log space, mask nonexistent actions, and treat low ESS or missing support as evidence that deployment-free evaluation is unreliable.</p>

@@ -1,0 +1,11 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Three ways to use an LLM to make pre-training data: <strong>generate textbooks</strong> from topic seeds, <strong>rephrase</strong> real web pages into cleaner or more varied forms, or <strong>extract</strong> question–answer pairs from them. Rephrasing is the most popular now because the facts come from real documents while the style and density come from the model.</p>
+</div>
+<ul>
+<li><p><strong>Phi-1 / “Textbooks Are All You Need”</strong> (Microsoft, 2023): about 1B tokens of GPT-3.5 textbooks and exercises, plus filtered code, let a 1.3B model beat much larger ones on HumanEval.</p></li>
+<li><p><strong>Cosmopedia</strong> (HuggingFace, 2024): about 25B tokens (30M files) of synthetic textbooks, blog posts and stories from Mixtral-8x7B-Instruct, seeded by web pages and curated topic lists, for diversity. Cosmopedia v2 is part of <code>smollm-corpus</code>.</p></li>
+<li><p><strong>WRAP</strong> (Apple/CMU, 2024): rephrase web documents “like Wikipedia” or “as question–answer”; mixing rephrased with real data trains about 3<span class="math inline">\(\times\)</span> faster to the same perplexity.</p></li>
+<li><p><strong>Nemotron-CC-v2</strong> (NVIDIA, 2025; dataset card read this week): 3.36T tokens of real English crawl, plus 1.26T tokens of synthetic rephrasings and 0.69T of “Diverse QA” (also translated into 15 languages, 0.56T), generated with Mistral-Nemo-12B and Qwen3-30B-A3B using five prompt styles.</p></li>
+</ul>
+<p>The <code>rephrase</code> function in <code>synth.py</code> (listing in the next chapter) does this with three prompts: <code>wiki</code>, <code>qa</code> and <code>textbook</code>. Mix its output with the original documents rather than replacing them.</p>

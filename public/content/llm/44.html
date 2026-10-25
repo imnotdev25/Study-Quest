@@ -1,0 +1,226 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Autoregressive decoding</strong> generates one token at a time and feeds it back in. Under a causal mask, the keys and values of past tokens never change once computed. <strong>A KV cache</strong> stores them, so each new step computes only the new token’s <span class="math inline">\(q,k,v\)</span> and attends over the cache.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>In causal attention, why can token <span class="math inline">\(t\)</span> attend only to keys <span class="math inline">\(0,\ldots,t\)</span>?</p></li>
+<li><p>If a shared parameter is used by two computation-graph branches, how are its gradient contributions combined?</p></li>
+</ol>
+<p>During full-sequence causal attention:</p>
+<p><span class="math display">\[Q,K,V\in\mathbb{R}^{B\times T\times d}\]</span></p>
+<p><span class="math display">\[O=\operatorname{softmax}
+\left(
+\frac{QK^\top}{\sqrt d}+M
+\right)V\]</span></p>
+<p>During autoregressive generation, previous tokens do not change. Recomputing their keys and values at every decoding step is wasteful, so each layer caches them.</p>
+<p>At step <span class="math inline">\(t\)</span>:</p>
+<p><span class="math display">\[q_t\in\mathbb{R}^{B\times1\times d}\]</span></p>
+<p><span class="math display">\[K_{\le t},V_{\le t}\in\mathbb{R}^{B\times(t+1)\times d}\]</span></p>
+<p><span class="math display">\[S_t=\frac{q_tK_{\le t}^{\top}}{\sqrt d}
+\in\mathbb{R}^{B\times1\times(t+1)}\]</span></p>
+<p><span class="math display">\[o_t=\operatorname{softmax}(S_t)V_{\le t}
+\in\mathbb{R}^{B\times1\times d}\]</span></p>
+<p>No causal mask is required for this single newest query: the cache contains no future tokens.</p>
+<p>The cache avoids repeatedly projecting old tokens and computing outputs that will be discarded. Attention for the new token still reads the entire prefix, however, so total attention work across <span class="math inline">\(T\)</span> generated tokens remains quadratic.</p>
+<p>For <span class="math inline">\(L\)</span> layers and <span class="math inline">\(H\)</span> heads, KV-cache storage is proportional to:</p>
+<p><span class="math display">\[2BLHTd_h\]</span></p>
+<p>The factor two represents keys and values. Cache layout, position offsets, dtype, and beam reordering are common inference correctness bugs.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the cache gives the same answer, and what it costs</div>
+<p><strong>Step 1.</strong> Full causal attention, row <span class="math inline">\(t\)</span>: <span class="math inline">\(o_t=\sum_{j\le t}\operatorname{softmax}_j\big(q_t^\top k_j/\sqrt d\big)v_j\)</span>. It depends only on <span class="math inline">\(q_t\)</span> and <span class="math inline">\(k_{\le t},v_{\le t}\)</span>.</p>
+<p><strong>Step 2.</strong> Each <span class="math inline">\(k_j=x_jW_K\)</span> depends only on token <span class="math inline">\(j\)</span> (within one layer, and its input depends only on tokens <span class="math inline">\(\le j\)</span>). So <span class="math inline">\(k_{&lt;t}\)</span> computed at earlier steps is identical. Caching them changes nothing mathematically.</p>
+<p><strong>Step 3.</strong> <strong>Projection cost without a cache:</strong> step <span class="math inline">\(t\)</span> recomputes <span class="math inline">\(t\)</span> keys and values, <span class="math inline">\(O(tD^2)\)</span>, so generating <span class="math inline">\(T\)</span> tokens costs <span class="math inline">\(O(T^2D^2)\)</span>. With a cache: <span class="math inline">\(O(TD^2)\)</span> for projections plus <span class="math inline">\(O(T^2D)\)</span> for attention.</p>
+<p><strong>Step 4.</strong> <strong>Memory:</strong> <span class="math inline">\(2\times\text{layers}\times H\times d_h\times T\times B\)</span> numbers. Example: 32 layers, 32 heads, <span class="math inline">\(d_h=128\)</span>, <span class="math inline">\(T=4096\)</span>, <span class="math inline">\(B=1\)</span>, FP16: <span class="math inline">\(2\cdot32\cdot32\cdot128\cdot4096\cdot2\)</span> bytes <span class="math inline">\(=2\)</span> GiB.</p>
+<p><strong>Step 5.</strong> <strong>Why outputs can still differ:</strong> different kernels and orders of summation (one long matmul vs many small ones) round differently. Expect tiny numerical gaps, not a different argmax every token.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: greedy decoding with a KV cache</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> prompt <span class="math inline">\(x_{0:P-1}\)</span>, max new tokens <span class="math inline">\(N\)</span></div>
+<div class="algo-line" style="--d:0">prefill: run the model on the whole prompt, store <span class="math inline">\(K,V\)</span> per layer; <span class="math inline">\(y\gets\arg\max\)</span> of the last logits</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(n=1,\dots,N\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">run one token <span class="math inline">\(y\)</span> at position <span class="math inline">\(P+n-1\)</span>: per layer compute <span class="math inline">\(q,k,v\)</span>, append <span class="math inline">\(k,v\)</span> to the cache, attend <span class="math inline">\(q\)</span> over the cache</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(y\gets\arg\max(\text{logits})\)</span>; stop at EOS</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement cached single-head decoding and verify that it matches a full causal forward pass.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(161)
+
+B, T, D, d = 2, 6, 8, 5
+X = torch.randn(B, T, D)
+
+W_q = torch.randn(D, d) / math.sqrt(D)
+W_k = torch.randn(D, d) / math.sqrt(D)
+W_v = torch.randn(D, d) / math.sqrt(D)
+
+
+def full_causal_attention(X):
+    Q = ...                                      # TODO 1: [B, T, d]
+    K = ...                                      # TODO 2: [B, T, d]
+    V = ...                                      # TODO 3: [B, T, d]
+
+    scores = ...                                 # TODO 4: [B, T, T]
+
+    mask = torch.tril(
+        torch.ones(T, T, dtype=torch.bool)
+    )
+
+    scores = ...                                 # TODO 5: causal mask
+    weights = ...                                # TODO 6: softmax over keys
+    return ...                                   # TODO 7: [B, T, d]
+
+
+def cached_attention(X, replace_cache=False):
+    K_cache = None
+    V_cache = None
+    outputs = []
+
+    for t in range(T):
+        x_t = X[:, t:t + 1]                      # [B, 1, D]
+
+        q_t = ...                                # TODO 8: [B, 1, d]
+        k_t = ...                                # TODO 9: [B, 1, d]
+        v_t = ...                                # TODO 10: [B, 1, d]
+
+        if K_cache is None or replace_cache:
+            K_cache = ...
+            V_cache = ...                        # TODO 11: initialize/bug
+        else:
+            K_cache = ...                        # TODO 12: append over time
+            V_cache = ...
+
+        scores_t = ...                           # TODO 13: [B, 1, t+1]
+        weights_t = ...                          # TODO 14
+        output_t = ...                           # TODO 15: [B, 1, d]
+
+        outputs.append(output_t)
+
+    return torch.cat(outputs, dim=1), K_cache, V_cache
+
+
+full = full_causal_attention(X)
+cached, K_cache, V_cache = cached_attention(X)
+
+print(&quot;full shape: &quot;, full.shape)
+print(&quot;cache shape:&quot;, K_cache.shape)
+print(&quot;maximum difference:&quot;,
+      (full - cached).abs().max().item())
+
+assert K_cache.shape == (B, T, d)
+assert V_cache.shape == (B, T, d)
+assert torch.allclose(full, cached, atol=1e-6)</code></pre>
+<p>Before running, predict the cache and score shapes at decoding step <code>t=3</code>.</p>
+<p>Now introduce a cache-update bug:</p>
+<pre class="code python"><code class="language-python">buggy, *_ = cached_attention(X, replace_cache=True)
+
+error_by_position = (
+    full - buggy
+).abs().amax(dim=-1)
+
+print(&quot;error by position:\n&quot;, error_by_position)</code></pre>
+<p>Predict:</p>
+<ul>
+<li><p>Why should position zero still match?</p></li>
+<li><p>What information can every later output use when the cache is replaced rather than appended?</p></li>
+</ul>
+<p>Hints:</p>
+<ul>
+<li><p>Projections are <code>X @ W</code>.</p></li>
+<li><p>Scores use <code>K.transpose(-2, -1)</code>.</p></li>
+<li><p>Divide scores by <code>math.sqrt(d)</code>.</p></li>
+<li><p>Append cache tensors with <code>torch.cat(..., dim=1)</code>.</p></li>
+<li><p>The newest query may attend to every entry currently in the cache.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>At step <span class="math inline">\(t\)</span>, what are the shapes of <code>q_t</code>, <code>K_cache</code>, and <code>scores_t</code>?</p></li>
+<li><p>Why does cached decoding for the newest token not require an explicit causal mask?</p></li>
+<li><p>Prediction: if generated length doubles, how do KV-cache memory and total cached-attention work scale?</p></li>
+<li><p>Debugging: cached and full outputs match at position zero but diverge afterward. Name two likely causes.</p></li>
+<li><p>During beam search, why must the KV cache be reordered whenever beam hypotheses are reordered?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def full_causal_attention(X):
+    Q = X @ W_q
+    K = X @ W_k
+    V = X @ W_v
+
+    scores = (
+        Q @ K.transpose(-2, -1)
+    ) / math.sqrt(d)
+
+    mask = torch.tril(
+        torch.ones(T, T, dtype=torch.bool)
+    )
+
+    scores = scores.masked_fill(~mask, float(&quot;-inf&quot;))
+    weights = torch.softmax(scores, dim=-1)
+
+    return weights @ V
+
+
+def cached_attention(X, replace_cache=False):
+    K_cache = None
+    V_cache = None
+    outputs = []
+
+    for t in range(T):
+        x_t = X[:, t:t + 1]
+
+        q_t = x_t @ W_q
+        k_t = x_t @ W_k
+        v_t = x_t @ W_v
+
+        if K_cache is None or replace_cache:
+            K_cache = k_t
+            V_cache = v_t
+        else:
+            K_cache = torch.cat([K_cache, k_t], dim=1)
+            V_cache = torch.cat([V_cache, v_t], dim=1)
+
+        scores_t = (
+            q_t @ K_cache.transpose(-2, -1)
+        ) / math.sqrt(d)
+
+        weights_t = torch.softmax(scores_t, dim=-1)
+        output_t = weights_t @ V_cache
+
+        outputs.append(output_t)
+
+    return torch.cat(outputs, dim=1), K_cache, V_cache</code></pre>
+<p>At <code>t=3</code>, four tokens have been processed:</p>
+<p><span class="math display">\[q_t:[B,1,d],\qquad
+K_{\text{cache}}:[B,4,d]\]</span></p>
+<p><span class="math display">\[S_t:[B,1,4]\]</span></p>
+<p>When the cache is replaced, every query attends only to its current token. Position zero still matches because it has no earlier context anyway. Later positions differ because all previous keys and values have been discarded.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>At zero-based step <span class="math inline">\(t\)</span>:</p>
+<p><span class="math display">\[q_t:[B,1,d],\quad
+  K_{\text{cache}}:[B,t+1,d],\quad
+  S_t:[B,1,t+1]\]</span></p></li>
+<li><p>The cache contains only the current and previous tokens; no future key exists to mask.</p></li>
+<li><p>Cache memory doubles because it is linear in length. Total attention work grows by roughly four because <span class="math inline">\(\sum_{t=1}^{T}t=O(T^2)\)</span>.</p></li>
+<li><p>Likely causes include replacing instead of appending the cache, concatenating on the wrong dimension, caching queries instead of keys, using an incorrect positional offset, or mismatching cached and full-pass dtypes.</p></li>
+<li><p>Each cache entry belongs to a particular hypothesis. Reordering beams without identically reordering their caches attaches the wrong history to each continuation.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Causal masking prevents a query from reading keys belonging to future positions.</p></li>
+<li><p>Contributions from multiple branches into a shared parameter are added.</p></li>
+</ul>

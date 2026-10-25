@@ -1,0 +1,303 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Reduction defines the objective.</strong> When one advantage per response is copied to every token, the choice of denominator decides how much each token, and each response, counts. Token-mean gives every token equal weight. Sequence-mean gives every response equal weight, so tokens of long responses count less.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why does an equal-reward response group produce zero group-relative advantages?</p></li>
+<li><p>Why can tiny within-group reward variance create order-one normalized advantages?</p></li>
+</ol>
+<p>Suppose each prompt has <span class="math inline">\(G\)</span> responses, each padded to <span class="math inline">\(T\)</span> tokens:</p>
+<p><span class="math display">\[A\in\mathbb{R}^{B\times G},\qquad
+M,\ell_{\text{new}},\ell_{\text{old}}
+\in\mathbb{R}^{B\times G\times T}\]</span></p>
+<p>with response length:</p>
+<p><span class="math display">\[L_{bg}=\sum_t M_{bgt}\]</span></p>
+<p>and importance ratio:</p>
+<p><span class="math display">\[r_{bgt}
+=
+\exp\left(
+\ell_{\text{new},bgt}-\ell_{\text{old},bgt}
+\right)\]</span></p>
+<p>When a sequence-level advantage <span class="math inline">\(A_{bg}\)</span> is broadcast to every response token, the reduction determines the effective training objective.</p>
+<p>Token-weighted objective:</p>
+<p><span class="math display">\[J_{\text{token}}
+=
+\frac{
+\sum_{b,g,t}M_{bgt}r_{bgt}A_{bg}
+}{
+\sum_{b,g,t}M_{bgt}
+}\]</span></p>
+<p>A response with twice as many tokens contributes roughly twice as much total gradient.</p>
+<p>Sequence-balanced objective:</p>
+<p><span class="math display">\[J_{\text{sequence}}
+=
+\frac1{BG}
+\sum_{b,g}
+\frac1{L_{bg}}
+\sum_t
+M_{bgt}r_{bgt}A_{bg}\]</span></p>
+<p>Every response receives equal aggregate weight, but short responses receive larger gradients per token.</p>
+<p>At <span class="math inline">\(r=1\)</span>, for minimized loss <span class="math inline">\(L=-J\)</span>:</p>
+<p><span class="math display">\[\frac{\partial L_{\text{token}}}
+{\partial\ell_{bgt}}
+=
+-\frac{M_{bgt}A_{bg}}{N_{\text{tokens}}}\]</span></p>
+<p><span class="math display">\[\frac{\partial L_{\text{sequence}}}
+{\partial\ell_{bgt}}
+=
+-\frac{M_{bgt}A_{bg}}{BG\,L_{bg}}\]</span></p>
+<p>Neither reduction is universally correct. Token weighting treats each generated action equally; sequence weighting treats each sampled completion equally. The implementation must match the intended estimand.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: per-token gradient weights under each reduction</div>
+<p>Responses <span class="math inline">\((b,g)\)</span> of length <span class="math inline">\(L_{bg}\)</span>, advantage <span class="math inline">\(A_{bg}\)</span>, and <span class="math inline">\(N=\sum_{b,g}L_{bg}\)</span> tokens in total.</p>
+<p><strong>Step 1.</strong> <strong>Token-mean:</strong> <span class="math inline">\(J=\frac1N\sum_{bgt}M_{bgt}r_{bgt}A_{bg}\)</span>. Each token’s weight is <span class="math inline">\(\frac{A_{bg}}{N}\)</span>, and response <span class="math inline">\((b,g)\)</span>’s total weight is <span class="math inline">\(\frac{L_{bg}A_{bg}}{N}\)</span>: proportional to its length.</p>
+<p><strong>Step 2.</strong> <strong>Sequence-mean:</strong> <span class="math inline">\(J=\frac{1}{BG}\sum_{bg}\frac{1}{L_{bg}}\sum_tM_{bgt}r_{bgt}A_{bg}\)</span>. Each token’s weight is <span class="math inline">\(\frac{A_{bg}}{BG\,L_{bg}}\)</span>, and every response totals <span class="math inline">\(\frac{A_{bg}}{BG}\)</span>, whatever its length.</p>
+<p><strong>Step 3.</strong> <strong>Length bias of sequence-mean:</strong> a long wrong response (<span class="math inline">\(A&lt;0\)</span>) spreads its penalty over many tokens, so each token is barely discouraged, and long wrong answers become cheap.</p>
+<p><strong>Step 4.</strong> <strong>True gradient:</strong> <span class="math inline">\(\nabla\mathbb E[R]=\mathbb E[A\sum_t\nabla\log\pi(y_t)]\)</span>, a <em>sum</em> over tokens. Dividing by a constant (e.g. <span class="math inline">\(BG\cdot L_{\max}\)</span>) matches it up to scale.</p>
+<p><strong>Step 5.</strong> <strong>Example:</strong> lengths 5 and 20, <span class="math inline">\(A=\pm1\)</span>, <span class="math inline">\(G=2\)</span>: sequence-mean per-token weights <span class="math inline">\(\pm0.1\)</span> and <span class="math inline">\(\mp0.025\)</span>; token-mean <span class="math inline">\(\pm0.04\)</span> for both.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: choosing and applying a reduction</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> per-token objective <span class="math inline">\(J_{bgt}\)</span>, mask <span class="math inline">\(M\)</span>, mode</div>
+<div class="algo-line" style="--d:0"><strong>if</strong> mode <span class="math inline">\(=\)</span> token <strong>then</strong> <span class="math inline">\(J\gets\sum MJ/\sum M\)</span></div>
+<div class="algo-line" style="--d:0"><strong>else if</strong> mode <span class="math inline">\(=\)</span> sequence <strong>then</strong> <span class="math inline">\(J\gets\operatorname{mean}_{bg}\big(\sum_tMJ/\sum_tM\big)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>else</strong> <span class="math inline">\(J\gets\sum MJ/(BG\cdot L_{\max})\)</span> <em>▷ constant normalizer</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">keep the mode fixed for a run; log mean response length</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Compare both reductions and measure each response’s total gradient influence.</p>
+<pre class="code python"><code class="language-python">import torch
+
+B, G, T = 2, 3, 6
+
+response_mask = torch.tensor([
+    [
+        [1, 1, 0, 0, 0, 0],  # length 2
+        [1, 1, 1, 1, 0, 0],  # length 4
+        [1, 1, 1, 1, 1, 1],  # length 6
+    ],
+    [
+        [1, 1, 1, 0, 0, 0],  # length 3
+        [1, 1, 1, 1, 1, 0],  # length 5
+        [1, 1, 0, 0, 0, 0],  # length 2
+    ],
+], dtype=torch.bool)          # [B,G,T]
+
+advantages = torch.tensor([
+    [ 1.0,  1.0,  1.0],
+    [-1.0, -1.0, -1.0],
+])                             # [B,G]
+
+old_logp = torch.zeros(B, G, T)
+
+
+def compute_gradient(reduction):
+    new_logp = torch.zeros(
+        B, G, T,
+        requires_grad=True,
+    )
+
+    ratio = ...                                      # TODO 1: [B,G,T]
+    token_advantages = ...                           # TODO 2: [B,G,1]
+
+    if reduction == &quot;token&quot;:
+        objective = ...                              # TODO 3: scalar
+
+    elif reduction == &quot;sequence&quot;:
+        lengths = ...                                # TODO 4: [B,G]
+
+        response_objectives = ...                    # TODO 5: [B,G]
+        objective = ...                              # TODO 6: scalar
+
+    else:
+        raise ValueError(reduction)
+
+    loss = ...                                       # TODO 7: minimized loss
+
+    gradient = torch.autograd.grad(
+        loss,
+        new_logp,
+    )[0]
+
+    return loss.detach(), gradient
+
+
+token_loss, token_gradient = compute_gradient(&quot;token&quot;)
+sequence_loss, sequence_gradient = compute_gradient(&quot;sequence&quot;)
+
+lengths = response_mask.sum(dim=-1)
+
+token_influence = token_gradient.abs().sum(dim=-1)
+sequence_influence = sequence_gradient.abs().sum(dim=-1)
+
+print(&quot;response lengths:\n&quot;, lengths)
+
+print(&quot;\ntoken-weighted loss:&quot;, token_loss.item())
+print(&quot;sequence-balanced loss:&quot;, sequence_loss.item())
+
+print(&quot;\ntoken-weighted influence:\n&quot;, token_influence)
+print(&quot;\nsequence-balanced influence:\n&quot;, sequence_influence)
+
+assert torch.allclose(
+    token_gradient[~response_mask],
+    torch.zeros_like(token_gradient[~response_mask]),
+)
+
+assert torch.allclose(
+    sequence_gradient[~response_mask],
+    torch.zeros_like(sequence_gradient[~response_mask]),
+)
+
+# Equal-magnitude advantages should give equal total influence
+# under sequence-balanced weighting.
+assert torch.allclose(
+    sequence_influence,
+    torch.full_like(sequence_influence, 1 / (B * G)),
+)
+
+# Under token weighting, influence should be proportional to length.
+influence_per_token = token_influence / lengths
+
+assert torch.allclose(
+    influence_per_token,
+    torch.full_like(
+        influence_per_token,
+        1 / response_mask.sum(),
+    ),
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Which positive-advantage response receives the most total gradient under token weighting?</p></li>
+<li><p>Which receives the largest per-token gradient under sequence weighting?</p></li>
+<li><p>Can <code>sequence_loss</code> equal zero while its gradient remains nonzero?</p></li>
+</ul>
+<p>Now simulate a common masking bug:</p>
+<pre class="code python"><code class="language-python">bad_new_logp = torch.zeros(
+    B, G, T,
+    requires_grad=True,
+)
+
+bad_ratio = torch.exp(
+    bad_new_logp - old_logp
+)
+
+# Bug: includes padded positions in the mean.
+bad_loss = -(                              # TODO 8
+    bad_ratio * advantages.unsqueeze(-1)
+).mean()
+
+bad_gradient = torch.autograd.grad(
+    bad_loss,
+    bad_new_logp,
+)[0]
+
+print(
+    &quot;\npadding gradient norm from bad reduction:&quot;,
+    bad_gradient[~response_mask].norm().item(),
+)</code></pre>
+<p>Why does this bug make padded sequence width affect both gradient allocation and the reported loss?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Ratios are <code>exp(new_logp - old_logp)</code>.</p></li>
+<li><p>For token weighting, boolean-index valid token objectives before taking the mean.</p></li>
+<li><p>Convert the mask to the ratio’s dtype for sums.</p></li>
+<li><p>Sequence objectives first sum across <span class="math inline">\(T\)</span>, divide by <span><code>[</code></span><code>B,G</code><span><code>]</code></span> lengths, then average responses.</p></li>
+<li><p>Optimizers minimize, so negate the objective.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Under token weighting, how does doubling response length affect its aggregate gradient when advantage and ratios stay fixed?</p></li>
+<li><p>Prediction: under sequence balancing, how does doubling length affect the gradient of each individual token?</p></li>
+<li><p>Why can a scalar loss be zero while parameter gradients are nonzero?</p></li>
+<li><p>Debugging: increasing <code>max_new_tokens</code> changes optimization even though generated content and valid lengths do not change. What masking error is likely?</p></li>
+<li><p>When might token weighting be preferable to sequence weighting?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def compute_gradient(reduction):
+    new_logp = torch.zeros(
+        B, G, T,
+        requires_grad=True,
+    )
+
+    ratio = torch.exp(
+        new_logp - old_logp
+    )
+
+    token_advantages = advantages.detach().unsqueeze(-1)
+
+    if reduction == &quot;token&quot;:
+        objective = (
+            ratio * token_advantages
+        )[response_mask].mean()
+
+    elif reduction == &quot;sequence&quot;:
+        mask_float = response_mask.to(ratio.dtype)
+        lengths = mask_float.sum(dim=-1)
+
+        response_objectives = (
+            ratio
+            * token_advantages
+            * mask_float
+        ).sum(dim=-1) / lengths
+
+        objective = response_objectives.mean()
+
+    else:
+        raise ValueError(reduction)
+
+    loss = -objective
+
+    gradient = torch.autograd.grad(
+        loss,
+        new_logp,
+    )[0]
+
+    return loss.detach(), gradient</code></pre>
+<p>Padding bug:</p>
+<pre class="code python"><code class="language-python">bad_loss = -(
+    bad_ratio * advantages.unsqueeze(-1)
+).mean()</code></pre>
+<p>Under token weighting, every valid token has gradient magnitude:</p>
+<p><span class="math display">\[\frac{|A_{bg}|}{N_{\text{tokens}}}\]</span></p>
+<p>Therefore, aggregate response influence is:</p>
+<p><span class="math display">\[\frac{L_{bg}|A_{bg}|}{N_{\text{tokens}}}\]</span></p>
+<p>The length-six positive response has three times the total influence of the length-two positive response.</p>
+<p>Under sequence balancing, aggregate influence is:</p>
+<p><span class="math display">\[\frac{|A_{bg}|}{BG}\]</span></p>
+<p>regardless of length. Its per-token magnitude is:</p>
+<p><span class="math display">\[\frac{|A_{bg}|}{BG\,L_{bg}}\]</span></p>
+<p>so the shortest response has the largest per-token gradient.</p>
+<p>The sequence-balanced loss is initially zero because three <span class="math inline">\(+1\)</span> and three <span class="math inline">\(-1\)</span> response objectives cancel. Its gradients do not cancel elementwise: positive-advantage log-probabilities must increase, while negative-advantage log-probabilities must decrease.</p>
+<p>The broken reduction includes padding as if it represented sampled actions. Consequently:</p>
+<ul>
+<li><p>padded log-probabilities receive gradients;</p></li>
+<li><p>changing padded width changes the denominator;</p></li>
+<li><p>shorter responses acquire more artificial padded contributions;</p></li>
+<li><p>loss and gradient scale depend on <code>T</code>, not just real responses.</p></li>
+</ul>
+<p>Check answers:</p>
+<ol>
+<li><p>Its aggregate contribution approximately doubles.</p></li>
+<li><p>Each token’s gradient is halved, leaving aggregate sequence influence unchanged.</p></li>
+<li><p>A zero value may result from cancellation between terms whose individual derivatives are nonzero.</p></li>
+<li><p>Padding is probably included in the objective or reduction denominator.</p></li>
+<li><p>Token weighting is appropriate when each valid generated action is intended to be one equally weighted training observation, particularly with meaningful token-level advantages or rewards.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Equal rewards equal the group mean, so every centered group-relative advantage is zero.</p></li>
+<li><p>Dividing tiny centered differences by a tiny standard deviation removes their small absolute scale and can promote noise to order-one advantages.</p></li>
+</ul>

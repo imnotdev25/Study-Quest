@@ -1,0 +1,185 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>The building blocks of social and location products: choosing between long polling, SSE, and WebSockets; modeling follows, likes, reactions, hashtags, and photo tags; unread indicators; live commentary; nearby search with geohashes and grids; Redis GEO; geofencing with point-in-polygon; filtering already-seen items; and an overview of matching and recommendation algorithms.</p>
+</div>
+<h1 id="long-polling-vs-sse-vs-websockets">Long Polling vs SSE vs WebSockets</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"></th>
+<th style="text-align: left;">Long polling</th>
+<th style="text-align: left;">Server-Sent Events</th>
+<th style="text-align: left;">WebSocket</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Direction</td>
+<td style="text-align: left;">server to client (simulated)</td>
+<td style="text-align: left;">server to client</td>
+<td style="text-align: left;">both</td>
+</tr>
+<tr>
+<td style="text-align: left;">How</td>
+<td style="text-align: left;">request held open until data or timeout, then re-sent</td>
+<td style="text-align: left;">one HTTP response streamed forever</td>
+<td style="text-align: left;">upgraded TCP connection, framed messages</td>
+</tr>
+<tr>
+<td style="text-align: left;">Infrastructure</td>
+<td style="text-align: left;">works everywhere</td>
+<td style="text-align: left;">plain HTTP; works through most proxies</td>
+<td style="text-align: left;">needs proxies and LBs that support upgrade and long connections</td>
+</tr>
+<tr>
+<td style="text-align: left;">Reconnect</td>
+<td style="text-align: left;">by design</td>
+<td style="text-align: left;">built-in with <code>Last-Event-ID</code></td>
+<td style="text-align: left;">you implement it</td>
+</tr>
+<tr>
+<td style="text-align: left;">Overhead</td>
+<td style="text-align: left;">a request per message</td>
+<td style="text-align: left;">low</td>
+<td style="text-align: left;">lowest</td>
+</tr>
+<tr>
+<td style="text-align: left;">Use</td>
+<td style="text-align: left;">fallback, notifications to old clients</td>
+<td style="text-align: left;">feeds, notifications, LLM tokens</td>
+<td style="text-align: left;">chat, games, collaboration, voice</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Whichever you choose, the scaling problems are the same as in Chapter (networking) and the Slack and Netflix cases (Part (cases)): a registry of which gateway holds each user’s connection, pub/sub to reach the right gateway, jittered reconnects after deploys, autoscaling on connection count, and a resync protocol (client sends its last sequence number) because pushes are best effort.</p>
+</div>
+<h1 id="social-network-data-modeling">Social Network Data Modeling</h1>
+<pre class="code text"><code class="language-plaintext">users     (user_id PK, handle UNIQUE, name, created_at, ...)
+posts     (post_id PK /* time-sortable id */, author_id, body, created_at,
+           like_count, comment_count)              -- denormalized counters
+follows   (follower_id, followee_id, created_at,
+           PRIMARY KEY (follower_id, followee_id)) -- &quot;who do I follow&quot;
+followers (followee_id, follower_id, created_at,
+           PRIMARY KEY (followee_id, follower_id)) -- reverse index, separate shard key
+likes     (post_id, user_id, created_at, PRIMARY KEY (post_id, user_id))
+user_likes(user_id, post_id, created_at, PRIMARY KEY (user_id, post_id))</code></pre>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Each edge is stored <strong>twice</strong>, once per direction, because the two questions (“whom does A follow?” and “who follows A?”) shard by different keys. Writes update both rows (a transaction if co-located, otherwise an outbox event that updates the reverse index). Counts (followers, likes) are denormalized onto the user or post row and updated asynchronously or with sharded counters (Chapter (analytics)); exact counts can be recomputed from edges.</p>
+</div>
+<h2 id="the-social-graph-flockdb-and-friends">The Social Graph: FlockDB and Friends</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Twitter built <strong>FlockDB</strong> (open-sourced 2010) to store follow edges: adjacency lists in sharded MySQL (through its Gizzard sharding framework), optimized for the operations a social graph needs: add and remove edges idempotently, page through a node’s edges in time order, count edges, and <strong>set operations</strong> across adjacency lists (“people A follows who also follow B”: an intersection). It deliberately did not support multi-hop graph traversal; most product queries are one hop. Meta’s TAO (Part (cases)) is the same idea with a caching layer in front. Multi-hop queries (friends-of-friends suggestions) are computed offline in batch graph jobs.</p>
+</div>
+<h1 id="reactions">Reactions</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A reaction is a typed edge: <code>reactions(target_id, user_id, type, created_at, PRIMARY KEY (target_id, user_id))</code>. The primary key enforces <em>one reaction per user per target</em>; changing a reaction is an upsert, removing it a delete. Make the API idempotent (<code>PUT /posts/42/reaction {type}</code> rather than “toggle”, which double-taps break). Keep per-type counts on the post (<code>{"like": 1203, "laugh": 87}</code>), updated from the change stream with sharded counters for viral posts. “Did I react?” is a point lookup by <code>(target_id, user_id)</code>, cached with the post for the viewer.</p>
+</div>
+<h1 id="hashtags-and-the-tag-store">Hashtags and the Tag Store</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Extract hashtags at write time with a Unicode-aware tokenizer (hashtags are not ASCII-only), normalize (case folding, Unicode NFKC normalization so visually identical tags match), and store in <code>post_tags(tag, post_id)</code> ordered by <code>post_id</code> (time-sortable) for “latest posts with #tag.” Popular tags produce huge, hot partitions: bucket by time (<code>(tag, day)</code> as the partition key) or route very hot tags to a dedicated store. Trending tags come from streaming counts compared to baselines (Chapter (analytics)). Tag pages are typically served from a search index, which handles ranking and filtering.</p>
+</div>
+<h1 id="photo-tagging-coordinates">Photo Tagging Coordinates</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Store a tag as <code>(photo_id, tagged_user_id, x, y, w, h, status, tagged_by)</code> with coordinates as <strong>fractions of image width and height</strong> (0.0–1.0), not pixels, so tags stay correct for every rendition size and after the client resizes the image. Handle <strong>EXIF orientation</strong> by normalizing images on upload. A <code>status</code> field supports approval flows (tags of you pending your approval) and privacy rules. Index by <code>tagged_user_id</code> for “photos of me.”</p>
+</div>
+<h1 id="a-newly-unread-indicator">A Newly-Unread Indicator</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The red dot or “3 new” badge must be cheap because it is shown on every screen.</p>
+<ul>
+<li><p><strong>Read pointer</strong>: store each user’s <code>last_read_seq</code> per conversation or inbox; each conversation has a <code>latest_seq</code>. Unread <span class="math inline">\(= \text{latest} -
+    \text{last read}\)</span> (or unread if they differ). Opening the conversation advances the pointer.</p></li>
+<li><p><strong>Counter on write</strong>: increment a per-user unread counter (Redis) during fan-out; reset on open. Fast reads, but counters drift with retries and multiple devices, so periodically recompute from pointers.</p></li>
+<li><p><strong>Multi-device</strong>: the read pointer is server state, so reading on the phone clears the badge on the laptop (push a “read up to” event to other devices).</p></li>
+<li><p>Show “99+” instead of exact large numbers: it is cheaper and users do not need more.</p></li>
+</ul>
+</div>
+<h1 id="live-commentary">Live Commentary</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A live match with millions of readers and a few writers (official commentary) or many writers (live comments). Writes go through the normal API (auth, moderation, rate limits) into a log per event; a fan-out service publishes to WebSocket or SSE gateways subscribed to that event; clients fetch the recent history once from a cache and then receive updates. For a flood of user comments, sample or rank which comments each viewer sees (no one can read 5<span>,</span>000 comments per second), apply per-user rate limits and slow mode, and run automated moderation before broadcast. Order by server timestamp plus sequence number. Persist everything for replays and the final page.</p>
+</div>
+<h1 id="nearby-search">Nearby Search</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>To find coffee shops near you, you should not measure the distance to every coffee shop on Earth. Divide the map into a grid, look only in your square and the squares around it, then measure distances to the few shops found there.</p>
+</div>
+<h2 id="geohash-prefix-index">Geohash Prefix Index</h2>
+<figure class="tikz"><img src="figs/sd/3bba509506e1.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Querying a cell and its neighbors avoids missing points just across a boundary.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A <strong>geohash</strong> interleaves bits of latitude and longitude and encodes them in base 32: each extra character makes the cell about 32 times smaller in area. Precision 5 is about 4.9 km <span class="math inline">\(\times\)</span> 4.9 km, precision 6 about 1.2 km <span class="math inline">\(\times\)</span> 0.6 km, precision 7 about 150 m. Points that share a prefix are in the same cell, so a sorted index on the geohash string (a B-tree or a sorted key-value store) answers “points in this cell” with a prefix range scan. <strong>Query</strong>: choose a precision whose cells are about the search radius, compute the user’s cell and its 8 neighbors, range-scan each, then filter candidates by exact (haversine) distance and sort. The neighbors are necessary because two nearby points on opposite sides of a cell boundary can have different prefixes, and the Z-order curve has jumps where adjacent cells have very different hashes.</p>
+</div>
+<h2 id="grid-systems-geohash-s2-h3">Grid Systems: Geohash, S2, H3</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Geohash</strong>: simple strings, prefix queries on any sorted store, rectangular cells that distort near the poles. <strong>S2</strong> (Google): the sphere projected onto a cube, cells ordered along a Hilbert curve (better locality than Z-order), 64-bit IDs, region coverings of any shape; used by Google Maps and many databases. <strong>H3</strong> (Uber): hexagons with one neighbor distance, ideal for aggregation and smoothing (Part (cases)). <strong>Quadtrees</strong> adapt cell size to density (split a cell when it holds too many points), good for very uneven data like restaurants. PostGIS uses R-trees (GiST indexes) and supports <code>ST_DWithin</code> queries directly; for many applications that is enough.</p>
+</div>
+<h2 id="redis-geo-for-the-hot-path">Redis GEO for the Hot Path</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>For constantly moving entities (drivers, couriers), keep locations in memory. Redis GEO stores members in a sorted set whose score is a 52-bit geohash: <code>GEOADD drivers:sf lon lat driver42</code> on every location update (every few seconds), and <code>GEOSEARCH drivers:sf FROMLONLAT lon lat BYRADIUS 2 km ASC COUNT 20</code> to find the nearest. Shard keys by city or by coarse geohash cell to keep sets small; expire stale drivers by also tracking last-update times (a second sorted set by timestamp, trimmed periodically), because GEO members do not expire individually. The durable record of trips lives in a database; Redis holds only the current positions.</p>
+</div>
+<h1 id="geofencing-point-in-polygon">Geofencing: Point in Polygon</h1>
+<figure class="tikz"><img src="figs/sd/63fc61f470f6.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Ray casting: count how many polygon edges a ray from the point crosses.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Ray casting</strong>: from the point, cast a ray in one direction and count crossings with polygon edges; an odd count means inside. For each edge <span class="math inline">\((x_i, y_i) \to (x_j, y_j)\)</span>, it crosses a horizontal ray to the right of <span class="math inline">\((x, y)\)</span> if <span class="math inline">\((y_i &gt; y) \ne (y_j &gt; y)\)</span> and <span class="math inline">\(x &lt; x_i + (y - y_i)(x_j - x_i)/(y_j - y_i)\)</span>. Handle points exactly on edges and vertices consistently. <span class="math inline">\(O(\text{vertices})\)</span> per polygon.</p>
+<p><strong>At scale</strong> (millions of location updates against thousands of zones: delivery areas, surge zones, airport pickup zones): first filter by bounding box, then use a spatial index (an R-tree, or precompute each polygon’s covering H3 or S2 cells into a hash map from cell to candidate polygons) so each update is tested against only one or two polygons. Track the previous zone per entity to emit <code>enter</code> and <code>exit</code> events, with hysteresis or a minimum dwell time to avoid flapping at the boundary from GPS noise.</p>
+</div>
+<h1 id="seen-filtering-bloom-vs-exact-sets">Seen Filtering: Bloom vs Exact Sets</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Feeds and recommendation systems must not show the same item twice.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"></th>
+<th style="text-align: left;">Exact set (Redis set, DB table)</th>
+<th style="text-align: left;">Bloom filter per user</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Memory</td>
+<td style="text-align: left;">8+ bytes per item per user, plus overhead</td>
+<td style="text-align: left;">about 10 bits per item for 1% false positives</td>
+</tr>
+<tr>
+<td style="text-align: left;">Errors</td>
+<td style="text-align: left;">none</td>
+<td style="text-align: left;">false positives: an unseen item is sometimes skipped; never shows a seen item</td>
+</tr>
+<tr>
+<td style="text-align: left;">Deletion / expiry</td>
+<td style="text-align: left;">easy</td>
+<td style="text-align: left;">not supported; rotate filters</td>
+</tr>
+<tr>
+<td style="text-align: left;">Use</td>
+<td style="text-align: left;">small histories, must be exact (purchases, “don’t show again”)</td>
+<td style="text-align: left;">huge histories (every video impression)</td>
+</tr>
+</tbody>
+</table>
+<p>For time-limited “seen in the last 30 days,” keep a ring of filters (one per few days), check all, and drop the oldest when rotating. A 1% false positive rate means hiding 1% of unseen candidates, usually invisible to users. Apply seen filtering at candidate generation, before expensive ranking.</p>
+</div>
+<h1 id="matching-and-recommendation-algorithms">Matching and Recommendation Algorithms</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Content-based</strong>: recommend items similar to what the user liked (shared attributes or embedding similarity). Works for new items; can be narrow.</p></li>
+<li><p><strong>Collaborative filtering</strong>: item–item similarity from co-occurrence (“people who bought X bought Y”), matrix factorization, or two-tower neural models trained on interactions, served with approximate nearest neighbor search.</p></li>
+<li><p><strong>Graph-based</strong>: random walks on user–item graphs (Pinterest’s Pixie) or friends-of-friends for people suggestions.</p></li>
+<li><p><strong>Ranking</strong>: a multi-task model predicting click, watch, purchase, and negative feedback, combined into a score (the companion interview book covers the models).</p></li>
+<li><p><strong>Two-sided matching</strong> (ride hailing, delivery, dating, marketplaces): both sides have preferences or constraints. Batch the decision into short rounds and solve an assignment problem (Hungarian algorithm or min-cost flow) instead of greedy nearest matching; for mutual-preference markets, stable matching (Gale–Shapley) avoids pairs who would both rather be together. Dating apps also ration attention: popular profiles should not receive every like (fairness and quality for both sides).</p></li>
+<li><p><strong>Exploration</strong>: reserve some traffic for new items and uncertain candidates (bandits) so the system keeps learning.</p></li>
+</ul>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Design “nearby friends”</div>
+<p>Friends opt in to sharing location. Each app sends a location every 30 seconds while active; the location service updates the user’s position in a geo-sharded in-memory store and publishes to a per-user channel. Each user’s session subscribes to their friends’ channels and computes distances itself (friend lists are small, so this is cheaper than a geo query). Inactive users’ locations expire after a few minutes. Privacy: precision is coarsened, sharing can be paused, history is not stored.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Pick long polling, SSE, or WebSockets by direction and infrastructure; the scaling patterns are the same.</p></li>
+<li><p>Store social edges in both directions, keep counts denormalized, and make reaction APIs idempotent.</p></li>
+<li><p>Unread state is a read pointer versus a latest sequence number.</p></li>
+<li><p>Nearby search = grid cell + neighbors + exact distance filter; Redis GEO for moving entities.</p></li>
+<li><p>Ray casting decides point in polygon; index polygons by cells for scale.</p></li>
+<li><p>Bloom filters make “seen” filtering cheap when rare false positives are acceptable.</p></li>
+</ul>
+</div>

@@ -1,0 +1,132 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A <em>function</em> <span class="math inline">\(f:\mathbb R^n\to\mathbb R\)</span> maps inputs to a number (a loss). Its <em>derivative</em> along coordinate <span class="math inline">\(i\)</span> is the limit <span class="math inline">\(\partial_if(x)=\lim_{h\to0}\frac{f(x+he_i)-f(x)}{h}\)</span>. Stack them and you get the <em>gradient</em> <span class="math inline">\(\nabla f\)</span>, the direction of steepest increase. For a vector-valued <span class="math inline">\(g:\mathbb R^n\to\mathbb R^m\)</span>, the derivatives form an <span class="math inline">\(m\times n\)</span> <em>Jacobian</em>. Everything below is one of these objects, checked numerically.</p>
+</div>
+<h2 class="unnumbered" id="derivatives-you-can-trust-the-central-difference">Derivatives you can trust: the central difference</h2>
+<p>The one-sided difference <span class="math inline">\(\frac{f(x+h)-f(x)}{h}\)</span> has error <span class="math inline">\(O(h)\)</span>. The central difference is much better:</p>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Why <span class="math inline">\(\frac{f(x+h)-f(x-h)}{2h}\)</span> has error <span class="math inline">\(O(h^2)\)</span></div>
+<p><strong>Step 1.</strong> Taylor-expand both sides: <span class="math inline">\(f(x\pm h)=f(x)\pm hf&#39;(x)+\tfrac{h^2}{2}f&#39;&#39;(x)\pm\tfrac{h^3}{6}f&#39;&#39;&#39;(x)+O(h^4)\)</span>.</p>
+<p><strong>Step 2.</strong> Subtract: the even terms cancel, <span class="math inline">\(f(x+h)-f(x-h)=2hf&#39;(x)+\tfrac{h^3}{3}f&#39;&#39;&#39;(x)+O(h^5)\)</span>.</p>
+<p><strong>Step 3.</strong> Divide by <span class="math inline">\(2h\)</span>: <span class="math inline">\(\boxed{\frac{f(x+h)-f(x-h)}{2h}=f&#39;(x)+\tfrac{h^2}{6}f&#39;&#39;&#39;(x)+\dots}\)</span> With <span class="math inline">\(h=10^{-5}\)</span> the error is around <span class="math inline">\(10^{-10}\)</span>, until floating-point rounding (about <span class="math inline">\(\epsilon_{\text{mach}}/h\)</span>) takes over.</p>
+</div>
+<h2 class="unnumbered" id="chain-rule-and-jacobian">Chain rule and Jacobian</h2>
+<p>For <span class="math inline">\(y=\tanh(Wx)\)</span> with <span class="math inline">\(W\in\mathbb R^{3\times4}\)</span>, write <span class="math inline">\(u=Wx\)</span>. Then <span class="math inline">\(\frac{\partial y_i}{\partial x_j}=\frac{\partial y_i}{\partial u_i}\frac{\partial u_i}{\partial x_j}=(1-y_i^2)W_{ij}\)</span>, so <span class="math inline">\(J=\operatorname{diag}(1-y^2)\,W\)</span>. The diagonal comes from the activation acting element by element. That is exactly the Hadamard product.</p>
+<h2 class="unnumbered" id="hadamard-product">Hadamard product</h2>
+<p><span class="math inline">\((a\odot b)_i=a_ib_i\)</span>. Two facts carry through all of deep learning: <span class="math inline">\(\frac{\partial}{\partial a}\sum_i a_ib_i=b\)</span>, and a diagonal Jacobian times a vector is a Hadamard product, <span class="math inline">\(\operatorname{diag}(d)\,g=d\odot g\)</span>. That is why backprop through an activation is written <span class="math inline">\(\partial L/\partial Z=\partial L/\partial A\odot\phi&#39;(Z)\)</span> and never builds a matrix.</p>
+<h2 class="unnumbered" id="entropy-cross-entropy-and-kl">Entropy, cross-entropy and KL</h2>
+<p>Entropy <span class="math inline">\(H(p)=-\sum_ip_i\log p_i\)</span> is the average surprise of a distribution. Cross-entropy <span class="math inline">\(\mathrm{CE}(p,q)=-\sum_ip_i\log q_i\)</span> is your average surprise when the world follows <span class="math inline">\(p\)</span> but you predict <span class="math inline">\(q\)</span>. KL is the extra surprise you pay:</p>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: <span class="math inline">\(\mathrm{CE}(p,q)=H(p)+\mathrm{KL}(p\Vert q)\)</span> and <span class="math inline">\(\mathrm{KL}\ge0\)</span></div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\mathrm{KL}(p\Vert q)=\sum_ip_i\log\frac{p_i}{q_i}=\sum_ip_i\log p_i-\sum_ip_i\log q_i=-H(p)+\mathrm{CE}(p,q)\)</span>.</p>
+<p><strong>Step 2.</strong> Since <span class="math inline">\(H(p)\)</span> does not depend on the model <span class="math inline">\(q\)</span>, minimising cross-entropy over <span class="math inline">\(q\)</span> is the same as minimising KL. This is why the language-model loss is cross-entropy.</p>
+<p><strong>Step 3.</strong> Non-negativity: <span class="math inline">\(\log\)</span> is concave, so by Jensen <span class="math inline">\(-\mathrm{KL}=\sum_ip_i\log\frac{q_i}{p_i}\le\log\sum_ip_i\frac{q_i}{p_i}=\log1=0\)</span>, with equality only when <span class="math inline">\(p=q\)</span>.</p>
+</div>
+<h2 class="unnumbered" id="estimating-kl-from-samples-the-rlhf-estimator">Estimating KL from samples (the RLHF estimator)</h2>
+<p>In RLHF you can’t sum over every possible response. You sample <span class="math inline">\(x\sim p\)</span> and set <span class="math inline">\(r=q(x)/p(x)\)</span>.</p>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Two unbiased estimators: <span class="math inline">\(k_1=-\log r\)</span> and <span class="math inline">\(k_3=(r-1)-\log r\)</span></div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\mathbb E_p[-\log r]=\sum_xp(x)\log\frac{p(x)}{q(x)}=\mathrm{KL}(p\Vert q)\)</span>. Unbiased, but individual samples are negative whenever <span class="math inline">\(q(x)&gt;p(x)\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\mathbb E_p[r-1]=\sum_xq(x)-1=0\)</span>, so adding <span class="math inline">\(r-1\)</span> keeps the mean and acts as a control variate.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(r-1-\log r\ge0\)</span> for every <span class="math inline">\(r&gt;0\)</span> (the tangent line of <span class="math inline">\(\log\)</span> at 1 lies above it). Each sample is non-negative, and the variance drops a lot when <span class="math inline">\(p\approx q\)</span>.</p>
+</div>
+<h2 class="unnumbered" id="svd-and-the-best-low-rank-approximation">SVD and the best low-rank approximation</h2>
+<p>Every matrix factors as <span class="math inline">\(M=U\Sigma V^\top\)</span> with orthonormal columns in <span class="math inline">\(U,V\)</span> and <span class="math inline">\(\sigma_1\ge\sigma_2\ge\dots\ge0\)</span>. Keeping the top <span class="math inline">\(k\)</span> terms gives <span class="math inline">\(M_k=\sum_{i\le k}\sigma_iu_iv_i^\top\)</span>, and the Eckart–Young theorem says no rank-<span class="math inline">\(k\)</span> matrix is closer: <span class="math inline">\(\lVert M-M_k\rVert_F=\sqrt{\sum_{i&gt;k}\sigma_i^2}\)</span>. LoRA (Toolkit II) bets that the weight <em>update</em> of a fine-tune has a fast-decaying spectrum like this.</p>
+<h2 class="unnumbered" id="ema-and-bias-correction">EMA and bias correction</h2>
+<p><span class="math inline">\(m_t=\beta m_{t-1}+(1-\beta)x_t\)</span> with <span class="math inline">\(m_0=0\)</span>. Unrolling, <span class="math inline">\(m_t=(1-\beta)\sum_{s=1}^t\beta^{t-s}x_s\)</span>. If every <span class="math inline">\(x_s=c\)</span>, the sum is a geometric series: <span class="math inline">\(m_t=c(1-\beta^t)\)</span>. So early averages are biased toward zero, and dividing by <span class="math inline">\(1-\beta^t\)</span> removes it exactly. Adam does this for both of its moments.</p>
+<h2 class="unnumbered" id="l1-vs-l2-why-l1-makes-zeros">L1 vs L2: why L1 makes zeros</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Minimise <span class="math inline">\(\tfrac12(w-c)^2+\text{penalty}\)</span></div>
+<p><strong>Step 1.</strong> L2, penalty <span class="math inline">\(\tfrac\lambda2w^2\)</span>: set the derivative <span class="math inline">\(w-c+\lambda w\)</span> to 0, giving <span class="math inline">\(w=\frac{c}{1+\lambda}\)</span>. Every weight shrinks by the same factor and none reaches zero.</p>
+<p><strong>Step 2.</strong> L1, penalty <span class="math inline">\(\lambda|w|\)</span>: for <span class="math inline">\(w&gt;0\)</span> the derivative is <span class="math inline">\(w-c+\lambda\)</span>, so <span class="math inline">\(w=c-\lambda\)</span>, valid only if <span class="math inline">\(c&gt;\lambda\)</span>. Symmetrically for <span class="math inline">\(w&lt;0\)</span>. If <span class="math inline">\(|c|\le\lambda\)</span>, zero is the minimum because the subgradient <span class="math inline">\([-\lambda,\lambda]\)</span> of <span class="math inline">\(|w|\)</span> at 0 can absorb <span class="math inline">\(-c\)</span>.</p>
+<p><strong>Step 3.</strong> Result: the <em>soft threshold</em> <span class="math inline">\(\boxed{w=\operatorname{sign}(c)\max(|c|-\lambda,0)}\)</span>.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/0ddb601e4a2f.svg" alt="diagram" loading="lazy"></figure>
+<p><em>With <span class="math inline">\(\lambda=0.6\)</span>: L2 tilts the line, L1 cuts out a flat zero band of width <span class="math inline">\(2\lambda\)</span>.</em></p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Toolkit ch. 1-2: the math fundamentals, each checked numerically.&quot;&quot;&quot;
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# 1. Derivatives and gradients: central differences agree with the analytic gradient.
+f = lambda x: np.sum(x**2 * np.sin(x))
+grad_f = lambda x: 2 * x * np.sin(x) + x**2 * np.cos(x)
+x = rng.normal(size=5)
+h = 1e-5
+num = np.array([(f(x + h * e) - f(x - h * e)) / (2 * h) for e in np.eye(5)])
+print(f&quot;[grad] max |numeric - analytic| = {np.abs(num - grad_f(x)).max():.1e}&quot;)
+
+# 2. Chain rule and Jacobian: y = tanh(Wx), J = diag(1 - y^2) W.
+W = rng.normal(size=(3, 4))
+y = np.tanh(W @ x[:4])
+J = (1 - y**2)[:, None] * W
+J_num = np.stack([(np.tanh(W @ (x[:4] + h * e)) - np.tanh(W @ (x[:4] - h * e))) / (2 * h)
+                  for e in np.eye(4)], axis=1)
+print(f&quot;[jacobian] shape {J.shape}, max err {np.abs(J - J_num).max():.1e}&quot;)
+
+# 3. Hadamard product: d(sum(a*b))/da = b, element by element.
+a, b = rng.normal(size=4), rng.normal(size=4)
+g_num = np.array([(np.sum((a + h * e) * b) - np.sum((a - h * e) * b)) / (2 * h) for e in np.eye(4)])
+print(f&quot;[hadamard] a*b = {np.round(a * b, 3)}  numeric grad wrt a == b: {np.allclose(g_num, b)}&quot;)
+
+# 4. Entropy, cross-entropy, KL:  CE(p, q) = H(p) + KL(p || q).
+p = np.array([0.7, 0.2, 0.1])
+q = np.array([0.4, 0.4, 0.2])
+H = -(p * np.log(p)).sum()
+CE = -(p * np.log(q)).sum()
+KL = (p * np.log(p / q)).sum()
+print(f&quot;[info] H(p)={H:.4f}  CE(p,q)={CE:.4f}  KL(p||q)={KL:.4f}  H+KL={H + KL:.4f}&quot;)
+print(f&quot;[info] KL(q||p)={(q * np.log(q / p)).sum():.4f}  (KL is not symmetric)&quot;)
+
+# 5. Monte Carlo KL estimators used in RLHF (samples from p, r = q/p):
+#    k1 = -log r (unbiased, can go negative), k3 = (r - 1) - log r (unbiased, always &gt;= 0).
+s = rng.choice(3, size=200_000, p=p)
+r = q[s] / p[s]
+k1, k3 = -np.log(r), (r - 1) - np.log(r)
+print(f&quot;[kl-est] k1 mean {k1.mean():.4f} std {k1.std():.3f} | k3 mean {k3.mean():.4f} std {k3.std():.3f}&quot;)
+
+# 6. SVD and Eckart-Young: the best rank-k approximation keeps the top k singular values,
+#    and its Frobenius error is sqrt(sum of the dropped sigma^2).
+M = rng.normal(size=(50, 4)) @ rng.normal(size=(4, 40)) + 0.05 * rng.normal(size=(50, 40))
+U, S, Vt = np.linalg.svd(M, full_matrices=False)
+for k in (1, 4, 10):
+    Mk = (U[:, :k] * S[:k]) @ Vt[:k]
+    print(f&quot;[svd] rank {k:2d}: error {np.linalg.norm(M - Mk):7.3f}  predicted {np.sqrt((S[k:]**2).sum()):7.3f}&quot;)
+print(f&quot;[svd] top 6 singular values {np.round(S[:6], 2)}  (rank-4 signal + noise)&quot;)
+
+# 7. EMA: m_t = beta m_{t-1} + (1 - beta) x_t. Bias correction divides by 1 - beta^t.
+beta, m = 0.9, 0.0
+for t, xt in enumerate([5.0] * 5, start=1):
+    m = beta * m + (1 - beta) * xt
+    print(f&quot;[ema] t={t}  raw {m:.3f}  corrected {m / (1 - beta**t):.3f}&quot;)
+
+# 8. L1 vs L2: minimise 0.5 (w - c)^2 + penalty.
+#    L2 (lam/2 w^2): w = c / (1 + lam)  shrinks everything.  L1 (lam |w|): soft threshold, zeros small weights.
+c, lam = np.array([3.0, 0.5, -0.2, 1.2]), 0.6
+print(f&quot;[norms] c        {c}&quot;)
+print(f&quot;[norms] ridge    {np.round(c / (1 + lam), 3)}&quot;)
+print(f&quot;[norms] lasso    {np.round(np.sign(c) * np.maximum(np.abs(c) - lam, 0), 3)}&quot;)</code></pre>
+<pre class="code output"><code class="output">[grad] max |numeric - analytic| = 9.8e-11
+[jacobian] shape (3, 4), max err 2.9e-10
+[hadamard] a*b = [-0.432 -0.274  0.366 -0.116]  numeric grad wrt a == b: True
+[info] H(p)=0.8018  CE(p,q)=0.9856  KL(p||q)=0.1838  H+KL=0.9856
+[info] KL(q||p)=0.1920  (KL is not symmetric)
+[kl-est] k1 mean 0.1849 std 0.574 | k3 mean 0.1836 std 0.081
+[svd] rank  1: error  70.707  predicted  70.707
+[svd] rank  4: error   1.950  predicted   1.950
+[svd] rank 10: error   1.466  predicted   1.466
+[svd] top 6 singular values [55.82 46.71 41.33 33.26  0.58  0.56]  (rank-4 signal + noise)
+[ema] t=1  raw 0.500  corrected 5.000
+[ema] t=2  raw 0.950  corrected 5.000
+[ema] t=3  raw 1.355  corrected 5.000
+[ema] t=4  raw 1.719  corrected 5.000
+[ema] t=5  raw 2.048  corrected 5.000
+[norms] c        [ 3.   0.5 -0.2  1.2]
+[norms] ridge    [ 1.875  0.312 -0.125  0.75 ]
+[norms] lasso    [ 2.4  0.  -0.   0.6]</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Check every derivative with a central difference. It’s the unit test of calculus.</p></li>
+<li><p>Cross-entropy = entropy + KL. Minimising the LM loss is minimising KL to the data.</p></li>
+<li><p><span class="math inline">\(k_3\)</span> has the same mean as <span class="math inline">\(k_1\)</span> here (0.184) at a seventh of the standard deviation.</p></li>
+<li><p>The error columns of the SVD table match Eckart–Young to three decimals.</p></li>
+</ul>
+</div>

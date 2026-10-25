@@ -1,0 +1,214 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How low-level (object-oriented) design rounds and multi-part “practical coding” rounds work, the principles and patterns that score well, a concurrency primer, and complete designs for classic problems (LRU cache, rate limiter, key-value store with transactions and TTL, task scheduler, pub/sub) and ML-flavored problems (dynamic batching inference server, feature store, tool executor for agents, experiment tracker).</p>
+</div>
+<h1 id="what-the-round-looks-like">What the Round Looks Like</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A system design round asks “which boxes and arrows?” A low-level design round asks “which classes, methods, and data structures inside one box?” It is closer to real day-to-day engineering: clean interfaces that are easy to extend when the interviewer adds a new requirement every ten minutes.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Typical flow (45–60 minutes):</strong></p>
+<ol>
+<li><p>Clarify requirements and the API (5 min). Write the public interface first.</p></li>
+<li><p>Identify entities, responsibilities, and relationships (5–10 min).</p></li>
+<li><p>Choose data structures and complexities for each operation.</p></li>
+<li><p>Implement the core path (20 min), with tests.</p></li>
+<li><p>Extensions arrive: “now add TTL,” “now make it thread-safe,” “now persist it,” “now support transactions.” Good structure makes each one small.</p></li>
+</ol>
+<p>Scoring: correctness, API clarity, separation of concerns, extensibility, testing, handling of edge cases and concurrency, and explaining trade-offs.</p>
+</div>
+<h1 id="principles-that-interviewers-look-for">Principles That Interviewers Look For</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Single responsibility</strong>: a class has one reason to change (eviction policy separate from storage).</p></li>
+<li><p><strong>Open/closed</strong>: add behavior by adding a class, not editing a switch statement (a new sampling strategy implements <code>Sampler</code>).</p></li>
+<li><p><strong>Liskov substitution</strong>: subclasses must work wherever the base does.</p></li>
+<li><p><strong>Interface segregation</strong>: small interfaces (<code>Readable</code>, <code>Writable</code>) rather than one huge one.</p></li>
+<li><p><strong>Dependency inversion</strong>: depend on abstractions and inject them (pass a <code>Clock</code> so TTL logic is testable without sleeping).</p></li>
+<li><p><strong>Composition over inheritance</strong>; immutability for shared values; explicit error handling; no global state.</p></li>
+</ul>
+</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Pattern</th>
+<th style="text-align: left;">Idea</th>
+<th style="text-align: left;">ML / AI example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Strategy</td>
+<td style="text-align: left;">swap an algorithm behind an interface</td>
+<td style="text-align: left;">sampling strategies (greedy, top-<span class="math inline">\(p\)</span>), eviction policies, optimizers</td>
+</tr>
+<tr>
+<td style="text-align: left;">Factory / registry</td>
+<td style="text-align: left;">create objects by name</td>
+<td style="text-align: left;">model registry, tokenizer or loss lookup from config</td>
+</tr>
+<tr>
+<td style="text-align: left;">Observer</td>
+<td style="text-align: left;">subscribers notified of events</td>
+<td style="text-align: left;">training callbacks (logging, checkpointing, early stopping)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Decorator</td>
+<td style="text-align: left;">wrap behavior around a call</td>
+<td style="text-align: left;">retries, caching, timing, rate limiting of tool calls</td>
+</tr>
+<tr>
+<td style="text-align: left;">Adapter</td>
+<td style="text-align: left;">make one interface look like another</td>
+<td style="text-align: left;">one client interface over several LLM providers</td>
+</tr>
+<tr>
+<td style="text-align: left;">Builder</td>
+<td style="text-align: left;">construct complex objects step by step</td>
+<td style="text-align: left;">building prompts or data pipelines</td>
+</tr>
+<tr>
+<td style="text-align: left;">Template method</td>
+<td style="text-align: left;">fixed skeleton, overridable steps</td>
+<td style="text-align: left;">a base <code>Trainer</code> with <code>train_step</code> hooks</td>
+</tr>
+<tr>
+<td style="text-align: left;">Command</td>
+<td style="text-align: left;">represent an action as an object</td>
+<td style="text-align: left;">agent tool calls, undo logs, job queues</td>
+</tr>
+<tr>
+<td style="text-align: left;">State machine</td>
+<td style="text-align: left;">explicit states and transitions</td>
+<td style="text-align: left;">request lifecycle, order status, agent run status</td>
+</tr>
+</tbody>
+</table>
+<p><em>Design patterns worth knowing, with ML uses</em></p>
+<h1 id="concurrency-primer">Concurrency Primer</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Race condition</strong>: the result depends on thread interleaving (two threads read a counter, both write <span class="math inline">\(+1\)</span>, one update is lost). Protect shared mutable state with a lock, or use atomic operations.</p></li>
+<li><p><strong>Deadlock</strong> needs four conditions: mutual exclusion, hold and wait, no preemption, circular wait. Prevent it by always acquiring locks in a global order, or with timeouts.</p></li>
+<li><p><strong>Condition variables</strong>: wait for a condition while releasing the lock; always re-check the condition in a <code>while</code> loop (spurious wake-ups).</p></li>
+<li><p><strong>Read-write locks</strong>, <strong>semaphores</strong> (limit concurrency to <span class="math inline">\(N\)</span>), <strong>thread pools</strong>, and <strong>futures</strong>.</p></li>
+<li><p><strong>Async I/O</strong> (event loops) for many concurrent network calls; threads or processes for CPU work (Python’s GIL limits CPU parallelism in threads).</p></li>
+</ul>
+</div>
+<p><em>Bounded blocking queue (producer–consumer)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Put(<span class="math inline">\(item\)</span>)</div>
+<div class="algo-line" style="--d:1">acquire <span class="math inline">\(lock\)</span></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(|buffer| = capacity\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2">wait on <span class="math inline">\(notFull\)</span> <em>▷ releases <span class="math inline">\(lock\)</span> while waiting</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">append <span class="math inline">\(item\)</span>; signal <span class="math inline">\(notEmpty\)</span>; release <span class="math inline">\(lock\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Take()</div>
+<div class="algo-line" style="--d:1">acquire <span class="math inline">\(lock\)</span></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(|buffer| = 0\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2">wait on <span class="math inline">\(notEmpty\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(item \gets\)</span> pop front; signal <span class="math inline">\(notFull\)</span>; release <span class="math inline">\(lock\)</span></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(item\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<h1 id="classic-problem-key-value-store-with-ttl-and-transactions">Classic Problem: Key-Value Store with TTL and Transactions</h1>
+<figure class="tikz"><img src="figs/dsa/764728c36c22.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A small, testable design.</em></p>
+<p><em>Nested transactions with a stack of write buffers</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Begin()</div>
+<div class="algo-line" style="--d:1">push an empty map onto <span class="math inline">\(txStack\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Set(<span class="math inline">\(k, v\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(txStack\)</span> not empty <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(top(txStack)[k] \gets v\)</span></div>
+<div class="algo-line" style="--d:1"><strong>else</strong>  </div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(data[k] \gets v\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Delete(<span class="math inline">\(k\)</span>)</div>
+<p>XXIND1XX</p>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Get(<span class="math inline">\(k\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each buffer in <span class="math inline">\(txStack\)</span> from top to bottom <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(k \in buffer\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><strong>return</strong> null if TOMBSTONE else <span class="math inline">\(buffer[k]\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(data[k]\)</span> if present and not expired, else null <em>▷ lazy expiry</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Commit()</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(b \gets\)</span> pop<span class="math inline">\((txStack)\)</span></div>
+<div class="algo-line" style="--d:1">merge <span class="math inline">\(b\)</span> into the new top buffer, or into <span class="math inline">\(data\)</span> if the stack is empty</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Rollback()</div>
+<div class="algo-line" style="--d:1">pop<span class="math inline">\((txStack)\)</span> and discard it</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Design choices to talk through.</strong> Expiry: lazy (check on read; cheap but expired keys use memory) plus periodic sampling cleanup (Redis’s approach), or a min-heap of expiry times. Counting values (“how many keys have value <span class="math inline">\(v\)</span>”) needs a second map updated on every set and delete, including inside transactions. Thread safety: one lock is correct and simple; striped locks by key hash scale better; transactions per client need per-connection stacks. Persistence: an append-only log of operations replayed on startup, with periodic snapshots to bound replay time (the same design as databases’ write-ahead logs). Each extension maps to one new component, which is the point of starting with clean boundaries.</p>
+</div>
+<h1 id="classic-problem-rate-limiter">Classic Problem: Rate Limiter</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Interface: <code>allow(clientId, cost=1) -&gt; bool</code>. Strategy pattern over algorithms: <code>TokenBucket</code> (capacity, refill rate, <code>tokens</code>, <code>lastRefill</code>: refill lazily on each call as <span class="math inline">\(\min(cap, tokens + rate\cdot\Delta t)\)</span>), <code>SlidingWindowLog</code> (a deque of timestamps per client; pop old ones), <code>SlidingWindowCounter</code>. A map from client to limiter state, with idle-state cleanup. Inject the clock. For thread safety lock per client. For a distributed version the state moves to a shared store with an atomic script (see the System Design book’s rate limiting chapter). For LLM APIs the cost is the token count, reserved up front and refunded after the response.</p>
+</div>
+<h1 id="classic-problem-task-scheduler-with-dependencies">Classic Problem: Task Scheduler with Dependencies</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Requirements: submit tasks with dependencies, run with up to <span class="math inline">\(N\)</span> workers, retry failures with backoff, report status. Design: <code>Task</code> (id, function, deps, retries, state machine PENDING <span class="math inline">\(\to\)</span> READY <span class="math inline">\(\to\)</span> RUNNING <span class="math inline">\(\to\)</span> DONE / FAILED); <code>Scheduler</code> keeps in-degree counts and a ready queue (Kahn’s algorithm, Chapter 8), a thread pool of <span class="math inline">\(N\)</span> workers, and on completion decrements dependents and enqueues those that become ready. Cycle detection at submission. Failures: retry with exponential backoff and jitter up to a limit, then mark dependents as cancelled. Extensions: priorities (ready queue becomes a heap), timeouts per task, persistence of state for restarts (durable execution), idempotency keys for tasks with side effects.</p>
+</div>
+<h1 id="classic-problem-in-memory-pubsub">Classic Problem: In-Memory Pub/Sub</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><code>publish(topic, msg)</code>, <code>subscribe(topic, handler) -&gt; Subscription</code>, <code>unsubscribe</code>. Observer pattern with a map from topic to subscribers. Decisions: synchronous delivery (simple, a slow handler blocks the publisher) vs a queue and worker per subscriber (isolation, needs backpressure: bounded queue and drop or block policy); ordering per topic; at-least-once delivery requires acknowledgements and redelivery; wildcard topics need a trie of topic segments.</p>
+</div>
+<h1 id="ml-problem-dynamic-batching-inference-server">ML Problem: Dynamic Batching Inference Server</h1>
+<figure class="tikz"><img src="figs/dsa/9d2708359c59.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Dynamic batching trades a few milliseconds of latency for much higher throughput.</em></p>
+<p><em>Batcher loop</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>loop</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(batch \gets\)</span> [ first request from the queue (blocking) ]; <span class="math inline">\(deadline \gets now + T\)</span></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(|batch| &lt; B\)</span> <strong>and</strong> <span class="math inline">\(now &lt; deadline\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(r \gets\)</span> take from the queue with timeout <span class="math inline">\(deadline - now\)</span></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(r\)</span> exists <strong>then</strong></div>
+<div class="algo-line" style="--d:3">append <span class="math inline">\(r\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">drop requests whose own deadline has passed <em>▷ do not waste compute</em></div>
+<div class="algo-line" style="--d:1">pad inputs to a common shape; run the model once; split outputs</div>
+<div class="algo-line" style="--d:1">complete each request’s future with its output (or its error)</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Points that distinguish senior answers: the bounded queue gives backpressure (reject with 429/503 when full rather than letting latency grow without bound); choose <span class="math inline">\(B\)</span> and <span class="math inline">\(T\)</span> from a latency budget (p99 latency <span class="math inline">\(\approx\)</span> queue wait <span class="math inline">\(+ T +\)</span> batch compute); group requests by shape or sequence length to reduce padding waste; one error in a batch should fail only that request (validate inputs before batching); expose metrics (queue depth, batch size histogram, latency). For LLMs, request-level batching is replaced by <strong>continuous batching</strong> at every decode step because outputs have very different lengths.</p>
+</div>
+<h1 id="ml-problem-feature-store-point-in-time">ML Problem: Feature Store (Point-in-Time)</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>API: <code>write(entity, feature, value, timestamp)</code>, <code>get_online(entity, features)</code> (latest values, low latency), <code>get_training(events)</code> (point-in-time values for each (entity, timestamp), Chapter 16). Storage: per (entity, feature) a time-sorted list of (timestamp, value). Online read = last element (<span class="math inline">\(O(1)\)</span>); historical read = binary search for the last timestamp <span class="math inline">\(\le t\)</span> (<span class="math inline">\(O(\log n)\)</span>), or a merge for a sorted batch of events. Extensions: TTL for stale features, feature definitions shared by batch and online paths (avoid training–serving skew), backfills, and versioning of feature definitions.</p>
+</div>
+<h1 id="ml-problem-tool-executor-for-an-agent">ML Problem: Tool Executor for an Agent</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Components: <code>Tool</code> interface (name, JSON schema for arguments, <code>run(args, context)</code>, a <code>risky</code> flag, required permissions); <code>ToolRegistry</code> (register, look up, list schemas for the model); <code>Executor</code> that (1) validates arguments against the schema and business rules in code, (2) checks the caller’s permissions, (3) requests human approval for risky tools, (4) runs with a timeout and an idempotency key derived from (run id, step, tool), (5) retries transient failures with backoff, (6) truncates large outputs before returning them to the model, and (7) records every call for tracing. A <code>Budget</code> object caps steps, tokens, wall time, and cost; the agent loop stops cleanly when any limit is reached. Treat tool output as untrusted data, never as instructions.</p>
+</div>
+<h1 id="ml-problem-experiment-tracker">ML Problem: Experiment Tracker</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Entities: <code>Experiment</code> <span class="math inline">\(\to\)</span> many <code>Run</code>s; a run has parameters (immutable after start), metrics (time series of (step, value), append-only), artifacts (paths plus content hashes), tags, and status. API: <code>start_run</code>, <code>log_param</code>, <code>log_metric(key, value, step)</code>, <code>log_artifact</code>, <code>end_run</code>, <code>query(filter, order_by)</code>. Concerns: buffered asynchronous logging so training is not slowed (flush on a timer and at exit), idempotent metric writes (key + step), resuming a crashed run, and comparing runs (best metric per run).</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Writing code before agreeing on the interface and requirements.</p></li>
+<li><p>God classes that do storage, policy, and I/O at once, so every extension touches everything.</p></li>
+<li><p>Calling the real clock or network inside logic, making behavior untestable.</p></li>
+<li><p>Ignoring concurrency until asked, then bolting a lock onto every method.</p></li>
+<li><p>Leaving no tests; in practical rounds, tests are often explicitly scored.</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Start from the API, then entities, then data structures and complexity per operation.</p></li>
+<li><p>Strategy, observer, decorator, and state machines cover most extensions.</p></li>
+<li><p>Know locks, condition variables, and the bounded queue cold.</p></li>
+<li><p>ML-flavored LLD (batching server, feature store, tool executor) reuses the same algorithms in this book.</p></li>
+</ul>
+</div>

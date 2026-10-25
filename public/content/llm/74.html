@@ -1,0 +1,286 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Shaped reward:</strong> the reward model gives one score <span class="math inline">\(R_b\)</span> per response, while the KL penalty is naturally per token. Combine them as <span class="math inline">\(r_{bt}=-\beta k_{bt}+\mathbb 1[t=L_b-1]R_b\)</span>: a small cost at every token, and the score once, at the last real token. <strong>Return-to-go</strong> <span class="math inline">\(G_t=\sum_{k\ge t}r_k\)</span> is what each token is credited with.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Under token-weighted policy loss, why do longer responses receive more aggregate gradient?</p></li>
+<li><p>How can a scalar loss equal zero while its parameter gradient remains nonzero?</p></li>
+</ol>
+<p>In LLM reinforcement learning, a reward model commonly provides one score per response:</p>
+<p><span class="math display">\[R\in\mathbb{R}^{B}\]</span></p>
+<p>The policy and reference supply selected-token log-probabilities:</p>
+<p><span class="math display">\[\ell_\pi,\ell_{\text{ref}}
+\in\mathbb{R}^{B\times T}\]</span></p>
+<p>A sampled per-token KL penalty is:</p>
+<p><span class="math display">\[k_{bt}
+=
+\ell_{\pi,bt}-\ell_{\text{ref},bt}\]</span></p>
+<p>A common shaped reward is:</p>
+<p><span class="math display">\[r_{bt}^{\text{shaped}}
+=
+-\beta k_{bt}
++
+\mathbf 1[t=L_b-1]R_b\]</span></p>
+<p>Thus:</p>
+<ul>
+<li><p>every response token receives a local KL penalty;</p></li>
+<li><p>the reward-model score is added only at the final valid response token;</p></li>
+<li><p>padding receives neither reward nor policy gradient.</p></li>
+</ul>
+<p>The return-to-go is:</p>
+<p><span class="math display">\[G_{bt}
+=
+\sum_{j=t}^{L_b-1}
+\gamma^{j-t}r_{bj}^{\text{shaped}}\]</span></p>
+<p>With <span class="math inline">\(\gamma=1\)</span>, terminal reward reaches every earlier response token equally. With <span class="math inline">\(\gamma&lt;1\)</span>, earlier tokens receive a discounted signal.</p>
+<p>Placing terminal reward at physical position <code>T-1</code> instead of valid position <span class="math inline">\(L_b-1\)</span> introduces length dependence. If the return recurrence crosses padding, the reward receives extra discounting; if padding resets the recurrence, the reward can disappear entirely.</p>
+<p>In PPO, shaped rewards and returns are rollout data. They must be detached when optimizing the policy.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: what each token’s return contains</div>
+<p><strong>Step 1.</strong> With <span class="math inline">\(\gamma=1\)</span>: <span class="math inline">\(G_t=\sum_{k=t}^{L-1}r_k=-\beta\sum_{k=t}^{L-1}k_k+R\)</span>.</p>
+<p><strong>Step 2.</strong> So every token is credited with the full sequence score <span class="math inline">\(R\)</span>, plus the KL cost of itself and every token <em>after</em> it, not before.</p>
+<p><strong>Step 3.</strong> Backward recursion: <span class="math inline">\(G_{L-1}=-\beta k_{L-1}+R\)</span>, and <span class="math inline">\(G_t=r_t+G_{t+1}\)</span>. Padding beyond <span class="math inline">\(L-1\)</span> must contribute 0.</p>
+<p><strong>Step 4.</strong> <strong>Placement bug:</strong> putting <span class="math inline">\(R\)</span> on a padding position (index <span class="math inline">\(T-1\)</span> instead of <span class="math inline">\(L_b-1\)</span>) either drops it (if masked) or credits it to nonexistent tokens.</p>
+<p><strong>Step 5.</strong> <strong>Sum of KL penalties</strong> <span class="math inline">\(=-\beta\sum_tk_t\)</span>, which is <span class="math inline">\(-\beta\)</span> times the sampled sequence KL <span class="math inline">\(\log\frac{\pi(y)}{\pi_{\text{ref}}(y)}\)</span>: token shaping implements the sequence-level KL objective.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: shaped rewards and return-to-go</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(\ell_\pi,\ell_{\text{ref}}\)</span> (detached), response lengths <span class="math inline">\(L_b\)</span>, scores <span class="math inline">\(R_b\)</span>, <span class="math inline">\(\beta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(r_{bt}\gets-\beta(\ell_{\pi,bt}-\ell_{\text{ref},bt})\cdot M_{bt}\)</span>; <span class="math inline">\(r_{b,L_b-1}\gets r_{b,L_b-1}+R_b\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(G\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t=T-1\)</span> <strong>down to</strong> <span class="math inline">\(0\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(G_{bt}\gets M_{bt}(r_{bt}+G_{b,t+1})\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Construct KL-shaped rewards, compute return-to-go, and reproduce a terminal-position bug.</p>
+<pre class="code python"><code class="language-python">import torch
+
+B, T = 3, 6
+beta = 0.1
+gamma = 0.9
+
+response_mask = torch.tensor([
+    [1, 1, 1, 0, 0, 0],  # length 3
+    [1, 1, 1, 1, 1, 0],  # length 5
+    [1, 1, 1, 1, 1, 1],  # length 6
+], dtype=torch.bool)
+
+# Stored selected-token log-ratios from rollout generation.
+rollout_log_ratio = torch.tensor([
+    [ 0.20,  0.10, -0.10, 0.00, 0.00, 0.00],
+    [ 0.10, -0.20,  0.30, 0.10, 0.20, 0.00],
+    [-0.10,  0.20,  0.10, 0.00, 0.20, 0.10],
+])                                                      # [B,T]
+
+sequence_scores = torch.tensor([
+     2.0,
+     1.0,
+    -1.0,
+])                                                      # [B]
+
+
+lengths = ...                                           # TODO 1: [B]
+terminal_indices = ...                                  # TODO 2: [B]
+batch_indices = ...                                     # TODO 3: [B]
+
+token_rewards = ...                                     # TODO 4: KL reward [B,T]
+
+# Add each scalar score at its final valid response token.
+token_rewards[...] = token_rewards[...]                 # keep tensor writable
+token_rewards[batch_indices, terminal_indices] += ...   # TODO 5
+
+print(&quot;shaped token rewards:\n&quot;, token_rewards)
+
+
+def discounted_returns(rewards, gamma):
+    &quot;&quot;&quot;
+    rewards: [B,T]
+    Returns are computed over physical positions.
+    &quot;&quot;&quot;
+    returns = ...                                       # TODO 6: [B,T]
+    running_return = ...                                # TODO 7: [B]
+
+    for t in reversed(range(rewards.shape[1])):
+        running_return = ...                            # TODO 8
+        returns[:, t] = ...                             # TODO 9
+
+    return returns
+
+
+returns = discounted_returns(
+    token_rewards,
+    gamma,
+)
+
+# Only response positions are training targets.
+masked_returns = torch.where(
+    response_mask,
+    returns,
+    torch.zeros_like(returns),
+)
+
+print(&quot;\nreturn-to-go:\n&quot;, masked_returns)
+
+assert torch.allclose(
+    masked_returns[~response_mask],
+    torch.zeros_like(masked_returns[~response_mask]),
+)</code></pre>
+<p>Now use the returns in a simple policy-gradient loss:</p>
+<pre class="code python"><code class="language-python">new_selected_logp = torch.zeros(
+    B, T,
+    requires_grad=True,
+)
+
+policy_loss = -(                                      # TODO 10
+    new_selected_logp * masked_returns.detach()
+)[response_mask].mean()
+
+policy_loss.backward()
+
+print(&quot;\npolicy gradient:\n&quot;, new_selected_logp.grad)
+
+assert torch.allclose(
+    new_selected_logp.grad[~response_mask],
+    torch.zeros_like(new_selected_logp.grad[~response_mask]),
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Does a positive terminal score affect only the final token’s policy gradient?</p></li>
+<li><p>Can a positive sequence score coexist with a negative return at some token?</p></li>
+<li><p>For a positive return, should gradient descent increase or decrease that token’s selected log-probability?</p></li>
+</ul>
+<p>Reproduce the terminal-position bug:</p>
+<pre class="code python"><code class="language-python">bad_rewards = (
+    -beta
+    * rollout_log_ratio
+    * response_mask.to(rollout_log_ratio.dtype)
+)
+
+# Bug: T-1 is padding for the first two responses.
+bad_rewards[:, -1] += sequence_scores
+
+bad_returns = discounted_returns(
+    bad_rewards,
+    gamma,
+)
+
+bad_masked_returns = torch.where(
+    response_mask,
+    bad_returns,
+    torch.zeros_like(bad_returns),
+)
+
+print(&quot;\ncorrect returns:\n&quot;, masked_returns)
+print(&quot;\nreward-at-T-1 returns:\n&quot;, bad_masked_returns)
+
+print(
+    &quot;\nfirst-token return difference:&quot;,
+    masked_returns[:, 0] - bad_masked_returns[:, 0],
+)</code></pre>
+<p>Why is the error largest for the shortest padded response?</p>
+<p>Hints:</p>
+<ul>
+<li><p><code>lengths = response_mask.sum(dim=-1)</code>.</p></li>
+<li><p>The terminal index is <code>lengths - 1</code>.</p></li>
+<li><p>The KL reward is <code>-beta * rollout_log_ratio</code>.</p></li>
+<li><p>Zero invalid KL rewards using the mask.</p></li>
+<li><p>Initialize both return tensors with zeros.</p></li>
+<li><p>The recurrence is <code>reward</code><span><code>[</code></span><code>:, t</code><span><code>]</code></span><code> + gamma * running_return</code>.</p></li>
+<li><p>Treat returns as constants in the policy loss.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Where should a scalar reward-model score be inserted in a padded response tensor?</p></li>
+<li><p>Prediction: with <span class="math inline">\(\gamma=1\)</span> and no KL penalty, what return does every valid token receive?</p></li>
+<li><p>Why can future KL penalties influence the update assigned to an earlier token?</p></li>
+<li><p>Debugging: shorter responses systematically receive weaker reward credit despite equal scores. Which indexing error should you inspect?</p></li>
+<li><p>Why should rollout log-ratios and computed returns be detached during PPO optimization?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">lengths = response_mask.sum(dim=-1)
+terminal_indices = lengths - 1
+
+batch_indices = torch.arange(
+    B,
+    device=response_mask.device,
+)
+
+token_rewards = (
+    -beta
+    * rollout_log_ratio
+    * response_mask.to(rollout_log_ratio.dtype)
+)
+
+token_rewards[batch_indices, terminal_indices] += (
+    sequence_scores
+)</code></pre>
+<p>Return-to-go:</p>
+<pre class="code python"><code class="language-python">def discounted_returns(rewards, gamma):
+    returns = torch.zeros_like(rewards)
+
+    running_return = torch.zeros(
+        rewards.shape[0],
+        dtype=rewards.dtype,
+        device=rewards.device,
+    )
+
+    for t in reversed(range(rewards.shape[1])):
+        running_return = (
+            rewards[:, t]
+            + gamma * running_return
+        )
+
+        returns[:, t] = running_return
+
+    return returns</code></pre>
+<p>Policy loss:</p>
+<pre class="code python"><code class="language-python">policy_loss = -(
+    new_selected_logp
+    * masked_returns.detach()
+)[response_mask].mean()</code></pre>
+<p>A positive terminal reward affects every preceding token through return-to-go:</p>
+<p><span class="math display">\[G_t=r_t+\gamma r_{t+1}+\cdots\]</span></p>
+<p>It does not affect only the terminal token.</p>
+<p>A positive sequence score can still produce a negative return if accumulated KL penalties outweigh its discounted terminal contribution.</p>
+<p>For a positive return:</p>
+<p><span class="math display">\[L=-G_t\log\pi_\theta(a_t)\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[\frac{\partial L}
+{\partial\log\pi_\theta(a_t)}
+=-G_t&lt;0\]</span></p>
+<p>Gradient descent therefore increases the selected action’s log-probability.</p>
+<p>With the bug, a response of length <span class="math inline">\(L_b\)</span> receives its terminal score at <span class="math inline">\(T-1\)</span>, adding:</p>
+<p><span class="math display">\[T-L_b\]</span></p>
+<p>artificial discount steps. Its contribution at valid token <span class="math inline">\(t\)</span> becomes:</p>
+<p><span class="math display">\[\gamma^{T-1-t}R_b\]</span></p>
+<p>instead of:</p>
+<p><span class="math display">\[\gamma^{L_b-1-t}R_b\]</span></p>
+<p>Their ratio is:</p>
+<p><span class="math display">\[\gamma^{T-L_b}\]</span></p>
+<p>The shortest response has the most padding and therefore the strongest unintended attenuation. In implementations that reset return accumulation at padding, the misplaced reward may instead be removed completely.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>At index <code>response_length - 1</code>, the final valid response token.</p></li>
+<li><p>Every valid token receives the same return <span class="math inline">\(R\)</span>.</p></li>
+<li><p>Return-to-go includes all later shaped rewards, including later KL penalties.</p></li>
+<li><p>Check whether terminal reward is being written to <span><code>[</code></span><code>:, -1</code><span><code>]</code></span> rather than gathered/scattered using each response’s valid length.</p></li>
+<li><p>They define fixed rollout targets. Allowing gradients through their construction adds unintended paths and no longer implements the intended policy-gradient estimator.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Token weighting assigns one contribution per valid action, so longer responses contain more contributing terms.</p></li>
+<li><p>Loss terms can cancel in value while their derivatives with respect to different variables remain nonzero.</p></li>
+</ul>

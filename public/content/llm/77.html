@@ -1,0 +1,289 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Selection is optimization.</strong> If a reward model scores <span class="math inline">\(R=U+\epsilon\)</span> (true quality plus error), picking the highest-scoring of <span class="math inline">\(N\)</span> candidates selects for high <span class="math inline">\(U\)</span> <em>and</em> high <span class="math inline">\(\epsilon\)</span>. <strong>The winner’s curse:</strong> the winner’s score overstates its true quality, and the gap grows with <span class="math inline">\(N\)</span>.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>If observed KL exceeds its target, how should an adaptive KL controller change <span class="math inline">\(\beta\)</span>?</p></li>
+<li><p>Why can a reward model’s ranking accuracy stay fixed while its score scale changes training behavior?</p></li>
+</ol>
+<p>Suppose each prompt has <span class="math inline">\(G\)</span> candidate responses:</p>
+<p><span class="math display">\[U,R\in\mathbb{R}^{B\times G}\]</span></p>
+<p>where <span class="math inline">\(U_{bg}\)</span> is latent true quality and the reward-model score is:</p>
+<p><span class="math display">\[R_{bg}=U_{bg}+\epsilon_{bg}\]</span></p>
+<p>Best-of-<span class="math inline">\(N\)</span> selects:</p>
+<p><span class="math display">\[g_b^*
+=
+\arg\max_{g\le N}R_{bg}\]</span></p>
+<p>Because selection explicitly maximizes <span class="math inline">\(R\)</span>, it selects both high quality and favorable reward-model error:</p>
+<p><span class="math display">\[R_{b,g_b^*}
+=
+U_{b,g_b^*}
++
+\epsilon_{b,g_b^*}\]</span></p>
+<p>Typically:</p>
+<p><span class="math display">\[\mathbb E[\epsilon_{b,g_b^*}]&gt;0\]</span></p>
+<p>This is the winner’s curse. As <span class="math inline">\(N\)</span> grows:</p>
+<ul>
+<li><p>selected proxy reward usually rises;</p></li>
+<li><p>selected true quality may rise more slowly or plateau;</p></li>
+<li><p>the proxy–true gap generally grows;</p></li>
+<li><p>generated data moves farther from the reward model’s training distribution.</p></li>
+</ul>
+<p>A reward model can therefore have good held-out pairwise accuracy but still fail under strong optimization. Standard validation measures average performance on ordinary samples; best-of-<span class="math inline">\(N\)</span> probes performance on examples selected specifically to exploit the model’s errors.</p>
+<p>Practical evaluation should track both the optimized reward and an independent signal: human preference, a held-out reward model, task success, or targeted safety metrics.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the selected error is positive</div>
+<p><strong>Step 1.</strong> Let <span class="math inline">\(U_g,\epsilon_g\)</span> be independent, with <span class="math inline">\(\mathbb E[\epsilon]=0\)</span>. Choose <span class="math inline">\(g^*=\arg\max_gR_g\)</span>.</p>
+<p><strong>Step 2.</strong> Unselected, <span class="math inline">\(\mathbb E[\epsilon_g]=0\)</span>. But <span class="math inline">\(g^*\)</span> is more likely to be a candidate with large <span class="math inline">\(\epsilon\)</span>, since large <span class="math inline">\(\epsilon\)</span> raises <span class="math inline">\(R\)</span>. So <span class="math inline">\(\mathbb E[\epsilon_{g^*}]&gt;0\)</span>.</p>
+<p><strong>Step 3.</strong> Pure noise (<span class="math inline">\(U\)</span> equal for all): <span class="math inline">\(\mathbb E[\epsilon_{g^*}]=\sigma\,\mathbb E[\max_{g\le N}Z_g]\)</span> with standard normals <span class="math inline">\(Z\)</span>, about <span class="math inline">\(1.03\sigma\)</span> at <span class="math inline">\(N=4\)</span> and <span class="math inline">\(1.77\sigma\)</span> at <span class="math inline">\(N=16\)</span>. An upper bound is <span class="math inline">\(\sigma\sqrt{2\ln N}\)</span>.</p>
+<p><strong>Step 4.</strong> So <span class="math inline">\(\mathbb E[R_{g^*}]-\mathbb E[U_{g^*}]=\mathbb E[\epsilon_{g^*}]&gt;0\)</span>: the selected score is biased upward, and an independent judge is needed to measure the true gain.</p>
+<p><strong>Step 5.</strong> <strong>KL cost:</strong> best-of-<span class="math inline">\(N\)</span> moves the output distribution by <span class="math inline">\(D_{\mathrm{KL}}=\log N-\frac{N-1}{N}\)</span> nats from the base policy. More selection means more drift and more exploited error.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: best-of-<span class="math inline">\(N\)</span> with an honest estimate</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> prompts, policy, reward model <span class="math inline">\(\hat r\)</span>, independent judge <span class="math inline">\(u\)</span>, <span class="math inline">\(N\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each prompt <strong>do</strong></div>
+<div class="algo-line" style="--d:1">sample <span class="math inline">\(N\)</span> responses; pick <span class="math inline">\(g^*=\arg\max_g\hat r\)</span></div>
+<div class="algo-line" style="--d:1">record <span class="math inline">\(\hat r(g^*)\)</span> and <span class="math inline">\(u(g^*)\)</span> <em>▷ judge on the selected one only</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">report the mean of <span class="math inline">\(u\)</span> as the gain; <span class="math inline">\(\overline{\hat r-u}\)</span> estimates the winner’s curse</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Simulate best-of-<span class="math inline">\(N\)</span> selection and measure reward-model optimism.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(311)
+
+num_prompts = 100_000
+max_candidates = 64
+reward_noise_std = 1.5
+
+true_quality = torch.randn(
+    num_prompts,
+    max_candidates,
+)                                                       # [B,G]
+
+reward_noise = (
+    reward_noise_std
+    * torch.randn(num_prompts, max_candidates)
+)                                                       # [B,G]
+
+proxy_reward = ...                                      # TODO 1: [B,G]
+
+
+def evaluate_best_of_n(n):
+    candidate_rewards = ...                             # TODO 2: [B,n]
+
+    selected_indices = ...                              # TODO 3: [B]
+
+    selected_proxy = ...                                # TODO 4: [B]
+    selected_true = ...                                 # TODO 5: [B]
+    selected_noise = ...                                # TODO 6: [B]
+
+    return torch.stack([
+        selected_proxy.mean(),
+        selected_true.mean(),
+        selected_noise.mean(),
+    ])
+
+
+candidate_counts = [1, 2, 4, 8, 16, 32, 64]
+
+results = torch.stack([
+    evaluate_best_of_n(n)
+    for n in candidate_counts
+])                                                      # [7,3]
+
+print(&quot; N | proxy reward | true quality | optimism gap&quot;)
+
+for n, row in zip(candidate_counts, results):
+    proxy_mean, true_mean, noise_mean = row
+
+    print(
+        f&quot;{n:&gt;2} |&quot;
+        f&quot; {proxy_mean.item():&gt;12.4f} |&quot;
+        f&quot; {true_mean.item():&gt;12.4f} |&quot;
+        f&quot; {noise_mean.item():&gt;12.4f}&quot;
+    )
+
+assert torch.allclose(
+    results[:, 0] - results[:, 1],
+    results[:, 2],
+    atol=1e-5,
+)
+
+assert abs(results[0, 2].item()) &lt; 0.02
+assert results[-1, 2] &gt; results[1, 2]</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>For <span class="math inline">\(N=1\)</span>, what should the average selected noise be?</p></li>
+<li><p>Which grows faster with <span class="math inline">\(N\)</span>: selected proxy reward or selected true quality?</p></li>
+<li><p>Does a rising proxy reward prove that response quality improved by the same amount?</p></li>
+</ul>
+<p>Now compare with an independent evaluator:</p>
+<pre class="code python"><code class="language-python">heldout_noise = torch.randn_like(true_quality)
+
+heldout_reward = (
+    true_quality
+    + reward_noise_std * heldout_noise
+)
+
+
+def compare_evaluators(n):
+    selected_indices = ...                              # TODO 7
+
+    selected_proxy = ...                                # TODO 8
+    selected_heldout = ...                              # TODO 9
+
+    return (
+        selected_proxy.mean(),
+        selected_heldout.mean(),
+    )
+
+
+print(&quot;\n N | optimized RM | held-out RM&quot;)
+
+for n in candidate_counts:
+    proxy_mean, heldout_mean = compare_evaluators(n)
+
+    print(
+        f&quot;{n:&gt;2} |&quot;
+        f&quot; {proxy_mean.item():&gt;12.4f} |&quot;
+        f&quot; {heldout_mean.item():&gt;11.4f}&quot;
+    )</code></pre>
+<p>Finally, reproduce an evaluation leak:</p>
+<pre class="code python"><code class="language-python"># Bug: the &quot;held-out&quot; evaluator shares the optimized model&#x27;s error.
+leaked_heldout_reward = (
+    true_quality
+    + reward_noise
+)
+
+n = max_candidates
+
+selected_indices = proxy_reward[:, :n].argmax(dim=1)
+
+leaked_score = leaked_heldout_reward[:, :n].gather(
+    dim=1,
+    index=selected_indices[:, None],
+).squeeze(1)
+
+print(
+    &quot;\nleaked evaluator score:&quot;,
+    leaked_score.mean().item(),
+)</code></pre>
+<p>Why does this evaluator falsely confirm the optimized reward model’s gains?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Proxy reward is true quality plus noise.</p></li>
+<li><p>Select with <code>.argmax(dim=1)</code>.</p></li>
+<li><p>Gather one value per row using <code>indices</code><span><code>[</code></span><code>:, None</code><span><code>]</code></span>.</p></li>
+<li><p>Use the same selected indices for proxy, true, noise, and held-out scores.</p></li>
+<li><p>An independent evaluator has independent error, not merely a different name.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does reward-model error become positively biased after best-of-<span class="math inline">\(N\)</span> selection?</p></li>
+<li><p>Prediction: what happens to winner’s curse as reward-model noise approaches zero?</p></li>
+<li><p>Why might best-of-64 evaluation reveal failures absent from ordinary held-out accuracy?</p></li>
+<li><p>Debugging: optimized reward rises sharply and a second evaluator agrees perfectly. What possible evaluator leak should you check?</p></li>
+<li><p>Why is response-level human evaluation more informative after optimization than evaluation on random policy samples?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">proxy_reward = (
+    true_quality + reward_noise
+)
+
+
+def evaluate_best_of_n(n):
+    candidate_rewards = proxy_reward[:, :n]
+
+    selected_indices = candidate_rewards.argmax(
+        dim=1
+    )
+
+    gather_indices = selected_indices[:, None]
+
+    selected_proxy = candidate_rewards.gather(
+        dim=1,
+        index=gather_indices,
+    ).squeeze(1)
+
+    selected_true = true_quality[:, :n].gather(
+        dim=1,
+        index=gather_indices,
+    ).squeeze(1)
+
+    selected_noise = reward_noise[:, :n].gather(
+        dim=1,
+        index=gather_indices,
+    ).squeeze(1)
+
+    return torch.stack([
+        selected_proxy.mean(),
+        selected_true.mean(),
+        selected_noise.mean(),
+    ])</code></pre>
+<p>Independent evaluator:</p>
+<pre class="code python"><code class="language-python">def compare_evaluators(n):
+    selected_indices = proxy_reward[:, :n].argmax(
+        dim=1
+    )
+
+    gather_indices = selected_indices[:, None]
+
+    selected_proxy = proxy_reward[:, :n].gather(
+        dim=1,
+        index=gather_indices,
+    ).squeeze(1)
+
+    selected_heldout = heldout_reward[:, :n].gather(
+        dim=1,
+        index=gather_indices,
+    ).squeeze(1)
+
+    return (
+        selected_proxy.mean(),
+        selected_heldout.mean(),
+    )</code></pre>
+<p>At <span class="math inline">\(N=1\)</span>, there is no selection among alternatives. The chosen reward noise is therefore ordinary zero-mean noise:</p>
+<p><span class="math display">\[\mathbb E[\epsilon]\approx0\]</span></p>
+<p>For <span class="math inline">\(N&gt;1\)</span>, selection favors candidates whose proxy score is high partly because their error is positive:</p>
+<p><span class="math display">\[g^*=\arg\max_g(U_g+\epsilon_g)\]</span></p>
+<p>Consequently:</p>
+<p><span class="math display">\[\mathbb E[\epsilon_{g^*}]&gt;0\]</span></p>
+<p>The optimized reward rises faster than latent quality because it includes this selected error.</p>
+<p>The independent evaluator has unrelated noise:</p>
+<p><span class="math display">\[R_{\text{heldout}}
+=
+U+\epsilon&#39;\]</span></p>
+<p>with:</p>
+<p><span class="math display">\[\epsilon&#39;\perp\epsilon\]</span></p>
+<p>Selection based on <span class="math inline">\(\epsilon\)</span> does not directly select positive <span class="math inline">\(\epsilon&#39;\)</span>, so the held-out evaluator more closely tracks the selected candidate’s true-quality improvement.</p>
+<p>The leaked evaluator reuses exactly the same error:</p>
+<p><span class="math display">\[R_{\text{leaked}}=U+\epsilon=R_{\text{proxy}}\]</span></p>
+<p>It therefore reproduces the optimized model’s selection bias and provides no independent evidence.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Maximization preferentially selects candidates with positive reward-model errors.</p></li>
+<li><p>It approaches zero because proxy reward approaches true quality.</p></li>
+<li><p>Best-of-64 concentrates evaluation on extreme proxy scores, where rare modeling errors and distribution shift become important.</p></li>
+<li><p>Check whether both evaluators share weights, training labels, prompts, preprocessing, judge templates, or cached scores.</p></li>
+<li><p>Optimization changes the response distribution toward regions favored by the reward model. Evaluation must measure performance on that shifted distribution.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Excessive KL should increase <span class="math inline">\(\beta\)</span>, strengthening the penalty.</p></li>
+<li><p>Reward scale controls the relative magnitude of policy, value, clipping, and KL terms even when ranking order is unchanged.</p></li>
+</ul>

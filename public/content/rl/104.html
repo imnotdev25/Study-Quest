@@ -1,0 +1,384 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>How can randomized A/B ordering separate policy quality from judge position bias?</p></li>
+<li><p>Why is the average of first-order and second-order win probabilities not generally the neutral-position probability?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-judge-score-is-a-noisy-measurement-not-ground-truth">2. A judge score is a noisy measurement, not ground truth</h3>
+<p>Suppose the true unsafe-outcome rate is <span class="math inline">\(p\)</span>. An automated judge has:</p>
+<p><span class="math display">\[\text{TPR}
+=
+P(\hat Y=1\mid Y=1)\]</span></p>
+<p><span class="math display">\[\text{FPR}
+=
+P(\hat Y=1\mid Y=0)\]</span></p>
+<p>The observed positive rate is:</p>
+<p><span class="math display">\[q
+=
+\text{TPR}\,p
++
+\text{FPR}(1-p)\]</span></p>
+<p>Rearranging:</p>
+<p><span class="math display">\[q
+=
+\text{FPR}
++
+(\text{TPR}-\text{FPR})p\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[p
+=
+\frac{q-\text{FPR}}
+{\text{TPR}-\text{FPR}}\]</span></p>
+<p>The denominator:</p>
+<p><span class="math display">\[J=\text{TPR}-\text{FPR}\]</span></p>
+<p>is Youden’s <span class="math inline">\(J\)</span>. A useful judge has <span class="math inline">\(J&gt;0\)</span>. If <span class="math inline">\(J\)</span> is near zero, the judge barely distinguishes positive from negative cases, and correction amplifies noise by approximately:</p>
+<p><span class="math display">\[\frac1{|J|}\]</span></p>
+<p>for standard errors.</p>
+<p>This correction requires a human-labelled validation sample and assumes the judge’s TPR and FPR transfer to both evaluated policies. If the candidate learns to exploit the judge, that assumption may fail.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>true and judged outcomes: <span style="background-color: codeinlinebg"><code> [A, N]</code></span>, with <span style="background-color: codeinlinebg"><code> A=2</code></span> policies</p></li>
+<li><p>confusion matrix: <span style="background-color: codeinlinebg"><code> [2, 2]</code></span>, rows true and columns predicted</p></li>
+<li><p>policy rates: <span style="background-color: codeinlinebg"><code> [A]</code></span></p></li>
+</ul>
+<p>For RLHF, a reward model’s errors affect training trajectories, not just reported prevalence. Post-hoc rate correction can improve evaluation, but it cannot undo a policy trained to exploit incorrect rewards.</p>
+<p>DPO similarly learns from erroneous preferences. Lower DPO loss does not establish that preference labels—or their judge—are calibrated to human outcomes.</p>
+<h3 class="unnumbered" id="pytorch-exercise-recover-a-hidden-safety-improvement">3. PyTorch exercise — recover a hidden safety improvement</h3>
+<p>Control has a true unsafe rate of <span style="background-color: codeinlinebg"><code> 0.20</code></span>; candidate has <span style="background-color: codeinlinebg"><code> 0.10</code></span>. The judge has many false positives, so its raw comparison understates the improvement.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes_per_policy = 50_000
+validation_size = 5_000
+
+true_incident_probabilities = torch.tensor([
+    0.20,  # control
+    0.10,  # candidate
+])
+
+judge_true_positive_rate = 0.85
+judge_false_positive_rate = 0.30
+
+# TODO 1: Generate true and judged deployment outcomes.
+true_incidents = ...
+
+judge_positive_probabilities = ...
+
+judged_incidents = ...
+
+empirical_true_rates = ...
+
+observed_judge_rates = ...
+
+# TODO 2: Construct a balanced human-labelled
+# validation set and run the judge on it.
+validation_truth = ...
+
+validation_judge_probabilities = ...
+
+validation_judgments = ...
+
+# TODO 3: Build the confusion matrix.
+confusion_indices = ...
+
+confusion_matrix = ...
+
+estimated_tpr = ...
+estimated_fpr = ...
+estimated_specificity = ...
+
+# TODO 4: Correct each policy&#x27;s observed rate.
+estimated_youden_j = ...
+
+corrected_incident_rates = ...
+
+oracle_corrected_rates = ...
+
+# TODO 5: Compare policy improvements and instability.
+true_safety_improvement = ...
+
+naive_judge_improvement = ...
+
+corrected_safety_improvement = ...
+
+standard_error_amplification = ...
+variance_amplification = ...
+
+exact_observed_judge_rates = ...
+
+results = torch.stack([
+    empirical_true_rates,
+    observed_judge_rates,
+    corrected_incident_rates,
+    oracle_corrected_rates,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Rows: control, candidate\n&quot;
+    &quot;Columns: empirical truth, observed judge, &quot;
+    &quot;estimated correction, oracle correction&quot;
+)
+print(results)
+
+print(
+    &quot;Validation confusion matrix &quot;
+    &quot;(rows=true, columns=judge)&quot;
+)
+print(confusion_matrix)
+
+print(&quot;Estimated TPR:&quot;, estimated_tpr.item())
+print(&quot;Estimated FPR:&quot;, estimated_fpr.item())
+print(
+    &quot;Estimated specificity:&quot;,
+    estimated_specificity.item(),
+)
+print(&quot;Estimated Youden J:&quot;, estimated_youden_j.item())
+
+print(
+    &quot;Exact expected judge rates:&quot;,
+    exact_observed_judge_rates,
+)
+
+print(
+    &quot;True safety improvement:&quot;,
+    true_safety_improvement.item(),
+)
+print(
+    &quot;Naive judge improvement:&quot;,
+    naive_judge_improvement.item(),
+)
+print(
+    &quot;Corrected safety improvement:&quot;,
+    corrected_safety_improvement.item(),
+)
+
+print(
+    &quot;SE amplification:&quot;,
+    standard_error_amplification.item(),
+)
+print(
+    &quot;Variance amplification:&quot;,
+    variance_amplification.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What judged-positive rates do you expect for control and candidate?</p></li>
+<li><p>Will the raw judge estimate the true <span style="background-color: codeinlinebg"><code> 0.10</code></span> safety improvement?</p></li>
+<li><p>Should correction recover values near <span style="background-color: codeinlinebg"><code> 0.20</code></span> and <span style="background-color: codeinlinebg"><code> 0.10</code></span>?</p></li>
+<li><p>What happens when <span style="background-color: codeinlinebg"><code> TPR - FPR</code></span> approaches zero?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where(true_incidents, TPR, FPR)</code></span>.</p></li>
+<li><p>Make half the validation labels negative and half positive.</p></li>
+<li><p>Encode a confusion-matrix cell as <span style="background-color: codeinlinebg"><code> 2 * truth + prediction</code></span>.</p></li>
+<li><p>Reshape four <span style="background-color: codeinlinebg"><code> bincount</code></span> values into <span style="background-color: codeinlinebg"><code> [2, 2]</code></span>.</p></li>
+<li><p>TPR is cell <span style="background-color: codeinlinebg"><code> [1, 1]</code></span> divided by row <span style="background-color: codeinlinebg"><code> 1</code></span>.</p></li>
+<li><p>FPR is cell <span style="background-color: codeinlinebg"><code> [0, 1]</code></span> divided by row <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+<li><p>Apply the inverse measurement equation separately to each policy.</p></li>
+<li><p>Freeze calibration estimates during evaluation; they are not trainable reward-model parameters.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Swap the confusion matrix’s true and predicted axes.</p></li>
+<li><p>Report judge accuracy without TPR, FPR or class prevalence.</p></li>
+<li><p>Apply one calibration matrix across languages where judge errors differ.</p></li>
+<li><p>Calibrate on control responses but assume candidate errors are identical after reward optimization.</p></li>
+<li><p>Divide by a nearly zero Youden <span class="math inline">\(J\)</span>.</p></li>
+<li><p>Silently clamp impossible corrected rates without investigating model mismatch.</p></li>
+<li><p>Tune the judge prompt on the same human-labelled set used to report calibration.</p></li>
+<li><p>Treat corrected aggregate rates as corrected per-example labels.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is overall judge accuracy insufficient?</p></li>
+<li><p>What does a small Youden <span class="math inline">\(J\)</span> imply?</p></li>
+<li><p>When is applying one confusion matrix to both policies invalid?</p></li>
+<li><p>Does prevalence correction repair reward hacking during training?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Deployment outcomes:</p>
+<pre class="code python"><code class="language-python">true_incidents = (
+    torch.rand(
+        2,
+        num_episodes_per_policy,
+    )
+    &lt; true_incident_probabilities[:, None]
+)
+
+judge_positive_probabilities = torch.where(
+    true_incidents,
+    torch.tensor(
+        judge_true_positive_rate
+    ),
+    torch.tensor(
+        judge_false_positive_rate
+    ),
+)
+
+judged_incidents = (
+    torch.rand_like(
+        judge_positive_probabilities
+    )
+    &lt; judge_positive_probabilities
+)
+
+empirical_true_rates = (
+    true_incidents
+    .to(torch.float64)
+    .mean(dim=1)
+)
+
+observed_judge_rates = (
+    judged_incidents
+    .to(torch.float64)
+    .mean(dim=1)
+)</code></pre>
+<p>Balanced validation data:</p>
+<pre class="code python"><code class="language-python">validation_truth = torch.zeros(
+    validation_size,
+    dtype=torch.bool,
+)
+
+validation_truth[
+    validation_size // 2:
+] = True
+
+validation_truth = validation_truth[
+    torch.randperm(validation_size)
+]
+
+validation_judge_probabilities = torch.where(
+    validation_truth,
+    torch.tensor(
+        judge_true_positive_rate
+    ),
+    torch.tensor(
+        judge_false_positive_rate
+    ),
+)
+
+validation_judgments = (
+    torch.rand(validation_size)
+    &lt; validation_judge_probabilities
+)</code></pre>
+<p>Confusion matrix:</p>
+<pre class="code python"><code class="language-python">confusion_indices = (
+    2 * validation_truth.to(torch.long)
+    + validation_judgments.to(torch.long)
+)
+
+confusion_matrix = torch.bincount(
+    confusion_indices,
+    minlength=4,
+).reshape(2, 2).to(torch.float64)
+
+estimated_tpr = (
+    confusion_matrix[1, 1]
+    / confusion_matrix[1].sum()
+)
+
+estimated_fpr = (
+    confusion_matrix[0, 1]
+    / confusion_matrix[0].sum()
+)
+
+estimated_specificity = (
+    confusion_matrix[0, 0]
+    / confusion_matrix[0].sum()
+)</code></pre>
+<p>Corrected rates:</p>
+<pre class="code python"><code class="language-python">estimated_youden_j = (
+    estimated_tpr
+    - estimated_fpr
+)
+
+corrected_incident_rates = (
+    observed_judge_rates
+    - estimated_fpr
+) / estimated_youden_j
+
+oracle_corrected_rates = (
+    observed_judge_rates
+    - judge_false_positive_rate
+) / (
+    judge_true_positive_rate
+    - judge_false_positive_rate
+)</code></pre>
+<p>Improvements and diagnostics:</p>
+<pre class="code python"><code class="language-python">true_safety_improvement = (
+    empirical_true_rates[0]
+    - empirical_true_rates[1]
+)
+
+naive_judge_improvement = (
+    observed_judge_rates[0]
+    - observed_judge_rates[1]
+)
+
+corrected_safety_improvement = (
+    corrected_incident_rates[0]
+    - corrected_incident_rates[1]
+)
+
+standard_error_amplification = (
+    1.0 / estimated_youden_j.abs()
+)
+
+variance_amplification = (
+    standard_error_amplification.square()
+)
+
+exact_observed_judge_rates = (
+    judge_false_positive_rate
+    + (
+        judge_true_positive_rate
+        - judge_false_positive_rate
+    )
+    * true_incident_probabilities
+)</code></pre>
+<p>The expected observed judge rates are:</p>
+<p><span class="math display">\[q_{\text{control}}
+=
+0.30+(0.85-0.30)(0.20)
+=
+0.41\]</span></p>
+<p><span class="math display">\[q_{\text{candidate}}
+=
+0.30+(0.85-0.30)(0.10)
+=
+0.355\]</span></p>
+<p>The naive measured improvement is therefore only:</p>
+<p><span class="math display">\[0.41-0.355=0.055\]</span></p>
+<p>although the true reduction is:</p>
+<p><span class="math display">\[0.20-0.10=0.10\]</span></p>
+<p>Correction divides the judged difference by:</p>
+<p><span class="math display">\[J=0.85-0.30=0.55\]</span></p>
+<p>giving:</p>
+<p><span class="math display">\[\frac{0.055}{0.55}=0.10\]</span></p>
+<p>But the same division amplifies standard errors by:</p>
+<p><span class="math display">\[\frac1{0.55}\approx1.82\]</span></p>
+<p>and variances by approximately <span style="background-color: codeinlinebg"><code> 3.31</code></span>. Calibration improves bias while potentially increasing variance.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Accuracy combines errors according to one class mixture. Deployment prevalence can differ, while TPR and FPR reveal the two error directions separately.</p></li>
+<li><p>The judge contains little information about truth, so inversion becomes numerically unstable and statistically noisy.</p></li>
+<li><p>It is invalid when errors depend on policy style, subgroup, language, response length or reward-model exploitation.</p></li>
+<li><p>No. It adjusts aggregate evaluation under stable error assumptions; it cannot reconstruct trajectories that training changed in response to faulty rewards.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Random ordering supplies observations under both positions; averaging and differencing their logits identifies quality and position effects.</p></li>
+<li><p>Because sigmoid is nonlinear, averaging probabilities outside it differs from averaging logits before applying it.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> judge outputs are measurements with sensitivity and false-positive rates—not truth. Validate them against humans, propagate calibration uncertainty, and check whether their error pattern changes after the policy learns to optimize the judge.</p>

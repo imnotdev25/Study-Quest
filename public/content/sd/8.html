@@ -1,0 +1,140 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>How to keep a system up when its dependencies fail: timeouts and deadlines, retries with exponential backoff and jitter, circuit breakers, bulkheads, idempotency keys, graceful degradation, and chaos engineering.</p>
+</div>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Everything fails eventually: networks drop packets, servers restart, third parties go down. Resilience patterns are the house rules for dealing with it: <strong>don’t wait forever</strong> (timeouts), <strong>try again politely</strong> (retries with backoff), <strong>stop calling someone who isn’t answering</strong> (circuit breaker), and <strong>make sure doing something twice is harmless</strong> (idempotency).</p>
+</div>
+<figure class="tikz"><img src="figs/sd/547b8413d076.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A typical resilience stack around an outbound call.</em></p>
+<h1 id="timeouts">Timeouts</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Every network call needs a timeout. Without one, a slow dependency ties up threads and connections until your service also stops responding.</p>
+<ul>
+<li><p><strong>Connect timeout</strong>: short (100 ms–1 s).</p></li>
+<li><p><strong>Request/read timeout</strong>: based on the dependency’s p99.9, plus margin.</p></li>
+<li><p><strong>Deadline propagation</strong>: pass the remaining time budget downstream (gRPC deadlines, a header like <code>X-Request-Deadline</code>), so a service does not start work the caller has already given up on.</p></li>
+</ul>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Budgets must shrink down the call tree: if the edge timeout is 2 s, the gateway gives services 1.8 s, and so on. A common bug is an inner timeout larger than the outer one, which makes retries useless. For LLM calls use two timeouts: <em>time-to-first-token</em> (e.g. 10 s) and an <em>inter-token idle</em> timeout (e.g. 30 s), rather than one fixed total that would kill long but healthy generations.</p>
+</div>
+<h1 id="retries">Retries</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Retry only <strong>transient</strong> failures: connection resets, timeouts, <code>429</code>, <code>502/503/504</code>. Never retry <code>400</code>, <code>401</code>, <code>403</code>, <code>404</code>, or validation errors. Only retry operations that are <strong>idempotent</strong> or protected by an idempotency key. Cap attempts (typically 3) and honor <code>Retry-After</code>.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Retry amplification:</strong> if each of 4 layers retries 3 times, one user request can become <span class="math inline">\(3^4 = 81\)</span> requests at the bottom, turning a small blip into a full outage (a <em>retry storm</em>). Rules:</p>
+<ul>
+<li><p>Retry at one layer only, usually closest to the failing call.</p></li>
+<li><p>Use a <strong>retry budget</strong>: retries may add at most 10% extra load (Finagle, Envoy, gRPC support this).</p></li>
+<li><p>Propagate a “do not retry” signal when overloaded.</p></li>
+<li><p><strong>Hedged requests</strong> for read latency: after the p95 time, send a second request to another replica and take the first response.</p></li>
+</ul>
+</div>
+<h1 id="exponential-backoff-with-jitter">Exponential Backoff with Jitter</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>If a shop is crowded, you do not walk back in every second. You wait one minute, then two, then four. And if everyone outside waited exactly the same amount, they would all rush in together, so each person adds a random few seconds.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/9a7c39994d91.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Exponential backoff with a cap, and full jitter spreading clients apart.</em></p>
+<pre class="code python"><code class="language-python">RETRYABLE = {429, 500, 502, 503, 504}
+
+def call_with_retry(fn, max_attempts=4, base=0.2, cap=10.0):
+    for attempt in range(max_attempts):
+        try:
+            resp = fn()
+            if resp.status not in RETRYABLE:
+                return resp
+            retry_after = resp.headers.get(&quot;Retry-After&quot;)
+        except (ConnectionError, TimeoutError):
+            retry_after = None
+        if attempt == max_attempts - 1:
+            raise RetryExhausted()
+        delay = random.uniform(0, min(cap, base * 2 ** attempt))  # full jitter
+        if retry_after:
+            delay = max(delay, float(retry_after))
+        time.sleep(delay)</code></pre>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Jitter variants (from the AWS Architecture Blog analysis): <em>full jitter</em> <code>random(0, exp)</code> gives the lowest total load; <em>equal jitter</em> <code>exp/2 + random(0, exp/2)</code> guarantees a minimum wait; <em>decorrelated jitter</em> <code>min(cap, random(base, prev*3))</code> works well in practice.</p>
+</div>
+<h1 id="circuit-breakers">Circuit Breakers</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>An electrical circuit breaker cuts power when there is a fault, so the whole house does not burn. A software circuit breaker stops calling a failing service for a while, so your service fails fast instead of piling up waiting requests.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/b7c9f77d7066.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Circuit breaker state machine.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Configuration: a sliding window (last 100 calls or last 60 s), a minimum number of calls before evaluating, a failure-rate threshold (e.g. 50%), a slow-call threshold (calls over 2 s count as failures), an open duration (30 s), and the number of half-open trial calls. When open, return a <strong>fallback</strong>: cached data, a default, a degraded feature, or a clear error. Libraries: Resilience4j (Java), Polly (.NET), <code>pybreaker</code>, <code>gobreaker</code>; at the platform level Envoy/Istio outlier detection ejects bad hosts.</p>
+</div>
+<h1 id="bulkheads-and-load-shedding">Bulkheads and Load Shedding</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Bulkheads</strong>, named after ship compartments, isolate resources so one failing dependency cannot consume everything: separate thread or connection pools per dependency, separate queues per tenant, separate clusters for critical and batch traffic. <strong>Load shedding</strong> rejects excess requests early (cheap <code>503</code>) when the server is saturated, keeping latency low for the requests it does accept. Prioritize: shed analytics before checkout.</p>
+</div>
+<h1 id="idempotency">Idempotency</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Pressing an elevator button five times does not summon five elevators. That button is idempotent: doing it again has no extra effect. Payment buttons must work the same way, or a double click charges you twice.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/c037223f5ba9.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Idempotency keys make retries of non-idempotent operations safe.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>HTTP semantics: <code>GET</code>, <code>PUT</code>, <code>DELETE</code> are idempotent by definition; <code>POST</code> and <code>PATCH</code> are not. Techniques:</p>
+<ul>
+<li><p><strong>Idempotency key</strong>: client sends a UUID per logical operation; the server stores key <span class="math inline">\(\to\)</span> (request hash, status, response) for 24 h or more.</p></li>
+<li><p><strong>Natural keys and unique constraints</strong>: <code>UNIQUE(order_id)</code> turns a duplicate insert into a no-op.</p></li>
+<li><p><strong>Conditional writes</strong>: <code>UPDATE ... WHERE version = 7</code> (optimistic concurrency), DynamoDB condition expressions.</p></li>
+<li><p><strong>Dedup tables</strong> for message consumers: record processed message IDs in the same transaction as the side effect.</p></li>
+</ul>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Implementation details that matter: insert the key with status <code>IN_PROGRESS</code> atomically before doing work, so concurrent duplicates get a <code>409</code> rather than both executing; store a hash of the request body and reject the same key with a different body (<code>422</code>); persist the key in the same database transaction as the business change, or recover in-progress keys after crashes; never cache transient <code>5xx</code> results as final. For downstream calls, pass a derived key (<code>k1:charge</code>) so the whole chain is idempotent end to end.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Payment API on a flaky mobile network</div>
+<p>The app generates <code>Idempotency-Key</code> when the user taps Pay and retries with the same key on timeout. The server charged the card on the first attempt but the response was lost; the retry returns the stored success response. One charge, a happy user. This is how Stripe’s API works.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Third-party outage during peak</div>
+<p>A recommendation service starts timing out. The circuit breaker opens within seconds; the product page falls back to “popular items” from cache. Checkout, which uses a separate connection pool (bulkhead), is unaffected. When the service recovers, half-open trials close the breaker automatically.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: LLM provider failover</div>
+<p>Primary model returns 529/overloaded. The AI gateway retries once with jittered backoff, then fails over to a second provider or region with an equivalent model. A circuit breaker per provider avoids hammering an overloaded endpoint. The request carries an idempotency key so agent tool calls are not repeated.</p>
+</div>
+<h1 id="chaos-engineering">Chaos Engineering</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Test resilience on purpose: inject latency, kill instances, drop a zone, throttle a dependency, and verify the system meets its SLOs. Start in staging with a clear hypothesis and a small blast radius, then run game days in production. Tools: Chaos Monkey, Gremlin, AWS Fault Injection Service, Chaos Mesh, LitmusChaos.</p>
+</div>
+<h1 id="deep-dive-why-systems-collapse-under-load">Deep Dive: Why Systems Collapse Under Load</h1>
+<figure class="tikz"><img src="figs/sd/63d05616e54b.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Queueing delay explodes as utilization approaches 100%.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>In a simple queue, average time in system is service time divided by <span class="math inline">\((1-\rho)\)</span>. At 50% utilization latency is 2<span class="math inline">\(\times\)</span> the service time; at 80% it is 5<span class="math inline">\(\times\)</span>; at 95%, 20<span class="math inline">\(\times\)</span>. This is why Shopify’s payment team targets well below full saturation (Part (cases)), and why autoscaling targets of 60–70% CPU are common.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Metastable failure.</strong> A system can be stable at normal load, get pushed over by a short trigger (a deploy, a cache flush, a brief network blip), and then <em>stay</em> broken after the trigger is gone. The mechanism is a feedback loop: latency rises <span class="math inline">\(\to\)</span> clients time out and retry <span class="math inline">\(\to\)</span> load rises <span class="math inline">\(\to\)</span> latency rises further. Work done for requests whose callers have already given up is pure waste (“goodput” falls to zero even though servers are 100% busy). The AWS us-east-1 case (Part (cases)) is a textbook example: after DynamoDB recovered, the backlog of lease renewals kept timing out and retrying.</p>
+<p>Defenses, in order of importance:</p>
+<ol>
+<li><p>Bound queues; reject early when full (fast failure is cheap).</p></li>
+<li><p>Drop requests whose deadline has already passed before doing any work.</p></li>
+<li><p>Retry budgets and jittered backoff so retries cannot multiply load.</p></li>
+<li><p>Prefer LIFO over FIFO under overload for interactive traffic: the newest requests are the ones whose users are still waiting.</p></li>
+<li><p>Admission control and priority: keep serving the most important traffic.</p></li>
+<li><p>A recovery playbook that throttles inbound work while backlogs drain.</p></li>
+</ol>
+<p><strong>Retry math.</strong> With failure probability <span class="math inline">\(p\)</span> per attempt and up to <span class="math inline">\(n\)</span> attempts, expected load multiplier is <span class="math inline">\(1 + p + p^2 + \dots + p^{n-1}\)</span>. At <span class="math inline">\(p=0.1\)</span> and <span class="math inline">\(n=3\)</span> that is 1.11 (fine). During an outage <span class="math inline">\(p\to 1\)</span> and the multiplier is <span class="math inline">\(n\)</span>, at every layer that retries, so 3 layers <span class="math inline">\(\times\)</span> 3 attempts gives 27<span class="math inline">\(\times\)</span> load exactly when the system can least handle it.</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>No timeout on HTTP clients (many libraries default to infinite).</p></li>
+<li><p>Retrying without jitter, creating synchronized waves.</p></li>
+<li><p>Retrying non-idempotent operations: duplicate orders and charges.</p></li>
+<li><p>Circuit breaker thresholds tuned for normal traffic that never trip at low volume.</p></li>
+<li><p>Fallbacks that are never tested and fail when finally needed.</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Timeouts everywhere, with budgets shrinking down the call chain.</p></li>
+<li><p>Retry transient errors at one layer, with capped exponential backoff and jitter.</p></li>
+<li><p>Circuit breakers and bulkheads stop failures from spreading.</p></li>
+<li><p>Idempotency is what makes retries and at-least-once delivery safe.</p></li>
+</ul>
+</div>

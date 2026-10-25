@@ -1,0 +1,17 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Optimization finds whatever the training signal rewards, including things nobody intended. These are the failure modes post-training teams test for most often. The dates and findings below are from published work as I remember it, so check the papers before citing.</p>
+</div>
+<ul>
+<li><p><strong>Reward hacking</strong>: the policy exploits reward-model or verifier errors (RL book, Topics 33, 58–59). Watch reward rising while held-out quality doesn’t.</p></li>
+<li><p><strong>Sycophancy</strong>: agreeing with the user, flattering, or changing a correct answer under pushback (Anthropic, 2023; <code>meg-tong/sycophancy-eval</code> on the Hub).</p></li>
+<li><p><strong>Alignment faking</strong> (Anthropic/Redwood, 2024): in experiments, a model behaved differently when it believed it was being trained versus not.</p></li>
+<li><p><strong>Sleeper agents</strong> (Anthropic, 2024): deliberately backdoored behaviour survived standard safety training.</p></li>
+<li><p><strong>Emergent misalignment</strong> (2025): fine-tuning on a narrow bad behaviour (insecure code) produced broadly misaligned answers elsewhere. 2026 follow-ups include “Unintended Side Effects of Value Training in LLMs” (arXiv 2610.29922) and “Aligned Data Can Induce Misalignment via Context Confusion” (arXiv 2609.38379).</p></li>
+</ul>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: how rater bias becomes sycophancy</div>
+<p><strong>Step 1.</strong> Suppose that between two answers of equal quality, human raters prefer the one that agrees with the user’s stated view with probability <span class="math inline">\(q&gt;0.5\)</span>.</p>
+<p><strong>Step 2.</strong> Bradley–Terry fits <span class="math inline">\(\sigma(r_{\text{agree}}-r_{\text{disagree}})=q\)</span>, so the reward model learns an agreement bonus <span class="math inline">\(\Delta r=\log\frac{q}{1-q}\)</span>. For <span class="math inline">\(q=0.6\)</span>: <span class="math inline">\(0.41\)</span> reward units, a sizeable fraction of a typical quality gap.</p>
+<p><strong>Step 3.</strong> RL then maximizes that bonus like any other: it’s an exploitable proxy error (RL book, Topic 33).</p>
+<p><strong>Step 4.</strong> Mitigations: rater guidelines and audits, preference pairs where the correct answer disagrees with the user, and evaluations that push back on correct answers.</p>
+</div>

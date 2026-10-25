@@ -1,0 +1,473 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why is <span style="background-color: codeinlinebg"><code> 1 - done</code></span> sometimes the wrong bootstrap mask?</p></li>
+<li><p>Why can a GAE trace stop at truncation while TD still bootstraps there?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="two-losses-can-fight-over-one-backbone">2. Two losses can fight over one backbone</h3>
+<p>An LLM actor–critic may share a transformer representation:</p>
+<p><span class="math display">\[h_\theta(x)\in\mathbb R^{B\times T\times H}\]</span></p>
+<p>with separate heads:</p>
+<p><span class="math display">\[\text{logits}=W_\pi h_\theta
+\quad [B,T,V]\]</span></p>
+<p><span class="math display">\[V=W_vh_\theta
+\quad [B,T]\]</span></p>
+<p>The masked losses might be:</p>
+<p><span class="math display">\[L_\pi
+=
+-\mathbb E_{\text{valid}}
+\left[
+\log\pi_\theta(a_t|s_t)\hat A_t
+\right]\]</span></p>
+<p><span class="math display">\[L_V
+=
+\frac12\mathbb E_{\text{valid}}
+\left[
+(V_\theta(s_t)-\hat R_t)^2
+\right]\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[L_{\text{total}}
+=
+L_\pi+c_vL_V\]</span></p>
+<p>For shared backbone parameters:</p>
+<p><span class="math display">\[\nabla_\theta L_{\text{total}}
+=
+g_\pi+c_vg_V\]</span></p>
+<p>The coefficient <span class="math inline">\(c_v\)</span> is not “the critic’s percentage of training.” Its influence depends on:</p>
+<p><span class="math display">\[c_v\lVert g_V\rVert\]</span></p>
+<p>and its alignment with the policy gradient:</p>
+<p><span class="math display">\[\cos(g_\pi,g_V)
+=
+\frac{g_\pi^\top g_V}
+{\lVert g_\pi\rVert\lVert g_V\rVert}\]</span></p>
+<ul>
+<li><p>positive cosine: losses broadly cooperate;</p></li>
+<li><p>near zero: mostly independent directions;</p></li>
+<li><p>negative cosine: gradient conflict.</p></li>
+</ul>
+<p>Consider one shared scalar <span class="math inline">\(\theta\)</span>. A positive-advantage action gives:</p>
+<p><span class="math display">\[L_\pi=-\log\sigma(\theta)\]</span></p>
+<p>At <span class="math inline">\(\theta=0\)</span>:</p>
+<p><span class="math display">\[\frac{\partial L_\pi}{\partial\theta}=-0.5\]</span></p>
+<p>SGD subtracts this negative slope, increasing <span class="math inline">\(\theta\)</span> and the action probability.</p>
+<p>If the critic target is <span class="math inline">\(-2\)</span>:</p>
+<p><span class="math display">\[L_V=\frac12(\theta+2)^2,
+\qquad
+\frac{\partial L_V}{\partial\theta}=2\]</span></p>
+<p>The critic pushes <span class="math inline">\(\theta\)</span> in the opposite direction. They cancel when:</p>
+<p><span class="math display">\[-0.5+c_v(2)=0
+\quad\Rightarrow\quad
+c_v=0.25\]</span></p>
+<p>Reward scale matters too. Multiplying returns by ten makes the initial MSE gradient roughly ten times larger and the value loss roughly one hundred times larger. Advantage normalization does not normalize critic targets.</p>
+<p>Separate critic parameters avoid direct interference but require more memory. Detaching shared features before the value head protects the actor backbone, but then only the value head—not the shared representation—learns from value loss.</p>
+<p>DPO has no value critic. However, any auxiliary loss sharing its policy backbone can create the same gradient-interference problem.</p>
+<h3 class="unnumbered" id="pytorch-exercise-a-value-coefficient-reverses-the-policy-update">3. PyTorch exercise — a value coefficient reverses the policy update</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.set_default_dtype(torch.float64)
+
+learning_rate = 0.20
+num_steps = 30
+
+value_target = torch.tensor(-2.0)
+
+value_coefficients = torch.tensor([
+    0.00,
+    0.10,
+    0.25,
+    1.00,
+])
+
+
+def policy_loss(theta):
+    # Sampled action 1 with positive advantage 1.
+    return -F.logsigmoid(theta)
+
+
+def value_loss(theta, target):
+    return 0.5 * (theta - target).square()
+
+
+# TODO 1: Measure the two gradients at theta=0.
+theta_probe = torch.tensor(
+    0.0,
+    requires_grad=True,
+)
+
+actor_gradient = ...
+
+critic_gradient = ...
+
+gradient_cosine = ...
+
+critical_value_coefficient = ...
+
+
+# TODO 2: Predict one combined SGD update for
+# every value coefficient.
+combined_gradients = ...
+
+one_step_thetas = ...
+
+one_step_action_probabilities = ...
+
+
+# TODO 3: Train shared parameters. Each element is an
+# independent replica with a different coefficient.
+shared_thetas = torch.zeros_like(
+    value_coefficients,
+    requires_grad=True,
+)
+
+shared_history = [
+    shared_thetas.detach().clone()
+]
+
+for _ in range(num_steps):
+    actor_losses = ...
+
+    critic_losses = ...
+
+    total_loss = ...
+
+    total_loss.backward()
+
+    with torch.no_grad():
+        shared_thetas -= ...
+
+        shared_thetas.grad.zero_()
+
+    shared_history.append(
+        shared_thetas.detach().clone()
+    )
+
+shared_history = torch.stack(
+    shared_history
+)
+
+final_shared_probabilities = ...
+
+
+# TODO 4: Train separate actor and critic parameters.
+separate_actor_theta = torch.tensor(
+    0.0,
+    requires_grad=True,
+)
+
+separate_critic_theta = torch.tensor(
+    0.0,
+    requires_grad=True,
+)
+
+for _ in range(num_steps):
+    separate_total_loss = ...
+
+    separate_total_loss.backward()
+
+    with torch.no_grad():
+        separate_actor_theta -= ...
+
+        separate_critic_theta -= ...
+
+        separate_actor_theta.grad.zero_()
+        separate_critic_theta.grad.zero_()
+
+separate_actor_probability = ...
+
+
+# TODO 5: Examine reward-scale sensitivity.
+reward_scales = torch.tensor([
+    1.0,
+    10.0,
+])
+
+scaled_value_targets = ...
+
+value_gradients_at_zero = ...
+
+value_losses_at_zero = ...
+
+critical_coefficients_by_scale = ...
+
+
+results = torch.stack([
+    value_coefficients,
+    combined_gradients,
+    one_step_thetas,
+    one_step_action_probabilities,
+    shared_thetas.detach(),
+    final_shared_probabilities,
+], dim=1)
+
+scale_results = torch.stack([
+    reward_scales,
+    scaled_value_targets,
+    value_gradients_at_zero,
+    value_losses_at_zero,
+    critical_coefficients_by_scale,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Actor gradient:&quot;, actor_gradient.item())
+print(&quot;Critic gradient:&quot;, critic_gradient.item())
+print(&quot;Gradient cosine:&quot;, gradient_cosine.item())
+print(
+    &quot;Cancellation coefficient:&quot;,
+    critical_value_coefficient.item(),
+)
+
+print(
+    &quot;\nColumns: value coefficient, combined gradient, &quot;
+    &quot;one-step theta, one-step probability, &quot;
+    &quot;final theta, final probability&quot;
+)
+print(results)
+
+print(&quot;\nSeparate actor probability:&quot;)
+print(separate_actor_probability.item())
+
+print(&quot;Separate critic prediction:&quot;)
+print(separate_critic_theta.item())
+
+print(
+    &quot;\nColumns: reward scale, target, value gradient, &quot;
+    &quot;value loss, cancellation coefficient&quot;
+)
+print(scale_results)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which direction does the policy loss move <span class="math inline">\(\theta\)</span>?</p></li>
+<li><p>Which direction does the value loss move it?</p></li>
+<li><p>What happens at <span class="math inline">\(c_v=0.25\)</span>?</p></li>
+<li><p>Can <span class="math inline">\(c_v=1\)</span> reduce the probability of the rewarded action?</p></li>
+<li><p>What happens to the cancellation coefficient after scaling returns by ten?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Obtain isolated gradients with <span style="background-color: codeinlinebg"><code> torch.autograd.grad</code></span>.</p></li>
+<li><p>Scalar cosine is the product divided by the product of absolute magnitudes.</p></li>
+<li><p>Combined gradient:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">actor_gradient + coefficient * critic_gradient</code></pre>
+<ul>
+<li><p>SGD performs <span style="background-color: codeinlinebg"><code> parameter -= learning_rate * gradient</code></span>.</p></li>
+<li><p>Sum the independent replica losses before calling <span style="background-color: codeinlinebg"><code> backward()</code></span>.</p></li>
+<li><p>With separate parameters, each loss differentiates only through its own parameter.</p></li>
+<li><p>At <span class="math inline">\(\theta=0\)</span>, the value gradient is <span style="background-color: codeinlinebg"><code> -target</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Interpret <span style="background-color: codeinlinebg"><code> value_coef=0.5</code></span> as exactly 50% critic influence.</p></li>
+<li><p>Normalize advantages but assume value gradients are now normalized too.</p></li>
+<li><p>Rescale rewards without retuning value loss, clipping, or learning rate.</p></li>
+<li><p>Include prompt and padding tokens in critic loss.</p></li>
+<li><p>Detach the value predictions and wonder why the critic stops learning.</p></li>
+<li><p>Assume separate output heads prevent shared-backbone interference.</p></li>
+<li><p>Log only combined gradient norm, hiding two large opposing gradients.</p></li>
+<li><p>Apply global gradient clipping without logging pre-clipping norms.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does a value loss alter policy behavior when logits do not appear in it?</p></li>
+<li><p>Why is the value-loss coefficient not a percentage?</p></li>
+<li><p>What does a negative actor–critic gradient cosine indicate?</p></li>
+<li><p>What is the tradeoff of detaching shared features before the value head?</p></li>
+<li><p>Which diagnostics would reveal critic domination?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Individual gradients:</p>
+<pre class="code python"><code class="language-python">actor_gradient = torch.autograd.grad(
+    policy_loss(theta_probe),
+    theta_probe,
+)[0].detach()
+
+critic_gradient = torch.autograd.grad(
+    value_loss(
+        theta_probe,
+        value_target,
+    ),
+    theta_probe,
+)[0].detach()
+
+gradient_cosine = (
+    actor_gradient * critic_gradient
+) / (
+    actor_gradient.abs()
+    * critic_gradient.abs()
+).clamp_min(1e-12)
+
+critical_value_coefficient = (
+    -actor_gradient / critic_gradient
+)</code></pre>
+<p>One-step updates:</p>
+<pre class="code python"><code class="language-python">combined_gradients = (
+    actor_gradient
+    + value_coefficients
+    * critic_gradient
+)
+
+one_step_thetas = (
+    -learning_rate
+    * combined_gradients
+)
+
+one_step_action_probabilities = (
+    torch.sigmoid(one_step_thetas)
+)</code></pre>
+<p>Shared training:</p>
+<pre class="code python"><code class="language-python">for _ in range(num_steps):
+    actor_losses = policy_loss(
+        shared_thetas
+    )
+
+    critic_losses = value_loss(
+        shared_thetas,
+        value_target,
+    )
+
+    total_loss = (
+        actor_losses
+        + value_coefficients
+        * critic_losses
+    ).sum()
+
+    total_loss.backward()
+
+    with torch.no_grad():
+        shared_thetas -= (
+            learning_rate
+            * shared_thetas.grad
+        )
+
+        shared_thetas.grad.zero_()
+
+    shared_history.append(
+        shared_thetas.detach().clone()
+    )
+
+shared_history = torch.stack(
+    shared_history
+)
+
+final_shared_probabilities = torch.sigmoid(
+    shared_thetas.detach()
+)</code></pre>
+<p>Separate parameters:</p>
+<pre class="code python"><code class="language-python">for _ in range(num_steps):
+    separate_total_loss = (
+        policy_loss(
+            separate_actor_theta
+        )
+        + value_loss(
+            separate_critic_theta,
+            value_target,
+        )
+    )
+
+    separate_total_loss.backward()
+
+    with torch.no_grad():
+        separate_actor_theta -= (
+            learning_rate
+            * separate_actor_theta.grad
+        )
+
+        separate_critic_theta -= (
+            learning_rate
+            * separate_critic_theta.grad
+        )
+
+        separate_actor_theta.grad.zero_()
+        separate_critic_theta.grad.zero_()
+
+separate_actor_probability = torch.sigmoid(
+    separate_actor_theta.detach()
+)</code></pre>
+<p>Reward scaling:</p>
+<pre class="code python"><code class="language-python">scaled_value_targets = (
+    reward_scales * value_target
+)
+
+value_gradients_at_zero = (
+    -scaled_value_targets
+)
+
+value_losses_at_zero = (
+    0.5
+    * scaled_value_targets.square()
+)
+
+critical_coefficients_by_scale = (
+    -actor_gradient
+    / value_gradients_at_zero
+)</code></pre>
+<p>At initialization:</p>
+<p><span class="math display">\[g_\pi=-0.5,\qquad g_V=2\]</span></p>
+<p>Their cosine is <span style="background-color: codeinlinebg"><code> -1</code></span>: complete opposition.</p>
+<p>The combined gradients are:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong><span class="math inline">\(c_v\)</span></strong></th>
+<th style="text-align: left;"><strong>Combined gradient</strong></th>
+<th style="text-align: left;"><strong>SGD effect</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong><span class="math inline">\(c_v\)</span></strong></td>
+<td style="text-align: left;"><strong>Combined gradient</strong></td>
+<td style="text-align: left;"><strong>SGD effect</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">0.00</td>
+<td style="text-align: left;"><span class="math inline">\(-0.50\)</span></td>
+<td style="text-align: left;">increases action probability</td>
+</tr>
+<tr>
+<td style="text-align: left;">0.10</td>
+<td style="text-align: left;"><span class="math inline">\(-0.30\)</span></td>
+<td style="text-align: left;">increases it more slowly</td>
+</tr>
+<tr>
+<td style="text-align: left;">0.25</td>
+<td style="text-align: left;"><span class="math inline">\(0.00\)</span></td>
+<td style="text-align: left;">no initial update</td>
+</tr>
+<tr>
+<td style="text-align: left;">1.00</td>
+<td style="text-align: left;"><span class="math inline">\(1.50\)</span></td>
+<td style="text-align: left;">decreases rewarded-action probability</td>
+</tr>
+</tbody>
+</table>
+<p>With <span class="math inline">\(c_v=0.25\)</span>, <span class="math inline">\(\theta=0\)</span> is exactly stationary in this toy example. With <span class="math inline">\(c_v=1\)</span>, critic pressure eventually pushes the action probability toward roughly <span style="background-color: codeinlinebg"><code> 0.23</code></span>.</p>
+<p>Separate parameters remove this direct conflict: the actor probability rises while the critic independently approaches <span style="background-color: codeinlinebg"><code> -2</code></span>.</p>
+<p>Scaling the value target from <span style="background-color: codeinlinebg"><code> -2</code></span> to <span style="background-color: codeinlinebg"><code> -20</code></span> changes:</p>
+<p><span class="math display">\[g_V: 2\rightarrow20\]</span></p>
+<p><span class="math display">\[L_V: 2\rightarrow200\]</span></p>
+<p>and the cancellation coefficient changes:</p>
+<p><span class="math display">\[0.25\rightarrow0.025\]</span></p>
+<p>The same configured value coefficient can therefore become ten times stronger relative to the policy gradient.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Both heads depend on the shared representation, so value-loss backpropagation modifies features subsequently used to compute policy logits.</p></li>
+<li><p>Actual influence depends on gradient magnitude and direction, not just the scalar multiplying the loss.</p></li>
+<li><p>The losses request opposing changes in the shared parameters; sufficiently strong critic gradients can cancel or reverse actor learning.</p></li>
+<li><p>It protects the actor backbone but prevents the critic from improving that shared representation; only parameters downstream of the detach point learn from value loss.</p></li>
+<li><p>Log isolated actor and critic gradient norms, their cosine, coefficient-weighted norm ratio, combined norm, policy KL, value loss, explained variance and clip fractions.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span style="background-color: codeinlinebg"><code> done</code></span> may combine true termination with an external truncation. Only true termination necessarily removes bootstrap value.</p></li>
+<li><p>A truncated final TD residual can include the final-state bootstrap, while stopping GAE recursion prevents residuals from an unrelated chunk from leaking backward.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> tune the value coefficient in gradient space, not loss-name space. With a shared backbone, a large or badly scaled critic gradient can quietly cancel the very policy improvement PPO is trying to make.</p>

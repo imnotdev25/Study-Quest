@@ -1,0 +1,279 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>An embedding</strong> is a lookup: token <span class="math inline">\(k\)</span> is mapped to row <span class="math inline">\(E_k\)</span> of a table <span class="math inline">\(E\in\mathbb R^{V\times D}\)</span>. Lookup is the same as multiplying a one-hot vector by <span class="math inline">\(E\)</span>: <span class="math inline">\(E_k=\onehot(k)^\top E\)</span>. <strong>Weight tying</strong> reuses <span class="math inline">\(E\)</span> as the output layer, so logits are <span class="math inline">\(Z=HE^\top\)</span>, each logit being a dot product with a token’s embedding.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>When one tensor influences the loss through two branches, how are its gradients combined?</p></li>
+<li><p>Why can a global gradient norm hide a broken parameter path?</p></li>
+</ol>
+<p>An embedding table is:</p>
+<p><span class="math display">\[E\in\mathbb{R}^{V\times D}\]</span></p>
+<p>where <span class="math inline">\(V\)</span> is vocabulary size and <span class="math inline">\(D\)</span> is model dimension. Token IDs:</p>
+<p><span class="math display">\[X\in\{0,\ldots,V-1\}^{B\times T}\]</span></p>
+<p>perform row lookups:</p>
+<p><span class="math display">\[H=E[X]\in\mathbb{R}^{B\times T\times D}\]</span></p>
+<p>If token <span class="math inline">\(k\)</span> occurs several times, all occurrences contribute to the same embedding row:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial E_k}
+=
+\sum_{(b,t):X_{bt}=k}
+\frac{\partial L}{\partial H_{bt}}\]</span></p>
+<p>Language models often tie the input embedding and output projection weights:</p>
+<p><span class="math display">\[Z=HE^\top
+\in\mathbb{R}^{B\times T\times V}\]</span></p>
+<p>Now <span class="math inline">\(E\)</span> influences the loss through two paths:</p>
+<ol>
+<li><p>Input path: <span class="math inline">\(E\rightarrow H\rightarrow Z\rightarrow L\)</span></p></li>
+<li><p>Output path: <span class="math inline">\(E\rightarrow Z\rightarrow L\)</span></p></li>
+</ol>
+<p>Therefore:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial E}
+=
+\left.\frac{\partial L}{\partial E}\right|_{\text{input}}
++
+\left.\frac{\partial L}{\partial E}\right|_{\text{output}}\]</span></p>
+<p>An embedding row absent from the input has zero input-path gradient. But it may still receive output-path gradient because every vocabulary logit participates in softmax.</p>
+<p>Weight tying saves roughly <span class="math inline">\(VD\)</span> parameters and forces input and output token representations to share geometry, but it also makes gradient debugging less obvious.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: gradients of a (tied) embedding</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(H_{bt}=\onehot(X_{bt})^\top E\)</span>, so <span class="math inline">\(\frac{\partial H_{bt}}{\partial E_k}=\mathbb 1[X_{bt}=k]\,I\)</span>.</p>
+<p><strong>Step 2.</strong> Sum over all positions (branching rule): <span class="math inline">\(\frac{\partial L}{\partial E_k}=\sum_{(b,t):X_{bt}=k}\frac{\partial L}{\partial H_{bt}}\)</span>. A token that appears 3 times gets 3 contributions: a <em>scatter-add</em>, not an overwrite.</p>
+<p><strong>Step 3.</strong> Rows of tokens not in the batch get exactly 0 from the input side.</p>
+<p><strong>Step 4.</strong> <strong>Tied output:</strong> <span class="math inline">\(Z=HE^\top\)</span> with <span class="math inline">\(\Delta=\partial L/\partial Z\)</span> gives <span class="math inline">\(\frac{\partial L}{\partial E}\Big|_{\text{out}}=\Delta^\top H\in\mathbb R^{V\times D}\)</span>. Every row gets a gradient here, because softmax touches all <span class="math inline">\(V\)</span> logits.</p>
+<p><strong>Step 5.</strong> Total for a tied matrix: <span class="math inline">\(\nabla E=\Delta^\top H_{\text{final}}+\text{scatter-add}\big(\tfrac{\partial L}{\partial H_{\text{input}}}\big)\)</span>. Both paths add into one tensor.</p>
+<p><strong>Step 6.</strong> Tying saves <span class="math inline">\(VD\)</span> parameters: for <span class="math inline">\(V=50{,}000\)</span>, <span class="math inline">\(D=4096\)</span>, that’s 205M.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: embedding backward with tying</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> token ids <span class="math inline">\(X\)</span>, table <span class="math inline">\(E\)</span>, upstream at the input <span class="math inline">\(\bar H_{\text{in}}\)</span>, output-logit gradient <span class="math inline">\(\Delta\)</span>, final hidden states <span class="math inline">\(H\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\nabla E\gets\Delta^\top H\)</span> <em>▷ output projection path</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each position <span class="math inline">\((b,t)\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\nabla E[X_{bt}]\gets\nabla E[X_{bt}]+\bar H_{\text{in},bt}\)</span> <em>▷ <code>index_add_</code>, repeats accumulate</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Explicitly separate the two gradient paths into a tied embedding matrix.</p>
+<pre class="code text"><code class="language-plaintext">import math
+import torch
+import torch.nn.functional as F
+
+torch.manual_seed(151)
+
+B, T, V, D = 2, 3, 7, 5
+
+token_ids = torch.tensor([
+    [1, 2, 1],
+    [3, 2, 4],
+])                                            # [B, T]
+
+targets = torch.tensor([
+    [2, 1, 3],
+    [4, 0, 2],
+])                                            # [B, T]
+
+E = (
+    torch.randn(V, D) / math.sqrt(D)
+).requires_grad_()                             # [V, D]
+
+
+def tied_loss(E, input_path=True, output_path=True):
+    lookup_weight = ...                       # TODO 1
+    output_weight = ...                       # TODO 2
+
+    hidden = ...                              # TODO 3: [B, T, D]
+    logits = ...                              # TODO 4: [B, T, V]
+
+    return F.cross_entropy(
+        ...                                   # TODO 5: [B*T, V]
+        ...                                   # TODO 6: [B*T]
+    )
+
+
+# Both paths active
+full_loss = tied_loss(
+    E,
+    input_path=True,
+    output_path=True,
+)
+
+full_gradient = torch.autograd.grad(
+    full_loss, E
+)[0]
+
+
+# Only the embedding-lookup path
+input_loss = tied_loss(
+    E,
+    input_path=True,
+    output_path=False,
+)
+
+input_gradient = torch.autograd.grad(
+    input_loss, E
+)[0]
+
+
+# Only the output-projection path
+output_loss = tied_loss(
+    E,
+    input_path=False,
+    output_path=True,
+)
+
+output_gradient = torch.autograd.grad(
+    output_loss, E
+)[0]
+
+
+combined_gradient = ...                       # TODO 7
+
+print(
+    &quot;branch sum matches full gradient:&quot;,
+    torch.allclose(
+        combined_gradient,
+        full_gradient,
+        atol=1e-6,
+    ),
+)
+
+assert torch.allclose(
+    combined_gradient,
+    full_gradient,
+    atol=1e-6,
+)
+
+for token in range(V):
+    count = ...                               # TODO 8
+
+    print(
+        f&quot;token={token}&quot;,
+        f&quot;input_count={count}&quot;,
+        f&quot;input_grad={input_gradient[token].norm().item():.6f}&quot;,
+        f&quot;output_grad={output_gradient[token].norm().item():.6f}&quot;,
+        f&quot;full_grad={full_gradient[token].norm().item():.6f}&quot;,
+    )</code></pre>
+<p>Before running, predict the input-path gradient norm for token <code>6</code>, which never occurs in <code>token_ids</code>.</p>
+<p>Then inspect its output-path gradient. Why can it be nonzero even though token <code>6</code> is absent from both the inputs and targets?</p>
+<p>Debugging extension:</p>
+<pre class="code python"><code class="language-python">buggy_loss = tied_loss(
+    E,
+    input_path=False,   # accidental detach
+    output_path=True,
+)
+
+buggy_gradient = torch.autograd.grad(
+    buggy_loss, E
+)[0]
+
+print(
+    &quot;buggy gradient still nonzero:&quot;,
+    buggy_gradient.norm().item()
+)</code></pre>
+<p>Explain why checking only whether <code>E.grad</code> is nonzero would fail to reveal this broken input path.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Select between <code>E</code> and <code>E.detach()</code>.</p></li>
+<li><p>Embedding lookup is <code>lookup_weight</code><span><code>[</code></span><code>token_ids</code><span><code>]</code></span>.</p></li>
+<li><p>Output projection is <code>hidden @ output_weight.T</code>.</p></li>
+<li><p>Flatten logits and targets with <code>.reshape(...)</code>.</p></li>
+<li><p>Count occurrences with <code>(token_ids == token).sum()</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why do repeated occurrences of one token accumulate into the same embedding row?</p></li>
+<li><p>Why can an input-absent token still receive an output-projection gradient?</p></li>
+<li><p>Prediction: if a token never appears as input but the model assigns it too much probability, in which direction should its output-path gradient move its logits?</p></li>
+<li><p>Debugging: the embedding gradient is nonzero, but input representations never learn. What tied-weight bug could explain this?</p></li>
+<li><p>What parameter saving does weight tying provide for vocabulary size <span class="math inline">\(V\)</span> and model dimension <span class="math inline">\(D\)</span>?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def tied_loss(E, input_path=True, output_path=True):
+    lookup_weight = E if input_path else E.detach()
+    output_weight = E if output_path else E.detach()
+
+    hidden = lookup_weight[token_ids]
+    logits = hidden @ output_weight.T
+
+    return F.cross_entropy(
+        logits.reshape(B * T, V),
+        targets.reshape(B * T),
+    )
+
+
+full_loss = tied_loss(
+    E,
+    input_path=True,
+    output_path=True,
+)
+
+full_gradient = torch.autograd.grad(
+    full_loss, E
+)[0]
+
+input_loss = tied_loss(
+    E,
+    input_path=True,
+    output_path=False,
+)
+
+input_gradient = torch.autograd.grad(
+    input_loss, E
+)[0]
+
+output_loss = tied_loss(
+    E,
+    input_path=False,
+    output_path=True,
+)
+
+output_gradient = torch.autograd.grad(
+    output_loss, E
+)[0]
+
+combined_gradient = input_gradient + output_gradient
+
+for token in range(V):
+    count = (token_ids == token).sum().item()
+
+    print(
+        f&quot;token={token}&quot;,
+        f&quot;input_count={count}&quot;,
+        f&quot;input_grad={input_gradient[token].norm().item():.6f}&quot;,
+        f&quot;output_grad={output_gradient[token].norm().item():.6f}&quot;,
+        f&quot;full_grad={full_gradient[token].norm().item():.6f}&quot;,
+    )</code></pre>
+<p>Token <code>6</code> receives zero input-path gradient because it is never looked up:</p>
+<p><span class="math display">\[\left.
+\frac{\partial L}{\partial E_6}
+\right|_{\text{input}}
+=0\]</span></p>
+<p>It can receive a nonzero output-path gradient because cross-entropy affects every vocabulary logit:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial z_c}
+=
+p_c-\mathbf1[c=y]\]</span></p>
+<p>For an incorrect token such as token <code>6</code>, the gradient is <span class="math inline">\(p_6&gt;0\)</span>. Gradient descent adjusts its output embedding to reduce that token’s logit in the current contexts.</p>
+<p>The accidental detach removes the input path but leaves the output path active. The total embedding gradient therefore remains nonzero, making a simple <code>grad is None</code> or <code>grad.norm() &gt; 0</code> check insufficient.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>A lookup is shared use of one parameter row; reverse-mode autodiff sums every downstream contribution to that row.</p></li>
+<li><p>Every vocabulary item participates in the softmax denominator, including incorrect and absent tokens.</p></li>
+<li><p>Gradient descent should decrease its logits in those contexts.</p></li>
+<li><p>The lookup-side embedding may have been detached while the tied output projection still uses the trainable matrix.</p></li>
+<li><p>Separate input and output matrices require approximately <span class="math inline">\(2VD\)</span> parameters; tying them requires <span class="math inline">\(VD\)</span>, saving <span class="math inline">\(VD\)</span>.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Gradients from separate computation-graph branches are added.</p></li>
+<li><p>A global norm can look healthy because gradients from functioning paths or later layers dominate the missing path.</p></li>
+</ul>

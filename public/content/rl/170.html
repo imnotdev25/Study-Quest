@@ -1,0 +1,96 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a fine split across words</div>
+<p>Imagine a teacher fines a wrong essay $10 total and spreads it across its words. A 50-word wrong essay pays 20 cents per word, while a 500-word wrong essay pays only 2 cents per word. Students quickly learn that if you’re going to be wrong, be <em>long</em>. GRPO’s <span class="math inline">\(1/|o_i|\)</span> normalization creates exactly that incentive.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/25259ac1542f.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Magnitudes of the per-token weights from this topic’s exercise. GRPO pushes the short answer 4<span class="math inline">\(\times\)</span> harder per token than the long wrong one. Dr. GRPO treats every token equally.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What does dividing by a tiny group std do to advantages? (Topic 43)</p></li>
+<li><p>Under a sequence-mean loss, what weight does each token of a length-<span class="math inline">\(L\)</span> response get? (Topic 46)</p></li>
+</ol>
+<h3 class="unnumbered" id="two-biases-liu-et-al.-2025-understanding-r1-zero-like-training">2. Two biases (Liu et al., 2025, “Understanding R1-Zero-Like Training”)</h3>
+<p>GRPO’s loss for response <span class="math inline">\(i\)</span> is <span class="math inline">\(\frac1G\sum_i\frac{1}{|o_i|}\sum_t\hat A_i\,(\cdots)\)</span> with <span class="math inline">\(\hat A_i=\frac{R_i-\bar R}{\operatorname{std}(R)}\)</span>.</p>
+<ol>
+<li><p><strong>Length bias, from <span class="math inline">\(1/|o_i|\)</span>:</strong> a negative advantage spread over more tokens is weaker per token, so long wrong answers are under-penalized and length grows, especially for incorrect outputs. The paper names this as the reason response length kept growing in R1-Zero-style runs.</p></li>
+<li><p><strong>Difficulty bias, from <span class="math inline">\(\operatorname{std}(R)\)</span>:</strong> prompts that are nearly always or never solved have a small std, so their advantages are scaled up (Topic 43).</p></li>
+</ol>
+<p><strong>Dr. GRPO</strong> removes both: <span class="math inline">\(\hat A_i=R_i-\bar R\)</span> (no std), and a <em>constant</em> normalizer (e.g. the max generation length) instead of <span class="math inline">\(|o_i|\)</span>. The resulting gradient is an unbiased policy gradient, and the paper reports better token efficiency at similar accuracy.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: why a constant normalizer is unbiased</div>
+<p>The true objective is <span class="math inline">\(\mathbb E[R(y)]\)</span>, whose gradient is <span class="math inline">\(\mathbb E[(R-b)\sum_t\nabla\log\pi(y_t|\cdot)]\)</span>: the <em>sum</em> over tokens, not the mean. Dividing by <span class="math inline">\(|o_i|\)</span> reweights each sample by a quantity the policy controls (its own length), which changes the objective. Dividing by a constant <span class="math inline">\(C\)</span> only rescales the gradient, which is the same as a smaller learning rate.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p><span class="math inline">\(1/|o_i|\)</span> rewards long wrong answers, and dividing by std over-weights easy and impossible prompts.</p></li>
+<li><p>Dr. GRPO: subtract the mean, divide by a constant.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the numbers in the chart</div>
+<p>Group: short correct (5 tokens, <span class="math inline">\(R=1\)</span>) and long wrong (20 tokens, <span class="math inline">\(R=0\)</span>), <span class="math inline">\(G=2\)</span>. GRPO: <span class="math inline">\(\hat A=\pm0.707\)</span>. Per-token weights <span class="math inline">\(\frac{0.707}{2\cdot5}=0.0707\)</span> and <span class="math inline">\(\frac{-0.707}{2\cdot20}=-0.0177\)</span>. Dr. GRPO: <span class="math inline">\(\hat A=\pm0.5\)</span>, normalizer <span class="math inline">\(G\cdot L_{\max}=40\)</span>, so per-token weights <span class="math inline">\(\pm0.0125\)</span> for both.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Removing std but keeping <span class="math inline">\(1/|o_i|\)</span> (half the fix).</p></li>
+<li><p>Using the batch’s current max length as the constant (it changes every batch).</p></li>
+<li><p>Comparing learning rates across the two without rescaling.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-measure-the-length-bias">3. PyTorch exercise — measure the length bias</h3>
+<pre class="code python"><code class="language-python">import torch
+
+lengths = [5, 20]
+rewards = torch.tensor([1.0, 0.0])
+G, L_max = len(lengths), max(lengths)
+
+
+def grpo_token_weights(r):
+    # TODO 1: std-normalized advantage, divided by G * |o_i|
+    ...
+
+
+def dr_grpo_token_weights(r):
+    # TODO 2: mean-centered advantage, divided by G * L_max
+    ...</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Which response does GRPO push hardest per token, and why is that a problem?</p></li>
+<li><p>Why is dividing by a constant “free” but dividing by <span class="math inline">\(|o_i|\)</span> isn’t?</p></li>
+<li><p>DAPO’s token-level loss divides by <span class="math inline">\(\sum_i|o_i|\)</span>. Is that a constant? Does it have the same bias?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+
+lengths = [5, 20]                # short correct answer, long wrong answer
+rewards = torch.tensor([1.0, 0.0])
+G, L_max = len(lengths), max(lengths)
+
+
+def grpo_token_weights(r):
+    adv = (r - r.mean()) / (r.std() + 1e-6)              # std normalization
+    return [(adv[i] / (G * lengths[i])).item() for i in range(G)]   # 1/|y_i| per response
+
+
+def dr_grpo_token_weights(r):
+    adv = r - r.mean()                                   # no std
+    return [(adv[i] / (G * L_max)).item() for i in range(G)]        # one constant normalizer
+
+
+for name, fn in ((&quot;GRPO&quot;, grpo_token_weights), (&quot;Dr. GRPO&quot;, dr_grpo_token_weights)):
+    w = fn(rewards)
+    print(f&quot;{name:9s} per-token weight: short {w[0]:+.4f}  long {w[1]:+.4f}  &quot;
+          f&quot;total on long response {w[1] * lengths[1]:+.3f}&quot;)</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">GRPO      per-token weight: short +0.0707  long -0.0177  total on long response -0.354
+Dr. GRPO  per-token weight: short +0.0125  long -0.0125  total on long response -0.250</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>The short correct one (0.0707 vs 0.0177). The long wrong answer is barely discouraged per token, so length drifts up.</p></li>
+<li><p>A constant just rescales the gradient. <span class="math inline">\(|o_i|\)</span> depends on the sample, so it changes which samples matter.</p></li>
+<li><p>It’s shared within a batch, so it doesn’t favor one response over another inside the batch, which is much closer to unbiased than <span class="math inline">\(1/|o_i|\)</span>. It still varies between batches, which acts like a varying learning rate.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) Amplifies tiny, possibly noisy differences. (2) <span class="math inline">\(1/L\)</span>.</p>
+<p><strong>Takeaway:</strong> normalizers are part of the objective. GRPO’s two normalizers quietly change what is being optimized, and Dr. GRPO removes them.</p>
+<p><em>Next: GSPO, which moves the importance ratio from tokens to sequences.</em></p>

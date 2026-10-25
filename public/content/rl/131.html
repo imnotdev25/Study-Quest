@@ -1,0 +1,565 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>For <span class="math inline">\(M\)</span> equally correlated reward models, what controls the effective ensemble size?</p></li>
+<li><p>Why can a highly correlated ensemble show low disagreement while retaining large mean error?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="accuracy-is-not-enough-measure-risk-versus-coverage">2. Accuracy is not enough; measure risk versus coverage</h3>
+<p>A reward model normally scores every completion. Selective prediction instead allows it to defer uncertain examples to a human, verifier or stronger evaluator.</p>
+<p>For example <span class="math inline">\(i\)</span>, define the acceptance mask:</p>
+<p><span class="math display">\[a_i(\tau)
+=
+\underbrace{
+\mathbf 1[u_i\le\tau]
+}_{\text{accept only if uncertainty }u_i\text{ is below threshold }\tau}\]</span></p>
+<p>The coverage is:</p>
+<p><span class="math display">\[C(\tau)
+=
+\underbrace{
+\frac1n\sum_{i=1}^{n}a_i(\tau)
+}_{\text{fraction handled automatically}}\]</span></p>
+<p>Using squared reward error:</p>
+<p><span class="math display">\[\ell_i
+=
+\underbrace{
+\left(\hat r_i-r_i\right)^2
+}_{\text{loss between predicted and trusted reward}}\]</span></p>
+<p>the selective risk is:</p>
+<p><span class="math display">\[R(\tau)
+=
+\underbrace{
+\frac{
+\sum_i a_i(\tau)\ell_i
+}{
+\sum_i a_i(\tau)
+}
+}_{\text{average error among accepted examples}}\]</span></p>
+<p>A threshold may be selected on calibration data:</p>
+<p><span class="math display">\[\tau^*
+=
+\underbrace{
+\arg\max_\tau C_{\mathrm{cal}}(\tau)
+}_{\text{retain maximum automation}}
+\quad
+\text{subject to}
+\quad
+\underbrace{
+R_{\mathrm{cal}}(\tau)\le r_{\max}
+}_{\text{meet the permitted risk}}\]</span></p>
+<p>Then freeze <span class="math inline">\(\tau^*\)</span> and evaluate it on untouched data.</p>
+<p>This works only when uncertainty ranks errors reasonably well. A shared blind spot can be both wrong and assigned low uncertainty. In that case, lowering <span class="math inline">\(\tau\)</span> may perversely increase risk because the system preferentially retains its overconfident errors.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>reward targets, predictions and uncertainty: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>thresholds: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+<li><p>acceptance matrix: <span style="background-color: codeinlinebg"><code> [N, K]</code></span></p></li>
+<li><p>coverage and selective risk: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+</ul>
+<p>In PPO, dropping uncertain rollouts changes the training distribution. Record what was rejected and why; do not silently treat rejected samples as zero reward. Reward outputs should also remain frozen and detached.</p>
+<p>For DPO, filtering high-disagreement preference pairs changes the offline training distribution. It may remove genuinely ambiguous examples, but also difficult prompts or underrepresented groups. This remains preference-data filtering, not online RL.</p>
+<h3 class="unnumbered" id="pytorch-exercise-stricter-abstention-can-become-worse">3. PyTorch exercise — stricter abstention can become worse</h3>
+<p>Most difficult examples receive high uncertainty. A small shared blind-spot group is badly mis-scored but assigned extremely low uncertainty.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float32)
+
+num_calibration_examples = 20_000
+num_test_examples = 20_000
+
+hard_example_probability = 0.20
+blind_spot_probability = 0.02
+
+easy_error_sd = 0.15
+hard_error_sd = 1.00
+blind_spot_bias = 3.00
+
+target_risk = 0.30
+
+thresholds = torch.tensor([
+    0.10,
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+    0.70,
+    0.90,
+    1.10,
+    1.30,
+    2.00,
+])
+
+
+# TODO 1: Generate one labelled evaluation batch.
+def generate_batch(num_examples):
+    true_rewards = ...
+
+    hard_examples = ...
+
+    blind_spots = ...
+
+    error_standard_deviations = ...
+
+    prediction_errors = ...
+
+    predicted_rewards = ...
+
+    uncertainty = ...
+
+    # The ensemble is confidently wrong here.
+    uncertainty = ...
+
+    uncertainty = ...
+
+    return (
+        true_rewards,
+        predicted_rewards,
+        uncertainty,
+        hard_examples,
+        blind_spots,
+    )
+
+
+calibration_batch = generate_batch(
+    num_calibration_examples
+)
+
+test_batch = generate_batch(
+    num_test_examples
+)
+
+
+# TODO 2: Calculate a risk–coverage curve.
+def risk_coverage_curve(
+    true_rewards,
+    predicted_rewards,
+    uncertainty,
+):
+    squared_errors = ...
+
+    accepted = ...
+
+    accepted_counts = ...
+
+    coverage = ...
+
+    selective_risk = ...
+
+    return (
+        coverage,
+        selective_risk,
+        squared_errors,
+    )
+
+
+(
+    calibration_coverage,
+    calibration_risk,
+    _,
+) = risk_coverage_curve(
+    calibration_batch[0],
+    calibration_batch[1],
+    calibration_batch[2],
+)
+
+(
+    test_coverage,
+    test_risk,
+    test_squared_errors,
+) = risk_coverage_curve(
+    test_batch[0],
+    test_batch[1],
+    test_batch[2],
+)
+
+
+# TODO 3: Select the highest-coverage calibration
+# threshold satisfying the risk requirement.
+eligible_thresholds = ...
+
+eligible_coverage = ...
+
+selected_index = ...
+
+selected_threshold = ...
+
+selected_calibration_coverage = ...
+selected_calibration_risk = ...
+
+selected_test_coverage = ...
+selected_test_risk = ...
+
+
+# TODO 4: Compare selective deferral with random deferral.
+selected_test_mask = ...
+
+random_test_mask = ...
+
+random_deferral_risk = ...
+
+full_test_risk = ...
+
+
+# TODO 5: Inspect which examples remain accepted.
+test_hard_examples = test_batch[3]
+test_blind_spots = test_batch[4]
+
+hard_example_acceptance_rate = ...
+
+blind_spot_acceptance_rate = ...
+
+blind_spot_fraction_among_accepted = ...
+
+
+results = torch.stack([
+    thresholds,
+    calibration_coverage,
+    calibration_risk,
+    test_coverage,
+    test_risk,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: threshold, calibration coverage/risk, &quot;
+    &quot;test coverage/risk&quot;
+)
+print(results)
+
+print(&quot;\nSelected threshold:&quot;)
+print(selected_threshold.item())
+
+print(&quot;Selected calibration coverage/risk:&quot;)
+print(
+    selected_calibration_coverage.item(),
+    selected_calibration_risk.item(),
+)
+
+print(&quot;Selected test coverage/risk:&quot;)
+print(
+    selected_test_coverage.item(),
+    selected_test_risk.item(),
+)
+
+print(&quot;Full and random-deferral test risk:&quot;)
+print(
+    full_test_risk.item(),
+    random_deferral_risk.item(),
+)
+
+print(
+    &quot;Acceptance rates: hard examples, blind spots&quot;
+)
+print(
+    hard_example_acceptance_rate.item(),
+    blind_spot_acceptance_rate.item(),
+)
+
+print(&quot;Blind-spot fraction among accepted:&quot;)
+print(
+    blind_spot_fraction_among_accepted.item()
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Must selective risk decrease whenever the threshold becomes stricter?</p></li>
+<li><p>Why might threshold <span style="background-color: codeinlinebg"><code> 0.10</code></span> have extremely high risk?</p></li>
+<li><p>Approximately how much coverage can satisfy risk below <span style="background-color: codeinlinebg"><code> 0.30</code></span>?</p></li>
+<li><p>Should random deferral reduce risk as effectively?</p></li>
+<li><p>Will the overconfident blind spots be rejected?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Generate difficult examples with <span style="background-color: codeinlinebg"><code> torch.rand(N) &lt; probability</code></span>.</p></li>
+<li><p>Choose error scales using <span style="background-color: codeinlinebg"><code> torch.where</code></span>.</p></li>
+<li><p>Ordinary prediction error is <span style="background-color: codeinlinebg"><code> error_sd * torch.randn(N)</code></span>.</p></li>
+<li><p>Give blind spots an additional positive error of <span style="background-color: codeinlinebg"><code> 3</code></span>.</p></li>
+<li><p>Use broadcasting:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">uncertainty[:, None] &lt;= thresholds[None, :]</code></pre>
+<ul>
+<li><p>Choose the valid threshold having the largest coverage.</p></li>
+<li><p>Random deferral should use the same approximate coverage as selective deferral.</p></li>
+<li><p>A rejection mask and a padding mask are different; do not conflate them.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Fit and report the threshold on the same evaluation set.</p></li>
+<li><p>Assume risk must decrease monotonically as coverage decreases.</p></li>
+<li><p>Report overall coverage while hiding subgroup coverage.</p></li>
+<li><p>Change reward-model scaling without recalibrating <span class="math inline">\(\tau\)</span>.</p></li>
+<li><p>Treat deferred examples as zero reward in PPO.</p></li>
+<li><p>Drop ambiguous DPO pairs without recording the induced data shift.</p></li>
+<li><p>Tune thresholds repeatedly against the final human audit set.</p></li>
+<li><p>Use ensemble disagreement as the only uncertainty signal despite shared blind spots.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What does a risk–coverage curve measure?</p></li>
+<li><p>Why must threshold selection and final evaluation use separate data?</p></li>
+<li><p>When can stricter abstention increase risk?</p></li>
+<li><p>What should happen to deferred RL trajectories?</p></li>
+<li><p>Which subgroup diagnostics should accompany aggregate coverage?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Batch generation:</p>
+<pre class="code python"><code class="language-python">def generate_batch(num_examples):
+    true_rewards = torch.randn(
+        num_examples
+    )
+
+    hard_examples = (
+        torch.rand(num_examples)
+        &lt; hard_example_probability
+    )
+
+    blind_spots = (
+        torch.rand(num_examples)
+        &lt; blind_spot_probability
+    )
+
+    error_standard_deviations = torch.where(
+        hard_examples,
+        torch.tensor(hard_error_sd),
+        torch.tensor(easy_error_sd),
+    )
+
+    prediction_errors = (
+        error_standard_deviations
+        * torch.randn(num_examples)
+        + blind_spot_bias
+        * blind_spots.to(torch.float32)
+    )
+
+    predicted_rewards = (
+        true_rewards + prediction_errors
+    )
+
+    uncertainty = (
+        torch.where(
+            hard_examples,
+            torch.tensor(1.00),
+            torch.tensor(0.25),
+        )
+        + 0.08
+        * torch.randn(num_examples)
+    )
+
+    uncertainty = torch.where(
+        blind_spots,
+        torch.full_like(
+            uncertainty,
+            0.05,
+        ),
+        uncertainty,
+    )
+
+    uncertainty = uncertainty.clamp_min(
+        0.0
+    )
+
+    return (
+        true_rewards,
+        predicted_rewards,
+        uncertainty,
+        hard_examples,
+        blind_spots,
+    )</code></pre>
+<p>Risk–coverage calculation:</p>
+<pre class="code python"><code class="language-python">def risk_coverage_curve(
+    true_rewards,
+    predicted_rewards,
+    uncertainty,
+):
+    squared_errors = (
+        predicted_rewards
+        - true_rewards
+    ).square()
+
+    accepted = (
+        uncertainty[:, None]
+        &lt;= thresholds[None, :]
+    )
+
+    accepted_counts = accepted.sum(
+        dim=0
+    )
+
+    coverage = (
+        accepted
+        .to(torch.float32)
+        .mean(dim=0)
+    )
+
+    selective_risk = (
+        (
+            accepted.to(torch.float32)
+            * squared_errors[:, None]
+        ).sum(dim=0)
+        / accepted_counts.clamp_min(1)
+    )
+
+    return (
+        coverage,
+        selective_risk,
+        squared_errors,
+    )</code></pre>
+<p>Threshold selection:</p>
+<pre class="code python"><code class="language-python">eligible_thresholds = (
+    calibration_risk &lt;= target_risk
+)
+
+if not eligible_thresholds.any():
+    raise RuntimeError(
+        &quot;No threshold meets the risk target.&quot;
+    )
+
+eligible_coverage = torch.where(
+    eligible_thresholds,
+    calibration_coverage,
+    torch.full_like(
+        calibration_coverage,
+        -1.0,
+    ),
+)
+
+selected_index = eligible_coverage.argmax()
+
+selected_threshold = thresholds[
+    selected_index
+]
+
+selected_calibration_coverage = (
+    calibration_coverage[selected_index]
+)
+
+selected_calibration_risk = (
+    calibration_risk[selected_index]
+)
+
+selected_test_coverage = (
+    test_coverage[selected_index]
+)
+
+selected_test_risk = (
+    test_risk[selected_index]
+)</code></pre>
+<p>Random-deferral comparison:</p>
+<pre class="code python"><code class="language-python">selected_test_mask = (
+    test_batch[2] &lt;= selected_threshold
+)
+
+random_test_mask = (
+    torch.rand(num_test_examples)
+    &lt; selected_test_coverage
+)
+
+random_deferral_risk = (
+    test_squared_errors[
+        random_test_mask
+    ].mean()
+)
+
+full_test_risk = (
+    test_squared_errors.mean()
+)</code></pre>
+<p>Accepted-group diagnostics:</p>
+<pre class="code python"><code class="language-python">hard_example_acceptance_rate = (
+    selected_test_mask[
+        test_hard_examples
+    ].to(torch.float32).mean()
+)
+
+blind_spot_acceptance_rate = (
+    selected_test_mask[
+        test_blind_spots
+    ].to(torch.float32).mean()
+)
+
+blind_spot_fraction_among_accepted = (
+    test_blind_spots[
+        selected_test_mask
+    ].to(torch.float32).mean()
+)</code></pre>
+<p>Typical results are:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Threshold</strong></th>
+<th style="text-align: left;"><strong>Coverage</strong></th>
+<th style="text-align: left;"><strong>Selective risk</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Threshold</strong></td>
+<td style="text-align: left;"><strong>Coverage</strong></td>
+<td style="text-align: left;"><strong>Selective risk</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.10</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.04</code></span></td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 4.0</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.20</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.23</code></span></td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 0.8</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.30</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.60</code></span></td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 0.32</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.50</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.81</code></span></td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 0.24</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.90</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.83</code></span></td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 0.26</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 1.10</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.98</code></span></td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 0.38</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Full coverage</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 1.00</code></span></td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 0.39</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The selected threshold is typically <span style="background-color: codeinlinebg"><code> 0.90</code></span>: it handles roughly 82% of examples while meeting the calibration risk target.</p>
+<p>Randomly retaining 82% leaves risk near the full-population value. Informative uncertainty rejects most difficult examples and lowers risk.</p>
+<p>But every blind spot has uncertainty <span style="background-color: codeinlinebg"><code> 0.05</code></span>, so nearly 100% of them are accepted. At threshold <span style="background-color: codeinlinebg"><code> 0.10</code></span>, blind spots form an unusually large fraction of the tiny accepted set, causing risk to explode. Stricter abstention is therefore not automatically safer.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It shows the prediction error among accepted examples as the automatically handled fraction changes.</p></li>
+<li><p>Selecting <span class="math inline">\(\tau\)</span> adapts it to calibration noise. Reusing those outcomes would produce optimistic final risk.</p></li>
+<li><p>When serious errors are assigned lower uncertainty than ordinary correct examples.</p></li>
+<li><p>Route them to another evaluator, human labelling or an explicit conservative protocol; preserve their metadata rather than silently replacing rewards.</p></li>
+<li><p>Report coverage and risk by prompt family, language, safety category, difficulty, response length and other deployment-relevant groups.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Pairwise error correlation determines how much nominal ensemble size translates into independent information:</p></li>
+</ol>
+<p><span class="math display">\[M_{\mathrm{eff}}
+=
+\underbrace{
+\frac{M}{1+(M-1)\rho}
+}_{\text{independent-equivalent model count}}\]</span></p>
+<ol>
+<li><p>Member disagreement removes the shared error component, but that component remains in the ensemble mean.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> abstention helps only when uncertainty identifies errors. Always inspect the full risk–coverage curve—especially its strictest region—because an overconfident shared blind spot can survive every uncertainty threshold.</p>

@@ -1,0 +1,229 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Ten systems that serve content to huge audiences: Twitter’s timelines and recommendations, YouTube, Netflix (CDN, cache, API), Dropbox, Reddit, Stack Overflow, and the real-time collaboration engines behind Google Docs and Figma.</p>
+</div>
+<h4 id="the-common-thread.">The common thread.</h4>
+<p>Content systems are read-heavy by orders of magnitude. The central design question is <em>when to do the work</em>: at write time (precompute feeds, transcode every format) or at read time (assemble on demand). The answer is almost always “precompute for the common case, compute on demand for the expensive outliers.”</p>
+<h1 id="case-twitter-timelines-and-the-fan-out-problem">Case: Twitter: Timelines and the Fan-Out Problem</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Social media<br />
+<strong>Scale:</strong> About 300K timeline reads/s vs about 6K tweet writes/s (2012–2013 talks)<br />
+<strong>Concepts:</strong> Fan-out on write, Redis timelines, hybrid push/pull, celebrity problem<br />
+<strong>Source:</strong> Raffi Krikorian, “Timelines at Scale”, QCon 2012</p>
+</div>
+<h4 id="the-numbers-that-drive-the-design.">The numbers that drive the design.</h4>
+<p>Reads outnumber writes by about 50:1. Users expect their home timeline instantly. So Twitter did the work at write time.</p>
+<h4 id="fan-out-on-write.">Fan-out on write.</h4>
+<p>When a user tweets, a fan-out service looks up their followers and inserts the tweet ID into each follower’s home timeline, stored as a list in a Redis cluster (replicated three times). Only IDs are stored (plus a little metadata), and only the latest few hundred entries per user. Reading a timeline is then one Redis read followed by a multi-get of tweet bodies from a tweet store and cache. Users who have not logged in for a while are not fanned out to; their timeline is rebuilt on demand when they return.</p>
+<h4 id="the-celebrity-problem.">The celebrity problem.</h4>
+<p>An account with tens of millions of followers turns one tweet into tens of millions of Redis writes, which can take minutes and creates a backlog that delays everyone’s timeline. Twitter’s answer was the <strong>hybrid</strong> model: high-follower accounts are <em>not</em> fanned out. At read time, their recent tweets are fetched and merged into the precomputed timeline.</p>
+<h4 id="the-2012-vs-2022-picture.">The 2012 vs 2022 picture.</h4>
+<p>Over the decade Twitter moved from a Ruby on Rails monolith (“Monorail”) to JVM services (Scala, Finagle RPC), from MySQL to its own stores (Manhattan key-value store), and from simple reverse-chronological timelines to ML-ranked ones.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Let the read:write ratio decide where to do work.</p></li>
+<li><p>Store IDs in feeds, not content; hydrate at read time from caches.</p></li>
+<li><p>Handle the long tail of huge fan-outs differently from the common case.</p></li>
+</ul>
+</div>
+<h1 id="case-twitterx-the-for-you-recommendation-pipeline">Case: Twitter/X: The “For You” Recommendation Pipeline</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Recommendations<br />
+<strong>Scale:</strong> About 5 billion ranking decisions per day; under 1.5 s per timeline (2023)<br />
+<strong>Concepts:</strong> Candidate generation, ranking models, filtering, graph embeddings<br />
+<strong>Source:</strong> Twitter engineering blog, “Twitter’s Recommendation Algorithm” (2023, open-sourced)</p>
+</div>
+<figure class="tikz"><img src="figs/sd/d5c554b44e51.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The three-stage recommendation funnel.</em></p>
+<h4 id="the-pipeline.">The pipeline.</h4>
+<p>Every modern feed (YouTube, TikTok, Instagram, LinkedIn) has the same three stages:</p>
+<ol>
+<li><p><strong>Candidate generation</strong>: cheaply select about 1<span>,</span>500 posts from hundreds of millions. Twitter used roughly half from accounts you follow (ranked by a lighter model predicting engagement) and half from outside, found through the social graph (“people like you engaged with this”) and embedding spaces (SimClusters: communities of users and content; TwHIN: knowledge-graph embeddings).</p></li>
+<li><p><strong>Ranking</strong>: a neural network with tens of millions of parameters scores each candidate on predicted probabilities (like, reply, retweet, dwell, report), combined into a single score with weights.</p></li>
+<li><p><strong>Heuristics and filters</strong>: remove blocked/muted content, limit consecutive posts from one author, balance in- and out-of-network, apply safety labels, and mix in ads.</p></li>
+</ol>
+<p>The serving layer (“Home Mixer”, built on a framework called Product Mixer) fans out to candidate sources in parallel and must finish within the latency budget.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Funnel: cheap retrieval over millions, expensive scoring over thousands, rules over the top.</p></li>
+<li><p>Embeddings and graphs are the main sources of “things you don’t follow yet.”</p></li>
+<li><p>Multiple predicted outcomes combined by weights let product teams tune behavior without retraining.</p></li>
+</ul>
+</div>
+<h1 id="case-youtube-uploads-transcoding-and-vitess">Case: YouTube: Uploads, Transcoding, and Vitess</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Video platform<br />
+<strong>Scale:</strong> Hundreds of hours of video uploaded every minute<br />
+<strong>Concepts:</strong> Chunked uploads, async pipelines, transcoding ladders, CDN, MySQL sharding<br />
+<strong>Source:</strong> Google/YouTube talks and engineering posts; Vitess project history</p>
+</div>
+<h4 id="the-upload-pipeline.">The upload pipeline.</h4>
+<p>A video upload is a large file over an unreliable network, so it is sent with a <strong>resumable, chunked</strong> protocol: the client gets an upload session ID and sends chunks; after a dropped connection it asks how much the server has and resumes. Once stored, the original triggers an asynchronous <strong>DAG of jobs</strong>: validation, splitting into segments for parallel processing, transcoding to many resolutions and codecs (H.264, VP9, AV1) to form a <strong>bitrate ladder</strong>, thumbnail generation, content ID matching (copyright), safety classification, and caption generation. Popular videos are encoded with more expensive codecs (AV1) because the bandwidth savings repay the compute; long-tail videos get cheaper encodings. Google later built custom video transcoding chips (Argos VCUs) because the volume made general CPUs too costly.</p>
+<h4 id="vitess.">Vitess.</h4>
+<p>YouTube’s metadata lived in MySQL. As it grew, engineers built <strong>Vitess</strong> (2010) to shard MySQL transparently: a proxy layer (VTGate) routes queries, VTTablet manages each MySQL instance, and the topology is stored in a consistent store. It became a CNCF project used by Slack, GitHub, Shopify, and many others (Case on Slack, Chapter (cs data)).</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Large uploads must be resumable; never make users restart a 2 GB upload.</p></li>
+<li><p>Media processing is a parallel DAG of async jobs triggered by the upload.</p></li>
+<li><p>Spend more compute encoding popular content; let popularity drive cost decisions.</p></li>
+</ul>
+</div>
+<h1 id="case-netflix-open-connect-a-cdn-inside-isps">Case: Netflix: Open Connect, a CDN Inside ISPs</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Streaming video<br />
+<strong>Scale:</strong> A large share of peak downstream internet traffic in many regions<br />
+<strong>Concepts:</strong> Control plane vs data plane, edge appliances, proactive caching, steering<br />
+<strong>Source:</strong> Netflix Open Connect documentation and TechBlog</p>
+</div>
+<figure class="tikz"><img src="figs/sd/7b6d2d8e6fc4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Netflix splits control (AWS) from data (Open Connect).</em></p>
+<h4 id="the-design.">The design.</h4>
+<p>Everything <em>except</em> the video bytes runs in AWS: sign-in, browsing, recommendations, and the playback decision. When you press play, the control plane picks the best Open Connect Appliances (OCAs) for you based on health, network proximity, and which ones hold the file, and returns their URLs. The video then streams directly from an OCA, often physically inside your ISP’s network or at an internet exchange.</p>
+<h4 id="why-it-works.">Why it works.</h4>
+<p>Netflix knows in advance what people will watch. OCAs are <strong>proactively filled</strong> during off-peak hours, based on predicted popularity per region, so at peak almost every request is a cache hit and no origin fetch is needed. ISPs get the appliances free because it saves them transit bandwidth. The players use <strong>adaptive bitrate</strong> streaming, switching quality based on measured throughput, and can fail over to another OCA mid-stream.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Separate the control plane (small, smart, centralized) from the data plane (huge, simple, distributed).</p></li>
+<li><p>If you can predict demand, push content before it is requested.</p></li>
+<li><p>Placing caches inside partner networks can be cheaper for everyone.</p></li>
+</ul>
+</div>
+<h1 id="case-netflix-evcache-and-four-ways-to-use-a-cache">Case: Netflix: EVCache and Four Ways to Use a Cache</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Streaming<br />
+<strong>Scale:</strong> Trillions of items, very high request rates across regions<br />
+<strong>Concepts:</strong> Distributed memcached, cross-zone replication, cache warming<br />
+<strong>Source:</strong> Netflix TechBlog posts on EVCache</p>
+</div>
+<h4 id="the-design.-1">The design.</h4>
+<p>EVCache is a memcached-based distributed cache. Data is replicated across Availability Zones: a write goes to a copy in every zone; a read goes to the local zone and falls back to another zone on miss. Cross-region replication is done asynchronously through a queue of change events.</p>
+<h4 id="four-uses-at-netflix">Four uses at Netflix</h4>
+<p>(as ByteByteGo summarizes them):</p>
+<ol>
+<li><p><strong>Look-aside cache</strong> in front of slower stores (classic cache-aside).</p></li>
+<li><p><strong>Transient data store</strong> for short-lived data such as playback session state, where the cache <em>is</em> the store.</p></li>
+<li><p><strong>Primary store for precomputed data</strong>: personalized home pages are computed offline in batch and written to EVCache; online services just read them.</p></li>
+<li><p><strong>High-volume UI data</strong>: data read on every page view (such as localized strings or artwork metadata) is served from cache to protect back-ends.</p></li>
+</ol>
+<p>Netflix also built <strong>cache warming</strong> tools: when adding capacity, copy data from existing replicas so the new nodes do not start cold and send a flood of misses to the database.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Replicating cache data per zone gives availability without cross-zone read latency.</p></li>
+<li><p>Precompute expensive personalization offline and serve it from a cache.</p></li>
+<li><p>Warm new cache capacity before sending it traffic.</p></li>
+</ul>
+</div>
+<h1 id="case-netflix-evolution-of-the-api-layer">Case: Netflix: Evolution of the API Layer</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Streaming<br />
+<strong>Scale:</strong> Hundreds of device types, hundreds of backend services<br />
+<strong>Concepts:</strong> Monolith to microservices, API gateway, BFF, GraphQL federation<br />
+<strong>Source:</strong> Netflix TechBlog posts on Falcor, Zuul, and “How Netflix Scales its API with GraphQL Federation” (2020)</p>
+</div>
+<h4 id="the-evolution.">The evolution.</h4>
+<ol>
+<li><p><strong>Monolith (2000s)</strong>: one Java application in a data center. A database corruption in 2008 stopped DVD shipping for three days and triggered the move to AWS and microservices.</p></li>
+<li><p><strong>Direct access</strong>: devices called many services directly. Every device needed to know the service landscape.</p></li>
+<li><p><strong>Gateway aggregation</strong>: the Netflix API (behind the Zuul gateway) aggregated backend calls into device-friendly responses. Device teams wrote server-side adapter scripts: a form of backend-for-frontend.</p></li>
+<li><p><strong>GraphQL federation</strong>: the single API team became a bottleneck. Netflix moved to a federated GraphQL graph: each domain team owns a subgraph (“Domain Graph Service”), and a gateway composes them into one schema.</p></li>
+</ol>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>The API layer’s main problem is often organizational: who owns the aggregation code.</p></li>
+<li><p>Federation lets each team own its part of one unified API.</p></li>
+<li><p>Moving to the cloud was triggered by a single-point-of-failure incident, not by fashion.</p></li>
+</ul>
+</div>
+<h1 id="case-dropbox-magic-pocket-leaving-the-public-cloud">Case: Dropbox: Magic Pocket, Leaving the Public Cloud</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> File storage<br />
+<strong>Scale:</strong> Exabytes of user data<br />
+<strong>Concepts:</strong> Object storage design, erasure coding, cells, hardware co-design, cost<br />
+<strong>Source:</strong> Dropbox tech blog posts on Magic Pocket (2016 onward)</p>
+</div>
+<h4 id="the-decision.">The decision.</h4>
+<p>Dropbox originally stored file blocks on Amazon S3. At exabyte scale, storage is Dropbox’s largest cost and its core product, so they built their own system, <strong>Magic Pocket</strong>, and moved the vast majority of user data into their own data centers around 2015–2016. They reported large savings over the following two years in their IPO filing.</p>
+<h4 id="the-design.-2">The design.</h4>
+<ul>
+<li><p>Files are split into blocks (up to 4 MB) addressed by their hash, which gives automatic deduplication.</p></li>
+<li><p>Blocks are written first with replication for durability, then grouped into larger <em>volumes</em> that are <strong>erasure coded</strong>: data is split into <span class="math inline">\(k\)</span> fragments plus <span class="math inline">\(m\)</span> parity fragments, so any <span class="math inline">\(k\)</span> of <span class="math inline">\(k+m\)</span> can rebuild it. This stores data far more cheaply than three full replicas with similar durability.</p></li>
+<li><p>Storage is organized into <strong>cells</strong> and zones; data is replicated across geographically separate zones.</p></li>
+<li><p>Custom high-density storage servers, later using SMR (shingled) drives, which are cheaper per byte but must be written sequentially, a good match for append-only volumes.</p></li>
+<li><p>Continuous <strong>verification</strong>: scrubbers read and check data to find silent corruption before users do.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>At extreme scale, owning the core resource can be cheaper than renting it; below that scale it rarely is.</p></li>
+<li><p>Replicate hot data, erasure-code cold data.</p></li>
+<li><p>Content-addressing gives deduplication and integrity checks for free.</p></li>
+</ul>
+</div>
+<h1 id="case-reddit-votes-queues-and-caches">Case: Reddit: Votes, Queues, and Caches</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Community forum<br />
+<strong>Scale:</strong> Hundreds of millions of monthly users; heavy vote and comment traffic<br />
+<strong>Concepts:</strong> Async processing, queues, precomputed listings, caching, monolith evolution<br />
+<strong>Source:</strong> Reddit engineering posts and ByteByteGo “Reddit’s Core Architecture”</p>
+</div>
+<h4 id="the-design.-3">The design.</h4>
+<p>Reddit’s core began as a Python monolith (“r2”) on Postgres, with Cassandra, memcached, and RabbitMQ.</p>
+<ul>
+<li><p><strong>Votes are queued.</strong> Clicking upvote updates the UI immediately; the vote goes to a queue, and workers update scores and listings asynchronously. Queues are partitioned (for example by subreddit or link) so one viral post does not block all vote processing.</p></li>
+<li><p><strong>Precomputed listings.</strong> The “hot” ranking of a subreddit is stored as a sorted list of IDs and updated incrementally when votes change, so loading a front page is a cache read, not a ranking query.</p></li>
+<li><p><strong>Hot ranking formula</strong> decays score with age (log of net votes plus a term proportional to submission time), so new posts can compete.</p></li>
+<li><p><strong>Comment trees</strong> are precomputed and cached per thread because building a deep nested tree from rows on every request is expensive.</p></li>
+</ul>
+<p>Reddit has since moved much of this to Go microservices and a GraphQL API layer.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Make the user’s action feel instant; do the expensive bookkeeping asynchronously.</p></li>
+<li><p>Partition queues by the entity that can go viral, so one hot item does not block others.</p></li>
+<li><p>Precompute sorted listings rather than ranking on read.</p></li>
+</ul>
+</div>
+<h1 id="case-stack-overflow-the-power-of-a-well-tuned-monolith">Case: Stack Overflow: The Power of a Well-Tuned Monolith</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Q&amp;A site<br />
+<strong>Scale:</strong> About 1.3B page views/month on a handful of servers (2016)<br />
+<strong>Concepts:</strong> Vertical scaling, monolith, aggressive caching, performance culture<br />
+<strong>Source:</strong> Nick Craver, “Stack Overflow: The Architecture – 2016 Edition”</p>
+</div>
+<h4 id="the-design.-4">The design.</h4>
+<p>In 2016 Stack Overflow ran on roughly nine web servers, four SQL Server machines (two clusters), two Redis servers, three tag engine servers, and three Elasticsearch servers, in an on-premises data center with a failover site. It was a single .NET monolith.</p>
+<h4 id="why-it-works.-1">Why it works.</h4>
+<ul>
+<li><p><strong>Big hardware with lots of RAM</strong>: the hot dataset fit in SQL Server memory.</p></li>
+<li><p><strong>Multiple cache layers</strong>: in-process caches on each web server, then Redis, then SQL Server. Most requests never touch the database.</p></li>
+<li><p><strong>Performance as a feature</strong>: they built and open-sourced tools like Dapper (a micro-ORM) and MiniProfiler to see every query’s cost on every page.</p></li>
+<li><p><strong>A custom tag engine</strong> for the expensive “questions with these tags” queries, run in memory.</p></li>
+<li><p>Servers ran at low utilization, leaving large headroom.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Microservices are an organizational tool; a small team can scale a monolith very far.</p></li>
+<li><p>Measure query cost on every page; most performance problems are a few queries.</p></li>
+<li><p>Vertical scaling plus caching is often the cheapest path for read-heavy sites.</p></li>
+</ul>
+</div>
+<h1 id="case-google-docs-and-figma-real-time-collaboration">Case: Google Docs and Figma: Real-Time Collaboration</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Collaborative editing<br />
+<strong>Scale:</strong> Many simultaneous editors per document<br />
+<strong>Concepts:</strong> Operational transformation, CRDTs, authoritative server, conflict resolution<br />
+<strong>Source:</strong> Google Wave/Docs OT papers; Figma blog, “How Figma’s multiplayer technology works” (2019)</p>
+</div>
+<h4 id="the-problem.">The problem.</h4>
+<p>Two people edit the same text at once. Alice inserts “X” at position 3; Bob deletes the character at position 1. If each applies the other’s edit naively, their documents diverge.</p>
+<h4 id="operational-transformation-google-docs.">Operational transformation (Google Docs).</h4>
+<p>A central server orders all operations. When an operation arrives that was based on an older version, it is <em>transformed</em> against operations that happened since: Alice’s insert at position 3 becomes an insert at position 2 because Bob’s earlier delete shifted the text left. All clients apply operations in the server’s order and converge. OT is correct but its transformation rules are notoriously tricky to get right for rich documents.</p>
+<h4 id="figmas-approach.">Figma’s approach.</h4>
+<p>Figma documents are trees of objects with properties, not long text. Figma uses a central, authoritative server per document and resolves conflicts at the <em>property</em> level: if two users change the same property of the same object, the last write the server receives wins. Inspired by CRDTs but simplified because a central server exists. Each document gets its own process on a multiplayer server, which holds the document in memory and periodically checkpoints it.</p>
+<h4 id="crdts.">CRDTs.</h4>
+<p>Conflict-free replicated data types (used by tools like Yjs and Automerge, and in local-first apps) let replicas merge without a central server, by giving each character or element a unique ID and an order that every replica computes the same way.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>With a central server, simple last-writer-wins at fine granularity is often enough.</p></li>
+<li><p>OT needs a central sequencer; CRDTs work peer-to-peer at the cost of metadata overhead.</p></li>
+<li><p>One in-memory process per document is a natural unit of state and sharding.</p></li>
+</ul>
+</div>

@@ -1,0 +1,162 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Counting things at scale: view and impression counters, raw events vs derived aggregates, bucketed time windows, and probabilistic sketches (HyperLogLog, count-min, top-<span class="math inline">\(k\)</span> heavy hitters, reservoir sampling, t-digest) that are small, fast, and mergeable. Ends with high-throughput live reactions.</p>
+</div>
+<h1 id="why-counting-is-hard">Why Counting Is Hard</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Counting seems trivial: add one. At a billion events a day, “add one” runs into three problems: a single counter becomes a hot spot that many servers fight over, retries make you count the same event twice, and some questions (“how many <em>different</em> people?”) need memory for everyone you have seen.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Decide first what kind of number you need:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Need</th>
+<th style="text-align: left;">Example</th>
+<th style="text-align: left;">Approach</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Exact, money-relevant</td>
+<td style="text-align: left;">ad impressions billed to customers</td>
+<td style="text-align: left;">deduplicated events, idempotent aggregation, reconciliation</td>
+</tr>
+<tr>
+<td style="text-align: left;">Approximately right, fast</td>
+<td style="text-align: left;">video view count, likes</td>
+<td style="text-align: left;">sharded counters, batched updates, eventual consistency</td>
+</tr>
+<tr>
+<td style="text-align: left;">Distinct counts</td>
+<td style="text-align: left;">unique viewers, daily active users</td>
+<td style="text-align: left;">HyperLogLog</td>
+</tr>
+<tr>
+<td style="text-align: left;">Frequency of each item</td>
+<td style="text-align: left;">trending hashtags, hot keys</td>
+<td style="text-align: left;">count-min sketch + top-<span class="math inline">\(k\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Distribution</td>
+<td style="text-align: left;">p50/p99 latency, watch-time percentiles</td>
+<td style="text-align: left;">t-digest / KLL / DDSketch</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h1 id="view-counting-at-scale">View Counting at Scale</h1>
+<figure class="tikz"><img src="figs/sd/8e442ae0778f.svg" alt="diagram" loading="lazy"></figure>
+<p><em>View counting: aggregate in the stream, write increments in batches.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Naive</strong>: <code>UPDATE videos SET views = views + 1</code> per view. A viral video receives thousands of views per second on one row, and every update takes the same row lock: a hot key.</p>
+<ul>
+<li><p><strong>Aggregate before writing</strong>: a stream processor sums views per video per window (e.g. 10 seconds) and writes one <code>+n</code> per window. Thousands of writes become one.</p></li>
+<li><p><strong>Sharded counters</strong>: split a hot counter into <span class="math inline">\(N\)</span> sub-counters (<code>views:{id}:{0..N-1}</code>), increment a random one, sum on read (cache the sum).</p></li>
+<li><p><strong>Validation</strong>: views are filtered for bots and abuse (minimum watch time, rate per user/IP, known bad actors), which is why public counts can lag or be revised.</p></li>
+<li><p><strong>Deduplication</strong>: client retries carry an event ID; the aggregator keeps a short-lived set of seen IDs (or a Bloom filter) per window.</p></li>
+<li><p><strong>Read path</strong>: the displayed count comes from a cache; slight staleness is acceptable.</p></li>
+</ul>
+<p>Reddit has described counting post views with HyperLogLog: events flow through Kafka, one consumer decides whether each event should count, another updates a per-post HLL in Redis, and HLLs are periodically persisted to Cassandra. Counting <em>unique</em> viewers that way takes about 12 KB per post regardless of audience size.</p>
+</div>
+<h1 id="impression-counting-for-billing">Impression Counting for Billing</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Ad impressions are money, so the bar is higher: each impression has a unique ID issued when the ad is served; the impression beacon carries it; ingestion is at-least-once and the aggregator <strong>deduplicates by ID</strong> within a window long enough to cover retries; aggregation writes are idempotent (keyed by window and campaign, not blind increments); the raw event log is kept so that billing totals can be <strong>recomputed and reconciled</strong> in a daily batch job, which is the version invoices use. Real-time numbers power pacing and dashboards; batch numbers are authoritative.</p>
+</div>
+<h1 id="raw-events-vs-derived-analytics">Raw Events vs Derived Analytics</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Keep the <strong>immutable raw events</strong> (in object storage, partitioned by date, in Parquet) as the source of truth, and treat every counter, rollup, and dashboard as a <strong>derived view</strong> that can be rebuilt. Benefits: fix a bug and recompute, add a new metric over history, audit numbers. Costs: storage (mitigated by compression and retention tiers) and recompute time.</p>
+<ul>
+<li><p><strong>Lambda architecture</strong>: a fast streaming path for fresh approximate numbers and a batch path for corrected numbers, merged at read time. Two code paths to keep consistent.</p></li>
+<li><p><strong>Kappa architecture</strong>: one streaming path; to recompute, replay the log through a new version of the job. Simpler when the stream system retains enough history.</p></li>
+</ul>
+<p>OLAP databases (ClickHouse, Druid, Pinot, BigQuery) often make pre-aggregation unnecessary for dashboards by scanning raw or lightly rolled-up columnar data quickly.</p>
+</div>
+<h1 id="bucketed-time-windows">Bucketed Time Windows</h1>
+<figure class="tikz"><img src="figs/sd/02e048f4ca05.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Per-minute buckets; any window is a sum of buckets.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Store counts per entity per time bucket: key <code>metric:entity:bucketStart</code>, with TTL equal to the longest window you serve. “Last hour” = sum of 60 one-minute buckets; “last 30 days” = 30 daily buckets (roll up minutes into hours and days). An approximate sliding window weights the oldest bucket by the fraction still inside the window (the same trick as the sliding-window rate limiter, Chapter (gateway)). In memory, a ring buffer of <span class="math inline">\(W\)</span> buckets gives <span class="math inline">\(O(1)\)</span> updates and <span class="math inline">\(O(W)\)</span> or <span class="math inline">\(O(1)\)</span> (with a running total) queries.</p>
+<p><strong>Window types</strong>: <em>tumbling</em> (fixed, non-overlapping), <em>hopping/sliding</em> (overlapping), <em>session</em> (gap-based, per user). <strong>Event time vs processing time</strong>: bucket by when the event happened, not when it arrived; stream processors (Flink, Beam, Kafka Streams) use <strong>watermarks</strong> to decide when a window is complete and how long to wait for late events, and allow late updates to correct closed windows.</p>
+</div>
+<h1 id="mergeable-sketches">Mergeable Sketches</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A sketch is a tiny summary of a huge stream that answers one kind of question approximately. The key property for systems is that two sketches can be <em>merged</em>: combine the sketch from server A with server B, or Monday with Tuesday, and get the sketch of the combined data.</p>
+</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Sketch</th>
+<th style="text-align: left;">Answers</th>
+<th style="text-align: left;">Size</th>
+<th style="text-align: left;">Merge</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">HyperLogLog</td>
+<td style="text-align: left;">number of distinct items (<span class="math inline">\(\approx\)</span>1–2% error)</td>
+<td style="text-align: left;"><span class="math inline">\(\sim\)</span>12 KB</td>
+<td style="text-align: left;">bucket-wise max</td>
+</tr>
+<tr>
+<td style="text-align: left;">Count-min</td>
+<td style="text-align: left;">frequency of any item (overestimate only)</td>
+<td style="text-align: left;"><span class="math inline">\(d\times w\)</span> counters</td>
+<td style="text-align: left;">cell-wise sum</td>
+</tr>
+<tr>
+<td style="text-align: left;">Top-<span class="math inline">\(k\)</span> (Space-Saving / heavy hitters)</td>
+<td style="text-align: left;">most frequent items</td>
+<td style="text-align: left;"><span class="math inline">\(O(k)\)</span></td>
+<td style="text-align: left;">combine and re-trim</td>
+</tr>
+<tr>
+<td style="text-align: left;">Bloom filter</td>
+<td style="text-align: left;">“seen before?” (false positives only)</td>
+<td style="text-align: left;"><span class="math inline">\(\sim\)</span>10 bits/item for 1%</td>
+<td style="text-align: left;">bitwise OR</td>
+</tr>
+<tr>
+<td style="text-align: left;">t-digest / KLL / DDSketch</td>
+<td style="text-align: left;">quantiles (p50, p99)</td>
+<td style="text-align: left;">a few KB</td>
+<td style="text-align: left;">merge centroids / buckets</td>
+</tr>
+<tr>
+<td style="text-align: left;">Reservoir sample</td>
+<td style="text-align: left;">uniform random sample</td>
+<td style="text-align: left;"><span class="math inline">\(k\)</span> items</td>
+<td style="text-align: left;">keep <span class="math inline">\(k\)</span> smallest random keys</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Store sketches per time bucket</strong> (one HLL per post per day), and answer any range by merging the buckets: unique visitors over the last 7 days is the merge of 7 daily HLLs, which you <em>cannot</em> get by adding daily unique counts (that double-counts people who came on several days). Redis implements HLL natively (<code>PFADD</code>, <code>PFCOUNT</code>, <code>PFMERGE</code>); BigQuery, Druid, and ClickHouse expose HLL and quantile sketches as column types. The algorithms themselves are covered in the companion interview book.</p>
+</div>
+<h1 id="top-k-heavy-hitters">Top-<span class="math inline">\(k\)</span> Heavy Hitters</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>“Top 10 trending hashtags in the last hour”: each stream partition keeps a count-min sketch plus a min-heap of its current top candidates (or the Space-Saving algorithm, which keeps <span class="math inline">\(k\)</span> counters and replaces the minimum when a new item arrives). Every minute, partitions send their candidates to an aggregator that merges counts and computes the global top <span class="math inline">\(k\)</span>. <strong>Pitfall</strong>: merging per-partition top-<span class="math inline">\(k\)</span> lists can miss an item that is moderately frequent everywhere but top-<span class="math inline">\(k\)</span> nowhere; partitions should send more candidates than <span class="math inline">\(k\)</span> (e.g. <span class="math inline">\(10k\)</span>), or partition by item (hash the hashtag) so each item’s full count lives in one partition. “Trending” usually means <em>growth</em>, not volume: compare the current window with a baseline (e.g. a ratio against the same hour last week, with smoothing).</p>
+</div>
+<h1 id="sampling-and-percentiles">Sampling and Percentiles</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Reservoir sampling</strong> keeps a uniform sample of a stream of unknown length in fixed memory, used for sampling logs, traces, and examples for labeling. <strong>Percentiles</strong>: you cannot average per-server p99s to get a global p99. Each server keeps a t-digest (or an HDR histogram, or DDSketch) per time bucket and ships it; the aggregator merges them and reads off the quantile. This is how monitoring systems compute fleet-wide latency percentiles (Prometheus histograms do a coarser version with fixed buckets).</p>
+</div>
+<h1 id="live-reactions-at-high-throughput">Live Reactions at High Throughput</h1>
+<figure class="tikz"><img src="figs/sd/ecdbced9e646.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Aggregate up, broadcast down.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A live stream with 2 million viewers tapping hearts can produce hundreds of thousands of events per second. Do not fan out every reaction to every viewer (that is <span class="math inline">\(O(n^2)\)</span>). Instead: gateways count reactions locally per short window and forward <em>counts</em>, regional aggregators sum them, and a global aggregator broadcasts a single update (totals per reaction type, perhaps a sample of individual reactions to animate) about once per second. Viewers see an accurate trend and a lively animation, generated client-side from the counts. Persist only the aggregate per time bucket. The same pattern applies to live polls and viewer counts.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Daily active users across products</div>
+<p>Each service emits a <code>(user_id, product, date)</code> event. A daily job builds one HLL per product per day; dashboards show DAU (one HLL), WAU and MAU (merge 7 or 30 HLLs), and cross-product unique users (merge across products). Exact counts are computed weekly from raw events to validate the approximations.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Decide between exact, approximate, distinct, frequency, and distribution questions first.</p></li>
+<li><p>Aggregate before writing; shard hot counters; deduplicate by event ID.</p></li>
+<li><p>Keep raw events immutable; derive and rebuild aggregates.</p></li>
+<li><p>Store mergeable sketches per time bucket and merge to answer any range.</p></li>
+<li><p>For live reactions, aggregate upward and broadcast summaries downward.</p></li>
+</ul>
+</div>

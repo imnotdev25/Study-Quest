@@ -1,0 +1,510 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does per-decision importance sampling use <span class="math inline">\(\rho_{0:t}\)</span>, rather than the final trajectory ratio, for reward <span class="math inline">\(R_t\)</span>?</p></li>
+<li><p>What are the two routes to consistency for an ordinary doubly robust estimator?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="combine-a-trajectory-model-with-per-step-corrections">2. Combine a trajectory model with per-step corrections</h3>
+<p>Suppose a value model predicts what remains under target policy <span class="math inline">\(\pi\)</span>:</p>
+<p><span class="math display">\[\hat V(s)
+=
+\underbrace{
+\sum_a \pi(a\mid s)\hat Q(s,a)
+}_{\text{predicted target-policy return from state }s}\]</span></p>
+<p>After observing one transition, calculate its temporal-difference residual:</p>
+<p><span class="math display">\[\delta_t
+=
+\underbrace{R_t}_{\text{observed reward}}
++
+\underbrace{
+\gamma(1-D_t)\hat V(S_{t+1})
+}_{\text{predicted future; zero after termination}}
+-
+\underbrace{
+\hat Q(S_t,A_t)
+}_{\text{prediction before observing the transition}}\]</span></p>
+<p>Here <span class="math inline">\(D_t=1\)</span> means the episode terminated.</p>
+<p>Sequential doubly robust evaluation begins with the model prediction and corrects every unexpected transition:</p>
+<p><span class="math display">\[\hat V_{\mathrm{SDR}}
+=
+\frac1N\sum_{i=1}^{N}
+\left[
+\underbrace{
+\hat V(S_0^{(i)})
+}_{\text{model-based starting estimate}}
++
+\sum_{t=0}^{T-1}
+\underbrace{\gamma^t}_{\text{discount}}
+\underbrace{\rho_{0:t}^{(i)}}_{\text{off-policy history correction}}
+\underbrace{\delta_t^{(i)}}_{\text{model error observed at step }t}
+\right]\]</span></p>
+<p>It has two rescue routes:</p>
+<ul>
+<li><p>Correct behavior probabilities make the residual corrections repair an incorrect value model.</p></li>
+<li><p>A correct <span class="math inline">\(Q\)</span>-model gives:</p></li>
+</ul>
+<p><span class="math display">\[E[\delta_t\mid S_t,A_t]
+=
+\underbrace{0}_{\text{no systematic residual}}\]</span></p>
+<p>so incorrect propensity estimates cannot systematically shift the result.</p>
+<p>If both components are wrong, the estimate can be biased. In practice, learned models should be fitted on separate data or with cross-fitting.</p>
+<p>For an LLM agent, states include conversation and tool history, while actions may be tool calls or tokens. DPO optimizes preferences offline; it does not supply the behavior propensities or transition-aware <span class="math inline">\(Q\)</span>-model required here.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions, rewards and cumulative ratios: <span style="background-color: codeinlinebg"><code> [R, N, T]</code></span></p></li>
+<li><p><span class="math inline">\(Q\)</span>-model: <span style="background-color: codeinlinebg"><code> [T, A]</code></span></p></li>
+<li><p><span class="math inline">\(V\)</span>-model: <span style="background-color: codeinlinebg"><code> [T+1]</code></span></p></li>
+<li><p>TD residuals: <span style="background-color: codeinlinebg"><code> [R, N, T]</code></span></p></li>
+<li><p>repeated estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-model-based-corrections-reduce-variance">3. PyTorch exercise — model-based corrections reduce variance</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 3_000
+episodes_per_repetition = 200
+horizon = 6
+gamma = 0.90
+
+behavior_action_one_probability = 0.25
+target_action_one_probability = 0.75
+
+# Incorrect probability recorded by a faulty logger.
+wrong_behavior_action_one_probability = 0.20
+
+target_policy = torch.tensor([
+    1.0 - target_action_one_probability,
+    target_action_one_probability,
+])
+
+true_reward_means = torch.tensor([
+    0.20,  # action 0
+    0.80,  # action 1
+])
+
+bad_reward_model = torch.tensor([
+    0.60,
+    0.40,
+])
+
+discounts = gamma ** torch.arange(horizon)
+
+
+# TODO 1: Generate behavior-policy trajectories.
+actions = ...
+
+reward_probabilities = ...
+
+rewards = ...
+
+
+# TODO 2: Construct cumulative importance ratios.
+def cumulative_ratios(
+    assumed_action_one_probability,
+):
+    assumed_behavior_policy = ...
+
+    step_ratios = ...
+
+    return ...
+
+
+correct_ratios = ...
+wrong_ratios = ...
+
+
+# TODO 3: Build finite-horizon Q and V models.
+def build_value_model(immediate_reward_model):
+    q_values = ...
+    v_values = ...
+
+    for time in reversed(range(horizon)):
+        q_values[time] = ...
+
+        v_values[time] = ...
+
+    return q_values, v_values
+
+
+exact_q, exact_v = ...
+bad_q, bad_v = ...
+
+
+# TODO 4: Implement PDIS and sequential DR.
+pdis_estimates = ...
+
+
+def sequential_dr(
+    q_model,
+    v_model,
+    cumulative_weights,
+):
+    time_indices = ...
+
+    logged_q_values = ...
+
+    next_state_values = ...
+
+    td_residuals = ...
+
+    corrections = ...
+
+    return ...
+
+
+sdr_exact_model_correct_ratios = ...
+sdr_bad_model_correct_ratios = ...
+
+sdr_exact_model_wrong_ratios = ...
+sdr_bad_model_wrong_ratios = ...
+
+
+# TODO 5: Compare bias and variance.
+target_step_reward = ...
+
+exact_target_value = ...
+
+all_estimates = torch.stack([
+    pdis_estimates,
+    sdr_exact_model_correct_ratios,
+    sdr_bad_model_correct_ratios,
+    sdr_exact_model_wrong_ratios,
+    sdr_bad_model_wrong_ratios,
+], dim=1)
+
+means = ...
+biases = ...
+standard_deviations = ...
+rmses = ...
+
+results = torch.stack([
+    means,
+    biases,
+    standard_deviations,
+    rmses,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+print(
+    &quot;Exact/bad model-only baselines:&quot;,
+    exact_v[0].item(),
+    bad_v[0].item(),
+)
+
+print(
+    &quot;\nRows: PDIS, SDR exact/correct, &quot;
+    &quot;SDR bad/correct, SDR exact/wrong, &quot;
+    &quot;SDR both-wrong&quot;
+)
+print(&quot;Columns: mean, bias, SD, RMSE&quot;)
+print(results)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the exact target value closer to <span style="background-color: codeinlinebg"><code> 2</code></span>, <span style="background-color: codeinlinebg"><code> 3</code></span>, or <span style="background-color: codeinlinebg"><code> 4</code></span>?</p></li>
+<li><p>Will the bad model-only baseline be above or below the truth?</p></li>
+<li><p>Which should have lower variance: PDIS or SDR with the exact model?</p></li>
+<li><p>Can correct ratios repair the bad model?</p></li>
+<li><p>What happens when both the ratios and model are wrong?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>The target’s expected reward per step is:</p>
+<p><span class="math display">\[\bar r_\pi
+=
+\underbrace{
+(1-0.75)(0.20)+0.75(0.80)
+}_{0.65}\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[V^\pi
+=
+\underbrace{0.65}_{\text{target mean reward}}
+\underbrace{
+\sum_{t=0}^{5}0.9^t
+}_{\text{discounted horizon}}\]</span></p>
+<p>For the value model:</p>
+<p><span class="math display">\[\hat Q_t(a)
+=
+\underbrace{\hat r(a)}_{\text{predicted current reward}}
++
+\underbrace{\gamma\hat V_{t+1}}_{\text{predicted remaining return}}\]</span></p>
+<ul>
+<li><p>Index the logged model prediction with <span style="background-color: codeinlinebg"><code> q_model[time_indices, actions]</code></span>.</p></li>
+<li><p>Multiply each TD residual by both <span style="background-color: codeinlinebg"><code> discounts</code></span> and its cumulative ratio.</p></li>
+<li><p><span class="math inline">\(V_T=0\)</span>: never bootstrap beyond the terminal state.</p></li>
+<li><p>Evaluation weights and learned-model predictions should be detached.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use only <span class="math inline">\(\rho_t\)</span> instead of the cumulative ratio <span class="math inline">\(\rho_{0:t}\)</span>.</p></li>
+<li><p>Subtract the TD correction from the baseline.</p></li>
+<li><p>Omit the discount inside the TD residual or outside the correction.</p></li>
+<li><p>Bootstrap from a nonzero value after termination.</p></li>
+<li><p>Include padded tool calls with non-unit importance ratios.</p></li>
+<li><p>Fit the value model on evaluation rewards without cross-fitting.</p></li>
+<li><p>Backpropagate through an evaluation estimate accidentally.</p></li>
+<li><p>Treat a scalar preference reward model as a transition-aware <span class="math inline">\(Q\)</span>-function.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can sequential DR be less variable than PDIS?</p></li>
+<li><p>Why does a correct <span class="math inline">\(Q\)</span>-model tolerate incorrect ratios?</p></li>
+<li><p>Why can correct ratios repair a biased model?</p></li>
+<li><p>How should padding and terminal transitions be handled?</p></li>
+<li><p>Does sequential DR remove the need for on-policy confirmation?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Trajectory generation:</p>
+<pre class="code python"><code class="language-python">actions = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_repetition,
+        horizon,
+    )
+    &lt; behavior_action_one_probability
+).to(torch.long)
+
+reward_probabilities = true_reward_means[
+    actions
+]
+
+rewards = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_repetition,
+        horizon,
+    )
+    &lt; reward_probabilities
+).to(torch.float64)</code></pre>
+<p>Importance ratios:</p>
+<pre class="code python"><code class="language-python">def cumulative_ratios(
+    assumed_action_one_probability,
+):
+    assumed_behavior_policy = torch.tensor([
+        1.0 - assumed_action_one_probability,
+        assumed_action_one_probability,
+    ])
+
+    step_ratios = (
+        target_policy[actions]
+        / assumed_behavior_policy[actions]
+    )
+
+    return step_ratios.cumprod(dim=-1)
+
+
+correct_ratios = cumulative_ratios(
+    behavior_action_one_probability
+)
+
+wrong_ratios = cumulative_ratios(
+    wrong_behavior_action_one_probability
+)</code></pre>
+<p>Value models:</p>
+<pre class="code python"><code class="language-python">def build_value_model(immediate_reward_model):
+    q_values = torch.zeros(
+        horizon,
+        2,
+    )
+
+    v_values = torch.zeros(
+        horizon + 1
+    )
+
+    for time in reversed(range(horizon)):
+        q_values[time] = (
+            immediate_reward_model
+            + gamma * v_values[time + 1]
+        )
+
+        v_values[time] = (
+            target_policy
+            * q_values[time]
+        ).sum()
+
+    return q_values, v_values
+
+
+exact_q, exact_v = build_value_model(
+    true_reward_means
+)
+
+bad_q, bad_v = build_value_model(
+    bad_reward_model
+)</code></pre>
+<p>PDIS and sequential DR:</p>
+<pre class="code python"><code class="language-python">pdis_estimates = (
+    correct_ratios
+    * discounts
+    * rewards
+).sum(dim=-1).mean(dim=1)
+
+
+def sequential_dr(
+    q_model,
+    v_model,
+    cumulative_weights,
+):
+    time_indices = torch.arange(
+        horizon
+    ).view(1, 1, horizon)
+
+    logged_q_values = q_model[
+        time_indices,
+        actions,
+    ]
+
+    next_state_values = v_model[
+        1:
+    ].view(1, 1, horizon)
+
+    td_residuals = (
+        rewards
+        + gamma * next_state_values
+        - logged_q_values
+    )
+
+    corrections = (
+        cumulative_weights
+        * discounts
+        * td_residuals
+    ).sum(dim=-1)
+
+    return (
+        v_model[0]
+        + corrections.mean(dim=1)
+    )
+
+
+sdr_exact_model_correct_ratios = sequential_dr(
+    exact_q,
+    exact_v,
+    correct_ratios,
+)
+
+sdr_bad_model_correct_ratios = sequential_dr(
+    bad_q,
+    bad_v,
+    correct_ratios,
+)
+
+sdr_exact_model_wrong_ratios = sequential_dr(
+    exact_q,
+    exact_v,
+    wrong_ratios,
+)
+
+sdr_bad_model_wrong_ratios = sequential_dr(
+    bad_q,
+    bad_v,
+    wrong_ratios,
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">target_step_reward = (
+    target_policy
+    * true_reward_means
+).sum()
+
+exact_target_value = (
+    target_step_reward
+    * discounts.sum()
+)
+
+means = all_estimates.mean(dim=0)
+
+biases = means - exact_target_value
+
+standard_deviations = all_estimates.std(
+    dim=0,
+    correction=1,
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)</code></pre>
+<p>The exact value is:</p>
+<p><span class="math display">\[V^\pi
+=
+\underbrace{0.65}_{\text{mean reward}}
+\underbrace{
+(1+0.9+\cdots+0.9^5)
+}_{4.68559}
+\approx3.046\]</span></p>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Estimator</strong></th>
+<th style="text-align: left;"><strong>Mean</strong></th>
+<th style="text-align: left;"><strong>Bias</strong></th>
+<th style="text-align: left;"><strong>SD</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Estimator</strong></td>
+<td style="text-align: left;"><strong>Mean</strong></td>
+<td style="text-align: left;"><strong>Bias</strong></td>
+<td style="text-align: left;"><strong>SD</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">PDIS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 3.046</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.95</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">SDR, exact model/correct ratios</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 3.046</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.30</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">SDR, bad model/correct ratios</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 3.046</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.50</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">SDR, exact model/wrong ratios</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 3.046</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;">high and seed-sensitive</td>
+</tr>
+<tr>
+<td style="text-align: left;">SDR, both wrong</td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 4.03</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> +0.98</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 1.5</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The bad model alone predicts approximately <span style="background-color: codeinlinebg"><code> 2.109</code></span>. Correct ratios repair that large error. With an exact model, only unpredictable reward noise remains in the corrections, explaining the lower variance.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>PDIS transports complete rewards; sequential DR transports only residual surprises left after model prediction.</p></li>
+<li><p>Its TD residual has conditional mean zero, so action-dependent weighting cannot create a systematic correction.</p></li>
+<li><p>Correct ratios transform residuals to the target trajectory distribution, where the corrections telescope from the incorrect baseline to the true return.</p></li>
+<li><p>Give padded steps ratio <span style="background-color: codeinlinebg"><code> 1</code></span> and correction mask <span style="background-color: codeinlinebg"><code> 0</code></span>; set the next-state value to zero after genuine termination.</p></li>
+<li><p>No. Poor support, long horizons, learned-model misspecification and high-stakes promotion decisions still favor fresh target-policy rollouts.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Reward <span class="math inline">\(R_t\)</span> depends only on decisions through time <span class="math inline">\(t\)</span>; future action ratios add variance without correcting its distribution.</p></li>
+<li><p>Either the outcome model is correct or the behavior propensity model is correct, assuming adequate support and valid estimation procedures.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> use the model to predict the route, then importance-weight only its observed mistakes. Sequential DR can dramatically reduce variance, but “doubly robust” still means one component may fail—not both.</p>

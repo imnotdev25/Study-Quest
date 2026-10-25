@@ -1,0 +1,18 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Beyond chat, labs build data for each skill they want: <strong>math</strong> and <strong>code</strong> with verifiers, <strong>tool use</strong> and <strong>agents</strong> with executable environments, <strong>long context</strong> with retrieval tasks, <strong>multilingual</strong> by translation. As of October 2026 the frontier is less “more SFT data” and more “more <em>environments</em> that can check an answer.”</p>
+</div>
+<ul>
+<li><p><strong>Math:</strong> GSM8K and MATH for evaluation; DeepMath-103K, OpenThoughts and NuminaMath for training; persona-generated problems to cover more domains.</p></li>
+<li><p><strong>Code:</strong> unit-tested problems (APPS, CodeContests, LiveCodeBench for evaluation); verifiers run the tests in a sandbox. Modal’s sandboxes are one way to run untrusted generated code safely.</p></li>
+<li><p><strong>Tool use and agents:</strong> SFT on tool-call transcripts (TRL supports a <code>tools</code> column), then RL in environments: TRL’s <code>environment_factory</code> and the OpenEnv project; software-engineering gyms; search agents.</p></li>
+<li><p><strong>Personas at scale:</strong> NVIDIA keeps releasing region-specific persona sets (<code>nvidia/Nemotron-Personas-*</code>, 1M rows each; the UK, Germany and Vietnam sets were updated this month).</p></li>
+</ul>
+<p><strong>What I found trending this week</strong> (Hugging Face trending datasets and arXiv cs.CL new submissions, read October 2026): reasoning-trace distillation sets from frontier models, small RL environment releases (e.g. <code>FineEnvs/openai-math</code>), open RL data from model releases (<code>XiaomiMiMo/MiMo-V2.6-RL-oss</code>), and papers on instruction-following training data with less reward hacking (LIFT, arXiv 2610.28819) and machine-translated parallel pre-training data (arXiv 2610.28838). TRL v1.16’s experimental trainers point the same way: asynchronous GRPO, on-policy and self-distillation (<code>SDFT</code>, <code>SDPO</code>, <code>IWOPD</code>).</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Synthetic data quality comes from the filter, not the generator: verify, judge, deduplicate, decontaminate.</p></li>
+<li><p>Keep real data in the mix; accumulate, don’t replace.</p></li>
+<li><p>For new capabilities, the scarce resource is now checkable tasks and environments.</p></li>
+</ul>
+</div>

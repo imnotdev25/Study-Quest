@@ -1,0 +1,319 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: judging a new waiter from old receipts</div>
+<p>You want to know how a new waiter who recommends desserts would do. The old receipts are from a waiter who rarely did. Receipts from the times the old waiter <em>did</em> recommend dessert can be reweighted to estimate the new one, as long as there are some. A new tool router can be evaluated from old routing logs the same way.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why is a pointwise risk bound invalid after searching many thresholds?</p></li>
+<li><p>How does a Hoeffding confidence radius scale with sample count?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="logged-rewards-describe-the-logging-policy">2. Logged rewards describe the logging policy</h3>
+<p>Suppose the deployed behavior policy <span class="math inline">\(\mu\)</span> generated tool-use logs, but we want to evaluate a new target policy <span class="math inline">\(\pi\)</span> without deploying it.</p>
+<p>Simply averaging logged rewards estimates:</p>
+<p><span class="math display">\[J(\mu)=\mathbb E_{\mu}[R]\]</span></p>
+<p>not <span class="math inline">\(J(\pi)\)</span>. Importance sampling corrects the action-distribution mismatch:</p>
+<p><span class="math display">\[\rho_i
+=
+\frac{\pi(a_i\mid s_i)}
+{\mu(a_i\mid s_i)}\]</span></p>
+<p><span class="math display">\[\hat J_{\text{IS}}(\pi)
+=
+\frac1N\sum_{i=1}^{N}\rho_i r_i\]</span></p>
+<p>A decision common under <span class="math inline">\(\pi\)</span> but rare under <span class="math inline">\(\mu\)</span> receives a large weight.</p>
+<p>Self-normalized importance sampling uses:</p>
+<p><span class="math display">\[\hat J_{\text{SNIS}}
+=
+\frac{\sum_i\rho_i r_i}
+{\sum_i\rho_i}\]</span></p>
+<p>SNIS is biased at finite <span class="math inline">\(N\)</span>, but often has lower variance. Weight clipping also reduces variance while introducing bias:</p>
+<p><span class="math display">\[\bar\rho_i=\min(\rho_i,c)\]</span></p>
+<p>Effective sample size diagnoses weight concentration:</p>
+<p><span class="math display">\[N_{\text{eff}}
+=
+\frac{(\sum_i\rho_i)^2}
+{\sum_i\rho_i^2}\]</span></p>
+<p>The essential support condition is:</p>
+<p><span class="math display">\[\pi(a\mid s)&gt;0
+\implies
+\mu(a\mid s)&gt;0\]</span></p>
+<p>Old logs cannot evaluate actions the behavior policy never attempted.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>contexts, actions, rewards: <span style="background-color: codeinlinebg"><code> [N]</code></span>;</p></li>
+<li><p>behavior and target action probabilities: <span style="background-color: codeinlinebg"><code> [N]</code></span>;</p></li>
+<li><p>importance weights: <span style="background-color: codeinlinebg"><code> [N]</code></span>;</p></li>
+<li><p>reward and policy tables: <span style="background-color: codeinlinebg"><code> [S, A]</code></span>.</p></li>
+</ul>
+<p>For trajectories, ratios multiply over time. Compute them in log-space, but expect variance to grow rapidly with horizon.</p>
+<p>DPO learns from fixed preference comparisons. Its objective is not an off-policy estimator of environmental reward, tool success or deployment utility.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the IPS estimator for routers</div>
+<p>Logs <span class="math inline">\((x_i,a_i,r_i,p_i)\)</span> with <span class="math inline">\(p_i=b(a_i|x_i)\)</span>, the exact probability the deployed router assigned. <span class="math inline">\(\hat V_{\text{IPS}}(\pi)=\frac1n\sum_i\frac{\pi(a_i|x_i)}{p_i}r_i\)</span>. <strong>Requirements:</strong> exact propensities (not re-estimated after the fact), support (<span class="math inline">\(b&gt;0\)</span> wherever <span class="math inline">\(\pi&gt;0\)</span>), and diagnostics (ESS, max weight, the share of the estimate coming from the top 1% of weights). <strong>A deterministic logger</strong> (<span class="math inline">\(p\in\{0,1\}\)</span>) supports only policies identical to it, so log stochastic routing decisions if you want to evaluate anything else.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Logged rewards evaluate the policy that produced them.</p></li>
+<li><p>Counterfactual evaluation needs propensities, support and diagnostics.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: evaluate an opposite router</div>
+<p>The logger picks tool A 80% and B 20%. A succeeds 0.5 of the time, B 0.9. The new router always picks B. For logged B rows, weight <span class="math inline">\(=1/0.2=5\)</span>, and <span class="math inline">\(\mathbb E[\text{weight}\cdot r]\)</span> over all rows <span class="math inline">\(=0.2\times5\times0.9=0.9\)</span>. The true value of “always B” is 0.9. (checks out) But only 20% of the rows inform it, so ESS <span class="math inline">\(\approx0.2n\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Estimating <span class="math inline">\(p_i\)</span> with a model trained later.</p></li>
+<li><p>Dropping rows with <span class="math inline">\(\pi(a_i|x_i)=0\)</span> from the denominator.</p></li>
+<li><p>Evaluating a router whose actions the logger never took.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-evaluate-an-opposite-router">3. PyTorch exercise — evaluate an opposite router</h3>
+<p>Action <span style="background-color: codeinlinebg"><code> 0</code></span> answers directly; action <span style="background-color: codeinlinebg"><code> 1</code></span> uses a tool.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_samples = 20_000
+
+# Two equally common request contexts.
+contexts = torch.randint(
+    low=0,
+    high=2,
+    size=(num_samples,),
+)
+
+# Logging policy:
+# context 0 uses the tool 20% of the time;
+# context 1 uses it 80% of the time.
+behavior_tool_probability = torch.where(
+    contexts == 0,
+    torch.tensor(0.20),
+    torch.tensor(0.80),
+)
+
+# Target policy reverses those probabilities.
+target_tool_probability = torch.where(
+    contexts == 0,
+    torch.tensor(0.80),
+    torch.tensor(0.20),
+)
+
+# Sample logged actions from the behavior policy.
+actions = (
+    torch.rand(num_samples)
+    &lt; behavior_tool_probability
+).long()
+
+# Mean reward for [context, action].
+reward_means = torch.tensor([
+    [0.40, 0.90],
+    [0.70, 0.50],
+])
+
+reward_probabilities = reward_means[
+    contexts,
+    actions,
+]
+
+rewards = (
+    torch.rand(num_samples)
+    &lt; reward_probabilities
+).to(torch.float64)
+
+# TODO 1: Probability assigned to each logged action,
+# not merely probability of action 1.
+behavior_action_probabilities = ...
+target_action_probabilities = ...
+
+assert bool(
+    (
+        behavior_action_probabilities &gt; 0
+    ).all()
+)
+
+# TODO 2: Importance ratios in log-space.
+log_weights = ...
+weights = ...
+
+# TODO 3: Naive, IS and self-normalized estimates.
+naive_value = ...
+is_value = ...
+snis_value = ...
+
+# TODO 4: Clipping and effective sample size.
+clipping_threshold = 2.0
+clipped_weights = ...
+
+clipped_is_value = ...
+clipped_snis_value = ...
+
+effective_sample_size = ...
+effective_sample_fraction = ...
+
+# TODO 5: Exact target and behavior values.
+context_distribution = torch.tensor([
+    0.5, 0.5
+])
+
+behavior_policy = torch.tensor([
+    [0.80, 0.20],
+    [0.20, 0.80],
+])
+
+target_policy = torch.tensor([
+    [0.20, 0.80],
+    [0.80, 0.20],
+])
+
+exact_behavior_value = ...
+exact_target_value = ...
+
+print(&quot;Exact behavior value:&quot;, exact_behavior_value.item())
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+print(&quot;Naive logged mean:&quot;, naive_value.item())
+print(&quot;IS estimate:&quot;, is_value.item())
+print(&quot;SNIS estimate:&quot;, snis_value.item())
+print(&quot;Clipped IS:&quot;, clipped_is_value.item())
+print(&quot;Clipped SNIS:&quot;, clipped_snis_value.item())
+print(&quot;Maximum weight:&quot;, weights.max().item())
+print(
+    &quot;Effective sample fraction:&quot;,
+    effective_sample_fraction.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the naive logged mean be closer to <span style="background-color: codeinlinebg"><code> 0.52</code></span> or <span style="background-color: codeinlinebg"><code> 0.73</code></span>?</p></li>
+<li><p>What is the largest importance ratio?</p></li>
+<li><p>Will effective sample size be near 100% or roughly 31%?</p></li>
+<li><p>Why can clipping improve stability while worsening accuracy?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>For action <span style="background-color: codeinlinebg"><code> 0</code></span>, its probability is <span style="background-color: codeinlinebg"><code> 1 - tool_probability</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where(actions == 1, p, 1 - p)</code></span>.</p></li>
+<li><p>Compute <span style="background-color: codeinlinebg"><code> log(target_probability) - log(behavior_probability)</code></span>.</p></li>
+<li><p>IS averages weighted rewards; SNIS divides by total weight.</p></li>
+<li><p>ESS is squared weight sum divided by squared-weight sum.</p></li>
+<li><p>Sum <span style="background-color: codeinlinebg"><code> context_distribution[:, None] * policy * reward_means</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> behavior_tool_probability</code></span> for every row, including logged action <span style="background-color: codeinlinebg"><code> 0</code></span>. The importance ratios become incorrect.</p></li>
+<li><p>Set a behavior probability to zero where the target probability is positive. No amount of logged data can recover that action’s reward.</p></li>
+<li><p>Recompute stored behavior probabilities with updated model weights. The denominator must describe the policy that collected the data.</p></li>
+<li><p>Clip at <span style="background-color: codeinlinebg"><code> 1.0</code></span>. Variance falls, but the estimate increasingly resembles a different target policy.</p></li>
+<li><p>For a multi-step trace, multiply probabilities directly. Underflow appears quickly; sum detached log-ratios before exponentiating.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is the unweighted logged reward generally biased for the target policy?</p></li>
+<li><p>What does low effective sample size reveal?</p></li>
+<li><p>Why is self-normalized IS biased?</p></li>
+<li><p>What must be stored with each tool decision for trustworthy OPE?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Selected-action probabilities:</p>
+<pre class="code python"><code class="language-python">behavior_action_probabilities = torch.where(
+    actions == 1,
+    behavior_tool_probability,
+    1.0 - behavior_tool_probability,
+)
+
+target_action_probabilities = torch.where(
+    actions == 1,
+    target_tool_probability,
+    1.0 - target_tool_probability,
+)</code></pre>
+<p>Importance weights:</p>
+<pre class="code python"><code class="language-python">log_weights = (
+    target_action_probabilities.log()
+    - behavior_action_probabilities.log()
+)
+
+weights = log_weights.exp()</code></pre>
+<p>Value estimates:</p>
+<pre class="code python"><code class="language-python">naive_value = rewards.mean()
+
+is_value = (
+    weights * rewards
+).mean()
+
+snis_value = (
+    weights * rewards
+).sum() / weights.sum()</code></pre>
+<p>Clipping and ESS:</p>
+<pre class="code python"><code class="language-python">clipped_weights = weights.clamp(
+    max=clipping_threshold
+)
+
+clipped_is_value = (
+    clipped_weights * rewards
+).mean()
+
+clipped_snis_value = (
+    clipped_weights * rewards
+).sum() / clipped_weights.sum()
+
+effective_sample_size = (
+    weights.sum().square()
+    / weights.square().sum()
+)
+
+effective_sample_fraction = (
+    effective_sample_size
+    / num_samples
+)</code></pre>
+<p>Exact values:</p>
+<pre class="code python"><code class="language-python">exact_behavior_value = (
+    context_distribution[:, None]
+    * behavior_policy
+    * reward_means
+).sum()
+
+exact_target_value = (
+    context_distribution[:, None]
+    * target_policy
+    * reward_means
+).sum()</code></pre>
+<p>The behavior policy’s exact value is:</p>
+<p><span class="math display">\[J(\mu)
+=
+\frac12[
+0.8(0.4)+0.2(0.9)
++
+0.2(0.7)+0.8(0.5)
+]
+=
+0.52\]</span></p>
+<p>The target policy’s value is:</p>
+<p><span class="math display">\[J(\pi)
+=
+\frac12[
+0.2(0.4)+0.8(0.9)
++
+0.8(0.7)+0.2(0.5)
+]
+=
+0.73\]</span></p>
+<p>The possible importance weights are:</p>
+<p><span class="math display">\[\rho\in\{0.25,4.0\}\]</span></p>
+<p>Twenty percent of samples receive weight <span style="background-color: codeinlinebg"><code> 4</code></span>, producing an asymptotic ESS fraction of:</p>
+<p><span class="math display">\[\frac{1}{\mathbb E[\rho^2]}
+=
+\frac{1}{3.25}
+\approx0.308\]</span></p>
+<p>IS and SNIS should approach <span style="background-color: codeinlinebg"><code> 0.73</code></span>. Clipping the large weights at <span style="background-color: codeinlinebg"><code> 2</code></span> reduces variance but underweights the decisions preferred by the target policy.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Logged actions follow <span class="math inline">\(\mu\)</span>, while the desired expectation weights actions according to <span class="math inline">\(\pi\)</span>.</p></li>
+<li><p>A small subset of logged decisions dominates the estimate, implying high variance and weak target-policy coverage.</p></li>
+<li><p>Its random weight sum appears in the denominator; the ratio of two random estimators is not generally unbiased.</p></li>
+<li><p>Store the exact behavior log-probability, complete conditioning history, masks, policy version, action, reward and episode boundary.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Searching thresholds creates multiple chances to select a lucky empirical result; simultaneous correction accounts for all candidates.</p></li>
+<li><p>It shrinks proportionally to <span class="math inline">\(1/\sqrt{N}\)</span>; quadrupling sample size approximately halves the margin.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> logged rewards evaluate the policy that produced them. Counterfactual evaluation requires exact behavior propensities, adequate support and diagnostics for weight concentration.</p>

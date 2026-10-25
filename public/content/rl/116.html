@@ -1,0 +1,393 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>By what factor does an inclusive group-mean baseline shrink an unnormalized <span class="math inline">\(K\)</span>-sample policy gradient?</p></li>
+<li><p>Why does a leave-one-out baseline preserve the expected gradient?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="kl-is-an-expectation-not-a-per-token-guarantee">2. KL is an expectation, not a per-token guarantee</h3>
+<p>For current policy <span class="math inline">\(p\)</span> and reference policy <span class="math inline">\(q\)</span>:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(p\|q)
+=
+E_{a\sim p}
+\left[
+\log p(a)-\log q(a)
+\right]\]</span></p>
+<p>Define the sampled log-ratio:</p>
+<p><span class="math display">\[x(a)=\log p(a)-\log q(a)\]</span></p>
+<p>The expectation is nonnegative, but an individual <span class="math inline">\(x(a)\)</span> may be negative whenever the reference assigns that token more probability than the current policy.</p>
+<p>A common Monte Carlo estimator is:</p>
+<p><span class="math display">\[k_1=x\]</span></p>
+<p>It is unbiased under samples from <span class="math inline">\(p\)</span>, but noisy and signed.</p>
+<p>A second unbiased estimator is:</p>
+<p><span class="math display">\[k_3
+=
+e^{-x}-1+x\]</span></p>
+<p>Because <span class="math inline">\(e^{-x}=q(a)/p(a)\)</span>:</p>
+<p><span class="math display">\[E_p[e^{-x}-1]=0\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[E_p[k_3]=D_{\mathrm{KL}}(p\|q)\]</span></p>
+<p>Also:</p>
+<p><span class="math display">\[e^{-x}-1+x\ge0\]</span></p>
+<p>for every sample. Compute it stably as:</p>
+<pre class="code python"><code class="language-python">torch.expm1(-log_ratio) + log_ratio</code></pre>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>vocabulary logits and log-probabilities: <span style="background-color: codeinlinebg"><code> [V]</code></span></p></li>
+<li><p>sampled token IDs and KL estimates: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>LLM token log-ratios and response masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+</ul>
+<p>In RLHF, a sampled KL penalty is often incorporated into reward and detached before calculating returns or advantages. Accidentally backpropagating through that reward creates an additional direct gradient path.</p>
+<p>DPO uses reference-policy log-ratios inside a fixed preference loss. Its <span class="math inline">\(\beta\)</span> controls preference-margin strength relative to the reference, but DPO does not run an online sampled-KL controller.</p>
+<h3 class="unnumbered" id="pytorch-exercise-40-of-valid-kl-samples-are-negative">3. PyTorch exercise — 40% of valid KL samples are negative</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_samples = 100_000
+
+current_logits = torch.log(torch.tensor([
+    0.60, 0.25, 0.10, 0.05
+]))
+
+reference_logits = torch.log(torch.tensor([
+    0.40, 0.30, 0.20, 0.10
+]))
+
+
+# TODO 1: Stable log-probabilities and exact KL.
+current_log_probabilities = ...
+reference_log_probabilities = ...
+
+current_probabilities = ...
+reference_probabilities = ...
+
+exact_forward_kl = ...
+
+exact_reverse_kl = ...
+
+
+# TODO 2: Sample actions from the current policy.
+current_samples = ...
+
+sampled_current_log_probabilities = ...
+
+sampled_reference_log_probabilities = ...
+
+log_ratios = ...
+
+
+# TODO 3: Compare k1 and nonnegative k3.
+k1_estimates = ...
+
+k3_estimates = ...
+
+k1_mean = ...
+k3_mean = ...
+
+k1_variance = ...
+k3_variance = ...
+
+k1_standard_error = ...
+k3_standard_error = ...
+
+negative_k1_fraction = ...
+negative_k3_fraction = ...
+
+
+# TODO 4: A tempting but biased &quot;fix&quot;.
+clamped_k1_estimates = ...
+
+clamped_k1_mean = ...
+
+
+# TODO 5: Sample from the wrong distribution.
+reference_samples = ...
+
+reference_sampled_log_ratios = ...
+
+wrong_reference_sample_mean = ...
+
+
+results = torch.stack([
+    torch.tensor([
+        k1_mean,
+        k1_variance,
+        k1_standard_error,
+        negative_k1_fraction,
+    ]),
+    torch.tensor([
+        k3_mean,
+        k3_variance,
+        k3_standard_error,
+        negative_k3_fraction,
+    ]),
+])
+
+torch.set_printoptions(
+    precision=6,
+    sci_mode=False,
+)
+
+print(&quot;Exact forward KL:&quot;, exact_forward_kl.item())
+print(&quot;Exact reverse KL:&quot;, exact_reverse_kl.item())
+
+print(
+    &quot;\nRows: k1, k3\n&quot;
+    &quot;Columns: mean, variance, SE, negative fraction&quot;
+)
+print(results)
+
+print(
+    &quot;\nMean after clamping negative k1 values:&quot;,
+    clamped_k1_mean.item(),
+)
+
+print(
+    &quot;Naive mean when sampling from reference:&quot;,
+    wrong_reference_sample_mean.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Must every <span style="background-color: codeinlinebg"><code> log_ratio</code></span> be positive?</p></li>
+<li><p>Approximately what fraction will be negative?</p></li>
+<li><p>Should <span style="background-color: codeinlinebg"><code> k1</code></span> and <span style="background-color: codeinlinebg"><code> k3</code></span> have the same mean?</p></li>
+<li><p>Which estimator should have lower variance here?</p></li>
+<li><p>Does clamping negative log-ratios preserve the KL estimate?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> F.log_softmax</code></span>.</p></li>
+<li><p>Exact forward KL is:</p></li>
+</ul>
+<p><span class="math display">\[\sum_a p(a)[\log p(a)-\log q(a)]\]</span></p>
+<ul>
+<li><p>Sample with <span style="background-color: codeinlinebg"><code> torch.multinomial(..., replacement=True)</code></span>.</p></li>
+<li><p>Gather sampled values using tensor indexing.</p></li>
+<li><p>Use population variance with <span style="background-color: codeinlinebg"><code> correction=0</code></span>.</p></li>
+<li><p>Standard error is <span style="background-color: codeinlinebg"><code> std / sqrt(N)</code></span>.</p></li>
+<li><p>Sampling from <span class="math inline">\(q\)</span> and averaging <span class="math inline">\(\log p-\log q\)</span> estimates:</p></li>
+</ul>
+<p><span class="math display">\[-D_{\mathrm{KL}}(q\|p)\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Clamp every negative token log-ratio to zero.</p></li>
+<li><p>Reverse current and reference log-probabilities.</p></li>
+<li><p>Sample from the rollout policy but describe the mean as exact current-policy KL after many PPO epochs.</p></li>
+<li><p>Include prompt or padding tokens in the KL average.</p></li>
+<li><p>Sum token KL while comparing responses with very different lengths.</p></li>
+<li><p>Allow gradients into the frozen reference model.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> exp(x) - 1 - x</code></span> with the wrong ratio orientation.</p></li>
+<li><p>Update adaptive KL coefficients from one noisy minibatch rather than an aggregated statistic.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can a valid token-level KL contribution be negative?</p></li>
+<li><p>Under which sampling distribution is <span class="math inline">\(k_1=\log p-\log q\)</span> unbiased for forward KL?</p></li>
+<li><p>Why is <span style="background-color: codeinlinebg"><code> clamp_min(0)</code></span> not a valid variance-reduction method?</p></li>
+<li><p>What happens if <span class="math inline">\(q(a)=0\)</span> for an action with <span class="math inline">\(p(a)&gt;0\)</span>?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Probabilities and exact KL:</p>
+<pre class="code python"><code class="language-python">current_log_probabilities = (
+    F.log_softmax(
+        current_logits,
+        dim=0,
+    )
+)
+
+reference_log_probabilities = (
+    F.log_softmax(
+        reference_logits,
+        dim=0,
+    )
+)
+
+current_probabilities = (
+    current_log_probabilities.exp()
+)
+
+reference_probabilities = (
+    reference_log_probabilities.exp()
+)
+
+exact_forward_kl = (
+    current_probabilities
+    * (
+        current_log_probabilities
+        - reference_log_probabilities
+    )
+).sum()
+
+exact_reverse_kl = (
+    reference_probabilities
+    * (
+        reference_log_probabilities
+        - current_log_probabilities
+    )
+).sum()</code></pre>
+<p>Current-policy sampling:</p>
+<pre class="code python"><code class="language-python">current_samples = torch.multinomial(
+    current_probabilities,
+    num_samples=num_samples,
+    replacement=True,
+)
+
+sampled_current_log_probabilities = (
+    current_log_probabilities[
+        current_samples
+    ]
+)
+
+sampled_reference_log_probabilities = (
+    reference_log_probabilities[
+        current_samples
+    ]
+)
+
+log_ratios = (
+    sampled_current_log_probabilities
+    - sampled_reference_log_probabilities
+)</code></pre>
+<p>Estimators:</p>
+<pre class="code python"><code class="language-python">k1_estimates = log_ratios
+
+k3_estimates = (
+    torch.expm1(-log_ratios)
+    + log_ratios
+)
+
+k1_mean = k1_estimates.mean()
+k3_mean = k3_estimates.mean()
+
+k1_variance = k1_estimates.var(
+    correction=0
+)
+
+k3_variance = k3_estimates.var(
+    correction=0
+)
+
+k1_standard_error = (
+    k1_variance.sqrt()
+    / math.sqrt(num_samples)
+)
+
+k3_standard_error = (
+    k3_variance.sqrt()
+    / math.sqrt(num_samples)
+)
+
+negative_k1_fraction = (
+    (k1_estimates &lt; 0.0)
+    .to(torch.float64)
+    .mean()
+)
+
+negative_k3_fraction = (
+    (k3_estimates &lt; 0.0)
+    .to(torch.float64)
+    .mean()
+)</code></pre>
+<p>Biased clamping:</p>
+<pre class="code python"><code class="language-python">clamped_k1_estimates = (
+    k1_estimates.clamp_min(0.0)
+)
+
+clamped_k1_mean = (
+    clamped_k1_estimates.mean()
+)</code></pre>
+<p>Wrong sampling distribution:</p>
+<pre class="code python"><code class="language-python">reference_samples = torch.multinomial(
+    reference_probabilities,
+    num_samples=num_samples,
+    replacement=True,
+)
+
+reference_sampled_log_ratios = (
+    current_log_probabilities[
+        reference_samples
+    ]
+    - reference_log_probabilities[
+        reference_samples
+    ]
+)
+
+wrong_reference_sample_mean = (
+    reference_sampled_log_ratios.mean()
+)</code></pre>
+<p>The token log-ratios are approximately:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Token</strong></th>
+<th style="text-align: left;"><strong><span class="math inline">\(p\)</span></strong></th>
+<th style="text-align: left;"><strong><span class="math inline">\(q\)</span></strong></th>
+<th style="text-align: left;"><strong><span class="math inline">\(\log(p/q)\)</span></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Token</strong></td>
+<td style="text-align: left;"><strong><span class="math inline">\(p\)</span></strong></td>
+<td style="text-align: left;"><strong><span class="math inline">\(q\)</span></strong></td>
+<td style="text-align: left;"><strong><span class="math inline">\(\log(p/q)\)</span></strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">0</td>
+<td style="text-align: left;">0.60</td>
+<td style="text-align: left;">0.40</td>
+<td style="text-align: left;"><span class="math inline">\(0.405\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">1</td>
+<td style="text-align: left;">0.25</td>
+<td style="text-align: left;">0.30</td>
+<td style="text-align: left;"><span class="math inline">\(-0.182\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">2</td>
+<td style="text-align: left;">0.10</td>
+<td style="text-align: left;">0.20</td>
+<td style="text-align: left;"><span class="math inline">\(-0.693\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">3</td>
+<td style="text-align: left;">0.05</td>
+<td style="text-align: left;">0.10</td>
+<td style="text-align: left;"><span class="math inline">\(-0.693\)</span></td>
+</tr>
+</tbody>
+</table>
+<p>Therefore, the probability of a negative <span class="math inline">\(k_1\)</span> sample is:</p>
+<p><span class="math display">\[0.25+0.10+0.05=0.40\]</span></p>
+<p>Yet the forward KL is positive:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(p\|q)
+\approx0.0937\]</span></p>
+<p>Both <span style="background-color: codeinlinebg"><code> k1</code></span> and <span style="background-color: codeinlinebg"><code> k3</code></span> converge to this value. Here, <span style="background-color: codeinlinebg"><code> k3</code></span> has much lower variance and no negative samples.</p>
+<p>Clamping instead converges near:</p>
+<p><span class="math display">\[0.60\log(1.5)\approx0.2433\]</span></p>
+<p>which substantially overestimates KL because it discards legitimate negative contributions.</p>
+<p>Sampling from the reference gives:</p>
+<p><span class="math display">\[E_q[\log p-\log q]
+=
+-D_{\mathrm{KL}}(q\|p)
+\approx-0.1004\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>KL nonnegativity applies after expectation. Tokens favored more by the reference have negative sampled log-ratios.</p></li>
+<li><p>Samples must come from <span class="math inline">\(p\)</span>, the first argument of <span class="math inline">\(D_{\mathrm{KL}}(p\|q)\)</span>.</p></li>
+<li><p>Negative terms are required for the expectation to equal KL; deleting them introduces upward bias.</p></li>
+<li><p>The forward KL is infinite. This is a support failure, not a numerical value that should be silently clipped.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The inclusive unnormalized estimator is multiplied by <span class="math inline">\(1-1/K\)</span>.</p></li>
+<li><p>Completion <span class="math inline">\(i\)</span>’s leave-one-out baseline depends only on other independently sampled completions, making it independent of <span class="math inline">\(a_i\)</span> conditional on the prompt.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> do not debug KL by forcing every token contribution positive. Verify ratio orientation, sampling distribution and masks; use a principled estimator such as <span class="math inline">\(k_3\)</span> when nonnegative lower-variance samples are useful.</p>

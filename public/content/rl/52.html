@@ -1,0 +1,277 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: capping each person vs capping the household</div>
+<p>A family budget caps <em>total</em> monthly spending. If instead you cap each person separately, the family’s spending mix changes: the big spender is cut hard, the small spender not at all. Gradient clipping is nonlinear in the same way. Clipping each microbatch’s gradient changes the <em>direction</em> of the final update, not just its size.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/1e165207a9c3.svg" alt="diagram" loading="lazy"></figure>
+<p><em><span class="math inline">\(g_1=(3,0)\)</span>, <span class="math inline">\(g_2=(0,1)\)</span>, max norm 1. Clipping early rotates the update.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can averaging independently normalized microbatch losses optimize a different objective?</p></li>
+<li><p>Why can the actor and critic have a reasonable total gradient norm while individually producing large gradients?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="gradient-clipping-is-nonlinear">2. Gradient clipping is nonlinear</h3>
+<p>Global-norm clipping limits the size of an update:</p>
+<p><span class="math display">\[\tilde g
+=
+g\cdot
+\min\left(
+1,
+\frac{C}{\lVert g\rVert_2+\epsilon}
+\right)\]</span></p>
+<p>where <span class="math inline">\(C\)</span> is <span style="background-color: codeinlinebg"><code> max_grad_norm</code></span>.</p>
+<p>If the gradient norm exceeds <span class="math inline">\(C\)</span>, clipping shortens the vector without changing its direction.</p>
+<p>With gradient accumulation, the desired batch gradient is:</p>
+<p><span class="math display">\[g=\sum_k g_k\]</span></p>
+<p>The correct order is:</p>
+<ol>
+<li><p>accumulate every microbatch gradient;</p></li>
+<li><p>unscale mixed-precision gradients;</p></li>
+<li><p>compute the global norm;</p></li>
+<li><p>clip once;</p></li>
+<li><p>call the optimizer.</p></li>
+</ol>
+<p>Clipping each microbatch separately gives:</p>
+<p><span class="math display">\[\sum_k\operatorname{clip}(g_k)\]</span></p>
+<p>which generally differs from:</p>
+<p><span class="math display">\[\operatorname{clip}\left(\sum_k g_k\right)\]</span></p>
+<p>This happens because clipping is nonlinear. Large opposing gradients may legitimately cancel. Clipping them before cancellation changes their relative contribution and can rotate the final update.</p>
+<p>The same issue applies to actor, critic, entropy and KL terms. Clipping every term independently changes the intended loss coefficients.</p>
+<p>Practical limits:</p>
+<ul>
+<li><p>clipping prevents extreme updates but does not repair bad rewards or ratios;</p></li>
+<li><p>clipping on every step suggests instability, not successful training;</p></li>
+<li><p>with AMP, clip only after <span style="background-color: codeinlinebg"><code> scaler.unscale_(optimizer)</code></span>;</p></li>
+<li><p>log the pre-clipping norm, post-clipping norm and clipping frequency.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>each microbatch gradient: <span style="background-color: codeinlinebg"><code> [num_parameters]</code></span></p></li>
+<li><p>accumulated gradient: <span style="background-color: codeinlinebg"><code> [num_parameters]</code></span></p></li>
+<li><p>global norm and clipping scale: scalar</p></li>
+</ul>
+<p>DPO has no critic, but its preference gradients can also spike; the same accumulation and clipping order applies.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: clip once, at the optimizer boundary</div>
+<p><span class="math inline">\(\operatorname{clip}(g)=g\cdot\min(1,\ c/\|g\|)\)</span>. It is not linear: <span class="math inline">\(\operatorname{clip}(g_1)+\operatorname{clip}(g_2)\ne\operatorname{clip}(g_1+g_2)\)</span> in general. <strong>Correct order:</strong> accumulate all microbatches, then under mixed precision <em>unscale</em> (<code>scaler.unscale_(opt)</code>), then log the pre-clip norm, clip once, and step. Clipping <em>scaled</em> AMP gradients compares the norm against <span class="math inline">\(c\)</span> times the loss scale, which is almost never what you meant.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Clipping changes direction when applied piecewise.</p></li>
+<li><p>Accumulate, unscale, measure, clip once, step.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the numbers behind the picture</div>
+<p>Per-microbatch: <span class="math inline">\(\operatorname{clip}(3,0)=(1,0)\)</span>, <span class="math inline">\(\operatorname{clip}(0,1)=(0,1)\)</span>, sum <span class="math inline">\(=(1,1)\)</span>, which points at 45<span class="math inline">\(^\circ\)</span>. Correct: sum <span class="math inline">\((3,1)\)</span>, norm <span class="math inline">\(3.16\)</span>, clipped to <span class="math inline">\((0.949,0.316)\)</span>, which points at 18.4<span class="math inline">\(^\circ\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Clipping inside the accumulation loop.</p></li>
+<li><p>Clipping before <code>unscale_</code> with AMP.</p></li>
+<li><p>Logging only the post-clip norm (it’s always <span class="math inline">\(\le c\)</span>, so it tells you nothing).</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-clipping-early-rotates-the-update">3. PyTorch exercise — clipping early rotates the update</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.set_default_dtype(torch.float64)
+
+max_grad_norm = 5.0
+epsilon = 1e-12
+
+parameters = torch.nn.Parameter(
+    torch.zeros(2)
+)
+
+# Two microbatches produce large, partly opposing gradients.
+microbatch_directions = [
+    torch.tensor([100.0, 0.0]),
+    torch.tensor([-90.0, 10.0]),
+]
+
+microbatch_losses = [
+    (
+        parameters * direction
+    ).sum()
+    for direction in microbatch_directions
+]
+
+# TODO 1: Obtain each microbatch gradient separately.
+microbatch_gradients = [
+    ...
+    for loss in microbatch_losses
+]
+
+# TODO 2: Form the correct accumulated gradient.
+accumulated_gradient = ...
+
+def clip_vector(gradient, maximum_norm):
+    # TODO 3: Global norm, clipping scale and clipped vector.
+    gradient_norm = ...
+    clipping_scale = ...
+    clipped_gradient = ...
+
+    return (
+        clipped_gradient,
+        gradient_norm,
+        clipping_scale,
+    )
+
+# TODO 4: Accumulate first, then clip once.
+(
+    correctly_clipped_gradient,
+    accumulated_norm,
+    global_scale,
+) = ...
+
+# TODO 5: Incorrectly clip each microbatch, then add.
+individually_clipped = [
+    clip_vector(
+        gradient,
+        max_grad_norm,
+    )[0]
+    for gradient in microbatch_gradients
+]
+
+early_clipped_gradient = ...
+
+direction_cosine = F.cosine_similarity(
+    correctly_clipped_gradient,
+    early_clipped_gradient,
+    dim=0,
+)
+
+print(&quot;Microbatch gradients:&quot;)
+for gradient in microbatch_gradients:
+    print(gradient)
+
+print(&quot;Accumulated gradient:&quot;,
+      accumulated_gradient)
+
+print(&quot;Accumulated norm:&quot;,
+      accumulated_norm.item())
+
+print(&quot;Global clipping scale:&quot;,
+      global_scale.item())
+
+print(&quot;Correctly clipped gradient:&quot;,
+      correctly_clipped_gradient)
+
+print(&quot;Clip-each-microbatch gradient:&quot;,
+      early_clipped_gradient)
+
+print(&quot;Direction cosine:&quot;,
+      direction_cosine.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the accumulated gradient before clipping?</p></li>
+<li><p>Does correct global clipping preserve its direction?</p></li>
+<li><p>Will clipping both microbatches separately produce the same direction?</p></li>
+<li><p>Can the incorrectly accumulated gradient have norm below <span style="background-color: codeinlinebg"><code> 5</code></span> and still be wrong?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.autograd.grad(loss, parameters, retain_graph=True)[0]</code></span>.</p></li>
+<li><p>Sum gradients with <span style="background-color: codeinlinebg"><code> torch.stack(...).sum(dim=0)</code></span>.</p></li>
+<li><p>Compute the norm with <span style="background-color: codeinlinebg"><code> .norm(p=2)</code></span>.</p></li>
+<li><p>Clamp the scale to at most <span style="background-color: codeinlinebg"><code> 1</code></span>.</p></li>
+<li><p>Add the individually clipped vectors.</p></li>
+<li><p>Correct clipping rescales <span style="background-color: codeinlinebg"><code> [10, 10]</code></span>; it does not alter the <span style="background-color: codeinlinebg"><code> 1:1</code></span> ratio.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Use only:</p>
+<pre class="code python"><code class="language-python">optimizer.zero_grad()
+loss.backward()</code></pre>
+<p>inside every microbatch iteration. Zeroing between microbatches discards earlier gradients, so the optimizer sees only the final chunk.</p>
+<p>Next, clip the actor and critic gradients separately before adding them. This can alter the effective value-loss coefficient and hide actor–critic conflict.</p>
+<p>With AMP, clip scaled gradients before calling <span style="background-color: codeinlinebg"><code> unscale_</code></span>. The artificial scaling factor makes nearly every update look enormous, causing excessive clipping.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does global-norm clipping preserve direction?</p></li>
+<li><p>Why can clipping individual microbatches rotate the final update?</p></li>
+<li><p>What does a clipping frequency near 100% suggest?</p></li>
+<li><p>Why should the pre-clipping norm be logged?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Microbatch gradients:</p>
+<pre class="code python"><code class="language-python">microbatch_gradients = [
+    torch.autograd.grad(
+        loss,
+        parameters,
+        retain_graph=True,
+    )[0]
+    for loss in microbatch_losses
+]</code></pre>
+<p>Accumulated gradient:</p>
+<pre class="code python"><code class="language-python">accumulated_gradient = torch.stack(
+    microbatch_gradients
+).sum(dim=0)</code></pre>
+<p>Clipping function:</p>
+<pre class="code python"><code class="language-python">def clip_vector(gradient, maximum_norm):
+    gradient_norm = gradient.norm(p=2)
+
+    clipping_scale = torch.clamp(
+        maximum_norm
+        / (
+            gradient_norm + epsilon
+        ),
+        max=1.0,
+    )
+
+    clipped_gradient = (
+        gradient * clipping_scale
+    )
+
+    return (
+        clipped_gradient,
+        gradient_norm,
+        clipping_scale,
+    )</code></pre>
+<p>Correct clipping:</p>
+<pre class="code python"><code class="language-python">(
+    correctly_clipped_gradient,
+    accumulated_norm,
+    global_scale,
+) = clip_vector(
+    accumulated_gradient,
+    max_grad_norm,
+)</code></pre>
+<p>Incorrect early clipping:</p>
+<pre class="code python"><code class="language-python">early_clipped_gradient = torch.stack(
+    individually_clipped
+).sum(dim=0)</code></pre>
+<p>The unmodified accumulated gradient is:</p>
+<p><span class="math display">\[[100,0]+[-90,10]=[10,10]\]</span></p>
+<p>Its norm is:</p>
+<p><span class="math display">\[\sqrt{10^2+10^2}\approx14.14\]</span></p>
+<p>Correct clipping rescales it to norm <span style="background-color: codeinlinebg"><code> 5</code></span>:</p>
+<p><span class="math display">\[[10,10]\frac5{14.14}
+\approx
+[3.54,3.54]\]</span></p>
+<p>The direction remains <span style="background-color: codeinlinebg"><code> [1,1]</code></span>.</p>
+<p>Clipping the microbatches separately gives approximately:</p>
+<p><span class="math display">\[\operatorname{clip}([100,0])
+=
+[5,0]\]</span></p>
+<p><span class="math display">\[\operatorname{clip}([-90,10])
+\approx
+[-4.97,0.55]\]</span></p>
+<p>Their sum is approximately:</p>
+<p><span class="math display">\[[0.03,0.55]\]</span></p>
+<p>This points almost vertically rather than diagonally. Its norm is below <span style="background-color: codeinlinebg"><code> 5</code></span>, but it is still the wrong gradient for the intended full-batch objective.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Every component is multiplied by the same positive scalar, so component ratios remain unchanged.</p></li>
+<li><p>Each microbatch receives a different scale before cancellation, changing its relative weight.</p></li>
+<li><p>The learning rate, reward scale, loss coefficients or data may be producing consistently excessive gradients. The threshold may also be unrealistically small.</p></li>
+<li><p>The post-clipping norm often equals the threshold and hides whether the original norm was <span style="background-color: codeinlinebg"><code> 6</code></span>, <span style="background-color: codeinlinebg"><code> 60</code></span> or <span style="background-color: codeinlinebg"><code> 60,000</code></span>.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A local mean gives every microbatch equal outer weight regardless of its valid-token count; correct accumulation uses the objective’s global denominator.</p></li>
+<li><p>Large opposing gradients can cancel. The total norm alone therefore hides component magnitude and conflict.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> gradient clipping belongs at the optimizer boundary. Accumulate the intended batch gradient, unscale it, inspect its norm and clip once.</p>

@@ -1,0 +1,261 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: Goodhart’s law and the cobra effect</div>
+<p>“When a measure becomes a target, it ceases to be a good measure.” A classic (likely apocryphal) story: a city paid a bounty per dead cobra, so people started <em>breeding</em> cobras. Social apps that optimize watch-time can drift into the same trap, from “content you enjoy” to “content you can’t stop watching.” An RL policy is the most relentless bounty-hunter of all.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/dab843c40dad.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Stylized overoptimization curve, shaped like Gao et al. (2022). Proxy keeps rising, true quality peaks and then falls.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why does removing GRPO’s critic not remove reward-quality problems?</p></li>
+<li><p>What is the difference between a learned reward model and a verifier?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-policy-optimizes-exactly-what-it-can-see">2. The policy optimizes exactly what it can see</h3>
+<p>Suppose the desired behaviour has unknown true utility:</p>
+<p><span class="math display">\[U(x,y)\]</span></p>
+<p>Because <span class="math inline">\(U\)</span> is difficult to measure, training uses a proxy reward:</p>
+<p><span class="math display">\[R(x,y)\approx U(x,y)\]</span></p>
+<p>The policy then maximizes:</p>
+<p><span class="math display">\[J(\theta)
+=
+\mathbb E_{y\sim\pi_\theta}[R(x,y)]\]</span></p>
+<p>This works only while higher proxy reward reliably means higher true utility.</p>
+<p>During optimization, the policy actively searches the response space. It may discover unusual responses where:</p>
+<p><span class="math display">\[R(x,y)\gg U(x,y)\]</span></p>
+<p>This is reward hacking or specification gaming: the policy obtains high measured reward without delivering the intended outcome.</p>
+<p>A familiar analogy is teaching to a test. The score initially measures understanding, but intense optimization may discover memorization, guessing patterns or leaked answers.</p>
+<h3 class="unnumbered" id="three-different-failures">Three different failures</h3>
+<p><strong>Optimization failure</strong></p>
+<p><span class="math display">\[R\text{ does not increase}\]</span></p>
+<p>The RL algorithm, gradients or implementation may be broken.</p>
+<p><strong>Generalization failure</strong></p>
+<p>Reward rises on training prompts but not on held-out prompts.</p>
+<p><strong>Specification failure</strong></p>
+<p><span class="math display">\[R\uparrow,\qquad U\downarrow\]</span></p>
+<p>Training successfully optimizes the wrong behaviour.</p>
+<p>Examples in LLM systems include:</p>
+<ul>
+<li><p>verbosity rewarded as a proxy for helpfulness;</p></li>
+<li><p>confident wording mistaken for correctness;</p></li>
+<li><p>reward models preferring familiar answer templates;</p></li>
+<li><p>code exploiting incomplete tests;</p></li>
+<li><p>tool agents claiming success without checking tool state;</p></li>
+<li><p>models learning evaluator-specific phrases.</p></li>
+</ul>
+<h3 class="unnumbered" id="goodharts-law-in-optimization-form">Goodhart’s law in optimization form</h3>
+<p>A correlation observed in ordinary data may fail at extremes selected by optimization:</p>
+<p><span class="math display">\[\operatorname{corr}(R,U)&gt;0
+\quad\not\Rightarrow\quad
+\arg\max_y R(y)=\arg\max_y U(y)\]</span></p>
+<p>The policy eventually visits outputs unlike those used to design or validate the reward.</p>
+<p>Useful defenses include:</p>
+<ul>
+<li><p>hidden and adversarial evaluations;</p></li>
+<li><p>independent metrics not used for training;</p></li>
+<li><p>human audits of highest-reward samples;</p></li>
+<li><p>reward-model ensembles or uncertainty estimates;</p></li>
+<li><p>KL and update limits;</p></li>
+<li><p>refreshing reward data using current-policy outputs;</p></li>
+<li><p>logging proxy reward and real task metrics separately.</p></li>
+</ul>
+<p>DPO can also overfit annotation biases or superficial chosen-response patterns. It does not require an online reward model, but its preference objective remains a proxy for human intent.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: why optimization finds the errors</div>
+<p>Write the proxy as <span class="math inline">\(\hat r(y)=r(y)+e(y)\)</span>, true reward plus error. Pick the best of <span class="math inline">\(N\)</span> samples by <span class="math inline">\(\hat r\)</span>: you select for high <span class="math inline">\(r\)</span> <em>and</em> high <span class="math inline">\(e\)</span>. If <span class="math inline">\(e\sim\mathcal N(0,\sigma^2)\)</span> independently, then <span class="math inline">\(\mathbb E[e\text{ of the winner}]\approx\sigma\sqrt{2\ln N}\)</span>, which grows with optimization pressure and never stops.</p>
+<p>RL is a much stronger optimizer than best-of-<span class="math inline">\(N\)</span>, so it finds rare outputs where <span class="math inline">\(e\)</span> is huge: odd formatting, length padding, sycophancy, checker exploits. <strong>Watch for:</strong> reward rising fast, entropy collapsing, KL growing, responses getting longer or weirder. Read the top-reward samples by hand.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Optimizing a proxy amplifies exactly the proxy’s errors.</p></li>
+<li><p>Rising reward is a reason to inspect outputs, not to celebrate.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: how much noise does best-of-16 select?</div>
+<p>If the proxy error <span class="math inline">\(e\sim\mathcal N(0,1)\)</span>, the selected sample’s expected error is <span class="math inline">\(\mathbb E[\max_{16}Z]\approx1.77\)</span> (by simulation; the <span class="math inline">\(\sqrt{2\ln N}\)</span> formula gives 2.36, an overestimate at small <span class="math inline">\(N\)</span>). So about 1.77 standard deviations of “score” come from judge error alone.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Early-stopping on training reward.</p></li>
+<li><p>Using the same reward model for training and evaluation.</p></li>
+<li><p>Reading only random samples, never the top-reward ones.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-optimize-a-misleading-proxy">3. PyTorch exercise — optimize a misleading proxy</h3>
+<p>Five complete responses have both a training reward and an unobserved true utility. Response <span style="background-color: codeinlinebg"><code> 4</code></span> exploits the proxy.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+batch_size = 256
+num_updates = 150
+
+# Reward visible to the RL algorithm.
+proxy_rewards = torch.tensor([
+    0.0, 1.0, 2.0, 3.0, 5.0
+])
+
+# Independent evaluation unavailable to training.
+true_utilities = torch.tensor([
+     0.0,  # useless
+     1.0,  # somewhat useful
+     2.0,  # genuinely best
+     1.0,  # verbose but mediocre
+    -2.0,  # evaluator exploit
+])
+
+policy_logits = torch.nn.Parameter(
+    torch.zeros(5)
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.05,
+)
+
+history = []
+
+for update in range(num_updates):
+    policy = Categorical(logits=policy_logits)
+
+    # TODO 1: Sample responses from the current policy.
+    sampled_responses = ...
+
+    with torch.no_grad():
+        # TODO 2: Obtain proxy rewards for training.
+        rewards = ...
+
+        # TODO 3: Center and normalize advantages.
+        advantages = ...
+        advantages = ...
+
+    # TODO 4: Construct the policy-gradient loss.
+    selected_log_probs = ...
+    policy_loss = ...
+
+    optimizer.zero_grad()
+    policy_loss.backward()
+    optimizer.step()
+
+    with torch.no_grad():
+        probabilities = policy_logits.softmax(dim=-1)
+
+        # TODO 5: Calculate exact expected proxy reward
+        # and independently measured true utility.
+        expected_proxy = ...
+        expected_true = ...
+
+        exploit_probability = probabilities[4]
+
+    history.append((
+        expected_proxy.item(),
+        expected_true.item(),
+    ))
+
+    if update in [0, 1, 9, 39, 149]:
+        print(
+            f&quot;update={update:3d}&quot;,
+            f&quot;proxy={expected_proxy.item(): .3f}&quot;,
+            f&quot;true={expected_true.item(): .3f}&quot;,
+            f&quot;P(exploit)={exploit_probability.item():.3f}&quot;,
+            f&quot;probs={probabilities.tolist()}&quot;,
+        )
+
+print(&quot;Initial recorded metrics:&quot;, history[0])
+print(&quot;Final recorded metrics:&quot;, history[-1])</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which response will eventually receive the highest probability?</p></li>
+<li><p>What happens to expected proxy reward?</p></li>
+<li><p>Must expected true utility move in the same direction?</p></li>
+<li><p>Does the falling true metric mean the policy gradient is implemented incorrectly?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample with <span style="background-color: codeinlinebg"><code> policy.sample((batch_size,))</code></span>.</p></li>
+<li><p>Index <span style="background-color: codeinlinebg"><code> proxy_rewards</code></span> using the sampled IDs.</p></li>
+<li><p>Normalize using population standard deviation and <span style="background-color: codeinlinebg"><code> 1e-8</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> policy.log_prob(sampled_responses)</code></span>.</p></li>
+<li><p>Detach advantages.</p></li>
+<li><p>Expected metrics are probability-weighted sums.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Train using the independent utility instead:</p>
+<pre class="code python"><code class="language-python">rewards = true_utilities[
+    sampled_responses
+]</code></pre>
+<p>The policy should now prefer response <span style="background-color: codeinlinebg"><code> 2</code></span>, showing that the optimizer follows whichever objective it receives.</p>
+<p>Next, imagine reporting only <span style="background-color: codeinlinebg"><code> expected_proxy</code></span>. The run would appear completely successful. This is why training dashboards need outcome metrics that are independent of the optimized reward.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does more optimization pressure often reveal more reward hacking?</p></li>
+<li><p>Why is evaluating random or SFT-model samples insufficient?</p></li>
+<li><p>Can KL regularization eliminate reward hacking?</p></li>
+<li><p>What evidence distinguishes an optimization bug from a specification bug?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Sampling and rewards:</p>
+<pre class="code python"><code class="language-python">sampled_responses = policy.sample(
+    (batch_size,)
+)
+
+rewards = proxy_rewards[
+    sampled_responses
+]</code></pre>
+<p>Advantages:</p>
+<pre class="code python"><code class="language-python">advantages = rewards - rewards.mean()
+
+advantages = advantages / (
+    rewards.std(unbiased=False) + 1e-8
+)</code></pre>
+<p>Policy-gradient loss:</p>
+<pre class="code python"><code class="language-python">selected_log_probs = policy.log_prob(
+    sampled_responses
+)
+
+policy_loss = -(
+    selected_log_probs
+    * advantages.detach()
+).mean()</code></pre>
+<p>Independent metrics:</p>
+<pre class="code python"><code class="language-python">expected_proxy = (
+    probabilities * proxy_rewards
+).sum()
+
+expected_true = (
+    probabilities * true_utilities
+).sum()</code></pre>
+<p>Initially, the policy is uniform. Its expected metrics are:</p>
+<p><span class="math display">\[\mathbb E[R]
+=
+\frac{0+1+2+3+5}{5}
+=
+2.2\]</span></p>
+<p><span class="math display">\[\mathbb E[U]
+=
+\frac{0+1+2+1-2}{5}
+=
+0.4\]</span></p>
+<p>Because response <span style="background-color: codeinlinebg"><code> 4</code></span> has the greatest proxy reward, training moves toward:</p>
+<p><span class="math display">\[\pi(4)\rightarrow1\]</span></p>
+<p>Consequently:</p>
+<p><span class="math display">\[\mathbb E[R]\rightarrow5\]</span></p>
+<p>but:</p>
+<p><span class="math display">\[\mathbb E[U]\rightarrow-2\]</span></p>
+<p>The optimizer is functioning correctly. The reward specification is failing.</p>
+<p>Response <span style="background-color: codeinlinebg"><code> 2</code></span> has the best true utility, but the policy has no access to that fact during training.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Stronger optimization searches farther from ordinary training examples and is more likely to find proxy–utility mismatches.</p></li>
+<li><p>Hacking may appear only after the optimized policy deliberately concentrates on extreme high-reward outputs.</p></li>
+<li><p>No. KL can limit how quickly or how far the policy moves, but it does not make an incorrect reward correct.</p></li>
+<li><p>If proxy reward rises as intended while independent task metrics fall, the optimization works but the specification is wrong.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>GRPO changes how advantages are estimated; it still optimizes the supplied reward and can exploit its errors.</p></li>
+<li><p>A reward model predicts quality from learned data, while a verifier executes a rule or test. Either can still be incomplete or exploitable.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> reward is a training signal, not proof of success. A Research Engineer should treat rapidly rising reward—especially with falling entropy or growing distribution shift—as a reason to inspect high-reward outputs, not automatically celebrate.</p>

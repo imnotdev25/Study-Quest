@@ -1,0 +1,367 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Knowledge distillation</strong> trains a student to match a teacher’s full output distribution, not just its top answer. The teacher’s small probabilities for wrong-but-similar classes carry information (“dark knowledge”). <strong>Temperature</strong> <span class="math inline">\(T&gt;1\)</span> softens both distributions so those small probabilities are visible: <span class="math inline">\(p_T=\operatorname{softmax}(z^{(t)}/T)\)</span>, <span class="math inline">\(q_T=\operatorname{softmax}(z^{(s)}/T)\)</span>.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Under label smoothing, what is the cross-entropy logit gradient?</p></li>
+<li><p>Why is <code>log_softmax</code> preferable to computing <code>log(softmax(logits))</code> separately?</p></li>
+</ol>
+<p>For teacher and student logits:</p>
+<p><span class="math display">\[Z^{(t)},Z^{(s)}\in\mathbb{R}^{B\times C}\]</span></p>
+<p>temperature-softened distributions are:</p>
+<p><span class="math display">\[p_T
+=
+\operatorname{softmax}
+\left(
+\frac{Z^{(t)}}{T}
+\right)\]</span></p>
+<p><span class="math display">\[q_T
+=
+\operatorname{softmax}
+\left(
+\frac{Z^{(s)}}{T}
+\right)\]</span></p>
+<p>A distillation objective minimizes:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(p_T\|q_T)
+=
+\sum_c p_{T,c}
+\left(
+\log p_{T,c}-\log q_{T,c}
+\right)\]</span></p>
+<p>Higher <span class="math inline">\(T\)</span> reveals relative probabilities among non-argmax classes—the teacher’s “dark knowledge.” But temperature also weakens gradients. Without compensation:</p>
+<p><span class="math display">\[\frac{\partial L_{\mathrm{KD}}}
+{\partial Z^{(s)}}
+=
+\frac{q_T-p_T}{BT}\]</span></p>
+<p>For large <span class="math inline">\(T\)</span>, the probability difference is itself approximately <span class="math inline">\(O(1/T)\)</span>, making the gradient roughly <span class="math inline">\(O(1/T^2)\)</span>.</p>
+<p>The conventional correction is:</p>
+<p><span class="math display">\[L_{\mathrm{KD}}
+=
+T^2D_{\mathrm{KL}}(p_T\|q_T)\]</span></p>
+<p>which keeps gradient scale more comparable across temperatures.</p>
+<p>A combined objective is commonly:</p>
+<p><span class="math display">\[L
+=
+\alpha L_{\mathrm{hard}}
++
+(1-\alpha)L_{\mathrm{KD}}\]</span></p>
+<p>Teacher probabilities are fixed targets and should normally be detached.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why the loss is multiplied by <span class="math inline">\(T^2\)</span></div>
+<p><strong>Step 1.</strong> Loss <span class="math inline">\(D_{\mathrm{KL}}(p_T\|q_T)=\sum_cp_{T,c}\log p_{T,c}-\sum_cp_{T,c}\log q_{T,c}\)</span>. Only the second term depends on the student: it’s cross-entropy with target <span class="math inline">\(p_T\)</span>.</p>
+<p><strong>Step 2.</strong> With <span class="math inline">\(u=z^{(s)}/T\)</span>: <span class="math inline">\(\nabla_u=q_T-p_T\)</span> (Session 48, step 2). Chain rule: <span class="math inline">\(\nabla_{z^{(s)}}=\frac1T(q_T-p_T)\)</span>.</p>
+<p><strong>Step 3.</strong> For large <span class="math inline">\(T\)</span>, <span class="math inline">\(e^{z/T}\approx1+z/T\)</span>, so <span class="math inline">\(q_{T,c}\approx\frac1C+\frac{z^{(s)}_c-\bar z^{(s)}}{CT}\)</span>, and similarly for <span class="math inline">\(p_T\)</span>.</p>
+<p><strong>Step 4.</strong> Then <span class="math inline">\(\nabla_{z^{(s)}_c}\approx\frac1T\cdot\frac{(z^{(s)}_c-\bar z^{(s)})-(z^{(t)}_c-\bar z^{(t)})}{CT}=\frac{1}{CT^2}\big[(z^{(s)}_c-\bar z^{(s)})-(z^{(t)}_c-\bar z^{(t)})\big]\)</span>.</p>
+<p><strong>Step 5.</strong> The gradient shrinks like <span class="math inline">\(1/T^2\)</span>. Multiplying the distillation loss by <span class="math inline">\(T^2\)</span> keeps its gradient scale roughly independent of <span class="math inline">\(T\)</span>, so mixing it with the hard-label loss doesn’t need retuning when <span class="math inline">\(T\)</span> changes.</p>
+<p><strong>Step 6.</strong> Bonus: at high <span class="math inline">\(T\)</span> the gradient is proportional to the difference in centered logits, so distillation approaches matching logits by squared error.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: distillation loss</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> student logits <span class="math inline">\(Z^{(s)}\)</span>, teacher logits <span class="math inline">\(Z^{(t)}\)</span> (no gradient), labels <span class="math inline">\(y\)</span>, <span class="math inline">\(T\)</span>, <span class="math inline">\(\alpha\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\log q_T\gets\operatorname{log\_softmax}(Z^{(s)}/T)\)</span>; <span class="math inline">\(p_T\gets\operatorname{softmax}(Z^{(t)}/T)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L_{\text{KD}}\gets T^2\cdot\operatorname{mean}_i\sum_cp_{T,ic}(\log p_{T,ic}-\log q_{T,ic})\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets\alpha L_{\text{KD}}+(1-\alpha)\operatorname{CE}(Z^{(s)},y)\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement temperature-scaled distillation and inspect its gradients.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(361)
+
+B, C = 5, 6
+temperature = 4.0
+
+teacher_logits = torch.randn(B, C) * 2.0
+
+student_logits = (
+    teacher_logits
+    + 1.5 * torch.randn(B, C)
+).requires_grad_()                                  # [B,C]
+
+labels = torch.tensor([
+    0, 2, 1, 5, 3,
+])                                                   # [B]
+
+teacher_probabilities = ...                         # TODO 1: [B,C]
+student_log_probabilities = ...                     # TODO 2: [B,C]
+
+per_example_kl = ...                                # TODO 3: [B]
+raw_kd_loss = ...                                   # TODO 4: scalar
+scaled_kd_loss = ...                                # TODO 5: scalar
+
+print(&quot;teacher probabilities:\n&quot;,
+      teacher_probabilities)
+
+print(&quot;\nraw KD loss:&quot;,
+      raw_kd_loss.item())
+
+print(&quot;T^2-scaled KD loss:&quot;,
+      scaled_kd_loss.item())</code></pre>
+<p>Compare the exact gradient scaling:</p>
+<pre class="code python"><code class="language-python">raw_gradient = torch.autograd.grad(
+    raw_kd_loss,
+    student_logits,
+    retain_graph=True,
+)[0]
+
+scaled_gradient = torch.autograd.grad(
+    scaled_kd_loss,
+    student_logits,
+)[0]
+
+print(&quot;\nraw gradient norm:&quot;,
+      raw_gradient.norm().item())
+
+print(&quot;scaled gradient norm:&quot;,
+      scaled_gradient.norm().item())
+
+print(
+    &quot;gradient-norm ratio:&quot;,
+    (
+        scaled_gradient.norm()
+        / raw_gradient.norm()
+    ).item(),
+)
+
+assert torch.allclose(
+    scaled_gradient,
+    temperature**2 * raw_gradient,
+    atol=1e-6,
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>What should the gradient-norm ratio be at <span class="math inline">\(T=4\)</span>?</p></li>
+<li><p>Does multiplying the loss by <span class="math inline">\(T^2\)</span> change its minimizer?</p></li>
+<li><p>Does a higher temperature make the teacher distribution sharper or softer?</p></li>
+</ul>
+<p>Now compare several temperatures:</p>
+<pre class="code python"><code class="language-python">def distillation_gradient_norm(
+    teacher_logits,
+    initial_student_logits,
+    temperature,
+    apply_t_squared,
+):
+    student = (
+        initial_student_logits.detach()
+        .clone()
+        .requires_grad_()
+    )
+
+    teacher_probabilities = ...                    # TODO 6
+    student_log_probabilities = ...                # TODO 7
+
+    loss = F.kl_div(
+        student_log_probabilities,
+        teacher_probabilities,
+        reduction=&quot;batchmean&quot;,
+    )
+
+    if apply_t_squared:
+        loss = ...                                 # TODO 8
+
+    gradient = torch.autograd.grad(
+        loss,
+        student,
+    )[0]
+
+    return gradient.norm()
+
+
+initial_student = student_logits.detach()
+temperatures = [1.0, 2.0, 4.0, 8.0]
+
+print(&quot;\n T | raw grad norm | T^2-scaled grad norm&quot;)
+
+for T in temperatures:
+    raw_norm = distillation_gradient_norm(
+        teacher_logits,
+        initial_student,
+        T,
+        apply_t_squared=False,
+    )
+
+    scaled_norm = distillation_gradient_norm(
+        teacher_logits,
+        initial_student,
+        T,
+        apply_t_squared=True,
+    )
+
+    print(
+        f&quot;{T:&gt;2.0f} |&quot;
+        f&quot; {raw_norm.item():&gt;13.6f} |&quot;
+        f&quot; {scaled_norm.item():&gt;20.6f}&quot;
+    )</code></pre>
+<p>Finally, reproduce an accidental teacher-gradient path:</p>
+<pre class="code python"><code class="language-python">leaky_teacher_logits = (
+    teacher_logits.clone()
+    .requires_grad_()
+)
+
+fresh_student_logits = (
+    initial_student.clone()
+    .requires_grad_()
+)
+
+leaky_targets = ...                                 # TODO 9
+fresh_student_logp = ...                            # TODO 10
+
+leaky_loss = (                                      # TODO 11
+    temperature**2
+    * F.kl_div(
+        fresh_student_logp,
+        leaky_targets,
+        reduction=&quot;batchmean&quot;,
+    )
+)
+
+teacher_gradient = torch.autograd.grad(
+    leaky_loss,
+    leaky_teacher_logits,
+)[0]
+
+print(
+    &quot;\naccidental teacher gradient norm:&quot;,
+    teacher_gradient.norm().item(),
+)
+
+assert teacher_gradient.norm() &gt; 0</code></pre>
+<p>Why is this undesirable when the teacher is intended only to generate fixed targets?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Soften both teacher and student using the same <span class="math inline">\(T\)</span>.</p></li>
+<li><p>Detach the teacher probabilities in the intended objective.</p></li>
+<li><p><code>F.kl_div</code> expects student log-probabilities as input and teacher probabilities as target.</p></li>
+<li><p>With <code>reduction="none"</code>, sum over classes and average over the batch.</p></li>
+<li><p>Apply the factor after calculating KL.</p></li>
+<li><p>For the leak, deliberately omit <code>.detach()</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why must teacher and student probabilities use the same temperature?</p></li>
+<li><p>Prediction: as <span class="math inline">\(T\to\infty\)</span>, what happens to both distributions and the unscaled gradient?</p></li>
+<li><p>Why does multiplying by <span class="math inline">\(T^2\)</span> not change the optimal student distribution?</p></li>
+<li><p>Debugging: changing distillation temperature from 1 to 8 nearly eliminates the KD contribution. What missing factor should you inspect?</p></li>
+<li><p>Why might a student imitate an incorrect teacher even when hard labels are also present?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<p>Initial objective:</p>
+<pre class="code python"><code class="language-python">teacher_probabilities = F.softmax(
+    teacher_logits / temperature,
+    dim=-1,
+).detach()
+
+student_log_probabilities = F.log_softmax(
+    student_logits / temperature,
+    dim=-1,
+)
+
+per_example_kl = F.kl_div(
+    student_log_probabilities,
+    teacher_probabilities,
+    reduction=&quot;none&quot;,
+).sum(dim=-1)
+
+raw_kd_loss = per_example_kl.mean()
+
+scaled_kd_loss = (
+    temperature**2 * raw_kd_loss
+)</code></pre>
+<p>Temperature comparison:</p>
+<pre class="code python"><code class="language-python">def distillation_gradient_norm(
+    teacher_logits,
+    initial_student_logits,
+    temperature,
+    apply_t_squared,
+):
+    student = (
+        initial_student_logits.detach()
+        .clone()
+        .requires_grad_()
+    )
+
+    teacher_probabilities = F.softmax(
+        teacher_logits / temperature,
+        dim=-1,
+    ).detach()
+
+    student_log_probabilities = F.log_softmax(
+        student / temperature,
+        dim=-1,
+    )
+
+    loss = F.kl_div(
+        student_log_probabilities,
+        teacher_probabilities,
+        reduction=&quot;batchmean&quot;,
+    )
+
+    if apply_t_squared:
+        loss = temperature**2 * loss
+
+    gradient = torch.autograd.grad(
+        loss,
+        student,
+    )[0]
+
+    return gradient.norm()</code></pre>
+<p>Teacher-gradient leak:</p>
+<pre class="code python"><code class="language-python">leaky_targets = F.softmax(
+    leaky_teacher_logits / temperature,
+    dim=-1,
+)
+
+fresh_student_logp = F.log_softmax(
+    fresh_student_logits / temperature,
+    dim=-1,
+)
+
+leaky_loss = (
+    temperature**2
+    * F.kl_div(
+        fresh_student_logp,
+        leaky_targets,
+        reduction=&quot;batchmean&quot;,
+    )
+)</code></pre>
+<p>At a fixed temperature:</p>
+<p><span class="math display">\[L_{\mathrm{scaled}}=T^2L_{\mathrm{raw}}\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[\nabla L_{\mathrm{scaled}}
+=
+T^2\nabla L_{\mathrm{raw}}\]</span></p>
+<p>At <span class="math inline">\(T=4\)</span>, the exact gradient-norm ratio is therefore:</p>
+<p><span class="math display">\[T^2=16\]</span></p>
+<p>Multiplying by a positive constant does not change the minimizer. Both losses are minimized when:</p>
+<p><span class="math display">\[q_T=p_T\]</span></p>
+<p>The correction changes optimization scale, not the target distribution.</p>
+<p>Without detachment, autograd differentiates through the teacher probabilities. If teacher and student are optimized together, the teacher can move toward the student, reducing KL without the student actually learning the intended target. It also retains the teacher computation graph, increasing memory and communication costs.</p>
+<p>In an offline distillation pipeline, storing probabilities for a large vocabulary is expensive:</p>
+<p><span class="math display">\[O(BTC)\]</span></p>
+<p>Practical alternatives include storing teacher logits only for selected top-<span class="math inline">\(k\)</span> classes, running the teacher online under <code>torch.no_grad()</code>, or distilling sequence-level behavior rather than the full token distribution.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Otherwise they represent different softened distributions, so the student is not matching the intended teacher target.</p></li>
+<li><p>Both approach uniform; their difference and the unscaled gradient approach zero.</p></li>
+<li><p>Positive scalar multiplication preserves the loss’s argmin.</p></li>
+<li><p>Check for the missing <span class="math inline">\(T^2\)</span> multiplier and verify that both sides use the same temperature.</p></li>
+<li><p>The KD term transfers the teacher’s entire probability structure, including systematic errors; its weight may dominate the hard-label correction.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Under mean-reduced cross-entropy, the logit gradient is <span class="math inline">\((p-q)/B\)</span>.</p></li>
+<li><p><code>log_softmax</code> computes the log-normalizer stably without materializing probabilities that may underflow.</p></li>
+</ul>

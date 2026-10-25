@@ -1,0 +1,93 @@
+
+<h2 class="unnumbered" id="sequence-length-vs-batch-size">Sequence length vs batch size</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: When attention starts to dominate compute</div>
+<p><strong>Step 1.</strong> Per layer and per token, the dense parts (QKV, output, MLP with a <span class="math inline">\(4d\)</span> hidden size) cost about <span class="math inline">\(2\cdot12d^2=24d^2\)</span> forward FLOPs.</p>
+<p><strong>Step 2.</strong> Attention scores <span class="math inline">\(QK^\top\)</span> and the weighted sum <span class="math inline">\(AV\)</span> each cost <span class="math inline">\(2Td\)</span> per token, so <span class="math inline">\(4Td\)</span>.</p>
+<p><strong>Step 3.</strong> Ratio <span class="math inline">\(\boxed{\frac{4Td}{24d^2}=\frac{T}{6d}}\)</span> (halve it with causal masking that skips the upper triangle). At <span class="math inline">\(d=4096\)</span>, <span class="math inline">\(T=4096\)</span> adds 17%; at <span class="math inline">\(T=65{,}536\)</span> attention costs 2.7<span class="math inline">\(\times\)</span> the rest of the layer.</p>
+</div>
+<p>At a fixed number of tokens per batch, longer sequences cost more FLOPs and, without FlashAttention, <span class="math inline">\(O(BT^2)\)</span> memory for the score matrices. That is why pretraining starts with short sequences and extends context in a short final phase (Architectures part, long context).</p>
+<h2 class="unnumbered" id="swiglu-two-projections-and-a-gate">SwiGLU: two projections and a gate</h2>
+<p><span class="math inline">\(\operatorname{SwiGLU}(x)=W_{\downarrow}\big(\operatorname{SiLU}(W_gx)\odot W_ux\big)\)</span>, with <span class="math inline">\(\operatorname{SiLU}(z)=z\sigma(z)\)</span>. One projection decides <em>how much</em> to let through, the other <em>what</em>. Three matrices instead of two, so the hidden size shrinks from <span class="math inline">\(4d\)</span> to <span class="math inline">\(\tfrac83d\)</span> to keep parameters equal: <span class="math inline">\(3\cdot d\cdot\tfrac83d=8d^2=2\cdot d\cdot4d\)</span>. LLaMA rounds <span class="math inline">\(\tfrac83\cdot4096\)</span> up to 11008.</p>
+<h2 class="unnumbered" id="tiny-recursive-models">Tiny recursive models</h2>
+<p>Recursive models such as HRM and TRM (2025) reuse one small network many times, refining a latent state <span class="math inline">\(z\)</span> and a current answer <span class="math inline">\(y\)</span>: <span class="math inline">\(z\leftarrow f(x,z,y)\)</span>, <span class="math inline">\(y\leftarrow y+g(z)\)</span>. Depth comes from iteration, not parameters. <em>Deep supervision</em> grades the answer after every iteration, so each pass learns to improve the previous one.</p>
+<p>The experiment below makes the point sharply. The task is prefix parity of 12 bits. The update is a convolution with kernel 3, so one pass can only move information one position. The same 1<span>,</span>442-parameter network is trained with <span class="math inline">\(K=1\)</span>, 4 and 16 iterations:</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Toolkit ch. 9: sequence length vs batch size, SwiGLU, and a tiny recursive model.&quot;&quot;&quot;
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+
+# 1. Same token budget, different shapes. Per layer: dense FLOPs ~ 24 N d^2, attention ~ 4 N T d
+#    (forward, N = tokens in the batch). Ratio attention/dense = T / (6 d).
+d, tokens = 4096, 2**19
+print(&quot;[seq] T       B    attn/dense FLOPs   attn-score memory (bf16, 32 heads, naive)&quot;)
+for T in (1024, 4096, 16384, 65536):
+    B = tokens // T
+    ratio = (4 * tokens * T * d) / (24 * tokens * d * d)
+    mem = B * 32 * T * T * 2 / 2**30
+    print(f&quot;[seq] {T:&lt;6d} {B:4d}   {ratio:6.1%}            {mem:8.1f} GiB per layer&quot;)
+
+# 2. SwiGLU: three matrices, so hidden = 8d/3 matches a 4d GELU MLP in parameters.
+d = 4096
+print(f&quot;[swiglu] GELU 4d: {2 * d * 4 * d / 1e6:.1f}M params  SwiGLU 8d/3 (11008): {3 * d * 11008 / 1e6:.1f}M params&quot;)
+x = torch.linspace(-4, 4, 9)
+print(f&quot;[swiglu] silu(x) {[round(v, 2) for v in F.silu(x).tolist()]}&quot;)
+
+
+# 3. Tiny recursive model: one small network applied K times, refining a latent z and an answer y.
+#    Task: prefix parity of 12 bits. The update is local (kernel 3), so one step can only move
+#    information one position: the only way to get depth is to apply the same block again.
+class TinyRec(nn.Module):
+    def __init__(self, h=32):
+        super().__init__()
+        self.f = nn.Sequential(nn.Conv1d(3, h, 3, padding=1), nn.GELU(), nn.Conv1d(h, h, 1), nn.GELU(),
+                               nn.Conv1d(h, 2, 1))
+
+    def forward(self, x, K):
+        z = torch.zeros_like(x); y = torch.zeros_like(x); outs = []
+        for _ in range(K):
+            dz, dy = self.f(torch.stack([x, z, y], 1)).unbind(1)
+            z = torch.tanh(z + dz)
+            y = y + dy
+            outs.append(y)                         # deep supervision: every step is graded
+        return outs
+
+
+def batch(m, n=12):
+    x = torch.randint(0, 2, (m, n)).float()
+    return x, torch.cumsum(x, 1) % 2
+
+
+for K in (1, 4, 16):
+    torch.manual_seed(0)
+    model = TinyRec()
+    opt = torch.optim.AdamW(model.parameters(), lr=3e-3)
+    for step in range(2000):
+        x, t = batch(256)
+        outs = model(x * 2 - 1, K)
+        loss = sum(F.binary_cross_entropy_with_logits(o, t) for o in outs) / K
+        opt.zero_grad(); loss.backward(); opt.step()
+    with torch.no_grad():
+        x, t = batch(4096)
+        o = model(x * 2 - 1, K)[-1]
+        bit = ((o &gt; 0).float() == t).float().mean().item()
+        exact = ((o &gt; 0).float() == t).all(1).float().mean().item()
+    params = sum(p.numel() for p in model.parameters())
+    print(f&quot;[trm] K={K:2d}: {params:,} params (same net)  bit acc {bit:.3f}  exact-match {exact:.3f}&quot;)</code></pre>
+<pre class="code output"><code class="output">[seq] T       B    attn/dense FLOPs   attn-score memory (bf16, 32 heads, naive)
+[seq] 1024    512     4.2%                32.0 GiB per layer
+[seq] 4096    128    16.7%               128.0 GiB per layer
+[seq] 16384    32    66.7%               512.0 GiB per layer
+[seq] 65536     8   266.7%              2048.0 GiB per layer
+[swiglu] GELU 4d: 134.2M params  SwiGLU 8d/3 (11008): 135.3M params
+[swiglu] silu(x) [-0.07, -0.14, -0.24, -0.27, 0.0, 0.73, 1.76, 2.86, 3.93]
+[trm] K= 1: 1,442 params (same net)  bit acc 0.582  exact-match 0.001
+[trm] K= 4: 1,442 params (same net)  bit acc 0.709  exact-match 0.010
+[trm] K=16: 1,442 params (same net)  bit acc 1.000  exact-match 1.000</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Same weights, more iterations: exact-match goes from 0.1% (<span class="math inline">\(K=1\)</span>) to 100% (<span class="math inline">\(K=16\)</span>). With <span class="math inline">\(K=4\)</span> information can travel only a few positions, so long prefixes fail.</p></li>
+<li><p>This is the idea behind test-time compute in a small form: spending more computation per input can substitute for more parameters, when the task needs sequential steps.</p></li>
+</ul>
+</div>

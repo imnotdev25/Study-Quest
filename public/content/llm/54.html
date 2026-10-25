@@ -1,0 +1,32 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>An MoE layer</strong> replaces one MLP with <span class="math inline">\(E\)</span> expert MLPs and a <strong>router</strong>. For each token, the router picks the top-<span class="math inline">\(k\)</span> experts and mixes their outputs. Total parameters grow with <span class="math inline">\(E\)</span>, but compute per token grows only with <span class="math inline">\(k\)</span>. Mixtral 8<span class="math inline">\(\times\)</span>7B: 46.7B total, 12.9B active (<span class="math inline">\(k=2\)</span> of 8).</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/97e4b96f4871.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A top-2 MoE layer with one shared expert. The token pays for 3 expert MLPs but the layer stores 9. DeepSeek-V3 does this with 256 routed experts (top-8); Kimi K3 with 896 (top-16).</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: routing, and why it needs balancing</div>
+<p><strong>Step 1.</strong> Router logits <span class="math inline">\(r=xW_r\in\mathbb R^E\)</span>, gates <span class="math inline">\(g=\operatorname{softmax}(r)\)</span>. Output <span class="math inline">\(y=\sum_{e\in\operatorname{TopK}(g)}\tilde g_e\,\operatorname{MLP}_e(x)\)</span>, with <span class="math inline">\(\tilde g\)</span> the top-<span class="math inline">\(k\)</span> gates renormalized to sum to 1.</p>
+<p><strong>Step 2.</strong> The gradient reaches <span class="math inline">\(W_r\)</span> only through the chosen experts’ gates, so experts that win early get trained, get better, and win more: <strong>routing collapse</strong>.</p>
+<p><strong>Step 3.</strong> <strong>Switch auxiliary loss:</strong> with <span class="math inline">\(f_e\)</span> the fraction of tokens sent to expert <span class="math inline">\(e\)</span> and <span class="math inline">\(P_e\)</span> the mean gate probability for <span class="math inline">\(e\)</span>: <span class="math inline">\(L_{\text{aux}}=E\sum_ef_eP_e\)</span>.</p>
+<p><strong>Step 4.</strong> Uniform routing: <span class="math inline">\(f_e=P_e=1/E\Rightarrow L_{\text{aux}}=E\cdot E\cdot\frac{1}{E^2}=1\)</span>. Full collapse onto one expert: <span class="math inline">\(f=P=1\)</span> for it <span class="math inline">\(\Rightarrow L_{\text{aux}}=E\)</span>. (<span class="math inline">\(f\)</span> isn’t differentiable, so the gradient flows through <span class="math inline">\(P\)</span>.)</p>
+<p><strong>Step 5.</strong> <strong>Capacity:</strong> each expert processes at most <span class="math inline">\(\text{cf}\cdot kT/E\)</span> tokens per batch, and overflow tokens skip the layer (via the residual).</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: DeepSeekMoE: fine-grained and shared experts, balancing without a loss</div>
+<p><strong>Step 1.</strong> <strong>Fine-grained:</strong> split each expert into <span class="math inline">\(m\)</span> smaller ones and route to <span class="math inline">\(mk\)</span>. Same compute, but <span class="math inline">\(\binom{mE}{mk}\gg\binom Ek\)</span> possible combinations, so specialization is finer.</p>
+<p><strong>Step 2.</strong> <strong>Shared experts:</strong> <span class="math inline">\(y=\sum_{s}\operatorname{MLP}^{\text{shared}}_s(x)+\sum_{e\in\operatorname{TopK}}g_e\operatorname{MLP}_e(x)\)</span>. Common knowledge lives in the shared part, so routed experts don’t all relearn it.</p>
+<p><strong>Step 3.</strong> <strong>Auxiliary-loss-free balancing</strong> (DeepSeek-V3): add a bias <span class="math inline">\(b_e\)</span> to the scores <em>only for choosing</em>: <span class="math inline">\(\operatorname{TopK}(s_e+b_e)\)</span>, but mix with the unbiased <span class="math inline">\(s_e\)</span>. After each step, <span class="math inline">\(b_e\gets b_e-\gamma\operatorname{sign}(\text{load}_e-\overline{\text{load}})\)</span>.</p>
+<p><strong>Step 4.</strong> An overloaded expert’s bias falls until it’s chosen less. Balance is achieved without a loss term pulling the router away from what’s best for the language-model loss.</p>
+<p><strong>Step 5.</strong> Later variants change the score function: V3 uses <span class="math inline">\(\sigma(\cdot)\)</span>, V4 uses <span class="math inline">\(\sqrt{\softplus(\cdot)}\)</span> (from its <code>config.json</code>: <code>scoring_func: sqrtsoftplus</code>), and Kimi K3 sets the bias from a quantile of score margins (<em>Quantile Balancing</em>).</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: top-<span class="math inline">\(k\)</span> MoE layer with bias-based balancing</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> tokens <span class="math inline">\(X\)</span>, router <span class="math inline">\(W_r\)</span>, experts <span class="math inline">\(\{\operatorname{MLP}_e\}\)</span>, shared experts, bias <span class="math inline">\(b\)</span>, rate <span class="math inline">\(\gamma\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(s\gets\sigma(XW_r)\)</span> <em>▷ affinity per token and expert</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\mathcal T\gets\operatorname{TopK}(s+b)\)</span> per token <em>▷ bias affects choice only</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(g\gets s_{\mathcal T}/\sum s_{\mathcal T}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Y\gets\sum_s\operatorname{MLP}^{\text{sh}}_s(X)+\sum_{e\in\mathcal T}g_e\operatorname{MLP}_e(X)\)</span> <em>▷ dispatch tokens to experts</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(b_e\gets b_e-\gamma\operatorname{sign}(\text{load}_e-\overline{\text{load}})\)</span> <em>▷ outside autograd</em></div>
+</div>
+</div>

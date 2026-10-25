@@ -1,0 +1,417 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why must an outcome prediction be out-of-fold before using its residual in doubly robust evaluation?</p></li>
+<li><p>In LLM evaluation, what should determine fold membership when prompts share users or templates?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="repeated-episodes-share-hidden-causes">2. Repeated episodes share hidden causes</h3>
+<p>Suppose user <span class="math inline">\(u\)</span> produces episode <span class="math inline">\(t\)</span>, with paired candidate-control reward difference:</p>
+<p><span class="math display">\[D_{u,t}
+=
+\tau+B_u+\epsilon_{u,t}\]</span></p>
+<p>where:</p>
+<ul>
+<li><p><span class="math inline">\(\tau\)</span>: population-average policy effect;</p></li>
+<li><p><span class="math inline">\(B_u\)</span>: persistent user-specific effect;</p></li>
+<li><p><span class="math inline">\(\epsilon_{u,t}\)</span>: episode noise.</p></li>
+</ul>
+<p>Twenty episodes from one user repeatedly observe the same <span class="math inline">\(B_u\)</span>. They are not twenty independent users.</p>
+<p>With <span class="math inline">\(U\)</span> users and <span class="math inline">\(T\)</span> episodes per user:</p>
+<p><span class="math display">\[\operatorname{Var}(\hat\tau)
+=
+\frac{\sigma_B^2}{U}
++
+\frac{\sigma_\epsilon^2}{UT}\]</span></p>
+<p>A naive row-independent calculation incorrectly uses:</p>
+<p><span class="math display">\[\operatorname{Var}_{\text{naive}}(\hat\tau)
+=
+\frac{\sigma_B^2+\sigma_\epsilon^2}{UT}\]</span></p>
+<p>It pretends repeated episodes also average away user variation.</p>
+<p>Within-cluster correlation is:</p>
+<p><span class="math display">\[\rho
+=
+\frac{\sigma_B^2}
+{\sigma_B^2+\sigma_\epsilon^2}\]</span></p>
+<p>For equal cluster size <span class="math inline">\(T\)</span>, the approximate design effect is:</p>
+<p><span class="math display">\[1+(T-1)\rho\]</span></p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>repeated experiments and episode differences: <span style="background-color: codeinlinebg"><code> [R, U, T]</code></span></p></li>
+<li><p>per-user mean differences: <span style="background-color: codeinlinebg"><code> [R, U]</code></span></p></li>
+<li><p>estimates and standard errors: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>For real agent evaluation, bootstrap or compute uncertainty over independent users, tasks or source prompts. Keep all dependent turns together. With variable-length trajectories, use masks rather than treating padding as reward zero.</p>
+<p>DPO may train on many preference pairs derived from one prompt family or annotator. Those pairs still need cluster-aware evaluation uncertainty; DPO’s pairwise loss does not make them independent.</p>
+<h3 class="unnumbered" id="pytorch-exercise-naive-confidence-intervals-cover-only-about-38">3. PyTorch exercise — naive confidence intervals cover only about 38%</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 2_000
+num_users = 100
+episodes_per_user = 20
+
+true_effect = 0.10
+
+between_user_sd = 1.00
+within_user_sd = 0.50
+
+z_value = 1.96
+
+
+# TODO 1: Simulate correlated paired differences.
+user_effects = ...
+
+episode_noise = ...
+
+paired_differences = ...
+
+
+# TODO 2: Estimate the effect in every experiment.
+user_mean_differences = ...
+
+effect_estimates = ...
+
+row_mean_estimates = ...
+
+maximum_identity_error = ...
+
+
+# TODO 3: Incorrect row-independent SE.
+flat_differences = ...
+
+naive_row_standard_errors = ...
+
+
+# TODO 4: Cluster-aware SE.
+cluster_standard_errors = ...
+
+
+# TODO 5: Confidence intervals and diagnostics.
+naive_lower_bounds = ...
+naive_upper_bounds = ...
+
+cluster_lower_bounds = ...
+cluster_upper_bounds = ...
+
+naive_coverage = ...
+
+cluster_coverage = ...
+
+empirical_estimator_sd = ...
+
+mean_naive_se = ...
+mean_cluster_se = ...
+
+theoretical_cluster_se = ...
+theoretical_naive_se = ...
+
+intraclass_correlation = ...
+
+design_effect = ...
+
+effective_independent_rows = ...
+
+
+print(
+    &quot;Maximum point-estimate identity error:&quot;,
+    maximum_identity_error.item(),
+)
+
+print(
+    &quot;Empirical estimator SD:&quot;,
+    empirical_estimator_sd.item(),
+)
+
+print(
+    &quot;Mean SEs: naive, cluster-aware&quot;
+)
+print(
+    mean_naive_se.item(),
+    mean_cluster_se.item(),
+)
+
+print(
+    &quot;Theoretical SEs: naive, cluster-aware&quot;
+)
+print(
+    theoretical_naive_se,
+    theoretical_cluster_se,
+)
+
+print(
+    &quot;95% coverage: naive, cluster-aware&quot;
+)
+print(
+    naive_coverage.item(),
+    cluster_coverage.item(),
+)
+
+print(
+    &quot;Intraclass correlation:&quot;,
+    intraclass_correlation,
+)
+print(&quot;Design effect:&quot;, design_effect)
+print(
+    &quot;Nominal rows:&quot;,
+    num_users * episodes_per_user,
+)
+print(
+    &quot;Approximate effective rows:&quot;,
+    effective_independent_rows,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will averaging all rows and averaging user means give the same point estimate here?</p></li>
+<li><p>Should the empirical estimator SD be nearer <span style="background-color: codeinlinebg"><code> 0.025</code></span> or <span style="background-color: codeinlinebg"><code> 0.101</code></span>?</p></li>
+<li><p>Which confidence interval will be much too narrow?</p></li>
+<li><p>Are 2,000 episodes equivalent to 2,000 independent observations?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> user_effects</code></span> should have shape <span style="background-color: codeinlinebg"><code> [R, U, 1]</code></span> so it broadcasts across episodes.</p></li>
+<li><p>Average episodes first to obtain <span style="background-color: codeinlinebg"><code> [R, U]</code></span>.</p></li>
+<li><p>The cluster SE is the standard deviation of user means divided by <span class="math inline">\(\sqrt U\)</span>.</p></li>
+<li><p>Coverage means <span style="background-color: codeinlinebg"><code> lower &lt;= true_effect &lt;= upper</code></span>.</p></li>
+<li><p>The theoretical cluster SE is:</p></li>
+</ul>
+<p><span class="math display">\[\sqrt{
+\frac{\sigma_B^2}{U}
++
+\frac{\sigma_\epsilon^2}{UT}
+}\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Randomly shuffle or discard user IDs before computing uncertainty.</p></li>
+<li><p>Bootstrap individual episodes instead of complete users.</p></li>
+<li><p>Split turns from the same conversation across evaluation folds.</p></li>
+<li><p>Treat padding as valid zero-reward episodes.</p></li>
+<li><p>Report thousands of episodes while hiding that they came from eight users.</p></li>
+<li><p>Use a normal confidence interval with only a handful of clusters.</p></li>
+<li><p>Rescale rewards without rescaling the reported standard error.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does collecting more episodes from existing users not remove between-user uncertainty?</p></li>
+<li><p>Does clustering change the point estimate when every user has the same episode count?</p></li>
+<li><p>What unit should a bootstrap resample?</p></li>
+<li><p>What changes when users contribute unequal numbers of episodes?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Simulation:</p>
+<pre class="code python"><code class="language-python">user_effects = (
+    between_user_sd
+    * torch.randn(
+        num_repetitions,
+        num_users,
+        1,
+    )
+)
+
+episode_noise = (
+    within_user_sd
+    * torch.randn(
+        num_repetitions,
+        num_users,
+        episodes_per_user,
+    )
+)
+
+paired_differences = (
+    true_effect
+    + user_effects
+    + episode_noise
+)</code></pre>
+<p>Effect estimates:</p>
+<pre class="code python"><code class="language-python">user_mean_differences = (
+    paired_differences.mean(dim=2)
+)
+
+effect_estimates = (
+    user_mean_differences.mean(dim=1)
+)
+
+row_mean_estimates = (
+    paired_differences.mean(
+        dim=(1, 2)
+    )
+)
+
+maximum_identity_error = (
+    effect_estimates
+    - row_mean_estimates
+).abs().max()</code></pre>
+<p>Naive standard errors:</p>
+<pre class="code python"><code class="language-python">flat_differences = (
+    paired_differences.reshape(
+        num_repetitions,
+        -1,
+    )
+)
+
+naive_row_standard_errors = (
+    flat_differences.std(
+        dim=1,
+        correction=1,
+    )
+    / math.sqrt(
+        num_users
+        * episodes_per_user
+    )
+)</code></pre>
+<p>Cluster-aware standard errors:</p>
+<pre class="code python"><code class="language-python">cluster_standard_errors = (
+    user_mean_differences.std(
+        dim=1,
+        correction=1,
+    )
+    / math.sqrt(num_users)
+)</code></pre>
+<p>Intervals and diagnostics:</p>
+<pre class="code python"><code class="language-python">naive_lower_bounds = (
+    effect_estimates
+    - z_value
+    * naive_row_standard_errors
+)
+
+naive_upper_bounds = (
+    effect_estimates
+    + z_value
+    * naive_row_standard_errors
+)
+
+cluster_lower_bounds = (
+    effect_estimates
+    - z_value
+    * cluster_standard_errors
+)
+
+cluster_upper_bounds = (
+    effect_estimates
+    + z_value
+    * cluster_standard_errors
+)
+
+naive_coverage = (
+    (
+        (naive_lower_bounds &lt;= true_effect)
+        &amp; (true_effect &lt;= naive_upper_bounds)
+    )
+    .to(torch.float64)
+    .mean()
+)
+
+cluster_coverage = (
+    (
+        (cluster_lower_bounds &lt;= true_effect)
+        &amp; (true_effect &lt;= cluster_upper_bounds)
+    )
+    .to(torch.float64)
+    .mean()
+)
+
+empirical_estimator_sd = (
+    effect_estimates.std(correction=1)
+)
+
+mean_naive_se = (
+    naive_row_standard_errors.mean()
+)
+
+mean_cluster_se = (
+    cluster_standard_errors.mean()
+)
+
+theoretical_cluster_se = math.sqrt(
+    between_user_sd**2 / num_users
+    + within_user_sd**2
+    / (
+        num_users
+        * episodes_per_user
+    )
+)
+
+theoretical_naive_se = math.sqrt(
+    (
+        between_user_sd**2
+        + within_user_sd**2
+    )
+    / (
+        num_users
+        * episodes_per_user
+    )
+)
+
+intraclass_correlation = (
+    between_user_sd**2
+    / (
+        between_user_sd**2
+        + within_user_sd**2
+    )
+)
+
+design_effect = (
+    1.0
+    + (
+        episodes_per_user - 1
+    )
+    * intraclass_correlation
+)
+
+effective_independent_rows = (
+    num_users
+    * episodes_per_user
+    / design_effect
+)</code></pre>
+<p>Here:</p>
+<p><span class="math display">\[\rho
+=
+\frac{1}{1+0.25}
+=
+0.8\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\text{design effect}
+=
+1+19(0.8)
+=
+16.2\]</span></p>
+<p>Thus, the nominal 2,000 rows contain approximately:</p>
+<p><span class="math display">\[\frac{2000}{16.2}
+\approx123\]</span></p>
+<p>independent-row equivalents.</p>
+<p>The correct estimator standard deviation is:</p>
+<p><span class="math display">\[\sqrt{
+\frac{1}{100}
++
+\frac{0.25}{100(20)}
+}
+\approx0.101\]</span></p>
+<p>The naive calculation reports:</p>
+<p><span class="math display">\[\sqrt{
+\frac{1.25}{2000}
+}
+=
+0.025\]</span></p>
+<p>Typical coverage is therefore:</p>
+<ul>
+<li><p>naive row interval: roughly <span style="background-color: codeinlinebg"><code> 0.38</code></span>;</p></li>
+<li><p>cluster-aware interval: roughly <span style="background-color: codeinlinebg"><code> 0.95</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Repeated episodes continue sharing the same <span class="math inline">\(B_u\)</span>; only new independent users average away that component.</p></li>
+<li><p>No. With equal cluster sizes, both means are algebraically identical. Clustering changes uncertainty.</p></li>
+<li><p>Resample complete independent clusters—such as users or source tasks—not their individual rows.</p></li>
+<li><p>A raw row mean weights prolific users more heavily. Define the estimand first, then use user weighting, masks and cluster-aware uncertainty accordingly.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Otherwise the model may memorize the same label whose residual it later evaluates, artificially driving the correction toward zero.</p></li>
+<li><p>Keep every dependent cluster—user, source prompt, template family or conversation—inside one fold.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> count independent sampling units, not database rows. Repeated episodes improve estimates of each user’s mean, but they do not create new users or justify row-level confidence intervals.</p>

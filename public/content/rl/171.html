@@ -1,0 +1,86 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: grading the essay, not every comma</div>
+<p>A strict editor who rejects your whole essay because one comma moved is overreacting, and one who ignores a rewrite because “each sentence changed only a little” is underreacting. GSPO judges the <em>whole response</em>: how much more likely is this entire answer now, on a per-token average? Then it clips that one number.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>How does a per-token ratio of 1.01 compound over 500 tokens? (Topic 48)</p></li>
+<li><p>What does PPO’s clip do when <span class="math inline">\(\rho&gt;1+\epsilon\)</span> and <span class="math inline">\(A&gt;0\)</span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="the-objective-zheng-et-al.-2025-used-for-qwen3">2. The objective (Zheng et al., 2025; used for Qwen3)</h3>
+<p>The reward and advantage belong to the whole response, but GRPO’s ratios are per token, which is a mismatch the paper argues adds noise and destabilizes training, especially for Mixture-of-Experts models. GSPO uses one ratio per response, the geometric mean of the token ratios: <span class="math display">\[s_i(\theta)=\Big(\frac{\pi_\theta(y_i|x)}{\pi_{\text{old}}(y_i|x)}\Big)^{1/|y_i|}=\exp\Big(\frac{1}{|y_i|}\sum_t\log\frac{\pi_\theta(y_{i,t}|\cdot)}{\pi_{\text{old}}(y_{i,t}|\cdot)}\Big),\]</span> <span class="math display">\[\mathcal J_{\text{GSPO}}=\mathbb E\Big[\frac1G\sum_{i=1}^G\min\big(s_i\hat A_i,\ \operatorname{clip}(s_i,1-\epsilon,1+\epsilon)\hat A_i\big)\Big].\]</span> The <span class="math inline">\(1/|y_i|\)</span> exponent keeps <span class="math inline">\(s_i\)</span> in the same range regardless of length. Because <span class="math inline">\(s_i\)</span> moves much less than individual token ratios, the clip range is tiny: about <span class="math inline">\(3\times10^{-4}\)</span> to <span class="math inline">\(4\times10^{-4}\)</span> in the paper, versus GRPO’s <span class="math inline">\(0.2\)</span>–<span class="math inline">\(0.27\)</span>.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: gradient and the token variant</div>
+<p>Without clipping, <span class="math inline">\(\nabla\mathcal J=\mathbb E\big[\frac1G\sum_is_i\hat A_i\frac{1}{|y_i|}\sum_t\nabla\log\pi_\theta(y_{i,t}|\cdot)\big]\)</span>: every token of a response gets the same weight. <strong>GSPO-token</strong> allows per-token advantages (useful for multi-turn): <span class="math inline">\(s_{i,t}=\operatorname{sg}[s_i]\cdot\frac{\pi_\theta(y_{i,t})}{\operatorname{sg}[\pi_\theta(y_{i,t})]}\)</span>. Numerically <span class="math inline">\(s_{i,t}=s_i\)</span>, and with equal <span class="math inline">\(\hat A_{i,t}\)</span> it matches GSPO exactly.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>One length-normalized ratio per response, clipped as a whole.</p></li>
+<li><p>The clip range is orders of magnitude smaller than PPO’s because the ratio means something different.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: one outlier token</div>
+<p>100 tokens, one token’s log-ratio is <span class="math inline">\(+2\)</span>, and the rest are 0. That token’s ratio is <span class="math inline">\(e^2=7.39\)</span>: a token-level clip would clip it. The sequence ratio <span class="math inline">\(e^{2/100}=1.020\)</span> is above <span class="math inline">\(1+4\times10^{-4}\)</span>, so with <span class="math inline">\(A&gt;0\)</span> the <em>whole</em> response is clipped and gives no gradient. The decision is made once, for the response.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Using GRPO’s 0.2 clip with GSPO’s ratio (almost nothing is ever clipped).</p></li>
+<li><p>Forgetting the <span class="math inline">\(1/|y_i|\)</span> exponent (long responses get extreme ratios).</p></li>
+<li><p>Averaging the masked log-ratio over padding.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-the-gspo-loss">3. PyTorch exercise — the GSPO loss</h3>
+<pre class="code python"><code class="language-python">import torch
+
+
+def gspo_loss(logp_new, logp_old, adv, mask, eps_low=3e-4, eps_high=4e-4):
+    # logp_*: [G, T]; adv: [G]; mask: [G, T]
+    # TODO 1: masked mean token log-ratio per response
+    log_ratio = ...
+    # TODO 2: sequence ratio and the clipped min, averaged over the group
+    s = ...
+    return ...</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does GSPO need a much smaller clip range?</p></li>
+<li><p>What does the <span class="math inline">\(1/|y_i|\)</span> exponent buy?</p></li>
+<li><p>When would you want GSPO-token instead of GSPO?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+
+
+def gspo_loss(logp_new, logp_old, adv, mask, eps_low=3e-4, eps_high=4e-4):
+    # logp_*: [G, T] token log-probs; adv: [G]; mask: [G, T]
+    log_ratio = ((logp_new - logp_old) * mask).sum(1) / mask.sum(1)   # mean token log-ratio
+    s = log_ratio.exp()                                               # geometric-mean sequence ratio
+    unclipped = s * adv
+    clipped = s.clamp(1 - eps_low, 1 + eps_high) * adv
+    return -torch.min(unclipped, clipped).mean()
+
+
+# 100-token response; one token&#x27;s log-ratio is 2.0, the rest are 0.
+T = 100
+logp_old = torch.full((1, T), -1.0)
+logp_new = logp_old.clone()
+logp_new[0, 7] += 2.0
+mask = torch.ones(1, T)
+token_ratios = (logp_new - logp_old).exp()
+seq_ratio = (((logp_new - logp_old) * mask).sum(1) / mask.sum(1)).exp()
+print(f&quot;largest token ratio {token_ratios.max().item():.2f}  -&gt; clipped by a 0.2 token clip&quot;)
+print(f&quot;GSPO sequence ratio {seq_ratio.item():.4f}  -&gt; compared with [1-3e-4, 1+4e-4]&quot;)
+print(f&quot;GSPO loss with A=+1: {gspo_loss(logp_new, logp_old, torch.tensor([1.0]), mask).item():.5f}&quot;)</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">largest token ratio 7.39  -&gt; clipped by a 0.2 token clip
+GSPO sequence ratio 1.0202  -&gt; compared with [1-3e-4, 1+4e-4]
+GSPO loss with A=+1: -1.00040</code></pre>
+<p>The loss is <span class="math inline">\(-1.0004=-(1+4\times10^{-4})\cdot1\)</span>: the ratio was clipped at its upper bound, so it carries no gradient.</p>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p><span class="math inline">\(s_i\)</span> is a geometric mean over many tokens, so it moves far less than any single token ratio.</p></li>
+<li><p>Responses of any length share one numerical range, so one clip works for all of them.</p></li>
+<li><p>When different parts of a response deserve different advantages, e.g. multi-turn agent trajectories.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) <span class="math inline">\(1.01^{500}\approx145\)</span>. (2) The objective is flat, so there’s no gradient.</p>
+<p><strong>Takeaway:</strong> match the unit of the ratio to the unit of the reward. When rewards are per response, GSPO clips per response.</p>
+<p><em>Next: CISPO, which clips the weight instead of the update.</em></p>

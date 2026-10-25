@@ -1,0 +1,115 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Metrics, logs, and traces with OpenTelemetry; SLOs and error budgets; authentication and authorization (OAuth 2.x, OIDC, JWT); zero trust; secrets; and multi-tenant isolation.</p>
+</div>
+<h1 id="observability">Observability</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Monitoring tells you <em>that</em> the car’s engine light is on. Observability lets you figure out <em>why</em>, even for a problem nobody predicted, by looking at the dashboard gauges (metrics), the trip log (logs), and the route you took (traces).</p>
+</div>
+<figure class="tikz"><img src="figs/sd/f9c7276c9450.svg" alt="diagram" loading="lazy"></figure>
+<p><em>OpenTelemetry as a vendor-neutral pipeline for the three signals.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Metrics</strong>: cheap numeric time series. Use <strong>RED</strong> for services (Rate, Errors, Duration) and <strong>USE</strong> for resources (Utilization, Saturation, Errors). Avoid high-cardinality labels (user IDs).</p></li>
+<li><p><strong>Logs</strong>: structured JSON with a <code>trace_id</code> on every line.</p></li>
+<li><p><strong>Traces</strong>: a tree of spans following one request across services, linked by W3C <code>traceparent</code> headers. Sample intelligently (keep all errors and slow requests, a percentage of the rest).</p></li>
+<li><p><strong>Profiles</strong>: continuous profiling (eBPF-based) is becoming the fourth signal.</p></li>
+</ul>
+<p><strong>OpenTelemetry (OTel)</strong> is the standard for instrumentation; it includes <em>GenAI semantic conventions</em> for recording model name, token counts, and latency on LLM spans.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>SLOs and error budgets.</strong> An SLO of 99.9% successful requests over 30 days allows 0.1% failures: the error budget. Alert on <em>burn rate</em>, not raw errors: page if the budget burns 14.4<span class="math inline">\(\times\)</span> faster than sustainable over 1 hour (2% of budget gone), ticket if 6<span class="math inline">\(\times\)</span> over 6 hours. Multi-window burn-rate alerts catch both sudden and slow problems with few false pages. When the budget is exhausted, freeze risky launches and prioritize reliability. For LLM features add SLIs for TTFT, tokens/s, and quality (eval pass rate, user feedback).</p>
+</div>
+<h1 id="security-fundamentals">Security Fundamentals</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Authentication</strong> (who you are) vs <strong>authorization</strong> (what you can do).</p>
+<ul>
+<li><p><strong>OAuth 2.x</strong>: delegated authorization. Use Authorization Code with PKCE for web and mobile apps, Client Credentials for service-to-service. OAuth 2.1 consolidates current best practice and drops the implicit flow.</p></li>
+<li><p><strong>OIDC</strong>: identity layer on OAuth; issues an ID token.</p></li>
+<li><p><strong>JWT</strong>: signed tokens verified locally with the issuer’s public keys (JWKS). Keep them short-lived (5–15 min) with refresh tokens; validate <code>iss</code>, <code>aud</code>, <code>exp</code>, and the algorithm.</p></li>
+<li><p><strong>Passkeys (WebAuthn)</strong>: phishing-resistant passwordless login, now mainstream.</p></li>
+<li><p><strong>Authorization models</strong>: RBAC (roles), ABAC (attributes), ReBAC (relationships, Google Zanzibar style: OpenFGA, SpiceDB). Policy engines: OPA, Cedar.</p></li>
+</ul>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Zero trust:</strong> no implicit trust from network location. Every request carries a verifiable identity: users via SSO plus device posture; workloads via SPIFFE IDs and mTLS. <strong>Secrets:</strong> in a manager (Vault, AWS Secrets Manager), injected at runtime, rotated automatically; prefer workload identity federation over long-lived keys. <strong>Encryption:</strong> TLS in transit, KMS-managed keys at rest, envelope encryption for sensitive fields. <strong>Multi-tenancy:</strong> enforce tenant ID at the data layer (row-level security) not just the API; test for IDOR (changing an ID in the URL). Follow the OWASP Top 10, and for AI features the <strong>OWASP Top 10 for LLM Applications</strong> (prompt injection, sensitive data disclosure, excessive agency, and more; see Chapter (genai)).</p>
+</div>
+<h1 id="incident-response">Incident Response</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ol>
+<li><p><strong>Detect</strong>: SLO burn-rate alerts and user reports, routed to an on-call rotation.</p></li>
+<li><p><strong>Declare and assign roles</strong>: an <strong>incident commander</strong> coordinates (does not debug), a <strong>communications lead</strong> updates status pages and stakeholders, subject-matter experts investigate. A dedicated channel and a running timeline.</p></li>
+<li><p><strong>Mitigate first, diagnose later</strong>: roll back the last deploy or config change, flip a feature flag, fail over, shed load, block abusive traffic. Restoring service matters more than understanding it in the moment.</p></li>
+<li><p><strong>Resolve and verify</strong> with metrics, not hope.</p></li>
+<li><p><strong>Blameless postmortem</strong> within days: timeline, impact, root and contributing causes, what went well, and action items with owners and dates. Part (cases)’s outage chapter shows real ones.</p></li>
+</ol>
+<p>Severity levels (SEV1–SEV4) define who gets paged and how fast. Practice with game days.</p>
+</div>
+<h1 id="backups-restore-and-disaster-recovery">Backups, Restore, and Disaster Recovery</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>RPO</strong> (recovery point objective): how much data you can lose. <strong>RTO</strong> (recovery time objective): how long you can be down.</p>
+<ul>
+<li><p><strong>Backups</strong>: full snapshots plus continuous WAL or binlog archiving gives point-in-time recovery to any second. Follow 3-2-1: three copies, two media, one off-site, and at least one <strong>immutable</strong> copy (object lock) that ransomware or a compromised admin cannot delete. Encrypt backups and restrict who can delete them.</p></li>
+<li><p><strong>Restore testing</strong>: automate regular restores into a scratch environment and verify the data; measure how long it takes. GitLab’s 2017 incident (Part (cases)) is what untested backups look like. Replication is not a backup: it faithfully replicates a <code>DROP TABLE</code>.</p></li>
+</ul>
+<p><strong>Disaster recovery strategies</strong>, from cheapest to fastest:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Strategy</th>
+<th style="text-align: left;">Setup</th>
+<th style="text-align: left;">Typical RTO</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Backup and restore</td>
+<td style="text-align: left;">backups copied to another region; rebuild from scratch</td>
+<td style="text-align: left;">hours to days</td>
+</tr>
+<tr>
+<td style="text-align: left;">Pilot light</td>
+<td style="text-align: left;">data replicated; minimal core services idle in the DR region</td>
+<td style="text-align: left;">tens of minutes to hours</td>
+</tr>
+<tr>
+<td style="text-align: left;">Warm standby</td>
+<td style="text-align: left;">a scaled-down full copy running; scale up on failover</td>
+<td style="text-align: left;">minutes</td>
+</tr>
+<tr>
+<td style="text-align: left;">Active-active (multi-region)</td>
+<td style="text-align: left;">full capacity serving in several regions</td>
+<td style="text-align: left;">seconds to minutes</td>
+</tr>
+</tbody>
+</table>
+<p>Infrastructure as code makes rebuilding a region realistic; run failover drills.</p>
+</div>
+<h1 id="data-retention-deletion-and-privacy">Data Retention, Deletion, and Privacy</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Retention policy</strong> per data type (logs 30 days, analytics events 13 months, invoices 7 years for tax), enforced automatically with TTLs, partition drops, and object lifecycle rules.</p></li>
+<li><p><strong>User deletion</strong> (GDPR’s right to erasure, CCPA): a deletion request fans out to every system holding the user’s data (primary databases, caches, search indexes, analytics, data lake, ML training sets, third-party processors) through a tracked workflow, completed within the legal deadline, with proof. Keep a data map of where personal data lives; without it, deletion is guesswork.</p></li>
+<li><p><strong>Backups</strong>: deleting from immutable backups is impractical; common approaches are short backup retention and re-applying deletions after any restore, or <strong>crypto-shredding</strong>: encrypt each user’s data with a per-user key and delete the key to make all copies unreadable.</p></li>
+<li><p><strong>Minimize</strong>: do not collect what you do not need; pseudonymize analytics; restrict access and log it; keep data in the required region (data residency).</p></li>
+</ul>
+</div>
+<h1 id="security-and-abuse-prevention">Security and Abuse Prevention</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Abuse (spam, fake accounts, scraping, credential stuffing, promo fraud) is a product-scale problem, not just a security one. Layers: edge defenses (WAF, bot detection, IP reputation, rate limits by IP, account, device, and API key; Chapter (gateway)); friction that scales with risk (CAPTCHA, phone or email verification, step-up authentication); risk scoring models on signups, logins, and transactions with features like device fingerprint, velocity, and graph links between accounts; review queues and enforcement actions (warn, limit, suspend) with appeals; and feedback loops so detection improves from confirmed cases. Measure prevalence and false-positive rates, since blocking legitimate users is also a cost.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Debugging a latency spike</div>
+<p>Burn-rate alert fires for checkout p99. The trace view shows 80% of time in a <code>SELECT</code> on the inventory DB; logs linked by <code>trace_id</code> show a new query plan after a deploy; the continuous profiler shows the same. Rollback via feature flag fixes it in minutes.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: B2B SaaS authorization</div>
+<p>Users sign in through their company’s IdP (OIDC/SAML). The API gateway validates JWTs; services call OpenFGA to check “can user U edit document D” based on folder sharing relationships; Postgres row-level security ensures even a buggy query cannot read another tenant’s rows.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Instrument once with OpenTelemetry; correlate metrics, logs, and traces by trace ID.</p></li>
+<li><p>Alert on SLO burn rate, not on every error.</p></li>
+<li><p>Short-lived tokens, workload identity, and mTLS replace network trust.</p></li>
+<li><p>Enforce tenant isolation in the data layer.</p></li>
+</ul>
+</div>

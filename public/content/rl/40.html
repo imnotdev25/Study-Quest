@@ -1,0 +1,333 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: checking a restaurant bill three ways</div>
+<p>To check a bill, you can use a calculator, do rough mental math, or add up the items yourself. If all three agree, you trust it. If one disagrees, something’s wrong. Gradient checks do the same: autograd (the calculator), finite differences (rough math), and the REINFORCE estimate (the sampled answer) should all point the same way on a tiny problem.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why must advantages be detached in an actor’s policy-gradient loss?</p></li>
+<li><p>Why does subtracting an action-independent baseline preserve the expected policy gradient?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="three-views-of-the-same-gradient">2. Three views of the same gradient</h3>
+<p>For a small categorical policy, expected reward can be calculated exactly:</p>
+<p><span class="math display">\[J(\theta)
+=
+\sum_a \pi_\theta(a)R(a)\]</span></p>
+<p>Its gradient with respect to logit <span class="math inline">\(z_k\)</span> is:</p>
+<p><span class="math display">\[\frac{\partial J}{\partial z_k}
+=
+\pi_\theta(k)
+\left[
+R(k)-J(\theta)
+\right]\]</span></p>
+<p>Therefore:</p>
+<ul>
+<li><p>above-average actions have positive ascent gradients;</p></li>
+<li><p>below-average actions have negative ascent gradients;</p></li>
+<li><p>all logit gradients sum to zero because adding a constant to every logit leaves softmax unchanged.</p></li>
+</ul>
+<h3 class="unnumbered" id="finite-difference-slope">Finite-difference slope</h3>
+<p>For one parameter:</p>
+<p><span class="math display">\[\frac{\partial J}{\partial z_k}
+\approx
+\frac{
+J(z+\epsilon e_k)-J(z-\epsilon e_k)
+}{
+2\epsilon
+}\]</span></p>
+<p>This is the familiar line-slope idea applied one coordinate at a time. It is slow but valuable for testing tiny implementations.</p>
+<h3 class="unnumbered" id="sampled-reinforce-gradient">Sampled REINFORCE gradient</h3>
+<p>When exact expectation is unavailable:</p>
+<p><span class="math display">\[\nabla_\theta J
+=
+\mathbb E_{A\sim\pi_\theta}
+\left[
+(R(A)-b)
+\nabla_\theta\log\pi_\theta(A)
+\right]\]</span></p>
+<p>A Monte Carlo estimate should approach the exact gradient as sample count grows. It will not match exactly because actions are sampled.</p>
+<p>PyTorch optimizers minimize, so the actor loss is:</p>
+<p><span class="math display">\[L_{\text{actor}}
+=
+-\frac1B\sum_i
+\log\pi_\theta(A_i)\hat A_i\]</span></p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>logits, probabilities and exact gradient: <span style="background-color: codeinlinebg"><code> [actions]</code></span></p></li>
+<li><p>sampled actions, rewards and advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>policy loss: scalar</p></li>
+</ul>
+<p>DPO has a differentiable preference loss over fixed pairs rather than a sampled REINFORCE estimator. Finite-difference checks remain useful for either objective.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: finite-difference error: the V-shaped curve</div>
+<p>Central difference: <span class="math inline">\(\frac{f(\theta+h)-f(\theta-h)}{2h}=f&#39;(\theta)+\frac{h^2}{6}f&#39;&#39;&#39;(\theta)+O(h^4)\)</span>, so the truncation error is <span class="math inline">\(O(h^2)\)</span>. Forward difference has <span class="math inline">\(O(h)\)</span>. But floating-point roundoff adds about <span class="math inline">\(\varepsilon_{\text{mach}}|f|/h\)</span>. Too-small <span class="math inline">\(h\)</span> makes things <em>worse</em>:</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/e14186f196b4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Model curves (float64, <span class="math inline">\(|f|,|f&#39;&#39;|,|f&#39;&#39;&#39;|\sim1\)</span>). The best <span class="math inline">\(h\)</span> is about <span class="math inline">\(10^{-5}\)</span> for central and <span class="math inline">\(10^{-8}\)</span> for forward differences. In float32 everything is roughly <span class="math inline">\(10^9\times\)</span> worse, so run checks in float64.</em></p>
+</div>
+<p><strong>REINFORCE check:</strong> its standard error shrinks like <span class="math inline">\(1/\sqrt N\)</span>. Compare with cosine similarity, and expect agreement in <em>direction</em> within a few standard errors, not equality.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Autograd checks code, finite differences check autograd, REINFORCE checks the estimator.</p></li>
+<li><p>Use float64, central differences and <span class="math inline">\(h\approx10^{-5}\)</span>.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: central difference</div>
+<p><span class="math inline">\(f(\theta)=\theta^3\)</span> at <span class="math inline">\(\theta=1\)</span>, <span class="math inline">\(h=10^{-3}\)</span>: <span class="math inline">\(\frac{1.003001-0.997001}{0.002}=3.000001\)</span>. The true value is 3, so the error <span class="math inline">\(10^{-6}=h^2\cdot f&#39;&#39;&#39;/6\)</span>. (checks out)</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Float32 with <span class="math inline">\(h=10^{-6}\)</span> (roundoff dominates).</p></li>
+<li><p>Dropout or random sampling inside <span class="math inline">\(f\)</span> (the two evaluations differ).</p></li>
+<li><p>Comparing REINFORCE estimates elementwise instead of by direction and standard error.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-triangulate-the-gradient">3. PyTorch exercise — triangulate the gradient</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+base_logits = torch.tensor([
+    0.4, -0.2, 0.1
+])
+
+action_rewards = torch.tensor([
+    0.0, 1.0, 3.0
+])
+
+num_samples = 50_000
+
+# ----- 1. Exact autograd gradient -----
+
+exact_logits = torch.nn.Parameter(
+    base_logits.clone()
+)
+
+# TODO 1: Exact policy probabilities and expected reward.
+exact_probs = ...
+exact_expected_reward = ...
+
+# Optimizers minimize, so use negative expected reward.
+exact_loss = ...
+
+exact_loss.backward()
+
+# Convert the loss gradient into an ascent gradient for J.
+exact_ascent_gradient = ...
+
+# ----- 2. Monte Carlo REINFORCE gradient -----
+
+mc_logits = torch.nn.Parameter(
+    base_logits.clone()
+)
+
+mc_policy = Categorical(
+    logits=mc_logits
+)
+
+sampled_actions = mc_policy.sample((
+    num_samples,
+))
+
+# TODO 2: Selected rewards and log-probabilities.
+sampled_rewards = ...
+sampled_log_probs = ...
+
+# Oracle baseline for this tiny test.
+# In a real task, a critic would approximate this.
+baseline = exact_expected_reward.detach()
+
+# TODO 3: Fixed advantages and REINFORCE loss.
+advantages = ...
+mc_loss = ...
+
+mc_loss.backward()
+
+mc_ascent_gradient = ...
+
+# ----- 3. Finite-difference gradient -----
+
+epsilon = 1e-4
+
+def expected_reward(logits):
+    probabilities = logits.softmax(dim=-1)
+    return (
+        probabilities * action_rewards
+    ).sum()
+
+finite_difference_gradient = torch.zeros_like(
+    base_logits
+)
+
+for index in range(base_logits.numel()):
+    positive_logits = base_logits.clone()
+    negative_logits = base_logits.clone()
+
+    # TODO 4: Perturb one coordinate in opposite directions.
+    ...
+
+    positive_value = expected_reward(
+        positive_logits
+    )
+
+    negative_value = expected_reward(
+        negative_logits
+    )
+
+    # TODO 5: Central finite-difference slope.
+    finite_difference_gradient[index] = ...
+
+print(&quot;Policy probabilities:&quot;, exact_probs.detach())
+print(
+    &quot;Expected reward:&quot;,
+    exact_expected_reward.item(),
+)
+print(
+    &quot;Exact ascent gradient:&quot;,
+    exact_ascent_gradient,
+)
+print(
+    &quot;Finite-difference gradient:&quot;,
+    finite_difference_gradient,
+)
+print(
+    &quot;REINFORCE gradient:&quot;,
+    mc_ascent_gradient,
+)
+
+print(
+    &quot;Finite-difference max error:&quot;,
+    (
+        exact_ascent_gradient
+        - finite_difference_gradient
+    ).abs().max().item(),
+)
+
+print(
+    &quot;REINFORCE max error:&quot;,
+    (
+        exact_ascent_gradient
+        - mc_ascent_gradient
+    ).abs().max().item(),
+)
+
+print(
+    &quot;Exact gradient sum:&quot;,
+    exact_ascent_gradient.sum().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action’s logit should have the largest positive ascent gradient?</p></li>
+<li><p>Should action <span style="background-color: codeinlinebg"><code> 0</code></span> have a positive or negative gradient?</p></li>
+<li><p>Which should match more closely: exact autograd versus finite difference, or exact versus REINFORCE?</p></li>
+<li><p>Why should the three exact-gradient components sum to approximately zero?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Exact probabilities use <span style="background-color: codeinlinebg"><code> softmax(dim=-1)</code></span>.</p></li>
+<li><p>Expected reward is the probability-weighted reward sum.</p></li>
+<li><p>Convert a minimization gradient to an ascent gradient by negating <span style="background-color: codeinlinebg"><code> .grad</code></span>.</p></li>
+<li><p>Index rewards using sampled action IDs.</p></li>
+<li><p>Detach advantages in the actor loss.</p></li>
+<li><p>Perturb using <span style="background-color: codeinlinebg"><code> += epsilon</code></span> and <span style="background-color: codeinlinebg"><code> -= epsilon</code></span>.</p></li>
+<li><p>The central difference denominator is <span style="background-color: codeinlinebg"><code> 2 * epsilon</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Remove the negative sign:</p>
+<pre class="code python"><code class="language-python">mc_loss = (
+    sampled_log_probs
+    * advantages.detach()
+).mean()</code></pre>
+<p>Gradient descent now moves opposite the reward-maximizing direction.</p>
+<p>Next, remove <span style="background-color: codeinlinebg"><code> .detach()</code></span> while making the baseline depend on <span style="background-color: codeinlinebg"><code> mc_logits</code></span>. Autograd then differentiates through the credit signal, so the result no longer represents the intended score-function actor gradient.</p>
+<p>Finally, reduce:</p>
+<pre class="code python"><code class="language-python">num_samples = 50</code></pre>
+<p>The code remains mathematically correct, but sampling variance can make individual gradient components noisy or even temporarily have the wrong sign.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is finite difference unsuitable for training a large LLM?</p></li>
+<li><p>What does a correct finite-difference gradient but incorrect REINFORCE gradient suggest?</p></li>
+<li><p>What does disagreement between autograd and finite difference suggest?</p></li>
+<li><p>Why is checking only whether the loss decreases insufficient?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Exact objective:</p>
+<pre class="code python"><code class="language-python">exact_probs = exact_logits.softmax(
+    dim=-1
+)
+
+exact_expected_reward = (
+    exact_probs * action_rewards
+).sum()
+
+exact_loss = -exact_expected_reward</code></pre>
+<p>Exact ascent gradient:</p>
+<pre class="code python"><code class="language-python">exact_ascent_gradient = (
+    -exact_logits.grad.detach().clone()
+)</code></pre>
+<p>Sampled quantities:</p>
+<pre class="code python"><code class="language-python">sampled_rewards = action_rewards[
+    sampled_actions
+]
+
+sampled_log_probs = mc_policy.log_prob(
+    sampled_actions
+)</code></pre>
+<p>REINFORCE loss:</p>
+<pre class="code python"><code class="language-python">advantages = (
+    sampled_rewards - baseline
+)
+
+mc_loss = -(
+    sampled_log_probs
+    * advantages.detach()
+).mean()
+
+mc_ascent_gradient = (
+    -mc_logits.grad.detach().clone()
+)</code></pre>
+<p>Finite differences:</p>
+<pre class="code python"><code class="language-python">positive_logits[index] += epsilon
+negative_logits[index] -= epsilon</code></pre>
+<pre class="code python"><code class="language-python">finite_difference_gradient[index] = (
+    positive_value - negative_value
+) / (
+    2.0 * epsilon
+)</code></pre>
+<p>The exact gradient has the form:</p>
+<p><span class="math display">\[\nabla_{z_k}J
+=
+\pi(k)[R(k)-J]\]</span></p>
+<p>Action <span style="background-color: codeinlinebg"><code> 2</code></span> has reward <span style="background-color: codeinlinebg"><code> 3</code></span>, well above the expected reward, so its logit receives the largest positive ascent gradient.</p>
+<p>Actions <span style="background-color: codeinlinebg"><code> 0</code></span> and <span style="background-color: codeinlinebg"><code> 1</code></span> are below the expected reward and receive negative ascent gradients. Increasing action <span style="background-color: codeinlinebg"><code> 2</code></span> necessarily takes probability mass from the other actions.</p>
+<p>Finite difference should match autograd very closely. REINFORCE should be nearby but retain Monte Carlo sampling error.</p>
+<p>The gradient sum is approximately zero:</p>
+<p><span class="math display">\[\sum_k
+\pi(k)[R(k)-J]
+=
+\mathbb E[R]-J
+=
+0\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It needs at least two forward evaluations per parameter; billions of parameters make that prohibitively expensive.</p></li>
+<li><p>The sampled loss may have the wrong sign, wrong log-probabilities, non-detached credit signals or excessive sampling variance.</p></li>
+<li><p>The differentiable objective or tensor operations may be incorrect; also inspect finite-difference <span class="math inline">\(\epsilon\)</span> and numerical precision.</p></li>
+<li><p>A reversed or otherwise incorrect objective can decrease perfectly while optimizing the wrong behavior.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Advantages are fixed credit signals for the actor update. Differentiating through them introduces unintended paths and can let the target move with the policy.</p></li>
+<li><p>For an action-independent baseline:</p></li>
+</ol>
+<p><span class="math display">\[\mathbb E[
+b\nabla\log\pi(A)
+]
+=
+b\nabla\sum_a\pi(a)
+=
+0\]</span></p>
+<p><strong>Takeaway:</strong> on a tiny problem, triangulate policy gradients three ways. Autograd checks the implementation, finite differences check autograd’s result, and REINFORCE checks whether the sampled estimator points in the same reward-improving direction.</p>

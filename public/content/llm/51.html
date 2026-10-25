@@ -1,0 +1,16 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>The question:</strong> with a fixed compute budget <span class="math inline">\(C\)</span>, how should it be split between model size <span class="math inline">\(N\)</span> and training tokens <span class="math inline">\(D\)</span>? Hoffmann et al. (2022) fit the loss as a sum of an irreducible term and two finite-size penalties: <span class="math inline">\(L(N,D)=E+\frac{A}{N^\alpha}+\frac{B}{D^\beta}\)</span>, with <span class="math inline">\(\alpha\approx0.34\)</span>, <span class="math inline">\(\beta\approx0.28\)</span>.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the compute-optimal allocation</div>
+<p><strong>Step 1.</strong> Constraint: <span class="math inline">\(C=6ND\Rightarrow D=C/(6N)\)</span>. Substitute: <span class="math inline">\(L(N)=E+AN^{-\alpha}+B(6N/C)^{\beta}\)</span>.</p>
+<p><strong>Step 2.</strong> Minimize over <span class="math inline">\(N\)</span>: <span class="math inline">\(\frac{dL}{dN}=-\alpha AN^{-\alpha-1}+\beta B\,6^\beta C^{-\beta}N^{\beta-1}=0\)</span>.</p>
+<p><strong>Step 3.</strong> Rearrange: <span class="math inline">\(N^{\alpha+\beta}=\frac{\alpha A}{\beta B}\Big(\frac C6\Big)^{\beta}\)</span>, so <span class="math inline">\(\boxed{N^*\propto C^{\beta/(\alpha+\beta)}}\)</span> and <span class="math inline">\(D^*=C/(6N^*)\propto C^{\alpha/(\alpha+\beta)}\)</span>.</p>
+<p><strong>Step 4.</strong> With the fitted values both exponents are close to <span class="math inline">\(0.5\)</span>: <strong>scale parameters and tokens equally</strong>. The empirical rule of thumb is <span class="math inline">\(D^*\approx20N^*\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Example:</strong> <span class="math inline">\(C=10^{24}\)</span> FLOPs. <span class="math inline">\(C=6N(20N)=120N^2\Rightarrow N=\sqrt{10^{24}/120}=91\)</span>B parameters, <span class="math inline">\(D=1.8\)</span>T tokens. GPT-3 (175B on 300B tokens) was heavily under-trained by this measure.</p>
+<p><strong>Step 6.</strong> <strong>After Chinchilla:</strong> inference cost depends on <span class="math inline">\(N\)</span> only, so models served to many users are now trained far <em>past</em> <span class="math inline">\(20N\)</span> (Llama 3 8B saw about 15T tokens, roughly 1<span>,</span>900 per parameter). Compute-optimal for training isn’t optimal for deployment.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/702c59f832dd.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Chinchilla’s fitted <span class="math inline">\(L(N,D)\)</span> (<span class="math inline">\(E=1.69\)</span>, <span class="math inline">\(A=406.4\)</span>, <span class="math inline">\(B=410.7\)</span>) along <span class="math inline">\(D=C/6N\)</span>. Each budget has a best size (dots), and the best size grows with <span class="math inline">\(C\)</span>. This particular fit puts the optimum at 60–100 tokens per parameter. The “<span class="math inline">\(\approx20\)</span>” rule comes from the paper’s two other estimation methods; the fits disagree, which is why you’ll see both numbers quoted.</em></p>
+</div>

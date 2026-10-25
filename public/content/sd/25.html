@@ -1,0 +1,231 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Ten systems where money and physical-world logistics are on the line: Uber’s geospatial index and dispatch, Airbnb’s architecture evolution, Shopify’s and Stripe’s payment reliability practices, Amazon Prime Video’s move back from serverless, India’s UPI, Visa, Ticketmaster, and DoorDash.</p>
+</div>
+<h4 id="the-common-thread.">The common thread.</h4>
+<p>When money moves, correctness beats latency. Every case here relies on idempotency, reconciliation, and clear state machines. When physical supply (drivers, seats, couriers) is matched to demand, geospatial indexing and contention control become the core problems.</p>
+<h1 id="case-uber-h3-a-hexagonal-grid-for-the-planet">Case: Uber H3: A Hexagonal Grid for the Planet</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Mobility marketplace<br />
+<strong>Scale:</strong> Every ride request, trip, and order in every city<br />
+<strong>Concepts:</strong> Geospatial indexing, hierarchical cells, aggregation, surge pricing<br />
+<strong>Source:</strong> Uber engineering blog, “H3: Uber’s Hexagonal Hierarchical Spatial Index” (2018)</p>
+</div>
+<h4 id="the-problem.">The problem.</h4>
+<p>Uber needs to answer questions like “how many open requests and available drivers are near this point right now?” for surge pricing, dispatch, and forecasting. Using city zones drawn by hand or zip codes gives irregular shapes that change for unrelated reasons.</p>
+<figure class="tikz"><img src="figs/sd/fcab3c5b48a4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Hexagons have one neighbor distance; squares have two.</em></p>
+<h4 id="the-design.">The design.</h4>
+<p>H3 projects the Earth onto an icosahedron and tiles it with hexagons (plus 12 pentagons, placed in the ocean) at 16 resolutions, each about one seventh the area of the one above. Every cell has a 64-bit ID.</p>
+<ul>
+<li><p><strong>Why hexagons:</strong> all six neighbors are equally far from the center, so “rings” of neighbors approximate a circle and smoothing across neighbors is simple. People and cars move constantly, and hexagons minimize distortion when they cross cell boundaries.</p></li>
+<li><p><strong>Aggregation:</strong> demand and supply are counted per cell in real time; surge pricing compares them per cell.</p></li>
+<li><p><strong>Fast operations:</strong> finding neighbors (<code>kRing</code>), the parent cell at a coarser resolution, and membership in a region are simple integer operations. Regions can be compacted into mixed-resolution cells: California goes from 10<span>,</span>633 cells at resolution 6 to 901 compacted cells.</p></li>
+</ul>
+<p>Alternatives: geohash (rectangles on a Z-order curve, simple prefix queries), Google S2 (squares on a cube projected onto the sphere, Hilbert-curve ordering, used by Google Maps and many databases).</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Turn location into a cell ID and geospatial problems become key-value and counting problems.</p></li>
+<li><p>Hierarchical cells let you zoom in and out of aggregates cheaply.</p></li>
+<li><p>Choose cell shape by the operations you need: neighbor analysis favors hexagons, range scans favor geohash/S2.</p></li>
+</ul>
+</div>
+<h1 id="case-uber-dispatch-ringpop-and-sharded-supply">Case: Uber Dispatch: Ringpop and Sharded Supply</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Mobility<br />
+<strong>Scale:</strong> Millions of drivers’ locations updated every few seconds<br />
+<strong>Concepts:</strong> Consistent hashing, gossip membership, application-level sharding, request forwarding<br />
+<strong>Source:</strong> Uber engineering talks on DISCO (2015) and the Ringpop open-source library</p>
+</div>
+<h4 id="the-problem.-1">The problem.</h4>
+<p>Driver apps send a location every few seconds. Matching a rider to the best nearby driver requires the latest location of every driver in the area, held in memory, plus coordination so two riders are not offered the same driver.</p>
+<h4 id="the-design.-1">The design.</h4>
+<p>The dispatch system (DISCO) shards supply and demand by geography: each geographic cell is owned by one server. Uber built <strong>Ringpop</strong>, a library that gives a group of Node.js processes a <strong>consistent hash ring</strong> and <strong>gossip-based membership</strong> (the SWIM protocol: nodes ping each other, suspect unresponsive ones, and spread membership changes). Any node can receive a request; if it does not own the key, it <em>forwards</em> the request to the owner. Adding servers moves only a fraction of cells. To find drivers near a rider, the system queries the cells covering a radius around the rider and computes ETAs along the road network, not straight lines.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Stateful, in-memory sharding is the right fit for rapidly changing data like locations.</p></li>
+<li><p>Gossip membership plus consistent hashing removes a central coordinator.</p></li>
+<li><p>Match on ETA, not distance; the road network is what matters.</p></li>
+</ul>
+</div>
+<h1 id="case-airbnb-from-monorail-to-micro-and-macro-services">Case: Airbnb: From Monorail to Micro and Macro Services</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Travel marketplace<br />
+<strong>Scale:</strong> From a startup to over 1.5 billion guest arrivals in total<br />
+<strong>Concepts:</strong> Monolith decomposition, service ownership, service-oriented architecture, API aggregation<br />
+<strong>Source:</strong> Airbnb engineering talks (QCon 2018, 2023) and ByteByteGo “Airbnb’s Architectural Evolution”</p>
+</div>
+<h4 id="the-three-eras.">The three eras.</h4>
+<ol>
+<li><p><strong>Monolith (2008–2017).</strong> A Ruby on Rails app, “Monorail.” It worked well until hundreds of engineers were committing to it: deploys took hours, a bug in one area blocked everyone’s release, and nobody owned shared code.</p></li>
+<li><p><strong>Microservices (2017–2020).</strong> Airbnb split along layers: data services (own the data for one entity, the only way to read or write it), derived data services (business logic over several data services), middle-tier services, and presentation services that aggregate for UI. Code generation from Thrift/IDL definitions, a standard service framework, and strict ownership kept hundreds of services consistent.</p></li>
+<li><p><strong>Micro + macro services (2020 onward).</strong> Hundreds of fine-grained services made dependencies hard to manage and product changes required touching many of them. Airbnb grouped services behind a unified data-access API layer and aggregated “macro” services that present a simpler interface, using GraphQL-style aggregation.</p></li>
+</ol>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A monolith becomes the bottleneck when the number of engineers, not users, grows.</p></li>
+<li><p>Give each piece of data one owning service; others go through its API.</p></li>
+<li><p>Too many small services create a new problem; aggregate them behind coarser APIs.</p></li>
+</ul>
+</div>
+<h1 id="case-shopify-ten-principles-for-resilient-payments">Case: Shopify: Ten Principles for Resilient Payments</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Commerce payments<br />
+<strong>Scale:</strong> Flash sales and Black Friday peaks<br />
+<strong>Concepts:</strong> Timeouts, circuit breakers, Little’s Law, idempotency, reconciliation, load testing<br />
+<strong>Source:</strong> Shopify Engineering, “10 Tips for Building Resilient Payment Systems” (2022)</p>
+</div>
+<h4 id="the-principles">The principles</h4>
+<p>(with Shopify’s numbers):</p>
+<ol>
+<li><p><strong>Lower your timeouts.</strong> Ruby’s <code>Net::HTTP</code> defaults to 60 s; some clients have no timeout. Start around 1 s to connect and 5 s to read.</p></li>
+<li><p><strong>Install circuit breakers.</strong> Shopify’s Semian library includes the merchant’s country in the resource name, so a payment provider’s outage in one country does not open the circuit for others.</p></li>
+<li><p><strong>Understand capacity with Little’s Law.</strong> 50 concurrent requests at 100 ms each is 500 requests/s; if latency doubles, capacity halves.</p></li>
+<li><p><strong>Monitor the four golden signals</strong> (latency, traffic, errors, saturation), and separate expected failures (a card declined) from real errors.</p></li>
+<li><p><strong>Structured logging</strong> with a correlation ID through every service.</p></li>
+<li><p><strong>Idempotency keys.</strong> At Shopify’s scale, “once in a million” happens many times a day. ULIDs as keys cut insert time by 50% versus random UUIDv4 in one system.</p></li>
+<li><p><strong>Reconcile</strong> your records against the payment partner’s records and treat mismatches as anomalies to fix automatically where possible.</p></li>
+<li><p><strong>Load test</strong> with simulated flash sales against a fake payment gateway that mimics production latency. Queues start growing at 70–80% utilization, so 100% is never a realistic target.</p></li>
+<li><p><strong>Incident management</strong> with clear roles.</p></li>
+<li><p><strong>Retrospectives</strong> within a week, with action items.</p></li>
+</ol>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Default library timeouts are almost always wrong for user-facing calls.</p></li>
+<li><p>Scope circuit breakers to the failure domain (provider <em>and</em> country).</p></li>
+<li><p>Reconciliation is the safety net that catches what idempotency misses.</p></li>
+</ul>
+</div>
+<h1 id="case-stripe-designing-robust-apis-with-idempotency">Case: Stripe: Designing Robust APIs with Idempotency</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Payments API<br />
+<strong>Scale:</strong> Millions of businesses retrying over unreliable networks<br />
+<strong>Concepts:</strong> Idempotency keys, atomic phases, recovery points, safe retries<br />
+<strong>Source:</strong> Stripe blog, “Designing robust and predictable APIs with idempotency” and Brandur Leach, “Implementing Stripe-like Idempotency Keys in Postgres” (2017)</p>
+</div>
+<h4 id="the-model.">The model.</h4>
+<p>Any POST may include an <code>Idempotency-Key</code> header. The server stores the key with the request parameters and, once finished, the response. A retry with the same key returns the stored response instead of charging again. Keys expire after 24 hours.</p>
+<h4 id="the-hard-part-requests-with-external-side-effects.">The hard part: requests with external side effects.</h4>
+<p>A charge request does several things: write to the local database, call a card network, write the result. A crash can happen between any two. The approach described by Brandur Leach:</p>
+<ul>
+<li><p>Split the request into <strong>atomic phases</strong>, each a local database transaction, separated by calls to foreign systems.</p></li>
+<li><p>After each phase, record a <strong>recovery point</strong> on the idempotency key row (<code>started</code>, <code>charge_created</code>, <code>finished</code>).</p></li>
+<li><p>A retry (from the client or a background “completer”) resumes from the last recovery point instead of starting over.</p></li>
+<li><p>Use the same idempotency key when calling the downstream provider, so a repeated external call is also safe.</p></li>
+<li><p>Lock the key row so two concurrent retries cannot run at the same time (return 409 to the second).</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Idempotency for multi-step operations means storing progress, not only the final response.</p></li>
+<li><p>Each phase should be one local transaction; never hold a DB transaction open during an external call.</p></li>
+<li><p>Pass idempotency keys downstream so the whole chain is safe to retry.</p></li>
+</ul>
+</div>
+<h1 id="case-amazon-prime-video-back-to-a-monolith-90-cheaper">Case: Amazon Prime Video: Back to a Monolith, 90% Cheaper</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Video quality monitoring<br />
+<strong>Scale:</strong> Thousands of concurrent streams to analyze<br />
+<strong>Concepts:</strong> Serverless costs, data transfer, choosing granularity<br />
+<strong>Source:</strong> Prime Video Tech blog, “Scaling up the Prime Video audio/video monitoring service and reducing costs by 90%” (2023)</p>
+</div>
+<h4 id="the-original-design.">The original design.</h4>
+<p>A tool that checks streams for audio and video defects was built as distributed serverless components: AWS Step Functions orchestrated each stream, Lambda functions ran detectors, and video frames were passed between stages through S3.</p>
+<h4 id="what-went-wrong.">What went wrong.</h4>
+<p>It hit scaling limits at about 5% of the expected load. Two costs dominated: Step Functions charges per state transition, and the workflow had many transitions per second of video; and every frame was written to and read from S3 between steps, which is expensive at high volume.</p>
+<h4 id="the-fix.">The fix.</h4>
+<p>The team moved all components into a single process running on ECS: frames pass in memory between the media converter and detectors, and orchestration is ordinary code. Scaling is achieved by running more copies of that process, each handling a set of streams. Infrastructure cost fell by over 90%.</p>
+<h4 id="the-real-lesson.">The real lesson.</h4>
+<p>This was widely reported as “microservices are bad.” It is more precise to say that the <em>unit of distribution</em> was wrong: the components exchanged large amounts of data at high frequency, so they belonged in one process. The service is still one service among many in Prime Video’s architecture.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Components that exchange lots of data frequently belong in the same process.</p></li>
+<li><p>Model per-request costs (transitions, invocations, data transfer) before choosing serverless.</p></li>
+<li><p>Architecture decisions should be revisited when the workload is understood.</p></li>
+</ul>
+</div>
+<h1 id="case-upi-indias-real-time-payment-switch">Case: UPI: India’s Real-Time Payment Switch</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> National payments infrastructure<br />
+<strong>Scale:</strong> Over 15 billion transactions per month (2024–2025, per NPCI)<br />
+<strong>Concepts:</strong> Central switch, interoperability, virtual addresses, two-factor flow, reconciliation<br />
+<strong>Source:</strong> NPCI public documentation; ByteByteGo “Unified Payments Interface (UPI)”</p>
+</div>
+<figure class="tikz"><img src="figs/sd/95dd00b01778.svg" alt="diagram" loading="lazy"></figure>
+<p><em>UPI: payment apps talk to one central switch; banks move the money.</em></p>
+<h4 id="the-design.-2">The design.</h4>
+<p>UPI separates the <em>user experience</em> (payment apps such as PhonePe, Google Pay, Paytm, called Payment Service Providers) from the <em>accounts</em> (banks). Users have a <strong>Virtual Payment Address</strong> (<code>name@bank</code>) instead of sharing account numbers. A payment flows through the NPCI central switch, which resolves the address, asks the payer’s bank to debit (after the user enters a PIN that is encrypted and verified by the bank, not the app), and asks the payee’s bank to credit. Settlement between banks happens in batches several times a day; each transaction is immediately final for the users. QR codes made it work for the smallest merchants.</p>
+<h4 id="why-it-scales.">Why it scales.</h4>
+<p>One interoperable switch with a standard API means any app works with any bank. The switch is a high-throughput router; heavy work (account balances) stays in the banks. Timeouts and “deemed approved” states, plus reconciliation files, handle cases where a bank responds late.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A thin central router with open standards can create a whole ecosystem.</p></li>
+<li><p>Separate instant user-visible confirmation from batch interbank settlement.</p></li>
+<li><p>Design explicit states for “unknown outcome” and resolve them by reconciliation.</p></li>
+</ul>
+</div>
+<h1 id="case-visa-what-happens-when-you-swipe-a-card">Case: Visa: What Happens When You Swipe a Card</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Card network<br />
+<strong>Scale:</strong> Hundreds of millions of transactions per day<br />
+<strong>Concepts:</strong> Authorization vs settlement, multi-party flows, holds, reconciliation<br />
+<strong>Source:</strong> Visa public documentation; ByteByteGo “How VISA Works When Swiping a Credit Card”</p>
+</div>
+<h4 id="the-parties.">The parties.</h4>
+<p>Cardholder, merchant, <strong>acquirer</strong> (the merchant’s bank or processor), the card network (VisaNet), and the <strong>issuer</strong> (the cardholder’s bank).</p>
+<h4 id="two-separate-flows.">Two separate flows.</h4>
+<ol>
+<li><p><strong>Authorization</strong> (real time, about a second): the terminal sends the transaction to the acquirer, which forwards it through VisaNet to the issuer. The issuer checks the card, available credit, and fraud models, then approves and places a <em>hold</em>. No money has moved yet.</p></li>
+<li><p><strong>Clearing and settlement</strong> (batch, typically the same or next day): the merchant submits a batch of captured transactions; the network calculates net positions between banks; the issuer pays the acquirer (minus interchange fees); the acquirer pays the merchant.</p></li>
+</ol>
+<p>Disputes and chargebacks are a third, slower flow that can reverse a payment weeks later.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Separate the fast “can this happen?” decision from the slow “move the money” process.</p></li>
+<li><p>Holds are a reservation pattern: reserve now, confirm or release later (like a saga step).</p></li>
+<li><p>Netting many transactions into batch settlements is far cheaper than settling each one.</p></li>
+</ul>
+</div>
+<h1 id="case-ticketmaster-the-taylor-swift-eras-tour-presale">Case: Ticketmaster: The Taylor Swift Eras Tour Presale</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Ticketing<br />
+<strong>Scale:</strong> About 3.5 billion system requests on one presale day, four times the previous peak (2022)<br />
+<strong>Concepts:</strong> Virtual waiting rooms, bot mitigation, inventory contention, admission control<br />
+<strong>Source:</strong> Ticketmaster public statements (November 2022)</p>
+</div>
+<h4 id="what-happened.">What happened.</h4>
+<p>For the November 2022 presale, about 1.5 million fans were invited with verified-fan codes. Ticketmaster reported that a combination of bot attacks and fans without codes pushed traffic to about 3.5 billion requests, four times its previous peak. Queues stalled, many users were stuck, and the general public sale was cancelled.</p>
+<h4 id="how-to-design-for-it.">How to design for it.</h4>
+<ul>
+<li><p><strong>Virtual waiting room</strong>: admit users into the purchase flow at a controlled rate (a token-bucket admission controller at the edge). Everyone else waits on a static, CDN-cached page that polls for their turn.</p></li>
+<li><p><strong>Fair queuing</strong>: randomize position for everyone who arrives before the sale opens, so being a millisecond faster (bots) does not help.</p></li>
+<li><p><strong>Bot defense at the edge</strong>: device fingerprinting, rate limits per account and IP range, proof-of-work or challenges, and verified identities.</p></li>
+<li><p><strong>Inventory contention</strong>: thousands of users want the same seats. Use short-lived seat <em>holds</em> with expiry (a reservation with TTL), partitioned by section, and atomic conditional updates (<code>UPDATE seats SET held_by=? WHERE id=? AND held_by IS NULL</code>).</p></li>
+<li><p><strong>Graceful degradation</strong>: offer “best available” instead of a seat map when the system is under stress; seat maps are expensive.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>For predictable spikes, admission control (waiting rooms) protects everything behind it.</p></li>
+<li><p>Fairness and bot defense are system design requirements, not afterthoughts.</p></li>
+<li><p>Contended inventory needs short holds with TTLs and atomic conditional writes.</p></li>
+</ul>
+</div>
+<h1 id="case-doordash-delivery-assignment-and-cell-based-reliability">Case: DoorDash: Delivery Assignment and Cell-Based Reliability</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Food delivery<br />
+<strong>Scale:</strong> Millions of orders per day across three-sided marketplace<br />
+<strong>Concepts:</strong> Optimization-based dispatch, ETA prediction, monolith to microservices, cells<br />
+<strong>Source:</strong> DoorDash engineering blog posts on dispatch (“DeepRed”) and cell-based architecture</p>
+</div>
+<h4 id="the-dispatch-problem.">The dispatch problem.</h4>
+<p>Unlike ride sharing, a delivery has three parties and a timing puzzle: the courier should arrive just as the food is ready. Arriving early wastes the courier’s time; arriving late leaves food cold.</p>
+<h4 id="the-design.-3">The design.</h4>
+<p>DoorDash’s dispatch system (described in its blog as DeepRed) works in rounds. Every few seconds, for each region, it collects open orders and available couriers, uses ML models to predict food preparation time, travel time, and the chance a courier accepts, then solves an <strong>assignment optimization</strong> (a mixed-integer program) to choose who gets which order, possibly batching two orders for one courier. Assignments are offered, and declined offers go back into the next round.</p>
+<h4 id="reliability.">Reliability.</h4>
+<p>After moving from a Python monolith to Kotlin microservices, DoorDash adopted a <strong>cell-based architecture</strong> with zone-aware routing in its service mesh, so failures and noisy workloads are contained within a cell and cross-zone data transfer costs drop.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Batching decisions into short rounds lets you optimize globally instead of greedily.</p></li>
+<li><p>Prediction quality (prep time, ETA) is as important as the optimizer.</p></li>
+<li><p>Cells and zone-aware routing improve both reliability and cloud cost.</p></li>
+</ul>
+</div>

@@ -1,0 +1,86 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Interpretability looks inside the model. For safety, the most practical tools are <strong>linear probes</strong>: small classifiers on hidden states that detect a property (“this request is harmful,” “this reasoning is deceptive”) before or during generation. They’re cheap to run next to the model and give a signal that doesn’t depend on its final text.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the best linear probe for Gaussian classes</div>
+<p><strong>Step 1.</strong> Model hidden states as <span class="math inline">\(h\sim\mathcal N(\mu_+,\Sigma)\)</span> for harmful and <span class="math inline">\(\mathcal N(\mu_-,\Sigma)\)</span> for benign, with a shared covariance.</p>
+<p><strong>Step 2.</strong> Log-odds: <span class="math inline">\(\log\frac{p(+|h)}{p(-|h)}=-\tfrac12(h-\mu_+)^\top\Sigma^{-1}(h-\mu_+)+\tfrac12(h-\mu_-)^\top\Sigma^{-1}(h-\mu_-)+\text{const}\)</span>. The quadratic terms in <span class="math inline">\(h\)</span> cancel.</p>
+<p><strong>Step 3.</strong> What’s left is linear: <span class="math inline">\(w^\top h+b\)</span> with <span class="math inline">\(\boxed{w=\Sigma^{-1}(\mu_+-\mu_-)}\)</span>. That’s Fisher’s LDA.</p>
+<p><strong>Step 4.</strong> If <span class="math inline">\(\Sigma\propto I\)</span>, <span class="math inline">\(w\propto\mu_+-\mu_-\)</span>: the simple difference-of-means probe is optimal. With correlated noise it isn’t, because LDA down-weights directions where noise is large.</p>
+<p><strong>Step 5.</strong> The output below shows this: with correlated noise, difference of means reaches 54% and LDA 93%, even though the LDA direction is <em>less</em> aligned with the planted signal. The optimal direction isn’t the signal direction; it’s the signal “whitened” by the noise.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Interpretability for safety monitoring: a linear probe that detects harmful requests from hidden states.
+
+Local test (synthetic activations with a planted direction):  python probe.py
+On Modal (real Qwen3-0.6B hidden states, per-layer accuracy):  modal run probe.py::probe_remote
+&quot;&quot;&quot;
+import modal
+import torch
+
+
+def diff_of_means(h_pos, h_neg):
+    &quot;&quot;&quot;Direction w = mu_pos - mu_neg; threshold at the midpoint. Equal to LDA when classes share an isotropic covariance.&quot;&quot;&quot;
+    mu_p, mu_n = h_pos.mean(0), h_neg.mean(0)
+    w = mu_p - mu_n
+    b = -w @ (mu_p + mu_n) / 2
+    return w, b
+
+
+def lda(h_pos, h_neg, ridge=1e-2):
+    &quot;&quot;&quot;Fisher&#x27;s LDA: w = Sigma^{-1}(mu_pos - mu_neg), with Sigma the pooled within-class covariance.&quot;&quot;&quot;
+    mu_p, mu_n = h_pos.mean(0), h_neg.mean(0)
+    X = torch.cat([h_pos - mu_p, h_neg - mu_n])
+    sigma = X.T @ X / (len(X) - 2) + ridge * torch.eye(X.shape[1])
+    w = torch.linalg.solve(sigma, mu_p - mu_n)
+    return w, -w @ (mu_p + mu_n) / 2
+
+
+def accuracy(w, b, h_pos, h_neg):
+    return ((h_pos @ w + b &gt; 0).float().sum() + (h_neg @ w + b &lt;= 0).float().sum()).item() / (len(h_pos) + len(h_neg))
+
+
+app = modal.App(&quot;pt-book-probe&quot;)
+image = modal.Image.debian_slim(python_version=&quot;3.12&quot;).uv_pip_install(
+    &quot;torch==2.14.1&quot;, &quot;transformers==5.20.2&quot;, &quot;datasets==5.1.0&quot;).add_local_python_source(&quot;probe&quot;)
+
+
+@app.function(gpu=&quot;L4&quot;, image=image, timeout=30 * 60)
+def probe_remote(model_name: str = &quot;Qwen/Qwen3-0.6B&quot;):
+    from datasets import load_dataset
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16).cuda().eval()
+    jbb = load_dataset(&quot;JailbreakBench/JBB-Behaviors&quot;, &quot;behaviors&quot;)
+
+    def states(prompts):                              # hidden state of the last prompt token, every layer
+        out = []
+        for p in prompts:
+            ids = tok.apply_chat_template([{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: p}], add_generation_prompt=True,
+                                          return_tensors=&quot;pt&quot;).to(&quot;cuda&quot;)
+            with torch.no_grad():
+                hs = model(ids, output_hidden_states=True).hidden_states
+            out.append(torch.stack([h[0, -1].float().cpu() for h in hs]))
+        return torch.stack(out)                       # [N, layers+1, D]
+
+    hp, hn = states(jbb[&quot;harmful&quot;][&quot;Goal&quot;]), states(jbb[&quot;benign&quot;][&quot;Goal&quot;])
+    tr, te = slice(0, 70), slice(70, 100)             # train on 70 of each, test on the other 30
+    return [round(accuracy(*diff_of_means(hp[tr, l], hn[tr, l]), hp[te, l], hn[te, l]), 3) for l in range(hp.shape[1])]
+
+
+if __name__ == &quot;__main__&quot;:
+    torch.manual_seed(0)
+    D, N = 256, 200
+    u = torch.nn.functional.normalize(torch.randn(D), dim=0)          # the planted &quot;harmfulness&quot; direction
+    mix = torch.randn(D, D) / D ** 0.5                                 # correlated (non-isotropic) noise
+    noise = lambda n: torch.randn(n, D) @ mix * 3
+    h_pos, h_neg = noise(N) + 1.5 * u, noise(N) - 1.5 * u
+    t_pos, t_neg = noise(N) + 1.5 * u, noise(N) - 1.5 * u
+    for name, fit in ((&quot;difference of means&quot;, diff_of_means), (&quot;LDA&quot;, lda)):
+        w, b = fit(h_pos, h_neg)
+        cos = torch.nn.functional.cosine_similarity(w, u, dim=0).item()
+        print(f&quot;{name:20s} test accuracy {accuracy(w, b, t_pos, t_neg):.3f}   cos(w, true direction) {cos:.3f}&quot;)</code></pre>
+<p>Local output (synthetic activations with a planted direction; <code>probe_remote</code> measures per-layer accuracy on Qwen3-0.6B):</p>
+<pre class="code output"><code class="output">difference of means  test accuracy 0.535   cos(w, true direction) 0.447
+LDA                  test accuracy 0.925   cos(w, true direction) 0.264</code></pre>
+<p><strong>Directions cut both ways.</strong> The difference of means between harmful and harmless prompts’ activations gives a “refusal direction” (Arditi et al., 2024): adding it makes a model refuse, and projecting it out of open weights largely removes refusal. That’s why safety in open-weight models is fragile, and it’s an active research area: “The Geometry of Refusal” (arXiv 2609.06934), “Beyond Shallow Alignment: How Post-Training Methods Determine Refusal Circuits” (arXiv 2609.03887), and “Abliteration Mitigation via Refusal Aliases” (arXiv 2608.18093). For monitoring, probes run alongside generation and flag high scores for review; <strong>chain-of-thought monitoring</strong> does the same on a reasoning model’s visible reasoning, which works only as long as training doesn’t teach the model to hide it.</p>

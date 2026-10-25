@@ -1,0 +1,33 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Study Quest",
+        "width": 1320,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 620,
+        "transparent": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 18,
+          "y": 22
+        },
+        "windowEffects": {
+          "effects": [
+            "sidebar"
+          ],
+          "state": "followsWindowActiveState"
+        }
+      }
+    ]
+  },
+  "bundle": {
+    "targets": [
+      "app",
+      "dmg"
+    ]
+  }
+}

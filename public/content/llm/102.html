@@ -1,0 +1,40 @@
+
+<div class="center">
+<table style="width:90%;">
+<colgroup>
+<col style="width: 15%" />
+<col style="width: 40%" />
+<col style="width: 35%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Engine</strong></th>
+<th style="text-align: left;"><strong>Design centre</strong></th>
+<th style="text-align: left;"><strong>Reach for it when</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">vLLM</td>
+<td style="text-align: left;">PagedAttention, continuous batching, the broadest model and hardware support, OpenAI API</td>
+<td style="text-align: left;">default choice; RL rollouts (TRL, verl)</td>
+</tr>
+<tr>
+<td style="text-align: left;">SGLang</td>
+<td style="text-align: left;">RadixAttention prefix cache, cache-aware scheduling, fast structured output, strong large-MoE support</td>
+<td style="text-align: left;">agents, shared prefixes, DeepSeek-style MoE at scale</td>
+</tr>
+<tr>
+<td style="text-align: left;">TensorRT-LLM</td>
+<td style="text-align: left;">ahead-of-time compiled engines, NVIDIA-tuned kernels, FP8/FP4</td>
+<td style="text-align: left;">lowest latency on NVIDIA once the model is fixed</td>
+</tr>
+<tr>
+<td style="text-align: left;">llama.cpp</td>
+<td style="text-align: left;">C/C++, GGUF quantisation (2–8 bit), CPU, Apple Metal</td>
+<td style="text-align: left;">laptops, edge, single-user local inference</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>A fair comparison fixes the model weights and precision, the hardware, the workload (lengths, arrival process, shared prefixes), the sampling parameters, and the SLO; reports goodput at the SLO plus the latency curve; tunes each engine’s main knobs equally; and checks that outputs agree (same greedy tokens, or the same eval score). <em>On Evaluating Performance of LLM Inference Serving Systems</em> documents how often published comparisons break one of these rules, for example by quoting TPOT without ITL tails or by sweeping only closed-loop load.</p>

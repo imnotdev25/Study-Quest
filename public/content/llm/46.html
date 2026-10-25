@@ -1,0 +1,257 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Perplexity</strong> is the exponential of the average per-token NLL: <span class="math inline">\(\operatorname{PPL}=\exp(L_{\text{token}})\)</span>. Read it as the effective number of equally likely choices the model is torn between at each step. A model that spreads probability uniformly over <span class="math inline">\(V\)</span> tokens has <span class="math inline">\(\operatorname{PPL}=V\)</span>, and a perfect model has <span class="math inline">\(\operatorname{PPL}=1\)</span>.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>For mean softmax cross-entropy, what is the gradient with respect to logits?</p></li>
+<li><p>Why must ignored or padded tokens be excluded from the loss denominator?</p></li>
+</ol>
+<p>For language-model logits and labels:</p>
+<p><span class="math display">\[Z\in\mathbb{R}^{B\times T\times V},
+\qquad
+Y\in\{0,\ldots,V-1\}^{B\times T}\]</span></p>
+<p>the negative log-likelihood of each valid token is:</p>
+<p><span class="math display">\[\ell_{bt}=-\log p_\theta(Y_{bt}\mid Y_{b,&lt;t})\]</span></p>
+<p>If <span class="math inline">\(M_{bt}\in\{0,1\}\)</span> indicates valid target tokens:</p>
+<p><span class="math display">\[L_{\text{token}}
+=
+\frac{\sum_{b,t}M_{bt}\ell_{bt}}
+{\sum_{b,t}M_{bt}}\]</span></p>
+<p>Perplexity is:</p>
+<p><span class="math display">\[\operatorname{PPL}=\exp(L_{\text{token}})\]</span></p>
+<p>It is the exponential of average token NLL—not average sequence loss and not average batch perplexity.</p>
+<p>For distributed or microbatched evaluation, accumulate two quantities:</p>
+<p><span class="math display">\[S=\sum_{\text{valid tokens}}\ell_{bt}\]</span></p>
+<p><span class="math display">\[N=\sum_{b,t}M_{bt}\]</span></p>
+<p>Then calculate once:</p>
+<p><span class="math display">\[L=\frac{S}{N},
+\qquad
+\operatorname{PPL}=e^{S/N}\]</span></p>
+<p>Averaging batch means is incorrect when batches contain different valid-token counts:</p>
+<p><span class="math display">\[\frac{1}{K}\sum_k\frac{S_k}{N_k}
+\neq
+\frac{\sum_kS_k}{\sum_kN_k}\]</span></p>
+<p>Research-engineering implication: evaluation results should not change merely because examples were packed or batched differently.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: what perplexity is, and how to aggregate it</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\exp\Big(-\frac1N\sum_t\log p_t\Big)=\Big(\prod_tp_t\Big)^{-1/N}\)</span>: the inverse geometric mean of the probabilities given to the true tokens.</p>
+<p><strong>Step 2.</strong> If every <span class="math inline">\(p_t=1/k\)</span>, then <span class="math inline">\(\operatorname{PPL}=k\)</span>. So <span class="math inline">\(\operatorname{PPL}=7.39\)</span> (NLL <span class="math inline">\(2.0\)</span>) is “as uncertain as choosing among about 7 tokens.”</p>
+<p><strong>Step 3.</strong> <strong>Aggregating across batches:</strong> accumulate <span class="math inline">\(\sum\)</span> NLL and <span class="math inline">\(\sum\)</span> tokens, divide once, then exponentiate. Batches with more tokens must count more.</p>
+<p><strong>Step 4.</strong> <strong>Averaging batch perplexities is wrong:</strong> <span class="math inline">\(\exp\)</span> is convex, so by Jensen <span class="math inline">\(\frac1K\sum_ke^{L_k}\ge e^{\frac1K\sum_kL_k}\)</span>. Example: batch NLLs 1 and 3 with equal tokens: true <span class="math inline">\(\operatorname{PPL}=e^2=7.39\)</span>, but the mean of <span class="math inline">\(e^1\)</span> and <span class="math inline">\(e^3\)</span> is <span class="math inline">\(11.40\)</span>.</p>
+<p><strong>Step 5.</strong> Perplexity depends on the tokenizer: different tokenizations of the same text give different <span class="math inline">\(N\)</span>, so only compare models with the same tokenizer (or use bits per byte).</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: corpus perplexity</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> evaluation batches with logits, labels and masks</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(S\gets0\)</span>; <span class="math inline">\(N\gets0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each batch <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(S\gets S+\sum_{b,t}M_{bt}\ell_{bt}\)</span>; <span class="math inline">\(N\gets N+\sum_{b,t}M_{bt}\)</span> <em>▷ sum, don’t average</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\operatorname{PPL}=\exp(S/N)\)</span> <em>▷ all-reduce <span class="math inline">\(S,N\)</span> across ranks first</em></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement token-weighted evaluation across uneven microbatches.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(181)
+
+B, T, V = 5, 4, 7
+ignore_index = -100
+
+logits = torch.randn(B, T, V)
+
+labels = torch.tensor([
+    [1, 2, -100, -100],       # 2 valid tokens
+    [3, -100, -100, -100],    # 1
+    [4, 1, 0, 2],             # 4
+    [2, 3, 4, -100],          # 3
+    [5, 6, -100, -100],       # 2
+])                             # total: 12
+
+
+def loss_sum_and_count(logits, labels):
+    flat_logits = ...                          # TODO 1: [B*T, V]
+    flat_labels = ...                          # TODO 2: [B*T]
+
+    token_losses = F.cross_entropy(
+        flat_logits,
+        flat_labels,
+        ignore_index=ignore_index,
+        reduction=&quot;none&quot;,
+    )                                          # [B*T]
+
+    valid = ...                                # TODO 3: boolean [B*T]
+
+    loss_sum = ...                             # TODO 4: scalar
+    valid_count = ...                          # TODO 5: scalar
+
+    return loss_sum, valid_count
+
+
+# Reference: evaluate everything together
+full_sum, full_count = loss_sum_and_count(logits, labels)
+
+full_mean = ...                                # TODO 6
+full_ppl = ...                                 # TODO 7
+
+print(&quot;valid tokens:&quot;, full_count.item())
+print(&quot;full mean NLL:&quot;, full_mean.item())
+print(&quot;full perplexity:&quot;, full_ppl.item())
+
+
+# Evaluate as two uneven microbatches
+microbatches = [
+    (logits[:2], labels[:2]),   # 3 valid tokens
+    (logits[2:], labels[2:]),   # 9 valid tokens
+]
+
+total_sum = torch.tensor(0.0)
+total_count = torch.tensor(0)
+
+batch_means = []
+batch_perplexities = []
+
+for batch_logits, batch_labels in microbatches:
+    batch_sum, batch_count = ...               # TODO 8
+
+    total_sum += ...                            # TODO 9
+    total_count += ...
+
+    batch_mean = ...                            # TODO 10
+    batch_means.append(batch_mean)
+    batch_perplexities.append(torch.exp(batch_mean))
+
+aggregated_mean = ...                           # TODO 11
+aggregated_ppl = ...                            # TODO 12
+
+wrong_mean = torch.stack(batch_means).mean()
+wrong_ppl = torch.stack(batch_perplexities).mean()
+
+print(&quot;\ncorrect aggregated NLL:&quot;, aggregated_mean.item())
+print(&quot;wrong mean-of-means:   &quot;, wrong_mean.item())
+print(&quot;correct perplexity:    &quot;, aggregated_ppl.item())
+print(&quot;wrong mean batch PPL:  &quot;, wrong_ppl.item())
+
+assert torch.allclose(full_mean, aggregated_mean)
+assert torch.allclose(full_ppl, aggregated_ppl)</code></pre>
+<p>Before running, predict which microbatch receives too much influence in <code>wrong_mean</code>.</p>
+<p>Now test whether evaluation depends on batching:</p>
+<pre class="code python"><code class="language-python">single_example_batches = [
+    (logits[i:i + 1], labels[i:i + 1])
+    for i in range(B)
+]
+
+means = []
+
+for batch_logits, batch_labels in single_example_batches:
+    batch_sum, batch_count = loss_sum_and_count(
+        batch_logits,
+        batch_labels,
+    )
+    means.append(batch_sum / batch_count)
+
+wrong_single_example_mean = torch.stack(means).mean()
+
+print(
+    &quot;\nwrong metric changed after rebatching:&quot;,
+    not torch.allclose(wrong_mean, wrong_single_example_mean),
+)</code></pre>
+<p>Explain why a metric changing under pure rebatching is an evaluation bug.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Flatten logits with <code>.reshape(-1, V)</code>.</p></li>
+<li><p>Valid labels satisfy <code>flat_labels != ignore_index</code>.</p></li>
+<li><p>Sum only losses at valid positions.</p></li>
+<li><p>The correct denominator is the total valid-token count.</p></li>
+<li><p>Apply <code>torch.exp</code> only after obtaining the global mean NLL.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>For logits <span><code>[</code></span><code>B,T,V</code><span><code>]</code></span>, which dimension represents the categorical distribution?</p></li>
+<li><p>Why should workers in distributed evaluation reduce both NLL sums and valid-token counts?</p></li>
+<li><p>Prediction: if total NLL and valid-token count both double, what happens to perplexity?</p></li>
+<li><p>Debugging: validation perplexity changes when the same examples use a different batch size. What aggregation mistake is likely?</p></li>
+<li><p>Why is averaging per-sequence perplexities different from computing corpus-level perplexity?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def loss_sum_and_count(logits, labels):
+    flat_logits = logits.reshape(-1, V)
+    flat_labels = labels.reshape(-1)
+
+    token_losses = F.cross_entropy(
+        flat_logits,
+        flat_labels,
+        ignore_index=ignore_index,
+        reduction=&quot;none&quot;,
+    )
+
+    valid = flat_labels != ignore_index
+
+    loss_sum = token_losses[valid].sum()
+    valid_count = valid.sum()
+
+    return loss_sum, valid_count
+
+
+full_sum, full_count = loss_sum_and_count(
+    logits,
+    labels,
+)
+
+full_mean = full_sum / full_count
+full_ppl = torch.exp(full_mean)
+
+
+total_sum = torch.tensor(0.0)
+total_count = torch.tensor(0)
+
+batch_means = []
+batch_perplexities = []
+
+for batch_logits, batch_labels in microbatches:
+    batch_sum, batch_count = loss_sum_and_count(
+        batch_logits,
+        batch_labels,
+    )
+
+    total_sum += batch_sum
+    total_count += batch_count
+
+    batch_mean = batch_sum / batch_count
+    batch_means.append(batch_mean)
+    batch_perplexities.append(torch.exp(batch_mean))
+
+aggregated_mean = total_sum / total_count
+aggregated_ppl = torch.exp(aggregated_mean)</code></pre>
+<p>The first microbatch contains only three valid tokens, while the second contains nine. <code>wrong_mean</code> assigns both microbatches 50% of the final metric, so each token in the first receives three times as much influence as each token in the second.</p>
+<p>Pure rebatching does not alter the model, examples, labels, or token probabilities. A metric that changes after rebatching is therefore aggregating containers—batches or sequences—instead of the intended token-level observations.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>The final dimension <span class="math inline">\(V\)</span>. Cross-entropy normalizes across vocabulary entries for each <span><code>[</code></span><code>b,t</code><span><code>]</code></span> position.</p></li>
+<li><p>The global mean is: <span class="math display">\[\frac{\sum_r S_r}{\sum_r N_r}\]</span> Averaging worker means incorrectly weights workers equally when their valid-token counts differ.</p></li>
+<li><p>Nothing changes: <span class="math display">\[\exp\left(\frac{2S}{2N}\right)=\exp(S/N)\]</span></p></li>
+<li><p>The implementation is probably averaging batch-level losses or perplexities instead of aggregating token-loss sums and counts.</p></li>
+<li><p>Sequences have different lengths, and exponentiation is nonlinear. Averaging sequence perplexities weights sequences equally and does not equal: <span class="math display">\[\exp\left(
+  \frac{\text{total token NLL}}
+  {\text{total valid tokens}}
+  \right)\]</span></p></li>
+</ol>
+<p>Retrieval answers:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial Z}
+=
+\frac{P-\operatorname{onehot}(Y)}
+{N_{\text{valid}}}\]</span></p>
+<p>Ignored tokens contribute neither loss nor gradient and must not enlarge the mean-reduction denominator.</p>

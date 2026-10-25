@@ -1,0 +1,454 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Fourteen stories of how real companies stored, sharded, cached, and migrated data as they grew from thousands to billions of users. Each case follows the same shape: the problem, the design, why it works, the numbers, and the lessons you can reuse. Numbers come from the companies’ own engineering blogs and papers; treat them as “as reported at the time.”</p>
+</div>
+<h4 id="how-to-read-these-cases.">How to read these cases.</h4>
+<p>Do not memorize the architectures. Look for the <em>forcing function</em>: the specific limit (disk, IOPS, GC pauses, vacuum, connection count, fan-out) that made the old design fail. Real systems change when a measured limit is hit, almost never because a new technology is fashionable. Every case in this part names that limit.</p>
+<h4 id="find-cases-by-concept.">Find cases by concept.</h4>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Concept</th>
+<th style="text-align: left;">Cases to study</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Sharding and re-sharding</td>
+<td style="text-align: left;">Figma, Notion, Instagram, Slack/Vitess, Stripe DocDB, YouTube</td>
+</tr>
+<tr>
+<td style="text-align: left;">Hot keys and coalescing</td>
+<td style="text-align: left;">Discord, Facebook Live, Facebook Memcache, DynamoDB</td>
+</tr>
+<tr>
+<td style="text-align: left;">Caching at scale</td>
+<td style="text-align: left;">Meta TAO, Facebook Memcache, Netflix EVCache, Stack Overflow, OpenAI Postgres</td>
+</tr>
+<tr>
+<td style="text-align: left;">Cells and blast radius</td>
+<td style="text-align: left;">Shopify pods, DoorDash, Roblox (what happens without cells)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Fan-out</td>
+<td style="text-align: left;">Twitter timelines, Discord Elixir, Slack, Facebook Live</td>
+</tr>
+<tr>
+<td style="text-align: left;">Push and connections</td>
+<td style="text-align: left;">Slack, WhatsApp, Netflix Zuul Push, Uber RAMEN</td>
+</tr>
+<tr>
+<td style="text-align: left;">Event-driven and logs</td>
+<td style="text-align: left;">LinkedIn Kafka, McDonald’s, Uber Schemaless, Reddit</td>
+</tr>
+<tr>
+<td style="text-align: left;">Idempotency and money</td>
+<td style="text-align: left;">Stripe, Shopify, UPI, Visa, Ticketmaster</td>
+</tr>
+<tr>
+<td style="text-align: left;">Geospatial</td>
+<td style="text-align: left;">Uber H3, Uber dispatch, DoorDash</td>
+</tr>
+<tr>
+<td style="text-align: left;">Consensus and clocks</td>
+<td style="text-align: left;">Spanner, DynamoDB, Borg</td>
+</tr>
+<tr>
+<td style="text-align: left;">Deployment safety</td>
+<td style="text-align: left;">Spinnaker/Kayenta, Knight Capital, CrowdStrike, Cloudflare, OpenAI Dec 2024</td>
+</tr>
+<tr>
+<td style="text-align: left;">Hidden dependencies</td>
+<td style="text-align: left;">AWS us-east-1, Facebook BGP, Roblox, OpenAI Dec 2024</td>
+</tr>
+<tr>
+<td style="text-align: left;">Monolith vs services</td>
+<td style="text-align: left;">Stack Overflow, Airbnb, Netflix API, Prime Video, WhatsApp</td>
+</tr>
+<tr>
+<td style="text-align: left;">LLM inference</td>
+<td style="text-align: left;">DeepSeek, Character.AI, OpenAI Kubernetes</td>
+</tr>
+<tr>
+<td style="text-align: left;">LLM applications</td>
+<td style="text-align: left;">LinkedIn GenAI, Uber Genie, DoorDash agents, Netflix foundation model</td>
+</tr>
+</tbody>
+</table>
+<h1 id="case-discord-storing-trillions-of-messages">Case: Discord: Storing Trillions of Messages</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Chat, wide-column storage<br />
+<strong>Scale:</strong> Trillions of messages; 177 Cassandra nodes shrunk to 72 ScyllaDB nodes<br />
+<strong>Concepts:</strong> Partitioning, hot partitions, GC pauses, request coalescing, consistent hashing, data migration<br />
+<strong>Source:</strong> Discord engineering blog, “How Discord Stores Trillions of Messages” (2023)</p>
+</div>
+<h4 id="the-problem.">The problem.</h4>
+<p>Discord stored messages in Cassandra, partitioned by <code>(channel_id, time bucket)</code> and clustered by a Snowflake message ID, so reading a channel’s history is a single-partition range scan. The cluster grew from 12 nodes in 2017 to 177 nodes by early 2022, and became an operational burden that the on-call team called “high-toil.” Three forces combined:</p>
+<ul>
+<li><p><strong>Hot partitions.</strong> A huge public server with a sudden burst of activity concentrates reads on one partition. Because reads and writes used quorum consistency, every query touching the slow node slowed down, and latency spread to unrelated channels.</p></li>
+<li><p><strong>Compaction.</strong> Cassandra is an LSM-tree database: writes are cheap appends, but background compaction must merge files. When compaction fell behind, reads had to check more SSTables and got slower, which made compaction fall further behind.</p></li>
+<li><p><strong>JVM garbage collection.</strong> Long GC pauses caused latency spikes, and sometimes the team had to reboot nodes and babysit them back to health.</p></li>
+</ul>
+<figure class="tikz"><img src="figs/sd/30524fe638e4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Discord’s message storage after 2022.</em></p>
+<h4 id="the-design.">The design.</h4>
+<p>Discord did two things, and the first matters more.</p>
+<ol>
+<li><p><strong>A data services layer in Rust</strong> sits between the API and the database. Each service exposes roughly one gRPC endpoint per query and holds no business logic. Its key trick is <strong>request coalescing</strong>: if several users ask for the same row at the same moment, only the first request starts a database query; later requests subscribe to that in-flight task and get the same result. Requests are routed with <strong>consistent hashing</strong> on <code>channel_id</code>, so every request for one channel reaches the same service instance. That is what makes coalescing effective: duplicates meet in the same process.</p></li>
+<li><p><strong>ScyllaDB</strong>, a Cassandra-compatible database written in C++ with no garbage collector and a shard-per-core design, replaced Cassandra.</p></li>
+</ol>
+<h4 id="the-migration.">The migration.</h4>
+<p>ScyllaDB’s Spark-based migrator was estimated at three months. Instead the team extended their Rust data-service library into a migrator in an afternoon: it read token ranges, checkpointed progress in a local SQLite database, and wrote to ScyllaDB at up to 3.2 million messages per second, finishing in about nine days. It stalled at 99.9999% because the final token ranges contained huge ranges of uncompacted <em>tombstones</em> (deletion markers); compacting that range fixed it in seconds. Before cutover, a small percentage of reads went to both databases and results were compared automatically.</p>
+<h4 id="numbers.">Numbers.</h4>
+<p>Historical message fetch p99 fell from 40–125 ms to 15 ms; insert p99 fell from 5–70 ms to a steady 5 ms. Node count dropped from 177 to 72 (each node holding about 9 TB instead of 4 TB). The system handled the 2022 World Cup final, where goals were visible as spikes in the message graph.</p>
+<h4 id="why-it-works.">Why it works.</h4>
+<p>Hot partitions are a <em>workload</em> problem, not a database problem. Coalescing collapses duplicate reads before they reach storage, so the hot partition sees one query instead of thousands. The database change removed GC pauses (a <em>tail latency</em> problem) and reduced per-node overhead, which allowed fewer, denser nodes.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Put a thin data-access layer in front of your database; it is where coalescing, routing, rate limiting, and migrations become possible.</p></li>
+<li><p>Route duplicate work to the same place (consistent hashing) so it can be deduplicated.</p></li>
+<li><p>Validate migrations with shadow reads that compare old and new results.</p></li>
+<li><p>Tombstones and compaction debt are a hidden cost of LSM databases.</p></li>
+</ul>
+</div>
+<h1 id="case-figma-scaling-postgres-nearly-100times">Case: Figma: Scaling Postgres Nearly 100<span class="math inline">\(\times\)</span></h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Collaborative design SaaS<br />
+<strong>Scale:</strong> Database stack grew almost 100<span class="math inline">\(\times\)</span> since 2020<br />
+<strong>Concepts:</strong> Vertical partitioning, horizontal sharding, colocation, query proxy, logical vs physical sharding<br />
+<strong>Source:</strong> Figma blog, “How Figma’s databases team lived to tell the scale” (2024)</p>
+</div>
+<h4 id="the-problem.-1">The problem.</h4>
+<p>In 2020 Figma ran one Postgres instance on the largest machine AWS offered. The team first did <strong>vertical partitioning</strong>: moving groups of related tables (files, organizations, and so on) into their own databases, ending up with about a dozen. That bought time, but a single table is the smallest unit you can move that way. Some tables reached several terabytes and billions of rows. Postgres <code>VACUUM</code> (which reclaims dead row versions) became unreliable and the databases approached the IOPS ceiling of Amazon RDS.</p>
+<h4 id="options-considered.">Options considered.</h4>
+<p>CockroachDB, TiDB, Spanner, Vitess, and NoSQL were evaluated. With only months of runway, a complex relational data model, and deep RDS Postgres expertise, Figma chose to build horizontal sharding <em>on top of</em> existing RDS Postgres instead of migrating to a new database.</p>
+<figure class="tikz"><img src="figs/sd/3b336e488cba.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Figma’s DBProxy routes SQL to the right shard.</em></p>
+<h4 id="the-design.-1">The design.</h4>
+<ul>
+<li><p><strong>Colos (colocations).</strong> Tables that share a shard key (UserID, FileID, or OrgID) are grouped and sharded together. Joins and transactions within a colo work as long as they stay on one shard key.</p></li>
+<li><p><strong>Hash routing.</strong> Rows are routed by a hash of the shard key, avoiding hotspots from sequential IDs, at the cost of slower range scans.</p></li>
+<li><p><strong>DBProxy</strong>, a Go service, parses SQL into an AST, works out which logical shards a query touches, maps them to physical databases, and rewrites the query. It also does load shedding, request hedging, and observability. Topology changes propagate in under a second.</p></li>
+<li><p><strong>Logical before physical sharding.</strong> First, each “shard” was a Postgres <em>view</em> on the still-unsharded table, each behind its own connection pool. This could be rolled out by percentage with feature flags and rolled back in seconds; views added under 10% overhead in the worst case. Only after logical sharding was proven did they physically split databases (a 1-to-N failover).</p></li>
+<li><p><strong>Shadow readiness checks.</strong> Candidate sharding schemes were run through the planner against live production queries and logged for offline analysis, showing product teams exactly which queries would break.</p></li>
+</ul>
+<h4 id="numbers.-1">Numbers.</h4>
+<p>The first table took about nine months to shard and shipped in September 2023 with ten seconds of partial availability on primaries and none on replicas. The supported query subset covers about 90% of queries; queries without a shard key fall back to scatter-gather across all shards.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Exhaust cheap options first (bigger box, replicas, vertical partitioning), but know their hard limits.</p></li>
+<li><p>Separate the <em>logical</em> change (routing) from the <em>physical</em> change (moving data); make the logical step reversible.</p></li>
+<li><p>Restricting the query language is a feature: it keeps the sharded system predictable.</p></li>
+<li><p>Test new routing against real traffic in shadow mode before it matters.</p></li>
+</ul>
+</div>
+<h1 id="case-notion-sharding-postgres-by-workspace">Case: Notion: Sharding Postgres by Workspace</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Docs and wikis SaaS<br />
+<strong>Scale:</strong> 480 logical shards on 32 physical Postgres databases<br />
+<strong>Concepts:</strong> Shard key choice, logical shards, double writes, backfill, dark reads<br />
+<strong>Source:</strong> Notion blog, “Herding elephants: lessons learned from sharding Postgres at Notion” (2021)</p>
+</div>
+<h4 id="the-problem.-2">The problem.</h4>
+<p>Everything in Notion is a <em>block</em>: a paragraph, a to-do, an image, a page. The <code>block</code> table in a single Postgres monolith grew so large that <code>VACUUM</code> kept stalling and Postgres approached <strong>transaction ID wraparound</strong>. Postgres uses 32-bit transaction IDs; if vacuum cannot freeze old rows fast enough, the database stops accepting writes to protect data. That is a hard deadline.</p>
+<h4 id="choosing-the-shard-key.">Choosing the shard key.</h4>
+<p>Every block belongs to exactly one workspace, so <code>space_id</code> was chosen as the shard key. All tables reachable from <code>block</code> by foreign keys (<code>space</code>, <code>discussion</code>, <code>comment</code>, …) were sharded with it, so nearly all queries stay within one shard.</p>
+<h4 id="why-480-shards">Why 480 shards?</h4>
+<p>480 has many divisors. 32 hosts <span class="math inline">\(\times\)</span> 15 shards is even; the fleet can grow to 40 hosts (12 each) or 48 (10 each) without uneven shards. With 512 shards, the next even step after 32 hosts would be 64. Each logical shard is a Postgres <em>schema</em> (<code>schema001.block</code>) rather than native partitioning.</p>
+<figure class="tikz"><img src="figs/sd/72dcb150e84c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Notion’s migration: double write, backfill, verify, cut over.</em></p>
+<h4 id="the-migration.-1">The migration.</h4>
+<ol>
+<li><p><strong>Double writes</strong> via an audit log table plus a catch-up script that replayed writes into the shards. Logical replication was rejected because it could not keep up with <code>block</code> writes during the initial snapshot.</p></li>
+<li><p><strong>Backfill</strong> of historical data took about three days on a 96-CPU machine. Each record’s version was compared so newer data was never overwritten, which meant backfill and catch-up could run in any order.</p></li>
+<li><p><strong>Verification</strong>: a script compared random UUID ranges between old and new; <strong>dark reads</strong> fetched from both, logged mismatches, and discarded the sharded result. Different engineers wrote the migration and the verification code, so one person’s bug would not hide in both.</p></li>
+<li><p><strong>Cutover</strong> with about five minutes of scheduled downtime.</p></li>
+</ol>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Shard earlier than feels necessary; a forced migration under a deadline is harder.</p></li>
+<li><p>Choose a shard key that matches the ownership boundary of your data (workspace, tenant).</p></li>
+<li><p>Pick a logical shard count with many divisors.</p></li>
+<li><p>Make writes idempotent with versions, so backfill and live replication can race safely.</p></li>
+</ul>
+</div>
+<h1 id="case-openai-one-postgres-primary-behind-chatgpt">Case: OpenAI: One Postgres Primary Behind ChatGPT</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Consumer AI<br />
+<strong>Scale:</strong> Hundreds of millions of weekly users; one primary with dozens of read replicas<br />
+<strong>Concepts:</strong> Read replicas, connection pooling, cache stampede protection, workload isolation, write offloading<br />
+<strong>Source:</strong> OpenAI engineering blog, “Scaling PostgreSQL” (2026)</p>
+</div>
+<h4 id="the-surprise.">The surprise.</h4>
+<p>Many expect ChatGPT’s metadata to live in an exotic distributed database. OpenAI reported instead that a large share of it runs on a <em>single</em> Azure Postgres primary with close to fifty read replicas across regions, serving millions of queries per second. The design works because the workload is overwhelmingly reads.</p>
+<h4 id="how-they-keep-one-primary-alive.">How they keep one primary alive.</h4>
+<ul>
+<li><p><strong>Push reads to replicas</strong> and keep the primary for writes and reads that must be fresh.</p></li>
+<li><p><strong>Offload write-heavy, shardable workloads</strong> to a horizontally scalable store (Azure Cosmos DB), and stop adding new tables to the main Postgres cluster.</p></li>
+<li><p><strong>Connection pooling with PgBouncer</strong>: Postgres uses one process per connection, so thousands of app pods connecting directly would exhaust memory. Pooling multiplexes many clients onto few server connections.</p></li>
+<li><p><strong>Cache stampede protection</strong>: when a cache entry expires, only one request is allowed to rebuild it (a lock or lease); others wait or use stale data, so a cache miss storm cannot flatten the database.</p></li>
+<li><p><strong>Rate limiting at several layers</strong> (application, pooler, proxy, query) and <strong>workload isolation</strong>: noisy, low-priority traffic is sent to separate instances so it cannot starve critical paths.</p></li>
+<li><p><strong>Careful writes</strong>: backfills are rate-limited, and expensive multi-table joins are moved into the application.</p></li>
+</ul>
+<h4 id="the-incident-that-tested-it.">The incident that tested it.</h4>
+<p>A viral launch of image generation brought a sudden flood of new sign-ups and a burst of writes. The lesson reported was that write surges, not reads, are what threaten a single-primary design, which is why write-heavy workloads were moved off it.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A boring, well-tuned single primary goes much further than most teams expect.</p></li>
+<li><p>Protect the database with pooling, stampede locks, and rate limits before sharding it.</p></li>
+<li><p>Move only the workloads that do not fit (write-heavy, easily partitioned) to a different store.</p></li>
+</ul>
+</div>
+<h1 id="case-instagram-sharding-and-64-bit-ids-on-postgres">Case: Instagram: Sharding and 64-bit IDs on Postgres</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Social media<br />
+<strong>Scale:</strong> Thousands of logical shards on a few physical Postgres servers (2012)<br />
+<strong>Concepts:</strong> Logical shards, ID generation, time-sortable IDs<br />
+<strong>Source:</strong> Instagram engineering blog, “Sharding &amp; IDs at Instagram” (2012)</p>
+</div>
+<h4 id="the-problem.-3">The problem.</h4>
+<p>When data is sharded, you can no longer use one database’s auto-increment column for IDs. Instagram needed IDs that were unique across shards, sortable by time (so feeds can be ordered by ID), fit in 64 bits (for compact indexes), and did not need a central ID service.</p>
+<figure class="tikz"><img src="figs/sd/bbb75888896c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Instagram’s 64-bit ID layout.</em></p>
+<h4 id="the-design.-2">The design.</h4>
+<p>Data was split into several thousand <strong>logical shards</strong>, each a Postgres schema, mapped onto a few physical servers. Moving a logical shard to a new server is a copy, not a re-split. Each ID is generated <em>inside</em> Postgres by a PL/pgSQL function: 41 bits of milliseconds since a custom epoch (about 41 years of range), 13 bits for the logical shard (8<span>,</span>192 shards), and 10 bits from a per-shard sequence modulo 1<span>,</span>024 (1<span>,</span>024 IDs per shard per millisecond). Because the shard ID is embedded, you can find a row’s shard from its ID alone.</p>
+<h4 id="compare-twitter-snowflake.">Compare: Twitter Snowflake.</h4>
+<p>Twitter’s Snowflake (2010) uses 41 bits of time, 10 bits of machine ID (data center plus worker), and 12 bits of sequence (4<span>,</span>096 per millisecond per machine), generated by a standalone service. Discord and many others use Snowflake-style IDs. Modern equivalents for general use are <strong>ULID</strong> and <strong>UUIDv7</strong>, which put a timestamp in the high bits so B-tree inserts stay at the “right edge” of the index. Shopify reported ULIDs cut insert time by half compared to random UUIDv4 in one system, because random keys scatter writes across the whole index.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Time-ordered IDs make indexes and feeds efficient; random UUIDv4 keys hurt B-tree write locality.</p></li>
+<li><p>Embedding the shard in the ID removes a lookup on every read.</p></li>
+<li><p>Many logical shards on few machines make future growth a copy operation.</p></li>
+</ul>
+</div>
+<h1 id="case-uber-schemaless-a-datastore-on-mysql">Case: Uber: Schemaless, a Datastore on MySQL</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Mobility<br />
+<strong>Scale:</strong> Trip data for billions of trips<br />
+<strong>Concepts:</strong> Append-only storage, sharding, asynchronous triggers, building on proven engines<br />
+<strong>Source:</strong> Uber engineering blog, “Designing Schemaless” (2016)</p>
+</div>
+<h4 id="the-problem.-4">The problem.</h4>
+<p>In 2014 Uber’s trip data lived in a single Postgres instance that was projected to run out of capacity within months. They needed horizontal scale, high write availability (a trip must be recorded even during partial failures), and change notifications for downstream systems such as billing.</p>
+<h4 id="the-design.-3">The design.</h4>
+<p>Schemaless is a sharded layer on top of many MySQL databases. Its data model is a sparse three-dimensional map: <em>row key</em> (a UUID, such as a trip), <em>column name</em> (such as <code>BASE</code>, <code>STATUS</code>), and <em>ref key</em> (a version number). A cell is an immutable JSON blob; updates write a new version rather than modifying in place. This <strong>append-only</strong> model makes replication and conflict handling simple. Writes are buffered to a secondary cluster if the primary is down. <strong>Triggers</strong> let consumers subscribe to changes in a column, so the billing system can react when a trip’s <code>STATUS</code> column gets a new cell. This is an early version of change data capture. Schemaless later evolved into Docstore, which added schemas and transactions.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Building a distributed layer on a battle-tested storage engine (MySQL/InnoDB) reduces risk.</p></li>
+<li><p>Immutable, versioned records simplify replication, auditing, and event streams.</p></li>
+<li><p>Change notifications built into storage remove dual-write bugs.</p></li>
+</ul>
+</div>
+<h1 id="case-slack-moving-to-vitess">Case: Slack: Moving to Vitess</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Workplace chat<br />
+<strong>Scale:</strong> Reported 2.3M peak QPS on Vitess (2020)<br />
+<strong>Concepts:</strong> Re-sharding, shard key change, MySQL middleware<br />
+<strong>Source:</strong> Slack engineering blog, “Scaling Datastores at Slack with Vitess” (2020)</p>
+</div>
+<h4 id="the-problem.-5">The problem.</h4>
+<p>Slack originally sharded MySQL by workspace: one team’s data on one shard. That broke down in two ways. Enterprise customers (huge workspaces and cross-workspace channels with Enterprise Grid) made some shards very hot, and Slack Connect created channels shared between companies, which did not belong to a single workspace at all.</p>
+<h4 id="the-design.-4">The design.</h4>
+<p>Slack adopted <strong>Vitess</strong>, the MySQL sharding middleware created at YouTube. Vitess puts a routing layer (VTGate) in front of many MySQL shards (each managed by VTTablet), stores the shard map in a topology service, and supports online resharding. Slack could choose a different shard key per table: messages by <code>channel_id</code> rather than by workspace, which spreads a large customer’s load across many shards.</p>
+<h4 id="numbers.-2">Numbers.</h4>
+<p>Slack reported that by late 2020 nearly all query traffic ran on Vitess, peaking at about 2.3 million QPS with a median query latency of about 2 ms.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>The right shard key can change as the product changes; plan for re-sharding.</p></li>
+<li><p>Tenant-based sharding struggles when single tenants get huge or data is shared across tenants.</p></li>
+<li><p>Proven middleware (Vitess, Citus) is often better than writing your own sharding layer.</p></li>
+</ul>
+</div>
+<h1 id="case-stripe-zero-downtime-data-movement-in-docdb">Case: Stripe: Zero-Downtime Data Movement in DocDB</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Payments<br />
+<strong>Scale:</strong> Reported over 5M queries/s across thousands of shards<br />
+<strong>Concepts:</strong> Online data migration, CDC, chunk-based sharding, traffic switching<br />
+<strong>Source:</strong> Stripe blog on DocDB and its Data Movement Platform (2024)</p>
+</div>
+<h4 id="the-problem.-6">The problem.</h4>
+<p>Stripe runs DocDB, its own database-as-a-service built on MongoDB. Payments cannot tolerate downtime, yet shards constantly need splitting, merging, and rebalancing as merchants grow, and the fleet needs version upgrades.</p>
+<h4 id="the-design.-5">The design.</h4>
+<p>Data is divided into <em>chunks</em> (key ranges) that can be moved between shards. A move works like this:</p>
+<ol>
+<li><p>Register the migration and prepare the target shard.</p></li>
+<li><p><strong>Bulk import</strong> a snapshot of the chunk to the target.</p></li>
+<li><p><strong>Asynchronous replication</strong>: stream ongoing changes from the source’s operation log (change data capture) to the target until it is nearly caught up.</p></li>
+<li><p><strong>Correctness check</strong>: compare source and target point-in-time snapshots.</p></li>
+<li><p><strong>Traffic switch</strong>: briefly block writes to the chunk at the routing layer, apply the final changes, update the routing metadata, and release. Stripe reported this pause takes on the order of a couple of seconds.</p></li>
+<li><p>Clean up the source.</p></li>
+</ol>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Online migration = snapshot + change stream + verify + short write fence + route switch.</p></li>
+<li><p>Make the routing layer the single place where “where does key X live” is decided.</p></li>
+<li><p>Moving data must be routine and automated, not a heroic project.</p></li>
+</ul>
+</div>
+<h1 id="case-shopify-pods-for-isolation">Case: Shopify: Pods for Isolation</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> E-commerce platform<br />
+<strong>Scale:</strong> Millions of merchants; extreme Black Friday peaks<br />
+<strong>Concepts:</strong> Cell-based architecture, blast radius, tenant routing<br />
+<strong>Source:</strong> Shopify engineering blog posts on pods and flash-sale readiness</p>
+</div>
+<h4 id="the-problem.-7">The problem.</h4>
+<p>A single merchant running a flash sale (a celebrity product drop) can generate a traffic spike larger than everyone else combined. In a shared database, that one merchant could slow down every other store.</p>
+<h4 id="the-design.-6">The design.</h4>
+<p>Shopify splits its fleet into <strong>pods</strong>: each pod is a self-contained set of data stores (a MySQL shard, Redis, Memcached) holding all data for a group of shops. The Rails monolith is stateless and can serve any pod. An edge routing layer looks up which pod a shop belongs to and routes the request there. Shops can be moved between pods by a <em>pod mover</em>. A problem in one pod affects only the shops in it. This is the <strong>cell-based architecture</strong> pattern also used by AWS, Slack, and others.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Cells limit blast radius: a failure or noisy tenant only affects one cell.</p></li>
+<li><p>Route by tenant at the edge; keep application servers stateless and shared.</p></li>
+<li><p>Build tooling to move tenants between cells from day one.</p></li>
+</ul>
+</div>
+<h1 id="case-meta-tao-a-cache-for-the-social-graph">Case: Meta TAO: A Cache for the Social Graph</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Social network<br />
+<strong>Scale:</strong> Over a billion reads/s and millions of writes/s (2013 paper)<br />
+<strong>Concepts:</strong> Graph data model, read-through cache, cache tiers, eventual consistency<br />
+<strong>Source:</strong> Bronson et al., “TAO: Facebook’s Distributed Data Store for the Social Graph”, USENIX ATC 2013</p>
+</div>
+<h4 id="the-problem.-8">The problem.</h4>
+<p>Rendering one Facebook page requires hundreds of small lookups: who are this user’s friends, which of them liked this post, how many comments does it have. Using memcache with ad-hoc keys in front of MySQL made application code complex and invalidation error-prone.</p>
+<h4 id="the-design.-7">The design.</h4>
+<p>TAO exposes a simple graph API with two concepts: <strong>objects</strong> (users, posts, pages, with an ID and type) and <strong>associations</strong> (typed edges like <code>LIKES</code> or <code>FRIEND</code>, time-ordered). Queries are things like “the 50 most recent comments on post X” or “count of likes on X.” Data lives in sharded MySQL. In front sits a two-tier cache: <em>follower</em> caches serve reads in every region; a <em>leader</em> cache per shard handles writes and keeps followers consistent with invalidation messages. Remote regions read locally and forward writes to the master region for that shard. Consistency is eventual, with read-your-writes for the writing user.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A domain-specific data API (objects and edges) hides caching and sharding from product code.</p></li>
+<li><p>For read-dominated workloads, a smart read-through cache can be the primary interface to data.</p></li>
+<li><p>Leader/follower cache tiers keep invalidation traffic manageable.</p></li>
+</ul>
+</div>
+<h1 id="case-facebook-scaling-memcache">Case: Facebook: Scaling Memcache</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Social network<br />
+<strong>Scale:</strong> Billions of requests per second across clusters and regions<br />
+<strong>Concepts:</strong> Look-aside cache, leases, thundering herd, regional invalidation<br />
+<strong>Source:</strong> Nishtala et al., “Scaling Memcache at Facebook”, NSDI 2013</p>
+</div>
+<h4 id="key-techniques.">Key techniques.</h4>
+<p>This paper is a catalogue of caching problems from Chapter (caching), solved at extreme scale:</p>
+<ul>
+<li><p><strong>Leases</strong> solve both stale sets and thundering herds. On a miss, memcache gives the client a lease token. Only the token holder can fill the key, and a delete invalidates the token, so a slow reader cannot write stale data after a newer update. Memcache also hands out a lease for a key only every few seconds, so other clients wait briefly instead of all hitting the database.</p></li>
+<li><p><strong>mcrouter</strong>, a memcache proxy, handles routing, connection pooling, and replication of hot keys.</p></li>
+<li><p><strong>Batching and parallel fetches</strong>: a page’s keys are fetched as a DAG of dependencies in parallel, and UDP is used for gets to reduce overhead.</p></li>
+<li><p><strong>Gutter pool</strong>: when a cache server fails, its keys go to a small set of spare servers with short TTLs instead of rehashing onto healthy ones (which could cascade failures).</p></li>
+<li><p><strong>Invalidation via the database commit log</strong>: a daemon (mcsqueal) tails MySQL’s log and broadcasts deletes, so invalidation is reliable even if the web server crashes after writing.</p></li>
+<li><p><strong>Remote markers</strong> for cross-region consistency: after writing in a non-master region, a marker tells readers to go to the master region until replication catches up.</p></li>
+</ul>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Leases are the cleanest fix for both stale-set races and stampedes.</p></li>
+<li><p>Drive invalidation from the database log, not from application code.</p></li>
+<li><p>Do not rehash a failed cache node’s keys onto healthy nodes during an outage.</p></li>
+</ul>
+</div>
+<h1 id="case-amazon-dynamodb-predictable-performance-at-any-scale">Case: Amazon DynamoDB: Predictable Performance at Any Scale</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Cloud database<br />
+<strong>Scale:</strong> Reported peak of over 100M requests/s during Prime Day 2022<br />
+<strong>Concepts:</strong> Partitioning, Multi-Paxos replication, admission control, adaptive capacity<br />
+<strong>Source:</strong> Elhemali et al., “Amazon DynamoDB: A Scalable, Predictably Performant…”, USENIX ATC 2022</p>
+</div>
+<h4 id="the-design.-8">The design.</h4>
+<p>A table is split into <strong>partitions</strong> by hash of the partition key. Each partition is replicated to three storage nodes in different Availability Zones; replicas form a <strong>Multi-Paxos</strong> group with a leader that handles writes and strongly consistent reads. Request routers look up partition locations in a metadata service and forward requests.</p>
+<h4 id="the-interesting-evolution.">The interesting evolution.</h4>
+<p>Early DynamoDB divided a table’s provisioned throughput evenly across partitions. If a customer’s traffic was uneven (a hot key), the hot partition was throttled even though the table as a whole had spare capacity. The fix happened in stages: <em>bursting</em> (borrow unused capacity from the recent past), <em>adaptive capacity</em> (move capacity to hot partitions), and finally <strong>global admission control</strong>, which tracks capacity at the table level using token buckets independent of partitions. Hot partitions can also be split automatically by observed key ranges.</p>
+<h4 id="why-predictability-matters.">Why predictability matters.</h4>
+<p>The paper’s central message is that customers value <em>consistent</em> single-digit millisecond latency more than peak throughput. Many design decisions (avoiding cross-partition coordination, caching metadata in routers, limiting the size of a partition) exist to reduce variance rather than improve averages.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Uniform partitioning of capacity fails on real, skewed workloads; manage capacity globally.</p></li>
+<li><p>Optimize for low variance, not just low average latency.</p></li>
+<li><p>Every metadata dependency on the request path needs caching and a plan for when it fails (see Section (aws)).</p></li>
+</ul>
+</div>
+<h1 id="case-instagrams-first-architecture">Case: Instagram’s First Architecture</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> Photo sharing<br />
+<strong>Scale:</strong> About 14 million users within roughly a year, run by a handful of engineers (2011–2012)<br />
+<strong>Concepts:</strong> Boring technology, sharded Postgres, async fan-out, caching, object storage<br />
+<strong>Source:</strong> Instagram engineering blog, “What Powers Instagram: Hundreds of Instances, Dozens of Technologies” (2011)</p>
+</div>
+<h4 id="the-stack-as-described-in-2011.">The stack, as described in 2011.</h4>
+<figure class="tikz"><img src="figs/sd/dba89ac118c5.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Instagram around 2011.</em></p>
+<ul>
+<li><p><strong>Application</strong>: Django (Python) on Gunicorn behind nginx, on Amazon EC2; app servers were stateless and interchangeable.</p></li>
+<li><p><strong>Data</strong>: PostgreSQL for users, photo metadata, and tags, with streaming replication to replicas and connection pooling through Pgbouncer. As data grew, they sharded Postgres into thousands of logical shards on a few machines with IDs that embed the shard (the “Sharding and 64-bit IDs” case earlier in this chapter explains the scheme).</p></li>
+<li><p><strong>Photos</strong>: stored in S3, served through CloudFront.</p></li>
+<li><p><strong>Redis</strong> for the main feed lists and session data; <strong>Memcached</strong> as a general cache.</p></li>
+<li><p><strong>Async work</strong>: Gearman queues for fanning a new photo out to followers’ feeds and for notifications, so posting stayed fast.</p></li>
+<li><p><strong>Search</strong>: Solr for geo-tagged search; monitoring with Munin, Pingdom, and Sentry.</p></li>
+</ul>
+<h4 id="why-it-worked.">Why it worked.</h4>
+<p>Every component was mature and well understood, chosen so a tiny team could run it. They kept the design simple (one monolithic Django app), moved anything slow to queues, and scaled the one hard part, the database, by sharding only when needed. Their stated principles were roughly: keep it simple, do not reinvent the wheel, and use proven technologies.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>A monolith on boring, proven components can carry a product to tens of millions of users.</p></li>
+<li><p>Push fan-out and notifications to background queues from day one.</p></li>
+<li><p>Plan the ID and sharding scheme before you need it; it is the hardest thing to change later.</p></li>
+</ul>
+</div>
+<h1 id="case-amazon-dynamo-the-2007-paper">Case: Amazon Dynamo: The 2007 Paper</h1>
+<div class="box box-csfacts" data-kind="csfacts"><div class="box-title">📋 Case facts</div>
+<p><strong>Domain:</strong> E-commerce key-value store<br />
+<strong>Scale:</strong> Shopping cart and session state for Amazon’s retail site at holiday peak<br />
+<strong>Concepts:</strong> Consistent hashing, sloppy quorums, hinted handoff, vector clocks, Merkle trees, gossip<br />
+<strong>Source:</strong> DeCandia et al., “Dynamo: Amazon’s Highly Available Key-value Store”, SOSP 2007</p>
+</div>
+<h4 id="the-requirement.">The requirement.</h4>
+<p>The shopping cart must <em>always</em> accept writes: a customer adding an item should never see an error, even during server failures or network partitions. Amazon chose availability over consistency (an AP system, Chapter (foundations)) and pushed conflict resolution to the application.</p>
+<figure class="tikz"><img src="figs/sd/7915af022317.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Dynamo’s ring and preference list.</em></p>
+<h4 id="the-techniques">The techniques</h4>
+<p>(each addresses one problem):</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Problem</th>
+<th style="text-align: left;">Dynamo’s technique</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Partitioning</td>
+<td style="text-align: left;">consistent hashing with <strong>virtual nodes</strong> for even load and smooth rebalancing</td>
+</tr>
+<tr>
+<td style="text-align: left;">High write availability</td>
+<td style="text-align: left;"><strong>sloppy quorum</strong>: write to the first <span class="math inline">\(N\)</span> <em>healthy</em> nodes, not strictly the owners</td>
+</tr>
+<tr>
+<td style="text-align: left;">Temporary failures</td>
+<td style="text-align: left;"><strong>hinted handoff</strong>: a stand-in node keeps the write with a hint and returns it to the owner when it recovers</td>
+</tr>
+<tr>
+<td style="text-align: left;">Conflicting versions</td>
+<td style="text-align: left;"><strong>vector clocks</strong>; on read, concurrent versions are returned to the application to merge (a cart merges by union, which can resurrect deleted items)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Permanent failures / divergence</td>
+<td style="text-align: left;"><strong>anti-entropy with Merkle trees</strong>: replicas compare hash trees of key ranges and sync only differing branches</td>
+</tr>
+<tr>
+<td style="text-align: left;">Membership and failure detection</td>
+<td style="text-align: left;"><strong>gossip</strong>; no central coordinator</td>
+</tr>
+<tr>
+<td style="text-align: left;">Tunable consistency</td>
+<td style="text-align: left;">per-application <span class="math inline">\((N, R, W)\)</span>; a common setting was <span class="math inline">\((3, 2, 2)\)</span></td>
+</tr>
+</tbody>
+</table>
+<h4 id="dynamo-vs-dynamodb.">Dynamo vs DynamoDB.</h4>
+<p>The paper’s ideas inspired Cassandra, Riak, and Voldemort. Amazon <em>DynamoDB</em> (2012) shares the name but not the design: it uses leader-based replication with Multi-Paxos per partition, offers strongly consistent reads and transactions, and avoids exposing conflicting versions to applications (the 2022 DynamoDB case above). Dynamo’s operational burden on teams was part of why.</p>
+<div class="box box-lesson" data-kind="lesson"><div class="box-title">📚 Lesson</div>
+<ul>
+<li><p>Choose consistency per use case; “always writable” is a valid business requirement.</p></li>
+<li><p>Hinted handoff and anti-entropy separate handling of temporary and permanent failures.</p></li>
+<li><p>Pushing conflict resolution to applications is powerful but costly for developers; managed systems later moved away from it.</p></li>
+</ul>
+</div>

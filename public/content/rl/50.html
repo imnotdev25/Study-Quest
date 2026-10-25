@@ -1,0 +1,258 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: one employee, two bosses</div>
+<p>An employee with two bosses gets two sets of instructions. If one boss shouts much louder, the employee follows that one, even when the quiet boss was right. A shared actor–critic network is that employee: the policy loss and the value loss both send gradients into the same trunk, and the larger gradient wins.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/8752a231a75e.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Both losses write into the same trunk parameters.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can PPO value clipping give a badly predicted token zero direct value gradient?</p></li>
+<li><p>Why must advantages be detached in the actor loss?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="shared-parameters-receive-competing-instructions">2. Shared parameters receive competing instructions</h3>
+<p>An LLM PPO model may share a transformer backbone between:</p>
+<ul>
+<li><p>an actor head producing token probabilities;</p></li>
+<li><p>a critic head predicting values.</p></li>
+</ul>
+<p>A common total loss is:</p>
+<p><span class="math display">\[L_{\text{total}}
+=
+L_{\pi}
++
+c_V L_V
+-
+c_H H
++
+\beta L_{\mathrm{KL}}\]</span></p>
+<p>The shared parameters receive the sum of every weighted gradient:</p>
+<p><span class="math display">\[\nabla L_{\text{total}}
+=
+\nabla L_\pi
++
+c_V\nabla L_V
+-
+c_H\nabla H
++
+\beta\nabla L_{\mathrm{KL}}\]</span></p>
+<p>The coefficients are therefore gradient weights—not cosmetic labels.</p>
+<p>Think of two people moving the same steering wheel. The actor may push the representation toward a higher-reward token while the critic pushes it toward more accurate return prediction. Their gradients can:</p>
+<ul>
+<li><p>align: both improve under the same update;</p></li>
+<li><p>be orthogonal: little direct interaction;</p></li>
+<li><p>conflict: improving one locally harms the other.</p></li>
+</ul>
+<p>Measure this with cosine similarity:</p>
+<p><span class="math display">\[\cos(g_\pi,g_V)
+=
+\frac{g_\pi^\top g_V}
+{\lVert g_\pi\rVert\lVert g_V\rVert}\]</span></p>
+<p>A negative value indicates conflict.</p>
+<p>Loss magnitudes alone are insufficient. A small loss may have a large gradient, and parameterization changes gradient scale. Log per-term gradient norms on the shared backbone.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>shared representation: <span style="background-color: codeinlinebg"><code> [hidden]</code></span></p></li>
+<li><p>actor and critic gradient vectors: <span style="background-color: codeinlinebg"><code> [hidden]</code></span></p></li>
+<li><p>real flattened shared-parameter gradients: <span style="background-color: codeinlinebg"><code> [num_shared_parameters]</code></span></p></li>
+<li><p>each loss: scalar</p></li>
+</ul>
+<p>DPO ordinarily has no critic. Its preference loss can still conflict with auxiliary SFT, KL or regularization losses when they share parameters.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: gradient conflict</div>
+<p>Total loss <span class="math inline">\(\mathcal L=\mathcal L_\pi+c_V\mathcal L_V\)</span>, so the trunk gets <span class="math inline">\(g=g_\pi+c_Vg_V\)</span>. The actor’s intended direction survives only if <span class="math inline">\(g^\top g_\pi&gt;0\)</span>, i.e. <span class="math display">\[\|g_\pi\|^2+c_V\,g_V^\top g_\pi&gt;0 .\]</span> If <span class="math inline">\(g_V\)</span> points against <span class="math inline">\(g_\pi\)</span> and <span class="math inline">\(c_V\|g_V\|\)</span> is large, the trunk update <em>reverses</em> the policy improvement. <strong>Scale matters:</strong> <span class="math inline">\(\mathcal L_V\)</span> is in squared return units. Doubling the reward scale quadruples <span class="math inline">\(\mathcal L_V\)</span>, which is like quadrupling <span class="math inline">\(c_V\)</span> without touching the config.</p>
+<p><strong>Diagnostics:</strong> log <span class="math inline">\(\|g_\pi\|\)</span>, <span class="math inline">\(\|c_Vg_V\|\)</span> and <span class="math inline">\(\cos(g_\pi,g_V)\)</span> on the shared parameters. The total loss alone can’t show any of these.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p><span class="math inline">\(c_V\)</span> controls how strongly the critic moves the shared model.</p></li>
+<li><p>Measure per-loss gradient norms and alignment, or separate the trunks.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the critic reverses the actor</div>
+<p>On the trunk: <span class="math inline">\(g_\pi=(1,0)\)</span>, <span class="math inline">\(g_V=(-3,1)\)</span>, <span class="math inline">\(c_V=0.5\)</span>. So <span class="math inline">\(g=(1,0)+(-1.5,0.5)=(-0.5,0.5)\)</span>. <span class="math inline">\(g^\top g_\pi=-0.5&lt;0\)</span>: the descent step now moves the policy <em>against</em> its own improvement. With <span class="math inline">\(c_V=0.25\)</span>, <span class="math inline">\(g=(0.25,0.25)\)</span> and <span class="math inline">\(g^\top g_\pi=0.25&gt;0\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Tuning <span class="math inline">\(c_V\)</span> by watching the total loss.</p></li>
+<li><p>Changing the reward scale without revisiting <span class="math inline">\(c_V\)</span>.</p></li>
+<li><p>Logging gradient norms over all parameters instead of the shared ones.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-make-the-critic-reverse-the-actor-update">3. PyTorch exercise — make the critic reverse the actor update</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.set_default_dtype(torch.float64)
+
+learning_rate = 0.1
+
+# Tiny shared &quot;backbone&quot;.
+shared = torch.nn.Parameter(
+    torch.tensor([0.0, 0.0])
+)
+
+# Fixed actor and critic heads.
+actor_direction = torch.tensor([
+    1.0, 0.5
+])
+
+critic_direction = torch.tensor([
+    -1.0, 1.0
+])
+
+advantage = torch.tensor(1.0)
+return_target = torch.tensor(1.0)
+
+# TODO 1: Actor logit, selected-action log-probability
+# and policy-gradient loss.
+actor_logit = ...
+selected_log_prob = ...
+policy_loss = ...
+
+# TODO 2: Value prediction and squared-error loss.
+value_prediction = ...
+value_loss = ...
+
+# TODO 3: Separate gradients on the shared parameters.
+policy_gradient = ...
+value_gradient = ...
+
+# TODO 4: Gradient cosine similarity.
+gradient_cosine = ...
+
+print(&quot;Policy loss:&quot;, policy_loss.item())
+print(&quot;Value loss:&quot;, value_loss.item())
+print(&quot;Policy gradient:&quot;, policy_gradient)
+print(&quot;Value gradient:&quot;, value_gradient)
+print(&quot;Gradient cosine:&quot;, gradient_cosine.item())
+
+value_coefficients = [0.1, 1.0, 10.0]
+
+for coefficient in value_coefficients:
+    # TODO 5: Combined gradient and one predicted SGD step.
+    combined_gradient = ...
+    parameter_step = ...
+
+    # First-order change in the selected action&#x27;s logit.
+    actor_logit_change = (
+        parameter_step * actor_direction
+    ).sum()
+
+    value_change = (
+        parameter_step * critic_direction
+    ).sum()
+
+    print(
+        f&quot;c_v={coefficient:&gt;4}&quot;,
+        f&quot;combined_grad={combined_gradient.tolist()}&quot;,
+        f&quot;actor_logit_change={actor_logit_change.item():+.4f}&quot;,
+        f&quot;value_change={value_change.item():+.4f}&quot;,
+    )</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should a positive advantage make gradient descent increase or decrease the selected action’s logit?</p></li>
+<li><p>Will the actor and critic gradients have positive or negative cosine similarity?</p></li>
+<li><p>Which value coefficient can reverse the actor’s desired movement?</p></li>
+<li><p>Does a smaller numerical value loss guarantee a smaller critic gradient?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>For a selected binary action, use <span style="background-color: codeinlinebg"><code> F.logsigmoid(actor_logit)</code></span>.</p></li>
+<li><p>The optimizer minimizes, so negate log-probability times advantage.</p></li>
+<li><p>Use half squared error: <span style="background-color: codeinlinebg"><code> 0.5 * (prediction - target).square()</code></span>.</p></li>
+<li><p>Obtain gradients with <span style="background-color: codeinlinebg"><code> torch.autograd.grad(..., retain_graph=True)</code></span>.</p></li>
+<li><p>An SGD parameter step is <span style="background-color: codeinlinebg"><code> -learning_rate * gradient</code></span>.</p></li>
+<li><p>Detach the advantage and return target.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Let the advantage depend on the critic without detaching it:</p>
+<pre class="code python"><code class="language-python">coupled_advantage = (
+    return_target - value_prediction
+)
+
+bad_policy_loss = -(
+    selected_log_prob * coupled_advantage
+)</code></pre>
+<p>Now the actor loss differentiates through the credit signal. The critic path can change the shared representation merely to manipulate the advantage.</p>
+<p>Next, replace a masked mean value loss with an unmasked sum. Longer responses and padding can enlarge the critic gradient, silently changing its balance with the actor.</p>
+<p>Finally, inspect only total gradient norm. A normal-looking total can hide two large opposing gradients that nearly cancel.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can changing reward scale alter actor–critic balance?</p></li>
+<li><p>Does negative gradient cosine prove that one objective is wrong?</p></li>
+<li><p>Why inspect shared-backbone gradients rather than only head gradients?</p></li>
+<li><p>What should be logged when tuning <span class="math inline">\(c_V\)</span>?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Actor loss:</p>
+<pre class="code python"><code class="language-python">actor_logit = (
+    shared * actor_direction
+).sum()
+
+selected_log_prob = F.logsigmoid(
+    actor_logit
+)
+
+policy_loss = -(
+    selected_log_prob
+    * advantage.detach()
+)</code></pre>
+<p>Critic loss:</p>
+<pre class="code python"><code class="language-python">value_prediction = (
+    shared * critic_direction
+).sum()
+
+value_loss = 0.5 * (
+    value_prediction
+    - return_target.detach()
+).square()</code></pre>
+<p>Separate gradients:</p>
+<pre class="code python"><code class="language-python">policy_gradient = torch.autograd.grad(
+    policy_loss,
+    shared,
+    retain_graph=True,
+)[0]
+
+value_gradient = torch.autograd.grad(
+    value_loss,
+    shared,
+)[0]</code></pre>
+<p>Cosine similarity:</p>
+<pre class="code python"><code class="language-python">gradient_cosine = F.cosine_similarity(
+    policy_gradient,
+    value_gradient,
+    dim=0,
+)</code></pre>
+<p>Combined update:</p>
+<pre class="code python"><code class="language-python">combined_gradient = (
+    policy_gradient
+    + coefficient * value_gradient
+)
+
+parameter_step = (
+    -learning_rate * combined_gradient
+)</code></pre>
+<p>At initialization:</p>
+<p><span class="math display">\[g_\pi=[-0.5,-0.25]\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[g_V=[1,-1]\]</span></p>
+<p>Their dot product is negative:</p>
+<p><span class="math display">\[g_\pi^\top g_V=-0.25\]</span></p>
+<p>so the losses conflict on the shared representation.</p>
+<p>With small <span class="math inline">\(c_V\)</span>, the selected-action logit increases as requested by the positive advantage. With <span style="background-color: codeinlinebg"><code> c_v=10</code></span>, the critic dominates and the same combined SGD update decreases that logit.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Reward scaling changes returns and advantages, which changes actor and critic gradient scales—often differently because value loss is squared.</p></li>
+<li><p>No. Multi-objective learning naturally creates conflicts; cosine similarity is a diagnostic, not a correctness test.</p></li>
+<li><p>Separate heads may not interact directly, but the shared backbone receives both gradients and determines their real interference.</p></li>
+<li><p>Log policy/value losses, shared gradient norms, their cosine similarity, update norm, explained variance, policy KL, clip fractions and raw reward scale.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Outside the clipping range, the selected clipped prediction can be constant with respect to the current value, producing zero gradient.</p></li>
+<li><p>Advantages are fixed credit signals for the actor update. Detaching them prevents unintended differentiation through the critic or return-construction path.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> tuning <span class="math inline">\(c_V\)</span> means tuning how strongly the critic moves shared model parameters. Measure per-loss gradient norms and alignment; total loss alone cannot reveal dominance, cancellation or conflict.</p>

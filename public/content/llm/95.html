@@ -1,0 +1,180 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>A benchmark answers: <em>at this load, for this request mix, how many requests per second meet the latency target?</em> One number on one prompt answers nothing.</p>
+</div>
+<div class="center">
+<table style="width:68%;">
+<colgroup>
+<col />
+<col style="width: 68%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Metric</strong></th>
+<th style="text-align: left;"><strong>Definition</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">TTFT</td>
+<td style="text-align: left;">arrival <span class="math inline">\(\to\)</span> first output token (queueing + prefill)</td>
+</tr>
+<tr>
+<td style="text-align: left;">TPOT</td>
+<td style="text-align: left;"><span class="math inline">\((\text{E2E}-\text{TTFT})/(n_{\text{out}}-1)\)</span>, mean time per later token, per request</td>
+</tr>
+<tr>
+<td style="text-align: left;">ITL</td>
+<td style="text-align: left;">every gap between consecutive tokens; its p99 shows stalls that TPOT averages away</td>
+</tr>
+<tr>
+<td style="text-align: left;">E2E</td>
+<td style="text-align: left;">arrival <span class="math inline">\(\to\)</span> last token</td>
+</tr>
+<tr>
+<td style="text-align: left;">Throughput</td>
+<td style="text-align: left;">output tokens/s or requests/s across all users</td>
+</tr>
+<tr>
+<td style="text-align: left;">Goodput</td>
+<td style="text-align: left;">requests/s that meet <em>every</em> SLO (e.g. TTFT <span class="math inline">\(\le1\)</span> s and TPOT <span class="math inline">\(\le50\)</span> ms)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 class="unnumbered" id="how-to-run-one">How to run one</h2>
+<ul>
+<li><p><strong>Open loop vs closed loop.</strong> Open loop sends requests at a rate (Poisson arrivals), like real traffic, and exposes queueing. Closed loop keeps <span class="math inline">\(N\)</span> users each waiting for a reply, which caps load and hides overload.</p></li>
+<li><p><strong>Workload shape.</strong> Short chat, long-document RAG and shared-prefix agents stress different parts. Use a length distribution, not a constant.</p></li>
+<li><p><strong>Warm-up and steady state.</strong> Drop the first requests (CUDA graph capture, compilation, cold caches) and measure while the queue is stable.</p></li>
+<li><p><strong>Percentiles.</strong> Report p50, p95 and p99; users feel the tail.</p></li>
+<li><p><strong>Little’s law</strong> <span class="math inline">\(L=\lambda W\)</span> (mean requests in the system = arrival rate <span class="math inline">\(\times\)</span> mean time in the system) is a free consistency check.</p></li>
+</ul>
+<pre class="code output"><code class="output">vllm bench serve --model Qwen/Qwen3-8B --dataset-name random \
+  --random-input-len 800 --random-output-len 200 --request-rate 8 --num-prompts 600 \
+  --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,95,99</code></pre>
+<h2 class="unnumbered" id="break-one-gpu-in-simulation">Break one GPU (in simulation)</h2>
+<p>The simulator below uses a step-cost model calibrated loosely to an 8B model on an H100 (<span class="math inline">\(6\)</span> ms per step to read weights, <span class="math inline">\(27\,\mu\)</span>s per prefill token, <span class="math inline">\(40\)</span> ns per KV token attended). These are rough constants, so read the <em>shape</em> of the results, not the exact numbers. It compares three schedulers, sweeps the arrival rate past saturation, and sweeps closed-loop users.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference chs. &#x27;Benchmark&#x27;, &#x27;Break One GPU&#x27;, &#x27;Continuous Batching&#x27;: a discrete-time server simulator.
+
+Step cost model for an 8B bf16 model on one H100 (rough constants, not a measurement):
+    step = 6 ms (read weights) + 27 us per prefill token + 40 ns per KV token attended in decode.
+&quot;&quot;&quot;
+import numpy as np
+
+W_MS, PRE_US, KV_NS = 6.0, 27.0, 40.0
+SLO_TTFT, SLO_TPOT = 1.0, 0.05            # seconds
+
+
+def workload(rate, n=600, seed=0):
+    r = np.random.default_rng(seed)
+    t = np.cumsum(r.exponential(1 / rate, n)) if rate else np.zeros(n)
+    p = np.clip(r.lognormal(np.log(800), 0.6, n), 32, 4000).astype(int)
+    o = np.clip(r.lognormal(np.log(200), 0.6, n), 8, 1000).astype(int)
+    return t, p, o
+
+
+def simulate(mode, rate, max_batch=64, budget=2048, closed=None):
+    arr, P, O = workload(rate)
+    n = len(P)
+    if closed:                                 # closed loop: `closed` users, each sends again when done
+        arr = np.full(n, np.inf); arr[:closed] = 0
+    now, nxt, wait, run = 0.0, 0, [], []
+    first, last, gaps, finish = np.full(n, np.nan), np.zeros(n), np.zeros(n), np.full(n, np.nan)
+    left_pre, left_out, issued = P.copy(), O.copy(), closed or n
+    while np.isnan(finish).any():
+        while nxt &lt; n and arr[nxt] &lt;= now:
+            wait.append(nxt); nxt += 1
+        if mode == &quot;static&quot;:
+            if not run and wait:
+                run, wait = wait[:max_batch], wait[max_batch:]
+        else:
+            while wait and len(run) &lt; max_batch:
+                run.append(wait.pop(0))
+        if not run:
+            now = arr[nxt] if nxt &lt; n and arr[nxt] &lt; np.inf else now + 1e-3
+            continue
+        pre_tok, kv_tok, emit = 0, 0, []
+        tok_budget = budget if mode == &quot;chunked&quot; else 10**9
+        for i in run:
+            if left_pre[i] &gt; 0:
+                c = min(left_pre[i], tok_budget)
+                if c == 0:
+                    continue
+                left_pre[i] -= c; pre_tok += c; tok_budget -= c
+                if left_pre[i] == 0:
+                    emit.append(i)
+            elif left_out[i] &gt; 0:
+                kv_tok += P[i] + O[i] - left_out[i]; emit.append(i); tok_budget -= 1
+        if mode == &quot;static&quot;:                   # padded batch: finished slots still cost a decode
+            kv_tok += sum(P[i] + O[i] for i in run if left_out[i] == 0)
+        now += (W_MS + PRE_US * pre_tok / 1e3 + KV_NS * kv_tok / 1e6) / 1e3
+        for i in emit:
+            if np.isnan(first[i]):
+                first[i] = now
+            else:
+                gaps[i] = max(gaps[i], now - last[i])
+            last[i] = now
+            left_out[i] -= 1
+            if left_out[i] == 0:
+                finish[i] = now
+                if mode != &quot;static&quot;:
+                    run.remove(i)
+                if closed and issued &lt; n:
+                    arr[issued] = now; issued += 1
+        if mode == &quot;static&quot; and all(left_out[i] == 0 for i in run):
+            run = []
+    if closed:
+        pass
+    ttft, e2e = first - arr, finish - arr
+    tpot = (finish - first) / np.maximum(O - 1, 1)
+    good = (ttft &lt;= SLO_TTFT) &amp; (tpot &lt;= SLO_TPOT)
+    span = finish.max() - arr.min()
+    return dict(rps=n / span, tok=O.sum() / span, ttft50=np.median(ttft), ttft99=np.percentile(ttft, 99),
+                tpot50=np.median(tpot), itl99=np.percentile(gaps, 99), good=good.sum() / span,
+                frac=good.mean(), conc=(e2e.sum() / span), e2e=e2e.mean())
+
+
+print(&quot;[sim] mode        rate   req/s  out tok/s  TTFT p50  TTFT p99  TPOT p50  ITL p99  goodput (SLO ok)&quot;)
+for mode in (&quot;static&quot;, &quot;continuous&quot;, &quot;chunked&quot;):
+    for rate in (4, 8, 14, 20):
+        s = simulate(mode, rate)
+        print(f&quot;[sim] {mode:10s}  {rate:4d}  {s[&#x27;rps&#x27;]:6.2f}  {s[&#x27;tok&#x27;]:8.0f}  {s[&#x27;ttft50&#x27;]:7.2f}s  {s[&#x27;ttft99&#x27;]:7.2f}s&quot;
+              f&quot;  {s[&#x27;tpot50&#x27;] * 1e3:6.1f}ms  {s[&#x27;itl99&#x27;] * 1e3:5.0f}ms  {s[&#x27;good&#x27;]:5.2f}/s ({s[&#x27;frac&#x27;]:.0%})&quot;)
+
+s = simulate(&quot;chunked&quot;, 8)
+print(f&quot;[little] L = lambda W: mean in system {s[&#x27;conc&#x27;]:.1f}  vs  rate x mean E2E {s[&#x27;rps&#x27;] * s[&#x27;e2e&#x27;]:.1f}&quot;)
+
+print(&quot;[sweep] closed loop, chunked prefill: users -&gt; throughput and latency&quot;)
+for users in (1, 4, 16, 32, 64, 128):
+    s = simulate(&quot;chunked&quot;, 0, closed=users)
+    print(f&quot;[sweep] {users:4d} users  {s[&#x27;tok&#x27;]:7.0f} tok/s  TPOT p50 {s[&#x27;tpot50&#x27;] * 1e3:6.1f} ms  TTFT p50 {s[&#x27;ttft50&#x27;]:6.2f} s&quot;)</code></pre>
+<pre class="code output"><code class="output">[sim] mode        rate   req/s  out tok/s  TTFT p50  TTFT p99  TPOT p50  ITL p99  goodput (SLO ok)
+[sim] static         4    3.55       861     2.76s     6.87s     6.7ms      7ms   0.53/s (15%)
+[sim] static         8    6.18      1499     5.21s    13.44s     8.2ms      9ms   0.09/s (2%)
+[sim] static        14    7.15      1733    16.79s    33.71s     8.5ms      9ms   0.02/s (0%)
+[sim] static        20    6.81      1652    24.00s    50.72s     8.5ms      9ms   0.01/s (0%)
+[sim] continuous     4    3.64       882     0.03s     0.11s     6.9ms    114ms   3.64/s (100%)
+[sim] continuous     8    7.03      1706     0.03s     0.13s     8.1ms    117ms   7.03/s (100%)
+[sim] continuous    14   11.70      2838     0.04s     0.17s    11.0ms    150ms  11.70/s (100%)
+[sim] continuous    20   14.86      3603     0.66s     2.70s    14.6ms    117ms  11.64/s (78%)
+[sim] chunked        4    3.64       882     0.03s     0.12s     6.9ms     62ms   3.64/s (100%)
+[sim] chunked        8    7.03      1706     0.03s     0.13s     8.1ms     62ms   7.03/s (100%)
+[sim] chunked       14   11.70      2838     0.04s     0.16s    11.0ms     62ms  11.70/s (100%)
+[sim] chunked       20   14.85      3602     0.66s     2.71s    14.6ms     63ms  11.61/s (78%)
+[little] L = lambda W: mean in system 14.2  vs  rate x mean E2E 14.2
+[sweep] closed loop, chunked prefill: users -&gt; throughput and latency
+[sweep]    1 users      162 tok/s  TPOT p50    6.0 ms  TTFT p50   0.03 s
+[sweep]    4 users      603 tok/s  TPOT p50    6.5 ms  TTFT p50   0.03 s
+[sweep]   16 users     1852 tok/s  TPOT p50    8.4 ms  TTFT p50   0.03 s
+[sweep]   32 users     2806 tok/s  TPOT p50   10.8 ms  TTFT p50   0.03 s
+[sweep]   64 users     3757 tok/s  TPOT p50   15.6 ms  TTFT p50   0.04 s
+[sweep]  128 users     3757 tok/s  TPOT p50   15.6 ms  TTFT p50   3.61 s</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p><strong>Static batching</strong> waits for a whole batch to finish: TTFT is seconds even at light load, and goodput collapses.</p></li>
+<li><p><strong>Continuous batching</strong> admits new requests every step: TTFT drops to tens of milliseconds and goodput equals throughput until about 14 req/s. At 20 req/s throughput still rises, but only 78% of requests meet the SLO: past saturation, throughput lies and goodput tells the truth.</p></li>
+<li><p><strong>Chunked prefill</strong> matches continuous batching on everything except the ITL tail: long prompts no longer freeze everyone’s decode (p99 ITL 117 ms <span class="math inline">\(\to\)</span> 63 ms).</p></li>
+<li><p>The closed-loop sweep is the saturation curve: throughput flattens at 64 users while latency keeps growing. Little’s law holds to the decimal.</p></li>
+</ul>
+</div>

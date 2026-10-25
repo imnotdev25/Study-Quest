@@ -1,0 +1,473 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a school’s falling average</div>
+<p>A school’s average test score falls. Did teaching get worse, or did more struggling students enrol? Those need opposite responses. Drift decomposition splits a metric change into “who arrived” (mix) and “how well we served each group” (within-group performance).</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/fc14f4b06fe3.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Read left to right: 76, minus 12 from the mix, plus 1 within groups, gives 65.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does randomized canary traffic not automatically represent deployment traffic?</p></li>
+<li><p>What happens if a target group has positive probability but zero canary support?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="one-aggregate-metric-hides-two-kinds-of-change">2. One aggregate metric hides two kinds of change</h3>
+<p>At time <span class="math inline">\(t\)</span>, let:</p>
+<ul>
+<li><p><span class="math inline">\(p_t(g)\)</span>: fraction of traffic in group <span class="math inline">\(g\)</span>;</p></li>
+<li><p><span class="math inline">\(\mu_t(g)\)</span>: policy performance within group <span class="math inline">\(g\)</span>.</p></li>
+</ul>
+<p>Overall performance is:</p>
+<p><span class="math display">\[J_t
+=
+\sum_g p_t(g)\mu_t(g)\]</span></p>
+<p>A metric can fall because:</p>
+<ol>
+<li><p><strong>composition drift:</strong> deployment receives more difficult prompts;</p></li>
+<li><p><strong>conditional performance drift:</strong> the policy becomes worse within the same prompt groups.</p></li>
+</ol>
+<p>Using the baseline as the reference:</p>
+<p><span class="math display">\[J_1-J_0
+=
+\underbrace{
+\sum_g
+[p_1(g)-p_0(g)]\mu_0(g)
+}_{\text{composition effect}}
++
+\underbrace{
+\sum_g
+p_1(g)[\mu_1(g)-\mu_0(g)]
+}_{\text{performance effect}}\]</span></p>
+<p>The intermediate counterfactual is:</p>
+<p><span class="math display">\[J_{\text{mix-only}}
+=
+\sum_g p_1(g)\mu_0(g)\]</span></p>
+<p>It asks: “What would current aggregate performance be if only the traffic mixture changed and baseline conditional performance remained?”</p>
+<p>This decomposition is algebraically exact, but attribution depends on the chosen reference period. Reversing the reference changes the two components, though not their sum.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>group and reward rows: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>one-hot membership: <span style="background-color: codeinlinebg"><code> [N, G]</code></span></p></li>
+<li><p>frequencies, conditional values and contributions: <span style="background-color: codeinlinebg"><code> [G]</code></span></p></li>
+</ul>
+<p>For an LLM evaluation platform, useful pre-treatment groups include domain, language, task type, prompt difficulty and input modality. Keep group definitions and judge versions stable across periods.</p>
+<p>For agent RL, later states may be caused by the policy. A change in state visitation can be a genuine policy effect, so do not automatically “control it away” as ordinary traffic drift.</p>
+<p>DPO may improve performance on its preference-data mixture while current deployment shifts toward prompt groups where the policy is weaker. Aggregate preference accuracy cannot distinguish these two sources of drift.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: a two-part decomposition</div>
+<p>With group shares <span class="math inline">\(w_g\)</span> and group metrics <span class="math inline">\(\mu_g\)</span> in periods 1 and 2: <span class="math display">\[\Delta=\underbrace{\textstyle\sum_g(w_{2g}-w_{1g})\,\mu_{1g}}_{\text{mix}}+\underbrace{\textstyle\sum_gw_{2g}\,(\mu_{2g}-\mu_{1g})}_{\text{within-group}} .\]</span> The split depends on which period’s weights you use as the reference, so report the convention (or average both orderings, like a Shapley split). Keep the reward or judge definition fixed across periods, or the “within” term mixes in measurement drift.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Aggregate drift is a symptom, not a diagnosis.</p></li>
+<li><p>Monitor both who arrives and how each stable group is served.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: an 11-point drop</div>
+<p>Easy: 90%, hard: 50%. Period 1 mix 65/35: <span class="math inline">\(58.5+17.5=76\)</span>. Period 2 mix 35/65 with easy 91%, hard 51%: <span class="math inline">\(31.85+33.15=65\)</span>. Mix: <span class="math inline">\((-0.3)(90)+(0.3)(50)=-12\)</span>. Within: <span class="math inline">\(0.35(1)+0.65(1)=+1\)</span>. Total <span class="math inline">\(-11\)</span>. The policy improved slightly, and the traffic got harder.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>The judge model changed between periods.</p></li>
+<li><p>Groups defined with post-treatment variables.</p></li>
+<li><p>Hiding the reference-period convention.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Mix vs within-group drift decomposition</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> per-group shares <span class="math inline">\(w_{1g},w_{2g}\)</span> and metrics <span class="math inline">\(\mu_{1g},\mu_{2g}\)</span> (same metric definition in both periods)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\text{mix}\gets\sum_g(w_{2g}-w_{1g})\,\mu_{1g}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\text{within}\gets\sum_gw_{2g}\,(\mu_{2g}-\mu_{1g})\)</span></div>
+<div class="algo-line" style="--d:0">check: <span class="math inline">\(\text{mix}+\text{within}=\sum_gw_{2g}\mu_{2g}-\sum_gw_{1g}\mu_{1g}\)</span></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> both terms, with bootstrap CIs over independent units</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-decompose-an-11-point-drop">3. PyTorch exercise — decompose an 11-point drop</h3>
+<p>Traffic shifts toward the difficult group, while conditional performance also declines.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_groups = 3
+episodes_per_period = 20_000
+
+baseline_group_probabilities = torch.tensor([
+    0.60, 0.30, 0.10
+])
+
+current_group_probabilities = torch.tensor([
+    0.40, 0.35, 0.25
+])
+
+baseline_group_values = torch.tensor([
+    0.80, 0.60, 0.40
+])
+
+current_group_values = torch.tensor([
+    0.78, 0.58, 0.30
+])
+
+baseline_groups = torch.multinomial(
+    baseline_group_probabilities,
+    num_samples=episodes_per_period,
+    replacement=True,
+)
+
+current_groups = torch.multinomial(
+    current_group_probabilities,
+    num_samples=episodes_per_period,
+    replacement=True,
+)
+
+baseline_rewards = (
+    torch.rand(episodes_per_period)
+    &lt; baseline_group_values[
+        baseline_groups
+    ]
+).to(torch.float64)
+
+current_rewards = (
+    torch.rand(episodes_per_period)
+    &lt; current_group_values[
+        current_groups
+    ]
+).to(torch.float64)
+
+
+# TODO 1: Summarize one period.
+def summarize_period(
+    groups,
+    rewards,
+):
+    one_hot = ...
+
+    counts = ...
+
+    frequencies = ...
+
+    conditional_values = ...
+
+    overall_value = ...
+
+    return (
+        counts,
+        frequencies,
+        conditional_values,
+        overall_value,
+    )
+
+
+(
+    baseline_counts,
+    estimated_baseline_frequencies,
+    estimated_baseline_values,
+    estimated_baseline_overall,
+) = summarize_period(
+    baseline_groups,
+    baseline_rewards,
+)
+
+(
+    current_counts,
+    estimated_current_frequencies,
+    estimated_current_values,
+    estimated_current_overall,
+) = summarize_period(
+    current_groups,
+    current_rewards,
+)
+
+# TODO 2: Raw aggregate change.
+estimated_total_change = ...
+
+# TODO 3: Counterfactual current value if only the
+# traffic mixture changed.
+composition_only_current_value = ...
+
+estimated_composition_effect = ...
+
+estimated_performance_effect = ...
+
+# TODO 4: Per-group contributions and residual check.
+composition_contributions = ...
+
+performance_contributions = ...
+
+decomposed_change = ...
+
+decomposition_residual = ...
+
+# TODO 5: Oracle values for this simulation.
+exact_baseline_overall = ...
+exact_current_overall = ...
+
+exact_total_change = ...
+
+exact_composition_effect = ...
+
+exact_performance_effect = ...
+
+results = torch.stack([
+    estimated_baseline_frequencies,
+    estimated_current_frequencies,
+    estimated_baseline_values,
+    estimated_current_values,
+    composition_contributions,
+    performance_contributions,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: baseline frequency, current frequency, &quot;
+    &quot;baseline value, current value, &quot;
+    &quot;composition contribution, &quot;
+    &quot;performance contribution&quot;
+)
+print(results)
+
+print(
+    &quot;Estimated baseline overall:&quot;,
+    estimated_baseline_overall.item(),
+)
+print(
+    &quot;Estimated current overall:&quot;,
+    estimated_current_overall.item(),
+)
+print(
+    &quot;Estimated total change:&quot;,
+    estimated_total_change.item(),
+)
+print(
+    &quot;Composition-only current value:&quot;,
+    composition_only_current_value.item(),
+)
+print(
+    &quot;Estimated composition effect:&quot;,
+    estimated_composition_effect.item(),
+)
+print(
+    &quot;Estimated performance effect:&quot;,
+    estimated_performance_effect.item(),
+)
+print(
+    &quot;Decomposition residual:&quot;,
+    decomposition_residual.item(),
+)
+
+print(
+    &quot;Exact baseline overall:&quot;,
+    exact_baseline_overall.item(),
+)
+print(
+    &quot;Exact current overall:&quot;,
+    exact_current_overall.item(),
+)
+print(
+    &quot;Exact total change:&quot;,
+    exact_total_change.item(),
+)
+print(
+    &quot;Exact composition effect:&quot;,
+    exact_composition_effect.item(),
+)
+print(
+    &quot;Exact performance effect:&quot;,
+    exact_performance_effect.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What are the exact baseline and current aggregate values?</p></li>
+<li><p>How much of the change comes from traffic composition?</p></li>
+<li><p>How much comes from within-group degradation?</p></li>
+<li><p>Can the raw aggregate alone distinguish these explanations?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>One-hot membership has shape <span style="background-color: codeinlinebg"><code> [N, G]</code></span>.</p></li>
+<li><p>Conditional value is each group’s reward sum divided by its count.</p></li>
+<li><p>The mix-only value uses current frequencies with baseline conditional values.</p></li>
+<li><p>Composition contribution is <span style="background-color: codeinlinebg"><code> (current_frequency - baseline_frequency) * baseline_value</code></span>.</p></li>
+<li><p>Performance contribution is <span style="background-color: codeinlinebg"><code> current_frequency * (current_value - baseline_value)</code></span>.</p></li>
+<li><p>The decomposition residual should be numerically near zero.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Monitor only aggregate success and blame the model for every drop.</p></li>
+<li><p>Change group taxonomy between periods.</p></li>
+<li><p>Compare scores produced by different judge versions.</p></li>
+<li><p>Treat response length or tool count as pre-treatment traffic attributes.</p></li>
+<li><p>Drop unknown-language or unclassified prompts.</p></li>
+<li><p>Compare duplicated episodes as though they were independent users.</p></li>
+<li><p>Ignore new groups with no baseline support.</p></li>
+<li><p>Use current traffic weights when the decision concerns a different target population.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What counterfactual does the composition effect represent?</p></li>
+<li><p>Why can stable aggregate performance still hide degradation?</p></li>
+<li><p>Why does the chosen reference period matter?</p></li>
+<li><p>How should uncertainty be estimated for real user traffic?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Period summarization:</p>
+<pre class="code python"><code class="language-python">def summarize_period(
+    groups,
+    rewards,
+):
+    one_hot = F.one_hot(
+        groups,
+        num_classes=num_groups,
+    ).to(torch.float64)
+
+    counts = one_hot.sum(dim=0)
+
+    frequencies = (
+        counts / counts.sum()
+    )
+
+    conditional_values = (
+        (
+            one_hot
+            * rewards[:, None]
+        ).sum(dim=0)
+        / counts
+    )
+
+    overall_value = rewards.mean()
+
+    return (
+        counts,
+        frequencies,
+        conditional_values,
+        overall_value,
+    )</code></pre>
+<p>Aggregate change:</p>
+<pre class="code python"><code class="language-python">estimated_total_change = (
+    estimated_current_overall
+    - estimated_baseline_overall
+)</code></pre>
+<p>Counterfactual and decomposition:</p>
+<pre class="code python"><code class="language-python">composition_only_current_value = (
+    estimated_current_frequencies
+    * estimated_baseline_values
+).sum()
+
+estimated_composition_effect = (
+    composition_only_current_value
+    - estimated_baseline_overall
+)
+
+estimated_performance_effect = (
+    estimated_current_overall
+    - composition_only_current_value
+)</code></pre>
+<p>Per-group contributions:</p>
+<pre class="code python"><code class="language-python">composition_contributions = (
+    (
+        estimated_current_frequencies
+        - estimated_baseline_frequencies
+    )
+    * estimated_baseline_values
+)
+
+performance_contributions = (
+    estimated_current_frequencies
+    * (
+        estimated_current_values
+        - estimated_baseline_values
+    )
+)
+
+decomposed_change = (
+    composition_contributions.sum()
+    + performance_contributions.sum()
+)
+
+decomposition_residual = (
+    estimated_total_change
+    - decomposed_change
+)</code></pre>
+<p>Oracle values:</p>
+<pre class="code python"><code class="language-python">exact_baseline_overall = (
+    baseline_group_probabilities
+    * baseline_group_values
+).sum()
+
+exact_current_overall = (
+    current_group_probabilities
+    * current_group_values
+).sum()
+
+exact_total_change = (
+    exact_current_overall
+    - exact_baseline_overall
+)
+
+exact_composition_effect = (
+    (
+        current_group_probabilities
+        - baseline_group_probabilities
+    )
+    * baseline_group_values
+).sum()
+
+exact_performance_effect = (
+    current_group_probabilities
+    * (
+        current_group_values
+        - baseline_group_values
+    )
+).sum()</code></pre>
+<p>The baseline value is:</p>
+<p><span class="math display">\[J_0
+=
+0.6(0.8)+0.3(0.6)+0.1(0.4)
+=
+0.70\]</span></p>
+<p>The current value is:</p>
+<p><span class="math display">\[J_1
+=
+0.4(0.78)+0.35(0.58)+0.25(0.30)
+=
+0.59\]</span></p>
+<p>So:</p>
+<p><span class="math display">\[J_1-J_0=-0.11\]</span></p>
+<p>Holding conditional performance at baseline levels while changing the mixture gives:</p>
+<p><span class="math display">\[J_{\text{mix-only}}
+=
+0.4(0.8)+0.35(0.6)+0.25(0.4)
+=
+0.63\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\text{composition effect}
+=
+0.63-0.70
+=
+-0.07\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\text{performance effect}
+=
+0.59-0.63
+=
+-0.04\]</span></p>
+<p>Both changed: harder traffic explains seven points of the decline, and within-group degradation explains four points.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It estimates current performance if current traffic had arrived but baseline conditional performance had remained unchanged.</p></li>
+<li><p>Easier traffic can offset declining conditional performance—or harder traffic can hide genuine improvements.</p></li>
+<li><p>The decomposition moves first along one dimension and then the other. Changing that order changes attribution when both dimensions move.</p></li>
+<li><p>Bootstrap complete users or other independent clusters, recomputing the entire decomposition within every bootstrap replicate.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Randomization balances policies within sampled traffic; it does not make the sample’s group mixture equal to deployment.</p></li>
+<li><p>The target estimand is unsupported. Collect data for that group, narrow the target population or report explicit partial bounds rather than silently extrapolating.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> aggregate drift is a symptom, not a diagnosis. Monitor both who is arriving and how the policy performs within stable, pre-treatment groups—using the same reward and judge definitions across time.</p>

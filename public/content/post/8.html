@@ -1,0 +1,103 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>After SFT, the model follows instructions but its answers vary in quality. <strong>Preference data</strong> pairs a prompt with a <em>chosen</em> and a <em>rejected</em> response. <strong>DPO</strong> raises the chosen response’s log-probability relative to a frozen reference model and lowers the rejected one’s, with no reward model and no sampling (derivation: <em>LLM Fundamentals</em>, Session 26).</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: reading DPO’s training logs</div>
+<p><strong>Step 1.</strong> TRL logs the implicit rewards <span class="math inline">\(\hat r^\pm=\beta\big(\log\pi_\theta(y^\pm|x)-\log\pi_{\text{ref}}(y^\pm|x)\big)\)</span>.</p>
+<p><strong>Step 2.</strong> <code>rewards/margins</code> <span class="math inline">\(=\overline{\hat r^+-\hat r^-}\)</span>. It starts at 0 (policy = reference) and should grow.</p>
+<p><strong>Step 3.</strong> <code>rewards/accuracies</code> = fraction of pairs with <span class="math inline">\(\hat r^+&gt;\hat r^-\)</span>. Starts near 0.5.</p>
+<p><strong>Step 4.</strong> Loss <span class="math inline">\(=\overline{\softplus(-(\hat r^+-\hat r^-))}\)</span>, starting at <span class="math inline">\(\ln2=0.693\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Watch out:</strong> <span class="math inline">\(\hat r^+\)</span> often goes <em>down</em> too (both responses become less likely, the rejected one more so). Mild is normal; large drops in <span class="math inline">\(\hat r^+\)</span> mean the model is drifting toward degenerate text, so lower the learning rate or raise <span class="math inline">\(\beta\)</span>.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Direct Preference Optimization with TRL on UltraFeedback.
+
+Local smoke test:  python dpo.py                    (tiny model, CPU)
+On Modal:          modal run dpo.py::train_remote   (starts from the SFT checkpoint, 1x H100)
+&quot;&quot;&quot;
+import modal
+
+
+def run_dpo(model, dataset, output_dir, **overrides):
+    from peft import LoraConfig
+    from trl import DPOConfig, DPOTrainer
+
+    defaults = dict(
+        output_dir=output_dir,
+        beta=0.1,                            # KL strength; smaller = further from the reference
+        learning_rate=5e-6,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=8,
+        num_train_epochs=1,
+        logging_steps=10,
+        save_strategy=&quot;no&quot;,
+        report_to=&quot;none&quot;,
+    )
+    args = DPOConfig(**{**defaults, **overrides})   # smoke tests override some defaults
+    # With LoRA, the reference model is the base weights with the adapter disabled: no second copy in memory.
+    peft = LoraConfig(r=16, lora_alpha=32, target_modules=&quot;all-linear&quot;, task_type=&quot;CAUSAL_LM&quot;)
+    trainer = DPOTrainer(model=model, args=args, train_dataset=dataset, peft_config=peft)
+    trainer.train()
+    return trainer
+
+
+app = modal.App(&quot;pt-book-dpo&quot;)
+image = modal.Image.debian_slim(python_version=&quot;3.12&quot;).uv_pip_install(
+    &quot;torch==2.14.1&quot;, &quot;transformers==5.20.2&quot;, &quot;trl==1.16.0&quot;, &quot;datasets==5.1.0&quot;, &quot;peft==0.21.2&quot;, &quot;accelerate==1.15.0&quot;
+)
+models = modal.Volume.from_name(&quot;pt-book-models&quot;, create_if_missing=True)
+
+
+@app.function(gpu=&quot;H100&quot;, image=image, volumes={&quot;/models&quot;: models}, timeout=4 * 60 * 60)
+def train_remote():
+    from datasets import load_dataset
+
+    ds = load_dataset(&quot;trl-lib/ultrafeedback_binarized&quot;, split=&quot;train&quot;)   # ~62K conversational pairs
+    trainer = run_dpo(&quot;/models/qwen3-0.6b-sft&quot;, ds, &quot;/models/qwen3-0.6b-dpo&quot;, bf16=True)
+    trainer.save_model(&quot;/models/qwen3-0.6b-dpo&quot;)
+    models.commit()
+
+
+if __name__ == &quot;__main__&quot;:
+    from datasets import Dataset
+
+    pairs = [{&quot;prompt&quot;: f&quot;Q: What is {a} times 2?\nA:&quot;, &quot;chosen&quot;: f&quot; {2 * a}.&quot;, &quot;rejected&quot;: f&quot; {2 * a + 1}.&quot;}
+             for a in range(32)]
+    trainer = run_dpo(&quot;trl-internal-testing/tiny-Qwen2ForCausalLM-2.5&quot;, Dataset.from_list(pairs), &quot;/tmp/dpo_smoke&quot;,
+                      per_device_train_batch_size=4, gradient_accumulation_steps=1, max_steps=6, learning_rate=1e-3,
+                      logging_steps=2, bf16=False, use_cpu=True)
+    for h in trainer.state.log_history:
+        if &quot;loss&quot; in h:
+            print({k: round(v, 3) for k, v in h.items() if k in (&quot;loss&quot;, &quot;rewards/margins&quot;, &quot;rewards/accuracies&quot;)})</code></pre>
+<p>Local smoke test (same random test model; loss stays at <span class="math inline">\(\ln2\)</span> because the implicit rewards are still <span class="math inline">\(\approx0\)</span>, but <code>rewards/accuracies</code> already climbs above 0.5):</p>
+<pre class="code output"><code class="output">{&#x27;loss&#x27;: 0.693, &#x27;rewards/accuracies&#x27;: 0.125, &#x27;rewards/margins&#x27;: -0.0}
+{&#x27;loss&#x27;: 0.693, &#x27;rewards/accuracies&#x27;: 0.75, &#x27;rewards/margins&#x27;: 0.0}
+{&#x27;loss&#x27;: 0.693, &#x27;rewards/accuracies&#x27;: 0.875, &#x27;rewards/margins&#x27;: 0.0}</code></pre>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Preference dataset</th>
+<th style="text-align: left;">size</th>
+<th style="text-align: left;">notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>trl-lib/ultrafeedback_binarized</code></td>
+<td style="text-align: left;">62K pairs</td>
+<td style="text-align: left;">GPT-4-judged; the standard DPO benchmark set</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>Anthropic/hh-rlhf</code></td>
+<td style="text-align: left;">169K pairs</td>
+<td style="text-align: left;">human-labeled helpful/harmless dialogues</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>allenai/llama-3.1-tulu-3-8b-preference-mixture</code></td>
+<td style="text-align: left;">273K</td>
+<td style="text-align: left;">on-policy pairs judged by an LLM (Tulu 3)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>TRL also offers <code>KTOTrainer</code> (thumbs up/down, no pairs), <code>ORPOTrainer</code> and <code>CPOTrainer</code> (no reference model), and <code>OnlineDPOTrainer</code> (fresh pairs from the current policy); see the RL book, Topics 177–178.</p>

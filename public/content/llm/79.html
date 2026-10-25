@@ -1,0 +1,235 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Correlated samples</strong> carry less information than independent ones. Five rephrasings of the same question share its facts and difficulty, so they’re closer to one sample than five. The <strong>intra-cluster correlation</strong> <span class="math inline">\(\rho\)</span> measures how alike items in the same cluster are.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why must paired model outcomes remain aligned during resampling?</p></li>
+<li><p>What uncertainty does a bootstrap interval fail to detect?</p></li>
+</ol>
+<p>Suppose <span class="math inline">\(C\)</span> underlying entities each have <span class="math inline">\(K\)</span> prompt variants. For every variant, compute a paired model difference:</p>
+<p><span class="math display">\[D\in\mathbb{R}^{C\times K}\]</span></p>
+<p>Variants of the same entity share facts, phrasing, and difficulty, so they are correlated. The entity-balanced improvement is:</p>
+<p><span class="math display">\[\hat\Delta
+=
+\frac{1}{C}
+\sum_{c=1}^{C}
+\left(
+\frac{1}{K}\sum_{k=1}^{K}D_{ck}
+\right)\]</span></p>
+<p>Flattening <span class="math inline">\(D\)</span> and bootstrapping <span class="math inline">\(CK\)</span> rows assumes every variant is independent. This is pseudoreplication: it usually produces confidence intervals that are too narrow.</p>
+<p>Instead, resample entity indices:</p>
+<p><span class="math display">\[c_1^*,\ldots,c_C^*
+\sim
+\operatorname{Uniform}\{1,\ldots,C\}\]</span></p>
+<p>and retain all variants belonging to each sampled entity.</p>
+<p>For equal cluster size and within-cluster correlation <span class="math inline">\(\rho\)</span>, the approximate design effect is:</p>
+<p><span class="math display">\[\text{DEFF}=1+(K-1)\rho\]</span></p>
+<p>so the effective sample size is roughly:</p>
+<p><span class="math display">\[N_{\text{eff}}
+\approx
+\frac{CK}{1+(K-1)\rho}\]</span></p>
+<p>When <span class="math inline">\(\rho\approx1\)</span>, five paraphrases provide nearly one independent unit—not five.</p>
+<p>For unequal variant counts, first decide the estimand:</p>
+<ul>
+<li><p>Instance-weighted: entities with more variants receive more weight.</p></li>
+<li><p>Entity-balanced: compute one mean per entity, then average those means.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the design effect</div>
+<p><strong>Step 1.</strong> Cluster <span class="math inline">\(c\)</span> has <span class="math inline">\(K\)</span> items with variance <span class="math inline">\(\sigma^2\)</span> and pairwise correlation <span class="math inline">\(\rho\)</span>. Its mean <span class="math inline">\(\bar D_c=\frac1K\sum_kD_{ck}\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\operatorname{Var}(\bar D_c)=\frac{1}{K^2}\Big[K\sigma^2+K(K-1)\rho\sigma^2\Big]=\frac{\sigma^2}{K}\big(1+(K-1)\rho\big)\)</span>.</p>
+<p><strong>Step 3.</strong> Over <span class="math inline">\(C\)</span> independent clusters: <span class="math inline">\(\operatorname{Var}(\hat\Delta)=\frac{\sigma^2}{CK}\big(1+(K-1)\rho\big)\)</span>.</p>
+<p><strong>Step 4.</strong> Treating all <span class="math inline">\(CK\)</span> items as independent predicts <span class="math inline">\(\frac{\sigma^2}{CK}\)</span>. The ratio <span class="math inline">\(\mathrm{DEFF}=1+(K-1)\rho\)</span> is the <strong>design effect</strong>. Example: <span class="math inline">\(K=5\)</span>, <span class="math inline">\(\rho=0.5\)</span> gives <span class="math inline">\(\mathrm{DEFF}=3\)</span>, so naive intervals are <span class="math inline">\(\sqrt3=1.7\times\)</span> too narrow.</p>
+<p><strong>Step 5.</strong> <strong>Cluster bootstrap:</strong> resample whole clusters (entities), keeping all their variants together. That reproduces the correct variance automatically.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: cluster bootstrap</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> differences <span class="math inline">\(D\in\mathbb R^{C\times K}\)</span> (cluster <span class="math inline">\(\times\)</span> variant), resamples <span class="math inline">\(B\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\bar D_c\gets\)</span> mean over variants for each cluster</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(b=1,\dots,B\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">draw <span class="math inline">\(C\)</span> clusters with replacement; <span class="math inline">\(\hat\Delta_b\gets\)</span> mean of their <span class="math inline">\(\bar D_c\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> percentile interval of <span class="math inline">\(\{\hat\Delta_b\}\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Compare a naive row bootstrap with an entity-cluster bootstrap.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(331)
+
+C = 80                  # independent entities
+K = 5                   # correlated variants per entity
+num_bootstraps = 4_000
+
+# Shared entity-level model improvement.
+entity_effect = (
+    0.04
+    + 0.12 * torch.randn(C, 1)
+)                                           # [C,1]
+
+# Smaller variant-specific fluctuations.
+variant_noise = (
+    0.03 * torch.randn(C, K)
+)                                           # [C,K]
+
+paired_differences = ...                    # TODO 1: [C,K]
+
+entity_means = ...                          # TODO 2: [C]
+estimated_improvement = ...                 # TODO 3: scalar
+
+print(&quot;estimated improvement:&quot;,
+      estimated_improvement.item())</code></pre>
+<p>Implement the incorrect flattened bootstrap:</p>
+<pre class="code python"><code class="language-python">flat_differences = ...                      # TODO 4: [C*K]
+
+naive_indices = torch.randint(
+    low=0,
+    high=C * K,
+    size=(num_bootstraps, C * K),
+)                                           # [B,C*K]
+
+naive_estimates = ...                       # TODO 5: [B]
+
+quantiles = torch.tensor([0.025, 0.975])
+naive_interval = ...                        # TODO 6: [2]</code></pre>
+<p>Now resample complete entities:</p>
+<pre class="code python"><code class="language-python">cluster_indices = torch.randint(
+    low=0,
+    high=C,
+    size=(num_bootstraps, C),
+)                                           # [B,C]
+
+cluster_samples = ...                       # TODO 7: [B,C,K]
+cluster_estimates = ...                     # TODO 8: [B]
+
+cluster_interval = ...                      # TODO 9: [2]
+
+naive_width = naive_interval.diff().item()
+cluster_width = cluster_interval.diff().item()
+
+print(&quot;\nnaive row interval:&quot;,
+      naive_interval.tolist())
+
+print(&quot;clustered interval:&quot;,
+      cluster_interval.tolist())
+
+print(&quot;naive width:&quot;, naive_width)
+print(&quot;clustered width:&quot;, cluster_width)
+
+assert cluster_samples.shape == (
+    num_bootstraps,
+    C,
+    K,
+)
+
+assert cluster_width &gt; naive_width</code></pre>
+<p>Compare analytical standard errors:</p>
+<pre class="code python"><code class="language-python">naive_se = ...                              # TODO 10
+cluster_se = ...                            # TODO 11
+
+print(&quot;\nnaive analytical SE:&quot;, naive_se.item())
+print(&quot;cluster-aware SE:&quot;, cluster_se.item())</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Which interval will be wider?</p></li>
+<li><p>If variant noise became exactly zero, would <span class="math inline">\(CK\)</span> variants represent <span class="math inline">\(CK\)</span> independent observations?</p></li>
+<li><p>Would adding ten exact paraphrases per entity greatly reduce entity-level uncertainty?</p></li>
+</ul>
+<p>Hints:</p>
+<ul>
+<li><p><code>paired_differences = entity_effect + variant_noise</code>.</p></li>
+<li><p>The entity-balanced estimate averages within entities first.</p></li>
+<li><p>Flatten with <code>.reshape(-1)</code>.</p></li>
+<li><p><code>paired_differences</code><span><code>[</code></span><code>cluster_indices</code><span><code>]</code></span> produces <span><code>[</code></span><code>B,C,K</code><span><code>]</code></span>.</p></li>
+<li><p>The cluster-aware analytical SE uses the standard deviation of entity means and denominator <span class="math inline">\(\sqrt C\)</span>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>What is the independent observational unit in this experiment?</p></li>
+<li><p>Prediction: with <span class="math inline">\(K=5\)</span> and <span class="math inline">\(\rho=1\)</span>, what is the design effect?</p></li>
+<li><p>Why does flattening correlated prompt variants usually underestimate uncertainty?</p></li>
+<li><p>Debugging: a benchmark’s confidence interval shrinks dramatically after adding paraphrases but no new entities. What resampling mistake should you inspect?</p></li>
+<li><p>With unequal variant counts, how can an accidental instance-weighted reduction change the target metric?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">paired_differences = (
+    entity_effect + variant_noise
+)
+
+entity_means = paired_differences.mean(dim=1)
+estimated_improvement = entity_means.mean()</code></pre>
+<p>Naive bootstrap:</p>
+<pre class="code python"><code class="language-python">flat_differences = paired_differences.reshape(-1)
+
+naive_estimates = flat_differences[
+    naive_indices
+].mean(dim=1)
+
+naive_interval = torch.quantile(
+    naive_estimates,
+    quantiles,
+)</code></pre>
+<p>Cluster bootstrap:</p>
+<pre class="code python"><code class="language-python">cluster_samples = paired_differences[
+    cluster_indices
+]
+
+cluster_estimates = cluster_samples.mean(
+    dim=(1, 2)
+)
+
+cluster_interval = torch.quantile(
+    cluster_estimates,
+    quantiles,
+)</code></pre>
+<p>Analytical estimates:</p>
+<pre class="code python"><code class="language-python">naive_se = (
+    flat_differences.std(unbiased=True)
+    / (C * K) ** 0.5
+)
+
+cluster_se = (
+    entity_means.std(unbiased=True)
+    / C**0.5
+)</code></pre>
+<p>The naive bootstrap treats the shared entity component as if it were independently redrawn for every variant. It therefore acts as though there are <span class="math inline">\(CK\)</span> independent observations.</p>
+<p>The cluster bootstrap redraws only <span class="math inline">\(C\)</span> independent entities and keeps each entity’s correlated variants together. Variants can reduce uncertainty about that entity’s mean, but they do not create new independent entities.</p>
+<p>If variant noise is zero:</p>
+<p><span class="math display">\[D_{c1}=\cdots=D_{cK}\]</span></p>
+<p>Duplicating each value <span class="math inline">\(K\)</span> times adds no independent information. With <span class="math inline">\(\rho=1\)</span>:</p>
+<p><span class="math display">\[\text{DEFF}
+=
+1+(K-1)
+=
+K\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[N_{\text{eff}}
+=
+\frac{CK}{K}
+=
+C\]</span></p>
+<p>Check answers:</p>
+<ol>
+<li><p>The entity, together with all its associated prompt variants and paired model outcomes.</p></li>
+<li><p><span class="math inline">\(1+(5-1)\cdot1=5\)</span>.</p></li>
+<li><p>It discards within-entity dependence and uses an artificially large effective sample size.</p></li>
+<li><p>Check whether individual variants are resampled instead of resampling entity IDs with their variants intact.</p></li>
+<li><p>Entities with more variants receive greater weight, changing the estimand from “average entity performance” to “average recorded instance performance.”</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Paired outcomes must remain aligned because their covariance determines the uncertainty of their difference.</p></li>
+<li><p>Bootstrap intervals measure sampling variability under the observed data-generating setup; they do not reveal systematic judge bias, contamination, or dataset mismatch.</p></li>
+</ul>

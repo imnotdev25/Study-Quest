@@ -1,0 +1,276 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: grading on a curve per row of desks</div>
+<p>Curve the exam per <em>row of desks</em> instead of for the whole class, and a solid student sitting in a row of geniuses gets marked “below average.” Advantage whitening per microbatch does exactly this: a genuinely good action can get a negative whitened advantage because its chunk happened to be strong.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/8ddca843a46f.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Raw advantages <span class="math inline">\((1,2,-2.5,0.5)\)</span>, chunks <span class="math inline">\(\{a_1,a_2\}\)</span> and <span class="math inline">\(\{a_3,a_4\}\)</span>. Per-chunk whitening makes the good action <span class="math inline">\(a_1\)</span> look bad.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why should gradients be clipped only after all microbatches are accumulated?</p></li>
+<li><p>Why can independently normalized microbatches change the effective training objective?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="whitening-controls-advantage-scale">2. Whitening controls advantage scale</h3>
+<p>PPO implementations often standardize—or “whiten”—advantages:</p>
+<p><span class="math display">\[\tilde A_i
+=
+\frac{A_i-\mu_A}
+{\sigma_A+\epsilon}\]</span></p>
+<p>For masked token advantages:</p>
+<p><span class="math display">\[\mu_A
+=
+\frac{\sum_{i,t}M_{i,t}A_{i,t}}
+{\sum_{i,t}M_{i,t}}\]</span></p>
+<p><span class="math display">\[\sigma_A^2
+=
+\frac{\sum_{i,t}M_{i,t}(A_{i,t}-\mu_A)^2}
+{\sum_{i,t}M_{i,t}}\]</span></p>
+<p>Centering makes the batch-average advantage zero. Dividing by the standard deviation makes actor-gradient scale less sensitive to raw reward units.</p>
+<p>But whitening is not harmless bookkeeping:</p>
+<ul>
+<li><p>it changes gradient magnitude;</p></li>
+<li><p>batch centering uses estimated—not exact—statistics;</p></li>
+<li><p>tiny standard deviation can amplify noise;</p></li>
+<li><p>padding must not enter the statistics;</p></li>
+<li><p>local microbatch whitening can change gradient direction.</p></li>
+</ul>
+<p>The rollout-wide statistics should normally be computed once, before PPO minibatch epochs. In distributed training, aggregate the valid count, sum and squared sum across workers.</p>
+<p>Do not confuse this with GRPO’s per-prompt reward standardization. PPO advantage whitening usually normalizes a larger rollout batch; GRPO compares responses within the same prompt group.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>advantages and response mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>, or <span style="background-color: codeinlinebg"><code> [B]</code></span> for sequence advantages;</p></li>
+<li><p>masked mean, variance and standard deviation: scalar;</p></li>
+<li><p>normalized advantages: same shape as advantages;</p></li>
+<li><p>policy gradient: <span style="background-color: codeinlinebg"><code> [num_parameters]</code></span></p></li>
+</ul>
+<p>DPO does not estimate advantages. It directly optimizes preference-pair log-ratios, although any custom example weighting still needs explicit normalization rules.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: masked global statistics</div>
+<p><span class="math inline">\(\mu=\frac{\sum_tm_tA_t}{\sum_tm_t}\)</span>, <span class="math inline">\(\sigma^2=\frac{\sum_tm_t(A_t-\mu)^2}{\sum_tm_t}\)</span>, <span class="math inline">\(\tilde A_t=\frac{A_t-\mu}{\sigma+\varepsilon}\)</span>. Compute this <em>once</em> over the whole rollout batch (all ranks), and detach it. <strong>Two traps.</strong> Padding with <span class="math inline">\(A=0\)</span> included in <span class="math inline">\(\mu\)</span> pulls the mean toward 0 and can flip signs. And whitening subtracts the mean, so in a batch where everything was good, half the actions are told they were bad. That’s fine for variance reduction, but be aware of it.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Whitening should describe the rollout batch, not an execution chunk.</p></li>
+<li><p>Masked, global, detached, and monitored.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: local vs global</div>
+<p>Raw <span class="math inline">\(A=(1,2,-2.5,0.5)\)</span>. Global <span class="math inline">\(\mu=0.25\)</span>, population <span class="math inline">\(\sigma=1.68\)</span>, so <span class="math inline">\(\tilde A=(0.45,1.04,-1.64,0.15)\)</span>. The signs are preserved. Per chunk: <span class="math inline">\(\{1,2\}\to(-1,1)\)</span> and <span class="math inline">\(\{-2.5,0.5\}\to(-1,1)\)</span>. Action <span class="math inline">\(a_1\)</span> (raw <span class="math inline">\(+1\)</span>) is now <span class="math inline">\(-1\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Padding included in mean or std.</p></li>
+<li><p>Whitening inside each microbatch.</p></li>
+<li><p>Using whitened advantages to build value targets.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-local-whitening-erases-the-signal">3. PyTorch exercise — local whitening erases the signal</h3>
+<p>Four sampled responses are divided into two microbatches. The second microbatch has much larger advantages.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.set_default_dtype(torch.float64)
+
+epsilon = 1e-8
+
+# One categorical action per response.
+actions = torch.tensor([
+    0, 0, 1, 1
+])
+
+raw_advantages = torch.tensor([
+    1.0, 2.0, 10.0, 20.0
+])
+
+microbatch_indices = [
+    torch.tensor([0, 1]),
+    torch.tensor([2, 3]),
+]
+
+# TODO 1: Global population mean and standard deviation.
+global_mean = ...
+global_std = ...
+
+# TODO 2: Whiten all advantages using global statistics.
+global_advantages = ...
+
+# TODO 3: Incorrectly whiten each microbatch independently.
+local_advantages = torch.empty_like(
+    raw_advantages
+)
+
+for indices in microbatch_indices:
+    local_values = raw_advantages[indices]
+
+    local_mean = ...
+    local_std = ...
+
+    local_advantages[indices] = ...
+
+def estimate_ascent_gradient(advantages):
+    logits = torch.nn.Parameter(
+        torch.zeros(2)
+    )
+
+    policy = Categorical(logits=logits)
+
+    selected_log_probs = policy.log_prob(
+        actions
+    )
+
+    loss = -(
+        selected_log_probs
+        * advantages.detach()
+    ).mean()
+
+    loss.backward()
+
+    # Convert minimization gradient to ascent direction.
+    return -logits.grad.detach().clone()
+
+# TODO 4: Compare raw, global and local whitening.
+raw_gradient = ...
+global_gradient = ...
+local_gradient = ...
+
+# TODO 5: Compare gradient directions.
+raw_global_cosine = ...
+raw_local_cosine = ...
+
+print(&quot;Raw advantages:&quot;,
+      raw_advantages)
+
+print(&quot;Global advantages:&quot;,
+      global_advantages)
+
+print(&quot;Locally whitened advantages:&quot;,
+      local_advantages)
+
+print(&quot;Advantage means:&quot;,
+      {
+          &quot;global&quot;:
+              global_advantages.mean().item(),
+          &quot;local_0&quot;:
+              local_advantages[:2].mean().item(),
+          &quot;local_1&quot;:
+              local_advantages[2:].mean().item(),
+      })
+
+print(&quot;Raw ascent gradient:&quot;,
+      raw_gradient)
+
+print(&quot;Global-whitened gradient:&quot;,
+      global_gradient)
+
+print(&quot;Local-whitened gradient:&quot;,
+      local_gradient)
+
+print(&quot;Cosines:&quot;,
+      {
+          &quot;raw_vs_global&quot;:
+              raw_global_cosine.item(),
+          &quot;raw_vs_local&quot;:
+              raw_local_cosine.item(),
+      })</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action should the raw advantages favor?</p></li>
+<li><p>Should global whitening preserve that preference in this batch?</p></li>
+<li><p>What happens when each same-action microbatch is centered independently?</p></li>
+<li><p>Would adding a constant to every advantage affect globally centered advantages?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use population standard deviation with <span style="background-color: codeinlinebg"><code> unbiased=False</code></span>.</p></li>
+<li><p>Global whitening uses one mean and standard deviation for all four samples.</p></li>
+<li><p>Compute local statistics only from <span style="background-color: codeinlinebg"><code> local_values</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.nn.functional.cosine_similarity(..., dim=0)</code></span>.</p></li>
+<li><p>Each local pair becomes approximately <span style="background-color: codeinlinebg"><code> [-1, +1]</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Include padded advantages set to zero when computing statistics. Enough padding drags the mean toward zero and changes every valid token’s normalized credit.</p>
+<p>Next, use a microbatch containing identical advantages. Its standard deviation is zero; without epsilon the result becomes <span style="background-color: codeinlinebg"><code> nan</code></span>, while a very small epsilon can make tiny numerical differences dominate.</p>
+<p>Finally, recompute advantage statistics independently for every PPO minibatch and epoch. Samples then receive different normalized credits depending on how the rollout is shuffled.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does dividing by advantage standard deviation affect the effective learning rate?</p></li>
+<li><p>Why can microbatch whitening change gradient direction?</p></li>
+<li><p>Does advantage whitening make reward scale irrelevant to the complete PPO objective?</p></li>
+<li><p>Which statistics should be logged before and after whitening?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Global statistics:</p>
+<pre class="code python"><code class="language-python">global_mean = raw_advantages.mean()
+
+global_std = raw_advantages.std(
+    unbiased=False
+)</code></pre>
+<p>Global whitening:</p>
+<pre class="code python"><code class="language-python">global_advantages = (
+    raw_advantages - global_mean
+) / (
+    global_std + epsilon
+)</code></pre>
+<p>Local whitening:</p>
+<pre class="code python"><code class="language-python">for indices in microbatch_indices:
+    local_values = raw_advantages[indices]
+
+    local_mean = local_values.mean()
+
+    local_std = local_values.std(
+        unbiased=False
+    )
+
+    local_advantages[indices] = (
+        local_values - local_mean
+    ) / (
+        local_std + epsilon
+    )</code></pre>
+<p>Gradients:</p>
+<pre class="code python"><code class="language-python">raw_gradient = estimate_ascent_gradient(
+    raw_advantages
+)
+
+global_gradient = estimate_ascent_gradient(
+    global_advantages
+)
+
+local_gradient = estimate_ascent_gradient(
+    local_advantages
+)</code></pre>
+<p>Cosine similarities:</p>
+<pre class="code python"><code class="language-python">raw_global_cosine = (
+    torch.nn.functional.cosine_similarity(
+        raw_gradient,
+        global_gradient,
+        dim=0,
+    )
+)
+
+raw_local_cosine = (
+    torch.nn.functional.cosine_similarity(
+        raw_gradient,
+        local_gradient,
+        dim=0,
+    )
+)</code></pre>
+<p>The raw advantages for action <span style="background-color: codeinlinebg"><code> 1</code></span> sum to <span style="background-color: codeinlinebg"><code> 30</code></span>, while those for action <span style="background-color: codeinlinebg"><code> 0</code></span> sum to <span style="background-color: codeinlinebg"><code> 3</code></span>. The raw gradient therefore strongly favors action <span style="background-color: codeinlinebg"><code> 1</code></span>.</p>
+<p>Global whitening assigns below-average credits to the action-<span style="background-color: codeinlinebg"><code> 0</code></span> responses and above-average credits to the action-<span style="background-color: codeinlinebg"><code> 1</code></span> responses. It preserves the preference while changing gradient scale.</p>
+<p>Local whitening produces approximately:</p>
+<p><span class="math display">\[[-1,+1,-1,+1]\]</span></p>
+<p>Within each microbatch, both responses selected the same action. Their opposite normalized credits therefore cancel, producing an approximately zero policy gradient.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The actor gradient is linear in advantage, so dividing advantages by <span class="math inline">\(\sigma_A\)</span> scales the actor update by approximately <span class="math inline">\(1/\sigma_A\)</span>.</p></li>
+<li><p>Each microbatch receives its own offset and scale. This changes samples’ weights relative to samples in other microbatches.</p></li>
+<li><p>No. Value targets, KL penalties, entropy terms, clipping thresholds and verifier-reward composition can still depend on reward scale.</p></li>
+<li><p>Log valid count, raw and normalized mean/std, extrema, near-zero-variance rate, percentiles and actor-gradient norm.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Clipping is nonlinear. Clipping individual gradients before they cancel changes their relative scales and can rotate the accumulated update.</p></li>
+<li><p>Each locally normalized chunk receives equal outer weight regardless of its valid count or original scale.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> advantage whitening should describe the rollout batch, not an arbitrary execution chunk. Compute masked global statistics once, detach the result and monitor whether normalization is amplifying noise.</p>

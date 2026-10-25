@@ -1,0 +1,285 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: learning taste from a stack of old reviews</div>
+<p>Online RLHF is a chef who cooks, gets feedback, and cooks again. DPO is a chef who studies a fixed stack of “A was better than B” cards and adjusts their style to agree, without cooking anything new. It’s simpler and cheaper, but they can only learn what the cards cover.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/4a302b44a7d8.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Same shape as the reward-model loss, but the “reward” is the policy’s own log-ratio against the reference.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>In PPO, why must the denominator be the policy that generated the rollout?</p></li>
+<li><p>Why can a sampled signed KL estimate be negative?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="dpo-learns-from-fixed-preference-pairs">2. DPO learns from fixed preference pairs</h3>
+<p>A DPO example contains:</p>
+<ul>
+<li><p>prompt <span class="math inline">\(x\)</span>;</p></li>
+<li><p>preferred response <span class="math inline">\(y_w\)</span>;</p></li>
+<li><p>rejected response <span class="math inline">\(y_l\)</span>;</p></li>
+<li><p>fixed reference policy <span class="math inline">\(\pi_{\text{ref}}\)</span>.</p></li>
+</ul>
+<p>Define the policy-versus-reference score:</p>
+<p><span class="math display">\[s_\theta(x,y)
+=
+\log\pi_\theta(y\mid x)
+-
+\log\pi_{\text{ref}}(y\mid x)\]</span></p>
+<p>The preference margin is:</p>
+<p><span class="math display">\[\Delta_\theta
+=
+s_\theta(x,y_w)-s_\theta(x,y_l)\]</span></p>
+<p>DPO minimizes:</p>
+<p><span class="math display">\[L_{\mathrm{DPO}}
+=
+-\log\sigma(\beta\Delta_\theta)\]</span></p>
+<p>This encourages the policy to improve the chosen response relative to the rejected response, measured against the reference.</p>
+<p>For an autoregressive LLM:</p>
+<p><span class="math display">\[\log\pi_\theta(y\mid x)
+=
+\sum_t
+M_t\log\pi_\theta(y_t\mid x,y_{&lt;t})\]</span></p>
+<p>so correct response masks and reduction conventions remain essential.</p>
+<p>DPO differs from online RL:</p>
+<ul>
+<li><p>it does not generate fresh actions during each update;</p></li>
+<li><p>it does not observe environment rewards;</p></li>
+<li><p>it needs no critic or advantage estimator;</p></li>
+<li><p>it cannot explore beyond the fixed preference dataset;</p></li>
+<li><p>it uses ordinary backpropagation through differentiable log-probabilities.</p></li>
+</ul>
+<p>The reference policy in DPO is not PPO’s old rollout policy. PPO’s old policy changes after collecting each rollout batch; DPO’s reference is normally a fixed anchor.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>chosen/rejected token log-probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>response masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>chosen/rejected sequence log-probabilities: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>preference margins: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>DPO loss: scalar</p></li>
+</ul>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: deriving DPO from the KL-regularized optimum</div>
+<p>From Topic 29: <span class="math inline">\(\pi^*(y|x)=\pi_{\text{ref}}(y|x)e^{r(x,y)/\beta}/Z(x)\)</span>, so <span class="math inline">\(r(x,y)=\beta\log\frac{\pi^*(y|x)}{\pi_{\text{ref}}(y|x)}+\beta\log Z(x)\)</span>. Plug that into Bradley–Terry. <span class="math inline">\(Z(x)\)</span> is the same for both responses, so it cancels: <span class="math display">\[\mathcal L_{\text{DPO}}=-\mathbb E\Big[\log\sigma\Big(\beta\log\tfrac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)}-\beta\log\tfrac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\Big)\Big].\]</span> No reward model and no sampling: it’s a classification loss on fixed pairs. <strong>Not online RL:</strong> the policy never sees its own new outputs, so it can’t discover or fix failure modes outside the data.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>DPO = Bradley–Terry with the policy’s log-ratio as the reward.</p></li>
+<li><p>It’s bounded by pair quality, coverage and the frozen reference.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: one pair</div>
+<p><span class="math inline">\(h_w=\log\pi_\theta(y_w)-\log\pi_{\text{ref}}(y_w)=0.2\)</span>, <span class="math inline">\(h_l=-0.1\)</span>, <span class="math inline">\(\beta=0.1\)</span>. Margin <span class="math inline">\(=0.1(0.3)=0.03\)</span>. Loss <span class="math inline">\(=\ln(1+e^{-0.03})=0.678\)</span>, barely below <span class="math inline">\(\ln2\)</span>. The gradient weight <span class="math inline">\(\sigma(-0.03)\approx0.49\)</span> is still large.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>The reference model accidentally updating (it must be frozen).</p></li>
+<li><p>Mean vs sum of token log-probs (a mean introduces a length preference).</p></li>
+<li><p>Prompt tokens included in <span class="math inline">\(h\)</span>.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Direct Preference Optimization (DPO)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> preference pairs <span class="math inline">\((x,y_w,y_l)\)</span>, frozen reference <span class="math inline">\(\pi_{\text{ref}}\)</span>, policy <span class="math inline">\(\pi_\theta\)</span>, <span class="math inline">\(\beta\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each minibatch <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(h_w\gets\log\pi_\theta(y_w|x)-\log\pi_{\text{ref}}(y_w|x)\)</span> <em>▷ masked sums over response tokens</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(h_l\gets\log\pi_\theta(y_l|x)-\log\pi_{\text{ref}}(y_l|x)\)</span></div>
+<div class="algo-line" style="--d:1">gradient step on <span class="math inline">\(-\operatorname{mean}\log\sigma\big(\beta(h_w-h_l)\big)\)</span></div>
+<div class="algo-line" style="--d:1">log the implicit reward margin <span class="math inline">\(\beta(h_w-h_l)\)</span> and the pair accuracy</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-optimize-a-tiny-dpo-policy">3. PyTorch exercise — optimize a tiny DPO policy</h3>
+<p>Treat three categorical outcomes as three complete responses. The preference data consistently says response <span style="background-color: codeinlinebg"><code> 2 &gt; 1 &gt; 0</code></span>.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+beta = 0.5
+
+reference_logits = torch.tensor([
+    1.0, 0.0, -1.0
+])
+
+policy_logits = torch.nn.Parameter(
+    reference_logits.clone()
+)
+
+# Preference pairs:
+# response 2 beats 0
+# response 2 beats 1
+# response 1 beats 0
+chosen = torch.tensor([2, 2, 1])
+rejected = torch.tensor([0, 1, 0])
+
+reference_log_probs = (
+    reference_logits.log_softmax(
+        dim=-1
+    )
+).detach()
+
+def dpo_objective(policy_logits):
+    # TODO 1: Current policy log-probabilities.
+    policy_log_probs = ...
+
+    # TODO 2: Chosen and rejected policy-reference scores.
+    chosen_scores = ...
+    rejected_scores = ...
+
+    # TODO 3: Preference margin.
+    margins = ...
+
+    # TODO 4: Numerically stable DPO loss.
+    loss = ...
+
+    preference_probabilities = ...
+
+    return (
+        loss,
+        margins,
+        preference_probabilities,
+    )
+
+initial_loss, initial_margins, initial_probs = (
+    dpo_objective(policy_logits)
+)
+
+optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=0.05,
+)
+
+# TODO 5: Optimize the fixed preference dataset.
+for step in range(100):
+    loss, margins, preference_probabilities = (
+        dpo_objective(policy_logits)
+    )
+
+    ...
+
+with torch.no_grad():
+    final_loss, final_margins, final_probs = (
+        dpo_objective(policy_logits)
+    )
+
+    final_policy_probs = (
+        policy_logits.softmax(dim=-1)
+    )
+
+print(&quot;Reference probabilities:&quot;,
+      reference_logits.softmax(dim=-1))
+
+print(&quot;Initial margins:&quot;,
+      initial_margins.detach())
+
+print(&quot;Initial preference probabilities:&quot;,
+      initial_probs.detach())
+
+print(&quot;Final policy probabilities:&quot;,
+      final_policy_probs)
+
+print(&quot;Final margins:&quot;,
+      final_margins)
+
+print(&quot;Final preference probabilities:&quot;,
+      final_probs)
+
+print(&quot;Initial loss:&quot;,
+      initial_loss.item())
+
+print(&quot;Final loss:&quot;,
+      final_loss.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What are all DPO margins when policy and reference are identical?</p></li>
+<li><p>What preference probability does a zero margin imply?</p></li>
+<li><p>Which response should gain the most probability?</p></li>
+<li><p>Does a decreasing DPO loss prove that the policy’s responses are factually correct?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> log_softmax(dim=-1)</code></span>.</p></li>
+<li><p>A chosen score is <span style="background-color: codeinlinebg"><code> policy_log_probs[chosen] - reference_log_probs[chosen]</code></span>.</p></li>
+<li><p>Margin is chosen score minus rejected score.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> -F.logsigmoid(beta * margins).mean()</code></span>.</p></li>
+<li><p>Preference probability is <span style="background-color: codeinlinebg"><code> torch.sigmoid(beta * margins)</code></span>.</p></li>
+<li><p>The training loop needs <span style="background-color: codeinlinebg"><code> zero_grad</code></span>, <span style="background-color: codeinlinebg"><code> backward</code></span> and <span style="background-color: codeinlinebg"><code> step</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Swap <span style="background-color: codeinlinebg"><code> chosen</code></span> and <span style="background-color: codeinlinebg"><code> rejected</code></span>. Training remains numerically healthy while learning exactly the opposite ranking.</p>
+<p>Next, remove <span style="background-color: codeinlinebg"><code> .detach()</code></span> from a trainable reference model. Both policy and reference may move, destroying the fixed anchor assumed by the objective.</p>
+<p>Replace <span style="background-color: codeinlinebg"><code> F.logsigmoid</code></span> with:</p>
+<pre class="code python"><code class="language-python">-torch.log(
+    torch.sigmoid(beta * margins)
+).mean()</code></pre>
+<p>Large negative margins can make <span style="background-color: codeinlinebg"><code> sigmoid</code></span> underflow toward zero and the logarithm produce <span style="background-color: codeinlinebg"><code> inf</code></span>. <span style="background-color: codeinlinebg"><code> logsigmoid</code></span> is more stable.</p>
+<p>Finally, length-normalize response log-probabilities. This may reduce length effects, but it changes the preference objective rather than merely fixing numerical stability.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What role does the reference policy play in DPO?</p></li>
+<li><p>How does increasing <span class="math inline">\(\beta\)</span> affect the loss?</p></li>
+<li><p>Why can DPO struggle with preferences outside the dataset’s support?</p></li>
+<li><p>What diagnostics should accompany DPO training loss?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Policy log-probabilities:</p>
+<pre class="code python"><code class="language-python">policy_log_probs = (
+    policy_logits.log_softmax(
+        dim=-1
+    )
+)</code></pre>
+<p>Reference-relative scores:</p>
+<pre class="code python"><code class="language-python">chosen_scores = (
+    policy_log_probs[chosen]
+    - reference_log_probs[chosen]
+)
+
+rejected_scores = (
+    policy_log_probs[rejected]
+    - reference_log_probs[rejected]
+)</code></pre>
+<p>Preference margin:</p>
+<pre class="code python"><code class="language-python">margins = (
+    chosen_scores - rejected_scores
+)</code></pre>
+<p>Loss and implied probabilities:</p>
+<pre class="code python"><code class="language-python">loss = -F.logsigmoid(
+    beta * margins
+).mean()
+
+preference_probabilities = (
+    torch.sigmoid(
+        beta * margins
+    )
+)</code></pre>
+<p>Optimization:</p>
+<pre class="code python"><code class="language-python">for step in range(100):
+    loss, margins, preference_probabilities = (
+        dpo_objective(policy_logits)
+    )
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()</code></pre>
+<p>When policy and reference are identical:</p>
+<p><span class="math display">\[s_\theta(x,y)=0\]</span></p>
+<p>for every response, so:</p>
+<p><span class="math display">\[\Delta_\theta=0\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\sigma(\beta\Delta_\theta)=0.5\]</span></p>
+<p>Training increases the relative scores of responses <span style="background-color: codeinlinebg"><code> 2</code></span> and <span style="background-color: codeinlinebg"><code> 1</code></span> over lower-ranked responses. Response <span style="background-color: codeinlinebg"><code> 2</code></span> should gain the most probability because it wins both of its comparisons.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It defines the baseline response probabilities. DPO learns how the chosen-versus-rejected margin changes relative to that anchor.</p></li>
+<li><p>It makes the logistic comparison steeper and usually increases gradient scale near zero, while strongly confident examples can saturate sooner.</p></li>
+<li><p>It receives no fresh exploration or reward feedback. Missing behaviors cannot be directly compared or corrected.</p></li>
+<li><p>Log preference accuracy, margin distribution, chosen/rejected log-probabilities, policy-reference KL, response length, held-out preference accuracy and independent capability/safety evaluations.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>PPO’s ratio must compare the current policy against the fixed behavior policy that generated those sampled actions.</p></li>
+<li><p>An individual sampled action may have become more probable under the current policy; only the correctly weighted expectation is guaranteed to equal nonnegative KL.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> DPO is reference-relative preference classification over fixed pairs. It is simpler than online RL, but its behavior is bounded by preference quality, dataset coverage, masking choices and the fixed reference anchor.</p>

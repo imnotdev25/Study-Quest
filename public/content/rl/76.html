@@ -1,0 +1,339 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a weather app that says 90% rain</div>
+<p>If a weather app says “90% chance of rain” on 100 days, it should rain on about 90 of them. If it rains on 60, the app is overconfident, even if it’s usually right about <em>which</em> days are wetter. Calibration asks whether stated confidence matches observed frequency.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/271bb5603630.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A reliability diagram. Points below the diagonal mean overconfidence.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Which uncertainty describes inherent outcome randomness?</p></li>
+<li><p>Why might deployment use an LCB while exploration uses a UCB?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="confidence-is-a-claim-about-frequency">2. Confidence is a claim about frequency</h3>
+<p>Suppose an outcome model predicts whether a tool-agent answer will succeed. Among predictions made with 90% confidence, roughly 90% should succeed. That is calibration.</p>
+<p>Accuracy and calibration differ:</p>
+<ul>
+<li><p>A model can rank examples correctly but be overconfident.</p></li>
+<li><p>A calibrated model can still have poor accuracy.</p></li>
+<li><p>A policy probability means “how often I select this action,” not “how likely this action is correct.”</p></li>
+</ul>
+<p>For class logits <span class="math inline">\(z\)</span>, temperature scaling uses:</p>
+<p><span class="math display">\[p_T(y\mid x)
+=
+\operatorname{softmax}\left(\frac{z}{T}\right)\]</span></p>
+<p>where <span class="math inline">\(T&gt;0\)</span>:</p>
+<ul>
+<li><p><span class="math inline">\(T&gt;1\)</span>: softer, less confident probabilities;</p></li>
+<li><p><span class="math inline">\(T&lt;1\)</span>: sharper, more confident probabilities;</p></li>
+<li><p><span class="math inline">\(T=1\)</span>: unchanged probabilities.</p></li>
+</ul>
+<p>Fit <span class="math inline">\(T\)</span> on a held-out calibration set by minimizing negative log-likelihood:</p>
+<p><span class="math display">\[L(T)
+=
+-\frac1B\sum_{i=1}^{B}
+\log p_T(y_i\mid x_i)\]</span></p>
+<p>A positive scalar temperature preserves every argmax, so classification accuracy stays fixed. It changes confidence and NLL.</p>
+<p>Expected calibration error groups predictions into confidence bins:</p>
+<p><span class="math display">\[\operatorname{ECE}
+=
+\sum_k
+\frac{|B_k|}{B}
+\left|
+\operatorname{accuracy}(B_k)
+-
+\operatorname{confidence}(B_k)
+\right|\]</span></p>
+<p>ECE is useful diagnostically but depends on bin choices and is not smoothly differentiable. Optimize NLL; report ECE, NLL, Brier score and subgroup results.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>logits and probabilities: <span style="background-color: codeinlinebg"><code> [B, C]</code></span>;</p></li>
+<li><p>labels, confidence and predictions: <span style="background-color: codeinlinebg"><code> [B]</code></span>;</p></li>
+<li><p>temperature: scalar;</p></li>
+<li><p>NLL and ECE: scalar.</p></li>
+</ul>
+<p>In RL, calibrate a success, reward or outcome predictor against observed outcomes. Silently scaling policy logits changes sampling entropy, rollout log-probabilities and PPO ratios.</p>
+<p>DPO optimizes a preference log-ratio margin on fixed comparisons. Neither that margin nor its sigmoid is automatically a calibrated probability of task success.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: measuring and fixing calibration</div>
+<p><strong>Expected calibration error:</strong> bin predictions by confidence, then <span class="math inline">\(\mathrm{ECE}=\sum_b\frac{n_b}{n}\big|\mathrm{acc}_b-\mathrm{conf}_b\big|\)</span>. <strong>Temperature scaling:</strong> <span class="math inline">\(p=\sigma(z/T)\)</span> (or softmax), with one scalar <span class="math inline">\(T\)</span> fit by minimizing NLL on a <em>held-out calibration set</em>. <span class="math inline">\(T&gt;1\)</span> softens overconfident predictions. Accuracy is unchanged, because the ranking is preserved. <strong>Not probabilities of correctness:</strong> a policy’s token probability, or a DPO margin, isn’t a calibrated “chance this answer is right.”</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Confidence is only useful once checked against outcomes.</p></li>
+<li><p>Calibrate on separate data and monitor for drift.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: ECE from two bins</div>
+<p>Bin 1: 50 predictions at confidence 0.9, 35 correct (0.70). Bin 2: 50 at confidence 0.6, 30 correct (0.60). <span class="math inline">\(\mathrm{ECE}=0.5|0.70-0.90|+0.5|0.60-0.60|=0.10\)</span>. All the error is in the confident bin.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Fitting <span class="math inline">\(T\)</span> on the test set.</p></li>
+<li><p>Too many bins with too little data (a noisy ECE).</p></li>
+<li><p>Calibrating once and never checking again after a policy update.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-soften-an-overconfident-outcome-model">3. PyTorch exercise — soften an overconfident outcome model</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+# Separate calibration and evaluation splits.
+calibration_logits = torch.tensor([
+    [5.0, 0.0], [4.0, 0.0], [3.0, 0.0],
+    [2.0, 0.0], [0.0, 5.0], [0.0, 4.0],
+    [0.0, 3.0], [0.0, 2.0], [4.0, 0.0],
+    [0.0, 4.0], [3.0, 0.0], [0.0, 3.0],
+])
+
+calibration_labels = torch.tensor([
+    0, 0, 1, 0, 1, 1,
+    0, 1, 1, 0, 0, 1,
+])
+
+evaluation_logits = torch.tensor([
+    [6.0, 0.0], [0.0, 6.0], [5.0, 0.0],
+    [0.0, 5.0], [4.0, 0.0], [0.0, 4.0],
+    [3.0, 0.0], [0.0, 3.0], [2.0, 0.0],
+    [0.0, 2.0], [4.0, 0.0], [0.0, 4.0],
+])
+
+evaluation_labels = torch.tensor([
+    0, 1, 0, 1, 1, 0,
+    0, 1, 0, 1, 1, 0,
+])
+
+
+def calibration_metrics(
+    logits,
+    labels,
+    temperature,
+    num_bins=5,
+):
+    # TODO 1: Scale logits and compute probabilities.
+    scaled_logits = ...
+    probabilities = ...
+
+    confidences, predictions = ...
+
+    # TODO 2: Accuracy and stable NLL.
+    accuracy = ...
+    nll = ...
+
+    # TODO 3: Expected calibration error.
+    ece = torch.zeros(
+        (),
+        dtype=logits.dtype,
+    )
+
+    boundaries = torch.linspace(
+        0.0,
+        1.0,
+        num_bins + 1,
+    )
+
+    for index in range(num_bins):
+        lower = boundaries[index]
+        upper = boundaries[index + 1]
+
+        in_bin = ...
+
+        if bool(in_bin.any()):
+            bin_accuracy = ...
+            bin_confidence = ...
+            bin_weight = ...
+
+            ece = ...
+
+    return {
+        &quot;accuracy&quot;: accuracy,
+        &quot;nll&quot;: nll,
+        &quot;ece&quot;: ece,
+        &quot;mean_confidence&quot;:
+            confidences.mean(),
+        &quot;predictions&quot;: predictions,
+    }
+
+
+with torch.no_grad():
+    before = calibration_metrics(
+        evaluation_logits,
+        evaluation_labels,
+        temperature=torch.tensor(1.0),
+    )
+
+# log(T) is unconstrained, while exp(log(T)) is positive.
+log_temperature = torch.nn.Parameter(
+    torch.zeros(())
+)
+
+optimizer = torch.optim.Adam(
+    [log_temperature],
+    lr=0.05,
+)
+
+# TODO 4: Fit only the temperature.
+for step in range(500):
+    temperature = ...
+    loss = ...
+
+    ...
+
+# TODO 5: Evaluate without changing base logits.
+learned_temperature = ...
+
+with torch.no_grad():
+    after = ...
+
+predictions_unchanged = torch.equal(
+    before[&quot;predictions&quot;],
+    after[&quot;predictions&quot;],
+)
+
+print(
+    &quot;Learned temperature:&quot;,
+    learned_temperature.item(),
+)
+
+for name in [
+    &quot;accuracy&quot;,
+    &quot;mean_confidence&quot;,
+    &quot;nll&quot;,
+    &quot;ece&quot;,
+]:
+    print(
+        name,
+        &quot;before:&quot;,
+        before[name].item(),
+        &quot;after:&quot;,
+        after[name].item(),
+    )
+
+print(
+    &quot;Predictions unchanged:&quot;,
+    predictions_unchanged,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Evaluation accuracy is <span class="math inline">\(8/12\)</span>. Will calibration change it?</p></li>
+<li><p>Should the learned temperature be above or below one?</p></li>
+<li><p>Should mean confidence move toward or away from <span class="math inline">\(8/12\)</span>?</p></li>
+<li><p>Why would applying this transformation to a rollout policy be more consequential?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Divide logits by temperature before <span style="background-color: codeinlinebg"><code> softmax</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> F.cross_entropy</code></span> directly on scaled logits.</p></li>
+<li><p>A bin contains confidence in <span style="background-color: codeinlinebg"><code> (lower, upper]</code></span>.</p></li>
+<li><p>Bin weight is the fraction of all examples in that bin.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> temperature = log_temperature.exp()</code></span>.</p></li>
+<li><p>Detach the original logits while fitting the scalar temperature.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Optimize an unconstrained raw temperature. It may reach zero or become negative, producing instability or reversed rankings.</p></li>
+<li><p>Optimize the base logits with the temperature. This is no longer post-hoc calibration and can overfit the small split.</p></li>
+<li><p>Fit temperature on the evaluation set. The reported calibration is then contaminated by leakage.</p></li>
+<li><p>Increase the number of ECE bins. Small or empty bins make the estimate noisy.</p></li>
+<li><p>Scale PPO policy logits after rollout collection. Stored log-probabilities and the new distribution will no longer describe the same policy.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does scalar temperature scaling preserve the predicted class?</p></li>
+<li><p>Why optimize NLL instead of ECE?</p></li>
+<li><p>Why can calibration deteriorate after deployment?</p></li>
+<li><p>What should accompany one global ECE number?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Probability calculations:</p>
+<pre class="code python"><code class="language-python">scaled_logits = logits / temperature
+
+probabilities = scaled_logits.softmax(
+    dim=-1
+)
+
+confidences, predictions = (
+    probabilities.max(dim=-1)
+)</code></pre>
+<p>Accuracy and NLL:</p>
+<pre class="code python"><code class="language-python">accuracy = (
+    predictions == labels
+).to(logits.dtype).mean()
+
+nll = F.cross_entropy(
+    scaled_logits,
+    labels,
+)</code></pre>
+<p>ECE calculation:</p>
+<pre class="code python"><code class="language-python">in_bin = (
+    (confidences &gt; lower)
+    &amp; (confidences &lt;= upper)
+)
+
+if bool(in_bin.any()):
+    bin_accuracy = (
+        predictions[in_bin]
+        == labels[in_bin]
+    ).to(logits.dtype).mean()
+
+    bin_confidence = (
+        confidences[in_bin].mean()
+    )
+
+    bin_weight = (
+        in_bin.to(logits.dtype).mean()
+    )
+
+    ece = (
+        ece
+        + bin_weight
+        * (
+            bin_accuracy
+            - bin_confidence
+        ).abs()
+    )</code></pre>
+<p>Temperature optimization:</p>
+<pre class="code python"><code class="language-python">for step in range(500):
+    temperature = (
+        log_temperature.exp()
+    )
+
+    loss = F.cross_entropy(
+        calibration_logits.detach()
+        / temperature,
+        calibration_labels,
+    )
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()</code></pre>
+<p>Final evaluation:</p>
+<pre class="code python"><code class="language-python">learned_temperature = (
+    log_temperature.detach().exp()
+)
+
+with torch.no_grad():
+    after = calibration_metrics(
+        evaluation_logits,
+        evaluation_labels,
+        learned_temperature,
+    )</code></pre>
+<p>The model is correct on two-thirds of the evaluation examples but initially reports mean confidence near one. The learned <span class="math inline">\(T&gt;1\)</span> softens its probabilities. Accuracy and predictions remain unchanged, while mean confidence, NLL and usually ECE improve.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Dividing every class logit by the same positive scalar preserves their ordering.</p></li>
+<li><p>NLL is smooth and rewards probability assigned to the observed label; hard ECE bins are discontinuous and bin-dependent.</p></li>
+<li><p>Distribution shift can change the relationship between confidence and correctness.</p></li>
+<li><p>Report NLL, Brier score, reliability plots, bin counts and calibration by task, tool, difficulty and important subgroup.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Aleatoric uncertainty is irreducible outcome randomness; epistemic uncertainty represents limited knowledge.</p></li>
+<li><p>Deployment may penalize unsupported actions with an LCB, while exploration uses a UCB to investigate uncertain actions.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> confidence is only useful when checked against outcomes. Calibrate on separate data, monitor drift, and never mistake policy probability or a DPO preference margin for probability of correctness.</p>

@@ -1,0 +1,513 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can PPO value clipping give zero critic gradient even when the prediction is wrong?</p></li>
+<li><p>Why must the value clip range be reconsidered after reward rescaling?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-rollout-stopped-does-not-always-mean-the-episode-ended">2. “The rollout stopped” does not always mean “the episode ended”</h3>
+<p>Two events can end stored data:</p>
+<ul>
+<li><p><strong>Termination:</strong> the underlying episode truly ended—such as EOS or task completion.</p></li>
+<li><p><strong>Truncation:</strong> collection stopped externally—such as a rollout-length limit—while the state could still have future value.</p></li>
+</ul>
+<p>For an <span class="math inline">\(L\)</span>-step target:</p>
+<p><span class="math display">\[G_0^{(L)}
+=
+\sum_{t=0}^{L-1}\gamma^t r_t
++
+\gamma^L(1-z)V(s_L)\]</span></p>
+<p>where <span class="math inline">\(z=1\)</span> only for a true termination.</p>
+<p>Consider a continuing process with:</p>
+<p><span class="math display">\[r_t=1,\qquad \gamma=0.9\]</span></p>
+<p>Its exact value is:</p>
+<p><span class="math display">\[V(s)=\frac{1}{1-\gamma}=10\]</span></p>
+<p>If collection is truncated after five steps, the correct target is:</p>
+<p><span class="math display">\[1+0.9+\cdots+0.9^4+0.9^5(10)=10\]</span></p>
+<p>If truncation is incorrectly treated as termination:</p>
+<p><span class="math display">\[G_{\text{wrong}}
+=
+1+0.9+\cdots+0.9^4
+=
+4.0951\]</span></p>
+<p>The critic is taught that hitting the collection boundary destroys future value.</p>
+<p>For GAE, distinguish two masks:</p>
+<p><span class="math display">\[\delta_t
+=
+r_t+\gamma b_tV(s_{t+1})-V(s_t)\]</span></p>
+<ul>
+<li><p><span class="math inline">\(b_t=0\)</span> for true termination;</p></li>
+<li><p><span class="math inline">\(b_t=1\)</span> for truncation when a valid bootstrap state exists.</p></li>
+</ul>
+<p>The trace recursion normally stops at any unlinked stored-sequence boundary:</p>
+<p><span class="math display">\[A_t
+=
+\delta_t+\gamma\lambda c_tA_{t+1}\]</span></p>
+<p>Here <span class="math inline">\(c_t=0\)</span> prevents residuals from another episode or unrelated chunk leaking backward. At a truncated final step, the bootstrap belongs inside <span class="math inline">\(\delta_t\)</span>; that does not require continuing the GAE trace into an unrelated batch row.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>rewards and valid-token mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p><span style="background-color: codeinlinebg"><code> terminated</code></span>, <span style="background-color: codeinlinebg"><code> truncated</code></span>, bootstrap values: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>return targets: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+</ul>
+<p>For LLMs, EOS is normally terminal. A <span style="background-color: codeinlinebg"><code> max_new_tokens</code></span> cutoff is truncation only if continuation remains part of the intended task. If the environment scores the cutoff as the final failed answer, it is effectively terminal. Store the reason explicitly.</p>
+<p>DPO has no bootstrap target, but truncated completions still require explicit masks and should not silently be treated as natural EOS completions.</p>
+<h3 class="unnumbered" id="pytorch-exercise-zeroing-every-boundary-teaches-the-wrong-value">3. PyTorch exercise — zeroing every boundary teaches the wrong value</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.90
+maximum_length = 10
+
+lengths = torch.arange(
+    1,
+    maximum_length + 1,
+)
+
+batch_size = lengths.numel()
+true_continuing_value = torch.tensor(10.0)
+
+positions = torch.arange(
+    maximum_length
+)[None, :]
+
+valid_mask = (
+    positions &lt; lengths[:, None]
+)
+
+rewards = torch.where(
+    valid_mask,
+    torch.ones(batch_size, maximum_length),
+    torch.zeros(batch_size, maximum_length),
+)
+
+# Every row was cut by the collector, not by the MDP.
+terminated = torch.zeros(
+    batch_size,
+    dtype=torch.bool,
+)
+
+truncated = torch.ones(
+    batch_size,
+    dtype=torch.bool,
+)
+
+next_state_values = torch.full(
+    (batch_size,),
+    true_continuing_value.item(),
+)
+
+
+# TODO 1: Implement variable-length discounted returns.
+def calculate_returns(
+    rewards,
+    mask,
+    bootstrap_values,
+):
+    returns = ...
+
+    running_returns = ...
+
+    for token_index in reversed(
+        range(maximum_length)
+    ):
+        candidate_returns = ...
+
+        # Preserve the bootstrap while stepping backward
+        # through right-padding.
+        running_returns = ...
+
+        returns[:, token_index] = ...
+
+    return returns
+
+
+# TODO 2: Compare correct bootstrap semantics with
+# collapsing termination and truncation into &quot;done&quot;.
+done = ...
+
+correct_bootstrap_values = ...
+
+wrong_done_bootstrap_values = ...
+
+correct_returns = ...
+
+wrong_returns = ...
+
+correct_first_targets = ...
+wrong_first_targets = ...
+
+theoretical_wrong_targets = ...
+
+maximum_wrong_formula_error = ...
+
+
+# TODO 3: Fit a scalar critic to each set of targets.
+def fit_scalar_critic(targets):
+    value = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    for _ in range(100):
+        loss = ...
+
+        loss.backward()
+
+        with torch.no_grad():
+            value -= ...
+
+            value.grad.zero_()
+
+    return value.detach()
+
+
+correct_fitted_value = ...
+wrong_fitted_value = ...
+
+
+# TODO 4: Compare identical five-step records:
+# one truly terminates, the other is truncated.
+comparison_lengths = torch.tensor([
+    5,
+    5,
+])
+
+comparison_mask = (
+    positions[:1]
+    &lt; comparison_lengths[:, None]
+)
+
+comparison_rewards = torch.where(
+    comparison_mask,
+    torch.ones(2, maximum_length),
+    torch.zeros(2, maximum_length),
+)
+
+comparison_terminated = torch.tensor([
+    True,
+    False,
+])
+
+comparison_truncated = torch.tensor([
+    False,
+    True,
+])
+
+comparison_next_values = torch.full(
+    (2,),
+    true_continuing_value.item(),
+)
+
+correct_comparison_bootstrap = ...
+
+zero_every_boundary_bootstrap = ...
+
+always_bootstrap = ...
+
+correct_comparison_returns = ...
+
+zero_boundary_returns = ...
+
+always_bootstrap_returns = ...
+
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Lengths:&quot;,
+    lengths,
+)
+
+print(
+    &quot;\nCorrect first-step targets:&quot;,
+    correct_first_targets,
+)
+
+print(
+    &quot;\nWrong first-step targets:&quot;,
+    wrong_first_targets,
+)
+
+print(
+    &quot;\nMaximum analytic error:&quot;,
+    maximum_wrong_formula_error.item(),
+)
+
+print(
+    &quot;\nFitted scalar value: correct, wrong&quot;
+)
+print(
+    correct_fitted_value.item(),
+    wrong_fitted_value.item(),
+)
+
+print(
+    &quot;\nRows: true termination, truncation&quot;
+)
+print(
+    &quot;Correct first-step targets:&quot;,
+    correct_comparison_returns[:, 0],
+)
+print(
+    &quot;Zero every boundary:&quot;,
+    zero_boundary_returns[:, 0],
+)
+print(
+    &quot;Always bootstrap:&quot;,
+    always_bootstrap_returns[:, 0],
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What should every correctly bootstrapped first-step target equal?</p></li>
+<li><p>Which rollout length suffers the largest bias when bootstrap is removed?</p></li>
+<li><p>For length five, what targets should termination and truncation produce?</p></li>
+<li><p>Why is “always bootstrap” also incorrect?</p></li>
+<li><p>What value will the wrongly trained scalar critic approach?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Initialize the reverse recursion with <span style="background-color: codeinlinebg"><code> bootstrap_values</code></span>.</p></li>
+<li><p>Preserve <span style="background-color: codeinlinebg"><code> running_returns</code></span> at padding; do not reset it before reaching the final valid token.</p></li>
+<li><p>Correct bootstrap mask:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">~terminated</code></pre>
+<ul>
+<li><p>Incorrect mask:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">~(terminated | truncated)</code></pre>
+<ul>
+<li><p>The no-bootstrap target is:</p></li>
+</ul>
+<p><span class="math display">\[\frac{1-\gamma^L}{1-\gamma}\]</span></p>
+<ul>
+<li><p>Detach return targets during critic training.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Store one undifferentiated <span style="background-color: codeinlinebg"><code> done</code></span> flag.</p></li>
+<li><p>Zero bootstrap values at every generation-length cutoff.</p></li>
+<li><p>Bootstrap after a genuine EOS or irreversible failure.</p></li>
+<li><p>Let GAE cross from one batch row into another.</p></li>
+<li><p>Clamp an invalid final index instead of handling an empty response.</p></li>
+<li><p>Treat a context-window overflow as truncation while discarding the required final observation.</p></li>
+<li><p>Change maximum rollout length and assume the critic’s target distribution is unchanged.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is <span style="background-color: codeinlinebg"><code> 1 - done</code></span> not always the correct bootstrap mask?</p></li>
+<li><p>Why can GAE stop at a truncation while TD still bootstraps there?</p></li>
+<li><p>Is <span style="background-color: codeinlinebg"><code> max_new_tokens</code></span> inherently a termination or truncation?</p></li>
+<li><p>How can incorrect truncation handling alter policy behavior?</p></li>
+<li><p>What boundary metadata should rollout storage retain?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Return calculation:</p>
+<pre class="code python"><code class="language-python">def calculate_returns(
+    rewards,
+    mask,
+    bootstrap_values,
+):
+    returns = torch.zeros_like(rewards)
+
+    running_returns = (
+        bootstrap_values.detach().clone()
+    )
+
+    for token_index in reversed(
+        range(maximum_length)
+    ):
+        candidate_returns = (
+            rewards[:, token_index]
+            + gamma * running_returns
+        )
+
+        running_returns = torch.where(
+            mask[:, token_index],
+            candidate_returns,
+            running_returns,
+        )
+
+        returns[:, token_index] = torch.where(
+            mask[:, token_index],
+            running_returns,
+            torch.zeros_like(running_returns),
+        )
+
+    return returns</code></pre>
+<p>Correct and incorrect bootstraps:</p>
+<pre class="code python"><code class="language-python">done = (
+    terminated | truncated
+)
+
+correct_bootstrap_values = torch.where(
+    terminated,
+    torch.zeros_like(next_state_values),
+    next_state_values,
+)
+
+wrong_done_bootstrap_values = torch.where(
+    done,
+    torch.zeros_like(next_state_values),
+    next_state_values,
+)
+
+correct_returns = calculate_returns(
+    rewards,
+    valid_mask,
+    correct_bootstrap_values,
+)
+
+wrong_returns = calculate_returns(
+    rewards,
+    valid_mask,
+    wrong_done_bootstrap_values,
+)
+
+correct_first_targets = (
+    correct_returns[:, 0]
+)
+
+wrong_first_targets = (
+    wrong_returns[:, 0]
+)
+
+theoretical_wrong_targets = (
+    1.0
+    - gamma ** lengths
+) / (
+    1.0 - gamma
+)
+
+maximum_wrong_formula_error = (
+    wrong_first_targets
+    - theoretical_wrong_targets
+).abs().max()</code></pre>
+<p>Scalar critic:</p>
+<pre class="code python"><code class="language-python">def fit_scalar_critic(targets):
+    value = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    for _ in range(100):
+        loss = (
+            0.5
+            * (
+                value
+                - targets.detach()
+            ).square().mean()
+        )
+
+        loss.backward()
+
+        with torch.no_grad():
+            value -= (
+                0.20 * value.grad
+            )
+
+            value.grad.zero_()
+
+    return value.detach()
+
+
+correct_fitted_value = fit_scalar_critic(
+    correct_first_targets
+)
+
+wrong_fitted_value = fit_scalar_critic(
+    wrong_first_targets
+)</code></pre>
+<p>Boundary comparison:</p>
+<pre class="code python"><code class="language-python">correct_comparison_bootstrap = torch.where(
+    comparison_terminated,
+    torch.zeros_like(
+        comparison_next_values
+    ),
+    comparison_next_values,
+)
+
+zero_every_boundary_bootstrap = torch.zeros_like(
+    comparison_next_values
+)
+
+always_bootstrap = (
+    comparison_next_values
+)
+
+correct_comparison_returns = calculate_returns(
+    comparison_rewards,
+    comparison_mask,
+    correct_comparison_bootstrap,
+)
+
+zero_boundary_returns = calculate_returns(
+    comparison_rewards,
+    comparison_mask,
+    zero_every_boundary_bootstrap,
+)
+
+always_bootstrap_returns = calculate_returns(
+    comparison_rewards,
+    comparison_mask,
+    always_bootstrap,
+)</code></pre>
+<p>Every correctly bootstrapped truncated target equals:</p>
+<p><span class="math display">\[10\]</span></p>
+<p>The wrong targets for lengths <span style="background-color: codeinlinebg"><code> 1</code></span> through <span style="background-color: codeinlinebg"><code> 10</code></span> are approximately:</p>
+<p><span class="math display">\[[1,\;1.9,\;2.71,\;3.439,\;4.095,\ldots,6.513]\]</span></p>
+<p>Their mean is approximately:</p>
+<p><span class="math display">\[4.138\]</span></p>
+<p>Therefore, the correct scalar critic approaches <span style="background-color: codeinlinebg"><code> 10</code></span>, while the critic trained with <span style="background-color: codeinlinebg"><code> done</code></span> approaches only <span style="background-color: codeinlinebg"><code> 4.138</code></span>.</p>
+<p>For two five-step records:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Boundary</strong></th>
+<th style="text-align: left;"><strong>Correct</strong></th>
+<th style="text-align: left;"><strong>Zero every boundary</strong></th>
+<th style="text-align: left;"><strong>Always bootstrap</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Boundary</strong></td>
+<td style="text-align: left;"><strong>Correct</strong></td>
+<td style="text-align: left;"><strong>Zero every boundary</strong></td>
+<td style="text-align: left;"><strong>Always bootstrap</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">True termination</td>
+<td style="text-align: left;">4.0951</td>
+<td style="text-align: left;">4.0951</td>
+<td style="text-align: left;">10.0000</td>
+</tr>
+<tr>
+<td style="text-align: left;">Truncation</td>
+<td style="text-align: left;">10.0000</td>
+<td style="text-align: left;">4.0951</td>
+<td style="text-align: left;">10.0000</td>
+</tr>
+</tbody>
+</table>
+<p>Neither universal rule works. Bootstrap according to boundary semantics.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p><span style="background-color: codeinlinebg"><code> done</code></span> often combines true termination with an external cutoff; only true termination necessarily removes future value.</p></li>
+<li><p>The final truncated TD residual includes <span class="math inline">\(V(s_{t+1})\)</span>. Stopping the trace then prevents unrelated later residuals from leaking across the stored boundary.</p></li>
+<li><p>It depends on the task contract. It is truncation if valid continuation remains; it is terminal if the environment ends and scores the cutoff as final.</p></li>
+<li><p>Artificially low boundary values can make long responses, lengthy tool plans, or states near collection limits appear undesirable.</p></li>
+<li><p>Store termination, truncation, finish reason, valid length, final observation, bootstrap value, EOS status, timeout/context-limit status, and whether another chunk continues the same episode.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Beyond the permitted value-change interval, the clipped error can dominate while its <span style="background-color: codeinlinebg"><code> clamp</code></span> branch is flat, producing zero gradient for that sample.</p></li>
+<li><p>Value clipping is measured in return units. Rescaling rewards changes the clip’s relative restrictiveness.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> stop traces at storage boundaries, but zero future value only at genuine terminal states. Conflating truncation with termination can train a critic to fear the data collector’s chunk length rather than the environment’s actual outcomes.</p>

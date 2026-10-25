@@ -1,0 +1,469 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why must self-normalized importance sampling stay inside the observed reward range?</p></li>
+<li><p>Which bias normally vanishes with more data: SNIS bias or fixed clipping bias?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="use-a-model-for-predictable-value-and-weights-for-residual-mistakes">2. Use a model for predictable value and weights for residual mistakes</h3>
+<p>For logged context <span class="math inline">\(x_i\)</span>, define the model baseline:</p>
+<p><span class="math display">\[m_i
+=
+\underbrace{
+\sum_a\pi(a\mid x_i)\hat q(x_i,a)
+}_{\text{modelled target-policy reward}}\]</span></p>
+<p>and the factual residual:</p>
+<p><span class="math display">\[e_i
+=
+\underbrace{
+R_i-\hat q(x_i,A_i)
+}_{\text{model&#39;s error on the observed action}}\]</span></p>
+<p>Ordinary doubly robust evaluation is:</p>
+<p><span class="math display">\[\hat V_{\mathrm{DR}}
+=
+\underbrace{\frac1N\sum_im_i}_{\text{direct-model baseline}}
++
+\underbrace{
+\frac1N\sum_iw_ie_i
+}_{\text{importance-weighted error correction}}\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[w_i
+=
+\underbrace{
+\frac{\pi(A_i\mid x_i)}
+     {\mu(A_i\mid x_i)}
+}_{\text{target-to-behavior ratio}}\]</span></p>
+<p>Self-normalized DR instead normalizes only the correction:</p>
+<p><span class="math display">\[\hat V_{\mathrm{SNDR}}
+=
+\underbrace{\frac1N\sum_im_i}_{\text{baseline remains unweighted}}
++
+\underbrace{
+\frac{\sum_iw_ie_i}
+     {\sum_iw_i}
+}_{\text{self-normalized residual correction}}\]</span></p>
+<p>Do not normalize the baseline: it already represents a target-policy expectation.</p>
+<p>SNDR often reduces variance because it both:</p>
+<ol>
+<li><p>weights residual errors rather than full rewards;</p></li>
+<li><p>prevents random total weight from changing the correction’s scale.</p></li>
+</ol>
+<p>The cost is finite-sample ratio bias. With correct propensities but an imperfect model:</p>
+<p><span class="math display">\[E\!\left[
+\frac{\sum_iw_ie_i}{\sum_iw_i}
+\right]
+\ne
+\underbrace{
+E_\pi[e]
+}_{\text{required correction}}\]</span></p>
+<p>It remains consistent under adequate support. In sequential weighted DR, normalize cumulative weights separately at each timestep—not across timesteps, padding or unrelated batches.</p>
+<p>DPO supplies neither an environment <span class="math inline">\(Q\)</span>-model nor deployment logging propensities. Normalizing DPO reference ratios does not create a doubly robust policy evaluator.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions, rewards, weights and residuals: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+<li><p>stacked estimators: <span style="background-color: codeinlinebg"><code> [R, 5]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-normalize-a-model-error-correction">3. PyTorch exercise — normalize a model-error correction</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 10_000
+episodes_per_repetition = 100
+
+behavior_policy = torch.tensor([
+    0.98,
+    0.02,
+])
+
+target_policy = torch.tensor([
+    0.50,
+    0.50,
+])
+
+true_action_values = torch.tensor([
+    0.20,
+    0.80,
+])
+
+# Correct for the common action, but badly
+# underestimates the rare action.
+q_model = torch.tensor([
+    0.20,
+    0.40,
+])
+
+
+# TODO 1: Generate behavior-policy data.
+actions = ...
+
+reward_probabilities = ...
+
+rewards = ...
+
+importance_weights = ...
+
+exact_target_value = ...
+
+
+# TODO 2: Build model predictions and residuals.
+model_baseline = ...
+
+logged_predictions = ...
+
+residuals = ...
+
+
+# TODO 3: Construct five estimators.
+ips_estimates = ...
+
+snis_estimates = ...
+
+direct_method_estimates = ...
+
+dr_estimates = ...
+
+sndr_estimates = ...
+
+
+# TODO 4: Compare error.
+all_estimates = torch.stack([
+    ips_estimates,
+    snis_estimates,
+    direct_method_estimates,
+    dr_estimates,
+    sndr_estimates,
+], dim=1)
+
+means = ...
+
+biases = ...
+
+standard_deviations = ...
+
+rmses = ...
+
+results = torch.stack([
+    means,
+    biases,
+    standard_deviations,
+    rmses,
+], dim=1)
+
+
+# TODO 5: Inspect datasets with no rare actions.
+rare_counts = ...
+
+zero_rare_mask = ...
+
+zero_rare_fraction = ...
+
+zero_rare_means = ...
+
+raw_mean_weights = ...
+
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+print(&quot;Model baseline:&quot;, model_baseline.item())
+
+print(
+    &quot;Rows: IPS, SNIS, direct model, DR, SNDR\n&quot;
+    &quot;Columns: mean, bias, SD, RMSE&quot;
+)
+print(results)
+
+print(
+    &quot;Fraction with no rare action:&quot;,
+    zero_rare_fraction.item(),
+)
+
+print(
+    &quot;Estimator means conditional on no rare action:&quot;,
+    zero_rare_means,
+)
+
+print(
+    &quot;Mean and SD of raw mean weights:&quot;,
+    raw_mean_weights.mean().item(),
+    raw_mean_weights.std(correction=1).item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the direct model above or below the true value?</p></li>
+<li><p>Should ordinary DR remain unbiased with correct propensities?</p></li>
+<li><p>Will SNDR generally have lower variance than IPS?</p></li>
+<li><p>Can SNDR fully correct the rare-action model error when no rare action appears?</p></li>
+<li><p>What should happen if <span style="background-color: codeinlinebg"><code> q_model</code></span> is replaced by <span style="background-color: codeinlinebg"><code> true_action_values</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>The model baseline is:</p>
+<p><span class="math display">\[m
+=
+\underbrace{
+0.5(0.2)+0.5(0.4)
+}_{\text{target expectation under the imperfect model}}
+=
+0.30\]</span></p>
+<p>Use:</p>
+<pre class="code python"><code class="language-python">importance_weights.sum(dim=1)</code></pre>
+<p>as the SNIS/SNDR denominator.</p>
+<p>The estimators are:</p>
+<p><span class="math display">\[\hat V_{\mathrm{SNIS}}
+=
+\frac{\sum_iw_iR_i}{\sum_iw_i}\]</span></p>
+<p><span class="math display">\[\hat V_{\mathrm{DR}}
+=
+m+\frac1N\sum_iw_i e_i\]</span></p>
+<p><span class="math display">\[\hat V_{\mathrm{SNDR}}
+=
+m+\frac{\sum_iw_i e_i}{\sum_iw_i}\]</span></p>
+<p>All evaluation quantities should be detached from any trainable reward or value model.</p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Normalize the model baseline along with the residual correction.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> max_a q_model[a]</code></span> instead of the target-policy expectation.</p></li>
+<li><p>Normalize weights across repetitions rather than within each evaluation dataset.</p></li>
+<li><p>Include padded tokens in a sequential normalization denominator.</p></li>
+<li><p>Learn <span style="background-color: codeinlinebg"><code> q_model</code></span> on the same outcomes without cross-fitting.</p></li>
+<li><p>Report SNDR without raw mean-weight, maximum-weight and support diagnostics.</p></li>
+<li><p>Treat lower SNDR variance as proof that its finite-sample bias is zero.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Logged data:</p>
+<pre class="code python"><code class="language-python">actions = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_repetition,
+    )
+    &lt; behavior_policy[1]
+).to(torch.long)
+
+reward_probabilities = (
+    true_action_values[actions]
+)
+
+rewards = (
+    torch.rand(
+        num_repetitions,
+        episodes_per_repetition,
+    )
+    &lt; reward_probabilities
+).to(torch.float64)
+
+importance_weights = (
+    target_policy[actions]
+    / behavior_policy[actions]
+)
+
+exact_target_value = (
+    target_policy
+    * true_action_values
+).sum()</code></pre>
+<p>Model quantities:</p>
+<pre class="code python"><code class="language-python">model_baseline = (
+    target_policy
+    * q_model
+).sum()
+
+logged_predictions = (
+    q_model[actions]
+)
+
+residuals = (
+    rewards
+    - logged_predictions
+)</code></pre>
+<p>Estimators:</p>
+<pre class="code python"><code class="language-python">ips_estimates = (
+    importance_weights
+    * rewards
+).mean(dim=1)
+
+weight_sums = (
+    importance_weights.sum(dim=1)
+    .clamp_min(1e-12)
+)
+
+snis_estimates = (
+    (
+        importance_weights
+        * rewards
+    ).sum(dim=1)
+    / weight_sums
+)
+
+direct_method_estimates = torch.full_like(
+    ips_estimates,
+    model_baseline,
+)
+
+dr_estimates = (
+    model_baseline
+    + (
+        importance_weights
+        * residuals
+    ).mean(dim=1)
+)
+
+sndr_estimates = (
+    model_baseline
+    + (
+        importance_weights
+        * residuals
+    ).sum(dim=1)
+    / weight_sums
+)</code></pre>
+<p>Error diagnostics:</p>
+<pre class="code python"><code class="language-python">all_estimates = torch.stack([
+    ips_estimates,
+    snis_estimates,
+    direct_method_estimates,
+    dr_estimates,
+    sndr_estimates,
+], dim=1)
+
+means = all_estimates.mean(dim=0)
+
+biases = (
+    means - exact_target_value
+)
+
+standard_deviations = (
+    all_estimates.std(
+        dim=0,
+        correction=1,
+    )
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)
+
+results = torch.stack([
+    means,
+    biases,
+    standard_deviations,
+    rmses,
+], dim=1)</code></pre>
+<p>Support diagnostics:</p>
+<pre class="code python"><code class="language-python">rare_counts = (
+    actions == 1
+).sum(dim=1)
+
+zero_rare_mask = (
+    rare_counts == 0
+)
+
+zero_rare_fraction = (
+    zero_rare_mask
+    .to(torch.float64)
+    .mean()
+)
+
+zero_rare_means = (
+    all_estimates[
+        zero_rare_mask
+    ].mean(dim=0)
+)
+
+raw_mean_weights = (
+    importance_weights.mean(dim=1)
+)</code></pre>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Estimator</strong></th>
+<th style="text-align: left;"><strong>Mean</strong></th>
+<th style="text-align: left;"><strong>Bias</strong></th>
+<th style="text-align: left;"><strong>SD</strong></th>
+<th style="text-align: left;"><strong>RMSE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Estimator</strong></td>
+<td style="text-align: left;"><strong>Mean</strong></td>
+<td style="text-align: left;"><strong>Bias</strong></td>
+<td style="text-align: left;"><strong>SD</strong></td>
+<td style="text-align: left;"><strong>RMSE</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">IPS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.500</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.312</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.312</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">SNIS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.460</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.040</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.181</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.185</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Direct model</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.300</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.200</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.200</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">DR</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.500</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.200</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.200</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">SNDR</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.473</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.027</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.154</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.157</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The probability of observing no rare action is:</p>
+<p><span class="math display">\[P(K=0)
+=
+\underbrace{0.98^{100}}_{\text{all episodes take action 0}}
+\approx0.133\]</span></p>
+<p>In those datasets, the rare-action model error cannot be measured. SNDR remains near the model baseline plus common-action noise; normalization cannot construct the missing correction.</p>
+<p>Replacing:</p>
+<pre class="code python"><code class="language-python">q_model = true_action_values</code></pre>
+<p>makes the conditional residual means zero:</p>
+<p><span class="math display">\[E[R-\hat q(A)\mid A]
+=
+\underbrace{0}_{\text{correct outcome model}}\]</span></p>
+<p>so both DR and SNDR should be centered near the true value, with substantially reduced variance.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Below: the model predicts <span style="background-color: codeinlinebg"><code> 0.30</code></span> while the true target value is <span style="background-color: codeinlinebg"><code> 0.50</code></span>.</p></li>
+<li><p>Yes. Correct importance ratios repair the imperfect model in expectation.</p></li>
+<li><p>Usually here, because it normalizes weights and corrects residuals rather than full rewards.</p></li>
+<li><p>No. With no rare observation, its rare-action residual is unavailable.</p></li>
+<li><p>Both DR variants should be centered correctly; only irreducible reward noise remains.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Normalized nonnegative weights sum to one, making SNIS a convex combination of observed rewards.</p></li>
+<li><p>Under adequate support, SNIS bias shrinks with sample size. A fixed clipping threshold generally retains asymptotic clipping bias.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> self-normalize the correction, not the model baseline. SNDR can be much calmer than raw IPS, but its finite-sample stability still depends on a credible value model and observed support for the policy branches that matter.</p>

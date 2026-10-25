@@ -1,0 +1,273 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: texting word by word</div>
+<p>Writing a text, you pick one word, then the next, then the next. Each word is an action, and everything you’ve typed so far is the state. The reward only comes when they reply, after you hit send. Your phone’s autocomplete is literally a policy over next words. An LLM is the same thing at scale.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/c8133b9b773a.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Token MDP. The state is the prefix, the action is the next token, the transition is “append the token” (deterministic), and the reward usually comes only at EOS.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>In REINFORCE, why can a terminal reward update an earlier action?</p></li>
+<li><p>Why can long model-based rollouts accumulate error?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="translate-an-llm-into-rl-language">2. Translate an LLM into RL language</h3>
+<p>For an autoregressive language model:</p>
+<ul>
+<li><p><strong>state:</strong> prompt plus generated prefix, <span class="math inline">\(s_t=(x,y_{&lt;t})\)</span>;</p></li>
+<li><p><strong>action:</strong> next token, <span class="math inline">\(a_t=y_t\)</span>;</p></li>
+<li><p><strong>policy:</strong> next-token distribution, <span class="math inline">\(\pi_\theta(y_t\mid x,y_{&lt;t})\)</span>;</p></li>
+<li><p><strong>transition:</strong> append the selected token to the prefix;</p></li>
+<li><p><strong>trajectory:</strong> the complete response;</p></li>
+<li><p><strong>reward:</strong> usually a score for the response or its outcome.</p></li>
+</ul>
+<p>The probability of a response factorizes:</p>
+<p><span class="math display">\[\pi_\theta(y\mid x)
+=
+\prod_{t=1}^{T}
+\pi_\theta(y_t\mid x,y_{&lt;t})\]</span></p>
+<p>Products of many small probabilities underflow, so implementations use log-probabilities:</p>
+<p><span class="math display">\[\log\pi_\theta(y\mid x)
+=
+\sum_{t=1}^{T}
+\log\pi_\theta(y_t\mid x,y_{&lt;t})\]</span></p>
+<p>With one sequence-level reward, REINFORCE gives:</p>
+<p><span class="math display">\[L_{\text{policy}}
+=
+-\frac1B\sum_{b=1}^{B}
+R_b
+\sum_t
+M_{b,t}
+\log\pi_\theta(y_{b,t}\mid x_b,y_{b,&lt;t})\]</span></p>
+<p>Here <span class="math inline">\(M\)</span> is a response mask. Prompt and padding tokens are context, not generated actions, so they must not contribute.</p>
+<h3 class="unnumbered" id="alignment-logits-predict-the-next-token">Alignment: logits predict the next token</h3>
+<p>Given token IDs:</p>
+<pre class="code python"><code class="language-python">[BOS, prompt, answer_1, answer_2, EOS, PAD]</code></pre>
+<p>the logits at each position predict the token immediately to their right:</p>
+<pre class="code text"><code class="language-plaintext">input:   BOS  prompt  answer_1  answer_2  EOS
+target:  prompt answer_1 answer_2 EOS      PAD
+mask:      0      1        1      1        0</code></pre>
+<p>For batch size <span class="math inline">\(B\)</span>, length <span class="math inline">\(L\)</span>, and vocabulary <span class="math inline">\(V\)</span>:</p>
+<ul>
+<li><p>input IDs: <span style="background-color: codeinlinebg"><code> [B, L]</code></span></p></li>
+<li><p>next-token logits: <span style="background-color: codeinlinebg"><code> [B, L-1, V]</code></span></p></li>
+<li><p>shifted targets: <span style="background-color: codeinlinebg"><code> [B, L-1]</code></span></p></li>
+<li><p>selected log-probabilities: <span style="background-color: codeinlinebg"><code> [B, L-1]</code></span></p></li>
+<li><p>response mask: <span style="background-color: codeinlinebg"><code> [B, L-1]</code></span></p></li>
+<li><p>sequence log-probability: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>rewards: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="sft-dpo-and-online-rl">SFT, DPO and online RL</h3>
+<p>All three use autoregressive log-probabilities, but their supervision differs:</p>
+<ul>
+<li><p><strong>SFT:</strong> increase likelihood of labelled target tokens.</p></li>
+<li><p><strong>DPO:</strong> increase a chosen response’s relative log-likelihood over a rejected response, compared with a reference model.</p></li>
+<li><p><strong>Online RL:</strong> sample responses from a policy, obtain rewards from interaction or evaluation, then optimize those sampled actions.</p></li>
+</ul>
+<p>DPO is preference optimization over a fixed pairwise dataset. It does not itself require environment interaction, returns or a critic.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: sequence probability and the shift</div>
+<p><span class="math inline">\(\log\pi_\theta(y\mid x)=\sum_{t=1}^{|y|}\log\pi_\theta(y_t\mid x,y_{&lt;t})\)</span>. <strong>Example:</strong> token probabilities <span class="math inline">\(0.5,0.4,0.9\)</span> give <span class="math inline">\(\log\pi=-0.693-0.916-0.105=-1.715\)</span>, so <span class="math inline">\(\pi(y)=0.18\)</span>.</p>
+<p><strong>The shift:</strong> logits at position <span class="math inline">\(t\)</span> predict token <span class="math inline">\(t+1\)</span>. In code, <code>logits[:, :-1]</code> lines up with <code>tokens[:, 1:]</code>.</p>
+<p><strong>The mask:</strong> <span class="math inline">\(m_t=1\)</span> only for response tokens. The policy-gradient loss is <span class="math inline">\(-\sum_tm_t\,A\,\log\pi(y_t|\cdot)\)</span>. Prompt tokens weren’t chosen by the policy, so they’re not actions.</p>
+<p>Because transitions are deterministic, each prefix has exactly one history: the MDP is a <em>tree</em>. That’s why credit assignment, not dynamics, is the hard part.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>An LLM is a policy, and a sequence log-probability is a sum of token log-probabilities.</p></li>
+<li><p>Off-by-one shifts and missing masks are the most common LLM-RL bugs.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: masked loss</div>
+<p>Prompt token <span class="math inline">\(\log p=-3.0\)</span> (mask 0). Response tokens <span class="math inline">\(-0.5,-1.0,-0.2\)</span> (mask 1). <span class="math inline">\(A=+1\)</span>. Loss <span class="math inline">\(=-(1)(-0.5-1.0-0.2)=1.7\)</span> as a sum, or <span class="math inline">\(0.567\)</span> as a token mean. Without the mask the loss becomes <span class="math inline">\(4.7\)</span>, and the gradient pushes up a prompt token the policy never chose.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>No shift: comparing <code>logits[:, t]</code> with <code>tokens[:, t]</code>.</p></li>
+<li><p>Leaving EOS out of the mask (the model never learns when to stop).</p></li>
+<li><p>Including padding in the denominator.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Masked sequence policy gradient for an LLM</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> language model <span class="math inline">\(\pi_\theta\)</span>, prompts, reward function <span class="math inline">\(R(x,y)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each iteration <strong>do</strong></div>
+<div class="algo-line" style="--d:1">sample prompts <span class="math inline">\(x_i\)</span> and responses <span class="math inline">\(y_i\sim\pi_\theta(\cdot|x_i)\)</span>; compute <span class="math inline">\(R_i\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(A_i\gets R_i-b\)</span> <em>▷ e.g. <span class="math inline">\(b\)</span> = batch mean reward</em></div>
+<div class="algo-line" style="--d:1">run <span class="math inline">\(\pi_\theta\)</span> on <span class="math inline">\(x_i\oplus y_i\)</span>; take log-softmax of <code>logits[:, :-1]</code> at <code>tokens[:, 1:]</code> <em>▷ the shift</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(m_{it}\gets1\)</span> for response tokens, <span class="math inline">\(0\)</span> for prompt and padding</div>
+<div class="algo-line" style="--d:1">gradient step on <span class="math inline">\(-\frac1N\sum_iA_i\sum_tm_{it}\log\pi_\theta(y_{it}|x_i,y_{i,&lt;t})\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-masked-sequence-policy-gradient">3. PyTorch exercise — masked sequence policy gradient</h3>
+<p>This tensor-level exercise gives each token position independent logits so the gradient paths are easy to inspect. A real LLM shares parameters across every position.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+
+# Vocabulary:
+# 0=PAD, 1=BOS, 2=PROMPT, 3=A, 4=B, 5=EOS
+vocab_size = 6
+
+input_ids = torch.tensor([
+    [1, 2, 3, 4, 5, 0],
+    [1, 2, 2, 4, 5, 0],
+])  # [B=2, L=6]
+
+# A mask over shifted target positions.
+# Only generated response tokens, including EOS, are valid actions.
+response_mask = torch.tensor([
+    [0.0, 1.0, 1.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0, 1.0, 0.0],
+])  # [B, L-1]
+
+# First response was successful; second was unsuccessful.
+rewards = torch.tensor([1.0, -1.0])  # [B]
+
+batch_size, sequence_length = input_ids.shape
+
+logits = torch.nn.Parameter(
+    torch.zeros(
+        batch_size,
+        sequence_length - 1,
+        vocab_size,
+    )
+)  # [B, L-1, V]
+
+optimizer = torch.optim.SGD([logits], lr=0.5)
+
+# TODO 1: Tokens immediately to the right of each logit position.
+targets = ...
+
+# TODO 2: Stable log-probabilities over the vocabulary.
+all_log_probs = ...
+
+# TODO 3: Gather each observed next token&#x27;s log-probability.
+selected_log_probs = ...
+
+# TODO 4: Sum only response-token log-probabilities.
+sequence_log_probs = ...
+
+# TODO 5: Sequence-level policy-gradient loss.
+loss = ...
+
+with torch.no_grad():
+    probabilities_before = logits.softmax(dim=-1)
+
+optimizer.zero_grad()
+loss.backward()
+
+gradient = logits.grad.detach().clone()
+
+optimizer.step()
+
+with torch.no_grad():
+    probabilities_after = logits.softmax(dim=-1)
+
+    chosen_before = probabilities_before.gather(
+        dim=-1,
+        index=targets.unsqueeze(-1),
+    ).squeeze(-1)
+
+    chosen_after = probabilities_after.gather(
+        dim=-1,
+        index=targets.unsqueeze(-1),
+    ).squeeze(-1)
+
+    invalid_gradient_max = (
+        gradient
+        * (1.0 - response_mask).unsqueeze(-1)
+    ).abs().max()
+
+print(&quot;Targets:\n&quot;, targets)
+print(&quot;Selected log-probabilities:\n&quot;, selected_log_probs)
+print(&quot;Sequence log-probabilities:&quot;, sequence_log_probs)
+print(&quot;Loss:&quot;, loss.item())
+print(&quot;Chosen probabilities before:\n&quot;, chosen_before)
+print(&quot;Chosen probabilities after:\n&quot;, chosen_after)
+print(&quot;Maximum prompt/padding gradient:&quot;, invalid_gradient_max)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is every token probability initially?</p></li>
+<li><p>For the positive-reward response, should selected-token probabilities rise or fall?</p></li>
+<li><p>What happens to selected tokens in the negative-reward response?</p></li>
+<li><p>Should prompt and padding positions receive any gradient?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Next-token targets are <span style="background-color: codeinlinebg"><code> input_ids[:, 1:]</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> F.log_softmax(logits, dim=-1)</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> gather</code></span> requires targets shaped <span style="background-color: codeinlinebg"><code> [B, L-1, 1]</code></span>.</p></li>
+<li><p>Multiply by the mask before summing over time.</p></li>
+<li><p>Optimizers minimize, so retain the negative sign.</p></li>
+<li><p>Rewards are fixed supervision and should be detached.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>First, remove the mask:</p>
+<pre class="code python"><code class="language-python">sequence_log_probs = selected_log_probs.sum(dim=-1)</code></pre>
+<p>The policy now reinforces prompt and padding tokens as though the model had chosen them.</p>
+<p>Then use the wrong alignment:</p>
+<pre class="code python"><code class="language-python">targets = input_ids[:, :-1]</code></pre>
+<p>Each logit is trained against the token at its own position instead of the next token. This off-by-one error can produce a decreasing loss while teaching the wrong autoregressive task.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is sequence log-probability a sum rather than a product?</p></li>
+<li><p>Why does one terminal reward give every response token the same coarse signal?</p></li>
+<li><p>Why include generated <span style="background-color: codeinlinebg"><code> EOS</code></span> but exclude <span style="background-color: codeinlinebg"><code> PAD</code></span>?</p></li>
+<li><p>Does increasing a sampled token’s probability guarantee a better complete response?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Shifted targets and stable log-probabilities:</p>
+<pre class="code python"><code class="language-python">targets = input_ids[:, 1:]
+
+all_log_probs = F.log_softmax(
+    logits,
+    dim=-1,
+)</code></pre>
+<p>Gather selected token log-probabilities:</p>
+<pre class="code python"><code class="language-python">selected_log_probs = all_log_probs.gather(
+    dim=-1,
+    index=targets.unsqueeze(-1),
+).squeeze(-1)</code></pre>
+<p>Apply the response mask:</p>
+<pre class="code python"><code class="language-python">sequence_log_probs = (
+    selected_log_probs * response_mask
+).sum(dim=-1)</code></pre>
+<p>Policy-gradient loss:</p>
+<pre class="code python"><code class="language-python">loss = -(
+    rewards.detach() * sequence_log_probs
+).mean()</code></pre>
+<p>Initially all logits are zero, so:</p>
+<p><span class="math display">\[\pi(y_t\mid s_t)=\frac{1}{6}\]</span></p>
+<p>The valid sequence lengths are three and two tokens:</p>
+<p><span class="math display">\[\log\pi(y^{(1)}\mid x^{(1)})
+=
+3\log(1/6)\]</span></p>
+<p><span class="math display">\[\log\pi(y^{(2)}\mid x^{(2)})
+=
+2\log(1/6)\]</span></p>
+<p>For the first response, <span class="math inline">\(R=+1\)</span>. Minimizing</p>
+<p><span class="math display">\[-\log\pi_\theta(y\mid x)\]</span></p>
+<p>raises its selected-token logits and probabilities.</p>
+<p>For the second response, <span class="math inline">\(R=-1\)</span>. Its loss contribution is:</p>
+<p><span class="math display">\[+\log\pi_\theta(y\mid x)\]</span></p>
+<p>so gradient descent reduces its selected-token probabilities.</p>
+<p>Every prompt and padding gradient should be exactly zero:</p>
+<pre class="code text"><code class="language-plaintext">Maximum prompt/padding gradient: tensor(0.)</code></pre>
+<p>This example has separate logits for each sequence, so positive and negative examples cannot interact through shared parameters. In a real LLM, shared weights mean one update can change many tokens, positions and prompts—including examples not present in the batch.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Response probability is a product, and the logarithm converts that product into a numerically stable sum.</p></li>
+<li><p>The evaluator supplies no information about which particular token caused success or failure.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> EOS</code></span> is a generated action that controls termination; <span style="background-color: codeinlinebg"><code> PAD</code></span> is artificial batching structure.</p></li>
+<li><p>No. Shared parameters, future-token dependencies and imperfect rewards can make a locally encouraged token harmful elsewhere.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The terminal outcome is part of the earlier action’s future return, so it can weight that action’s log-probability.</p></li>
+<li><p>Each predicted state becomes the next model input, allowing small errors to compound across the rollout.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> an autoregressive LLM is a policy over tokens. Sequence probability becomes a sum of token log-probabilities, while correct shifting and response masking determine whether the loss trains the intended actions at all.</p>

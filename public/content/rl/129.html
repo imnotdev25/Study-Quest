@@ -1,0 +1,431 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does zero-mean reward-model error become positively biased after best-of-<span class="math inline">\(N\)</span> selection?</p></li>
+<li><p>If exploits occur independently with probability <span class="math inline">\(p\)</span>, what is the probability that at least one appears among <span class="math inline">\(N\)</span> samples?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="an-ensemble-can-expose-uncertaintynot-truth">2. An ensemble can expose uncertainty—not truth</h3>
+<p>Let <span class="math inline">\(M\)</span> reward models score completion <span class="math inline">\(y\)</span>:</p>
+<p><span class="math display">\[\hat r_1(y),\ldots,\hat r_M(y)\]</span></p>
+<p>Compute their mean and disagreement:</p>
+<p><span class="math display">\[\mu(y)=\frac1M\sum_{m=1}^M\hat r_m(y)\]</span></p>
+<p><span class="math display">\[s(y)=
+\sqrt{
+\frac1M\sum_{m=1}^M
+\left(\hat r_m(y)-\mu(y)\right)^2
+}\]</span></p>
+<p>A simple pessimistic selection score is:</p>
+<p><span class="math display">\[q_\kappa(y)=\mu(y)-\kappa s(y)\]</span></p>
+<p>Think of five inspectors. Agreement raises confidence; disagreement is a warning. Increasing <span class="math inline">\(\kappa\)</span> makes selection more conservative.</p>
+<p>If model errors are independent with variance <span class="math inline">\(\sigma^2\)</span>, averaging reduces noise:</p>
+<p><span class="math display">\[\operatorname{Var}[\mu]\approx\frac{\sigma^2}{M}\]</span></p>
+<p>But suppose every model shares the same blind spot <span class="math inline">\(b(y)\)</span>:</p>
+<p><span class="math display">\[\hat r_m(y)=r(y)+b(y)+\epsilon_m(y)\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\mu(y)\approx r(y)+b(y)\]</span></p>
+<p>while <span class="math inline">\(s(y)\)</span> measures only differences among models. All models can confidently agree on the same mistake.</p>
+<p>Therefore, <span class="math inline">\(\mu-\kappa s\)</span> is a risk-sensitive proxy—not automatically a calibrated confidence bound. Calibration requires held-out, preferably adversarial, human or verifiable outcomes.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>true rewards and exploit flags: <span style="background-color: codeinlinebg"><code> [B, N]</code></span></p></li>
+<li><p>member predictions: <span style="background-color: codeinlinebg"><code> [B, N, M]</code></span></p></li>
+<li><p>ensemble means and standard deviations: <span style="background-color: codeinlinebg"><code> [B, N]</code></span></p></li>
+<li><p>selected candidate IDs: <span style="background-color: codeinlinebg"><code> [B, 1]</code></span></p></li>
+</ul>
+<p>In PPO, freeze and detach reward-model outputs before constructing advantages. Also calibrate member scales: disagreement is meaningless if one model merely emits numerically larger scores.</p>
+<p>DPO has no separate scalar reward model during training, but can still exploit shared shortcuts in preference data. An ensemble can audit DPO outputs; it does not turn DPO into online RL.</p>
+<h3 class="unnumbered" id="pytorch-exercise-uncertainty-penalties-catch-only-diverse-errors">3. PyTorch exercise — uncertainty penalties catch only diverse errors</h3>
+<p>Rare exploit candidates have true reward <span style="background-color: codeinlinebg"><code> -2</code></span>. First, reward models react differently to the exploit. Then all models receive the same erroneous bonus.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float32)
+
+num_prompts = 4_000
+num_candidates = 128
+num_reward_models = 5
+
+exploit_probability = 0.01
+exploit_true_reward = -2.0
+
+member_noise_sd = 0.40
+uncertainty_penalty = 1.0
+
+
+# TODO 1: Construct candidates.
+ordinary_true_rewards = ...
+
+exploit_flags = ...
+
+true_rewards = ...
+
+
+# TODO 2: Construct two reward-model ensembles.
+member_noise = ...
+
+# Members disagree strongly about exploits.
+heterogeneous_exploit_bonuses = torch.tensor([
+    9.0, 8.0, 7.0, 1.0, 0.0
+])
+
+heterogeneous_predictions = ...
+
+# Every member shares the same blind spot.
+shared_exploit_bonus = 6.0
+
+shared_bias_predictions = ...
+
+
+# TODO 3: Calculate ensemble statistics and scores.
+heterogeneous_mean = ...
+heterogeneous_std = ...
+
+heterogeneous_pessimistic_score = ...
+
+shared_mean = ...
+shared_std = ...
+
+shared_pessimistic_score = ...
+
+single_model_score = ...
+
+
+# TODO 4: Select candidates and calculate diagnostics.
+# Returned columns:
+# selected score, selected true reward, exploit rate,
+# selected disagreement, regret against oracle.
+def selection_metrics(score, disagreement):
+    selected_indices = ...
+
+    selected_scores = ...
+
+    selected_true_rewards = ...
+
+    selected_exploits = ...
+
+    selected_disagreement = ...
+
+    oracle_true_rewards = ...
+
+    oracle_regret = ...
+
+    return torch.stack([
+        selected_scores.mean(),
+        selected_true_rewards.mean(),
+        selected_exploits.mean(),
+        selected_disagreement.mean(),
+        oracle_regret.mean(),
+    ])
+
+
+results = torch.stack([
+    selection_metrics(
+        single_model_score,
+        heterogeneous_std,
+    ),
+    selection_metrics(
+        heterogeneous_mean,
+        heterogeneous_std,
+    ),
+    selection_metrics(
+        heterogeneous_pessimistic_score,
+        heterogeneous_std,
+    ),
+    selection_metrics(
+        shared_pessimistic_score,
+        shared_std,
+    ),
+    selection_metrics(
+        true_rewards,
+        heterogeneous_std,
+    ),
+])
+
+
+# TODO 5: Audit whether disagreement detects exploits.
+any_exploit_rate = ...
+
+theoretical_any_exploit_rate = ...
+
+disagreement_diagnostics = torch.stack([
+    heterogeneous_std[~exploit_flags].mean(),
+    heterogeneous_std[exploit_flags].mean(),
+    shared_std[~exploit_flags].mean(),
+    shared_std[exploit_flags].mean(),
+])
+
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Rows: single model, ensemble mean, &quot;
+    &quot;heterogeneous pessimistic, shared-bias pessimistic, &quot;
+    &quot;oracle&quot;
+)
+print(
+    &quot;Columns: selected score, true reward, exploit rate, &quot;
+    &quot;disagreement, oracle regret&quot;
+)
+print(results)
+
+print(&quot;\nObserved/theoretical chance of any exploit:&quot;)
+print(
+    any_exploit_rate.item(),
+    theoretical_any_exploit_rate,
+)
+
+print(
+    &quot;\nDisagreement: heterogeneous honest/exploit, &quot;
+    &quot;shared honest/exploit&quot;
+)
+print(disagreement_diagnostics)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Roughly what fraction of candidate sets contain an exploit?</p></li>
+<li><p>Will a single reward model frequently select one?</p></li>
+<li><p>Will heterogeneous-model disagreement be larger on exploits?</p></li>
+<li><p>Should the pessimistic heterogeneous score reduce exploit selection?</p></li>
+<li><p>What happens when all reward models share the same exploit bonus?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span> to give exploits their negative true reward.</p></li>
+<li><p>Add a final dimension with <span style="background-color: codeinlinebg"><code> true_rewards[..., None]</code></span>.</p></li>
+<li><p>Ensemble statistics reduce the last dimension.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> std(dim=-1, correction=0)</code></span>.</p></li>
+<li><p>Select with <span style="background-color: codeinlinebg"><code> argmax(dim=1, keepdim=True)</code></span>.</p></li>
+<li><p>Retrieve matching values with <span style="background-color: codeinlinebg"><code> gather</code></span>.</p></li>
+<li><p>The probability of encountering an exploit is:</p></li>
+</ul>
+<p><span class="math display">\[1-(1-0.01)^{128}\approx0.724\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> mean + κ * std</code></span>, accidentally rewarding uncertainty.</p></li>
+<li><p>Give members different output scales without calibrating them.</p></li>
+<li><p>Train every member from the same initialization and identical data order.</p></li>
+<li><p>Interpret ensemble standard deviation as a calibrated confidence interval.</p></li>
+<li><p>Tune <span class="math inline">\(\kappa\)</span> on the claimed final evaluation set.</p></li>
+<li><p>Repeatedly retrain on discovered exploits without maintaining untouched adversarial tests.</p></li>
+<li><p>Log average disagreement but omit disagreement among selected outputs.</p></li>
+<li><p>Backpropagate PPO through a trainable reward ensemble unintentionally.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can averaging independent reward-model errors help?</p></li>
+<li><p>Why is ensemble disagreement not necessarily a confidence interval?</p></li>
+<li><p>What error cannot an ordinary ensemble detect?</p></li>
+<li><p>What changes when <span class="math inline">\(\kappa\)</span> increases?</p></li>
+<li><p>Which evaluator should decide whether the uncertainty penalty actually improves behavior?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Candidate construction:</p>
+<pre class="code python"><code class="language-python">ordinary_true_rewards = torch.randn(
+    num_prompts,
+    num_candidates,
+)
+
+exploit_flags = (
+    torch.rand(
+        num_prompts,
+        num_candidates,
+    )
+    &lt; exploit_probability
+)
+
+true_rewards = torch.where(
+    exploit_flags,
+    torch.full_like(
+        ordinary_true_rewards,
+        exploit_true_reward,
+    ),
+    ordinary_true_rewards,
+)</code></pre>
+<p>Reward-model ensembles:</p>
+<pre class="code python"><code class="language-python">member_noise = (
+    member_noise_sd
+    * torch.randn(
+        num_prompts,
+        num_candidates,
+        num_reward_models,
+    )
+)
+
+heterogeneous_predictions = (
+    true_rewards[..., None]
+    + member_noise
+    + exploit_flags[..., None]
+    * heterogeneous_exploit_bonuses
+)
+
+shared_bias_predictions = (
+    true_rewards[..., None]
+    + member_noise
+    + exploit_flags[..., None]
+    * shared_exploit_bonus
+)</code></pre>
+<p>Scores:</p>
+<pre class="code python"><code class="language-python">heterogeneous_mean = (
+    heterogeneous_predictions.mean(dim=-1)
+)
+
+heterogeneous_std = (
+    heterogeneous_predictions.std(
+        dim=-1,
+        correction=0,
+    )
+)
+
+heterogeneous_pessimistic_score = (
+    heterogeneous_mean
+    - uncertainty_penalty
+    * heterogeneous_std
+)
+
+shared_mean = (
+    shared_bias_predictions.mean(dim=-1)
+)
+
+shared_std = (
+    shared_bias_predictions.std(
+        dim=-1,
+        correction=0,
+    )
+)
+
+shared_pessimistic_score = (
+    shared_mean
+    - uncertainty_penalty
+    * shared_std
+)
+
+single_model_score = (
+    heterogeneous_predictions[..., 0]
+)</code></pre>
+<p>Selection metrics:</p>
+<pre class="code python"><code class="language-python">def selection_metrics(score, disagreement):
+    selected_indices = score.argmax(
+        dim=1,
+        keepdim=True,
+    )
+
+    selected_scores = score.gather(
+        dim=1,
+        index=selected_indices,
+    ).squeeze(1)
+
+    selected_true_rewards = true_rewards.gather(
+        dim=1,
+        index=selected_indices,
+    ).squeeze(1)
+
+    selected_exploits = exploit_flags.gather(
+        dim=1,
+        index=selected_indices,
+    ).squeeze(1).to(torch.float32)
+
+    selected_disagreement = disagreement.gather(
+        dim=1,
+        index=selected_indices,
+    ).squeeze(1)
+
+    oracle_true_rewards = true_rewards.max(
+        dim=1
+    ).values
+
+    oracle_regret = (
+        oracle_true_rewards
+        - selected_true_rewards
+    )
+
+    return torch.stack([
+        selected_scores.mean(),
+        selected_true_rewards.mean(),
+        selected_exploits.mean(),
+        selected_disagreement.mean(),
+        oracle_regret.mean(),
+    ])</code></pre>
+<p>Disagreement audit:</p>
+<pre class="code python"><code class="language-python">any_exploit_rate = (
+    exploit_flags.any(dim=1)
+    .to(torch.float32)
+    .mean()
+)
+
+theoretical_any_exploit_rate = (
+    1.0
+    - (
+        1.0
+        - exploit_probability
+    ) ** num_candidates
+)</code></pre>
+<p>Typical behavior is approximately:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Selection rule</strong></th>
+<th style="text-align: left;"><strong>Selected true reward</strong></th>
+<th style="text-align: left;"><strong>Exploit rate</strong></th>
+<th style="text-align: left;"><strong>Interpretation</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Selection rule</strong></td>
+<td style="text-align: left;"><strong>Selected true reward</strong></td>
+<td style="text-align: left;"><strong>Exploit rate</strong></td>
+<td style="text-align: left;"><strong>Interpretation</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Single vulnerable model</td>
+<td style="text-align: left;">below <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0.72</code></span></td>
+<td style="text-align: left;">One model gives exploits a huge bonus</td>
+</tr>
+<tr>
+<td style="text-align: left;">Heterogeneous ensemble mean</td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 0.60</code></span></td>
+<td style="text-align: left;">Averaging helps, but the mean remains vulnerable</td>
+</tr>
+<tr>
+<td style="text-align: left;">Heterogeneous pessimistic score</td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 2.5</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;">Large disagreement suppresses exploits</td>
+</tr>
+<tr>
+<td style="text-align: left;">Shared-bias pessimistic score</td>
+<td style="text-align: left;">below <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0.72</code></span></td>
+<td style="text-align: left;">Agreement hides the shared failure</td>
+</tr>
+<tr>
+<td style="text-align: left;">Oracle</td>
+<td style="text-align: left;">around <span style="background-color: codeinlinebg"><code> 2.6</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;">Selects by true reward</td>
+</tr>
+</tbody>
+</table>
+<p>For ordinary candidates, expected disagreement is roughly <span style="background-color: codeinlinebg"><code> 0.34</code></span>. The heterogeneous exploit bonuses produce disagreement near <span style="background-color: codeinlinebg"><code> 3.75</code></span>, making the exploit detectable.</p>
+<p>With a shared bonus, both honest and exploit candidates have disagreement near <span style="background-color: codeinlinebg"><code> 0.34</code></span>. The uncertainty penalty therefore provides no warning: every model agrees on the same wrong answer.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Independent errors partially cancel in the ensemble mean, reducing variance approximately as <span class="math inline">\(1/M\)</span>.</p></li>
+<li><p>Members are correlated, their training data are finite, and their score scales may be uncalibrated. Standard deviation alone supplies no coverage guarantee.</p></li>
+<li><p>A shared blind spot caused by common data, architecture, labelers or evaluation shortcuts.</p></li>
+<li><p>Selection becomes more conservative about disagreement, but may reject genuinely valuable novel behavior and changes the optimized objective.</p></li>
+<li><p>An evaluator independent of the reward ensemble—preferably humans, verifiable outcomes or a separately governed audit system.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Maximization conditions on unusually positive errors, so selected errors are no longer centered at zero.</p></li>
+<li><p>The probability is <span class="math inline">\(1-(1-p)^N\)</span>.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> ensemble disagreement can reveal “the models do not know,” but not “the models agree and are wrong.” Penalize uncertainty only as one defense; independently test the optimized reward tail for shared blind spots.</p>

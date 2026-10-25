@@ -1,0 +1,519 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: ten opinions from one friend</div>
+<p>Asking one friend the same question ten times doesn’t give you ten opinions. Turns from the same user are correlated (same writing style, same task, same patience), so 2000 turns from 100 users carry much less information than 2000 independent users.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/9de48d0ccac6.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Effective sample size <span class="math inline">\(=N/\text{DEFF}\)</span>.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What different questions do micro- and macro-averaged subgroup effects answer?</p></li>
+<li><p>Why use simultaneous bounds when applying several subgroup deployment gates?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="ten-turns-from-one-user-are-not-ten-independent-users">2. Ten turns from one user are not ten independent users</h3>
+<p>Suppose each user completes ten agent episodes. Outcomes from the same user share prompt style, ability, preferences and environment.</p>
+<p>They are like ten readings from one thermometer—not ten independent thermometers.</p>
+<p>A simple model is:</p>
+<p><span class="math display">\[Y_{u,t}
+=
+\tau Z_u+b_u+\epsilon_{u,t}\]</span></p>
+<p>where:</p>
+<ul>
+<li><p><span class="math inline">\(Z_u\)</span> is the user-level policy assignment;</p></li>
+<li><p><span class="math inline">\(\tau\)</span> is the policy effect;</p></li>
+<li><p><span class="math inline">\(b_u\)</span> is a shared user effect;</p></li>
+<li><p><span class="math inline">\(\epsilon_{u,t}\)</span> is episode-specific noise.</p></li>
+</ul>
+<p>The intraclass correlation is:</p>
+<p><span class="math display">\[\rho
+=
+\frac{\sigma_b^2}
+{\sigma_b^2+\sigma_\epsilon^2}\]</span></p>
+<p>With <span class="math inline">\(m\)</span> observations per user, the approximate design effect is:</p>
+<p><span class="math display">\[D
+=
+1+(m-1)\rho\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[N_{\text{effective}}
+\approx
+\frac{N_{\text{rows}}}{D}\]</span></p>
+<p>If <span class="math inline">\(\rho=0.7\)</span> and every user contributes ten episodes, treating all rows as independent can understate the standard error by roughly:</p>
+<p><span class="math display">\[\sqrt{1+9(0.7)}
+\approx2.7\]</span></p>
+<p>A simple solution for equally sized clusters is:</p>
+<ol>
+<li><p>average outcomes within each user;</p></li>
+<li><p>compare the independent user means;</p></li>
+<li><p>use the number of users—not episodes or tokens—for inference.</p></li>
+</ol>
+<p>For unequal cluster sizes or covariate adjustment, use user-clustered sandwich errors or bootstrap complete users.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>user assignments: <span style="background-color: codeinlinebg"><code> [R, U]</code></span></p></li>
+<li><p>episode outcomes: <span style="background-color: codeinlinebg"><code> [R, U, M]</code></span></p></li>
+<li><p>flattened rows: <span style="background-color: codeinlinebg"><code> [R, U*M]</code></span></p></li>
+<li><p>user-average outcomes: <span style="background-color: codeinlinebg"><code> [R, U]</code></span></p></li>
+<li><p>effect estimates and standard errors: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>For LLM agents, the cluster may be a user, conversation, prompt template, organization or task instance. Use the highest level that shares assignment or latent outcome noise.</p>
+<p>DPO preference pairs can also cluster by annotator and prompt family. A large pair count does not imply an equally large independent sample—and DPO training loss still does not replace clustered online outcome evaluation.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: clusters set the sample size</div>
+<p>With <span class="math inline">\(m\)</span> turns per user and intra-cluster correlation <span class="math inline">\(\rho\)</span>: <span class="math inline">\(\mathrm{DEFF}=1+(m-1)\rho\)</span> and <span class="math inline">\(n_{\text{eff}}=N/\mathrm{DEFF}\)</span>. <strong>Fixes:</strong> randomize whole users (or conversations), compute cluster-robust standard errors or a cluster bootstrap (resample users), and log stable user and conversation IDs.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>A million correlated turns aren’t a million experiments.</p></li>
+<li><p>Randomize and resample at the unit that actually received the policy.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: 2000 turns, 100 users</div>
+<p><span class="math inline">\(m=20\)</span>, ICC <span class="math inline">\(0.3\)</span>: <span class="math inline">\(\mathrm{DEFF}=1+19(0.3)=6.7\)</span>, so <span class="math inline">\(n_{\text{eff}}\approx299\)</span>. The naive SE is <span class="math inline">\(\sqrt{6.7}=2.6\times\)</span> too small.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Randomizing turns while users see both arms.</p></li>
+<li><p>i.i.d. standard errors on clustered data.</p></li>
+<li><p>Missing user IDs in logs (clustering can’t be fixed later).</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-expose-false-confidence-from-repeated-users">3. PyTorch exercise — expose false confidence from repeated users</h3>
+<p>Simulate experiments with no real policy effect. Each user contributes ten correlated episode rewards.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 1_000
+num_users = 200
+episodes_per_user = 10
+
+true_effect = 0.0
+
+user_effect_standard_deviation = 1.50
+episode_noise_standard_deviation = 1.00
+
+candidate_assigned = (
+    torch.rand(
+        num_repetitions,
+        num_users,
+    ) &lt; 0.50
+)
+
+assignment = candidate_assigned.to(
+    torch.float64
+)
+
+# TODO 1: Generate correlated outcomes.
+user_effects = ...
+
+episode_noise = ...
+
+outcomes = ...
+
+# Theoretical correlation diagnostics.
+user_variance = ...
+episode_variance = ...
+
+intraclass_correlation = ...
+
+design_effect = ...
+
+effective_episode_count = ...
+
+
+def masked_mean(values, mask):
+    return (
+        values * mask
+    ).sum(dim=1) / mask.sum(dim=1)
+
+
+def masked_variance(values, mask):
+    counts = mask.sum(dim=1)
+
+    means = masked_mean(
+        values,
+        mask,
+    )
+
+    squared_errors = (
+        (
+            values - means[:, None]
+        ).square()
+        * mask
+    ).sum(dim=1)
+
+    return squared_errors / (counts - 1.0)
+
+
+# TODO 2: Incorrectly treat every episode as independent.
+flat_outcomes = ...
+
+flat_assignment = ...
+flat_control_assignment = ...
+
+candidate_episode_counts = ...
+control_episode_counts = ...
+
+naive_candidate_means = ...
+naive_control_means = ...
+
+naive_effects = ...
+
+naive_standard_errors = ...
+
+# TODO 3: Aggregate to independent user-level units.
+user_mean_outcomes = ...
+
+control_assignment = ...
+
+candidate_user_counts = ...
+control_user_counts = ...
+
+cluster_candidate_means = ...
+cluster_control_means = ...
+
+cluster_effects = ...
+
+cluster_standard_errors = ...
+
+# TODO 4: Compare false-positive rates under the null.
+two_sided_z = 1.96
+
+naive_z_scores = ...
+cluster_z_scores = ...
+
+naive_false_positives = ...
+cluster_false_positives = ...
+
+naive_false_positive_rate = ...
+cluster_false_positive_rate = ...
+
+# TODO 5: Diagnostics.
+maximum_effect_difference = ...
+
+mean_naive_standard_error = ...
+mean_cluster_standard_error = ...
+
+empirical_se_ratio = ...
+predicted_se_ratio = ...
+
+print(
+    &quot;Intraclass correlation:&quot;,
+    intraclass_correlation,
+)
+print(&quot;Design effect:&quot;, design_effect)
+print(
+    &quot;Effective episodes:&quot;,
+    effective_episode_count,
+)
+print(
+    &quot;Maximum point-estimate difference:&quot;,
+    maximum_effect_difference.item(),
+)
+print(
+    &quot;Mean naive SE:&quot;,
+    mean_naive_standard_error.item(),
+)
+print(
+    &quot;Mean clustered SE:&quot;,
+    mean_cluster_standard_error.item(),
+)
+print(
+    &quot;Empirical SE ratio:&quot;,
+    empirical_se_ratio.item(),
+)
+print(
+    &quot;Predicted SE ratio:&quot;,
+    predicted_se_ratio,
+)
+print(
+    &quot;Naive false-positive rate:&quot;,
+    naive_false_positive_rate.item(),
+)
+print(
+    &quot;Clustered false-positive rate:&quot;,
+    cluster_false_positive_rate.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the episode-level and user-level point estimates differ?</p></li>
+<li><p>Will the naive standard error be too large or too small?</p></li>
+<li><p>Should its false-positive rate be near 5% or closer to 40–50%?</p></li>
+<li><p>Why does collecting more turns from existing users help less than recruiting new users?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Broadcast <span style="background-color: codeinlinebg"><code> user_effects</code></span> with <span style="background-color: codeinlinebg"><code> [:, :, None]</code></span>.</p></li>
+<li><p>Expand user assignments across the episode dimension before flattening.</p></li>
+<li><p>User outcomes are averaged with <span style="background-color: codeinlinebg"><code> .mean(dim=-1)</code></span>.</p></li>
+<li><p>The point estimates match because every user contributes the same number of episodes.</p></li>
+<li><p>A two-sided false positive occurs when <span style="background-color: codeinlinebg"><code> abs(z_score) &gt; 1.96</code></span>.</p></li>
+<li><p>The predicted standard-error ratio is <span style="background-color: codeinlinebg"><code> design_effect ** 0.5</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Treat generated tokens as independent evaluation samples.</p></li>
+<li><p>Randomize users but calculate uncertainty from individual turns.</p></li>
+<li><p>Bootstrap rows instead of complete users or conversations.</p></li>
+<li><p>Split one conversation across evaluation folds.</p></li>
+<li><p>Use request ID as the cluster when several requests share one user.</p></li>
+<li><p>Ignore that the candidate changes episode counts through early stopping.</p></li>
+<li><p>Combine users and organizations without checking organization-level correlation.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does clustering leave the effect estimate unchanged here but change its uncertainty?</p></li>
+<li><p>What determines the design effect?</p></li>
+<li><p>When is averaging one outcome per user insufficient?</p></li>
+<li><p>At what level should an agent canary normally be randomized?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Correlated outcomes and theoretical diagnostics:</p>
+<pre class="code python"><code class="language-python">user_effects = (
+    user_effect_standard_deviation
+    * torch.randn(
+        num_repetitions,
+        num_users,
+    )
+)
+
+episode_noise = (
+    episode_noise_standard_deviation
+    * torch.randn(
+        num_repetitions,
+        num_users,
+        episodes_per_user,
+    )
+)
+
+outcomes = (
+    true_effect
+    * assignment[:, :, None]
+    + user_effects[:, :, None]
+    + episode_noise
+)
+
+user_variance = (
+    user_effect_standard_deviation ** 2
+)
+
+episode_variance = (
+    episode_noise_standard_deviation ** 2
+)
+
+intraclass_correlation = (
+    user_variance
+    / (
+        user_variance
+        + episode_variance
+    )
+)
+
+design_effect = (
+    1.0
+    + (
+        episodes_per_user - 1
+    ) * intraclass_correlation
+)
+
+effective_episode_count = (
+    num_users * episodes_per_user
+    / design_effect
+)</code></pre>
+<p>Naive episode-level calculation:</p>
+<pre class="code python"><code class="language-python">flat_outcomes = outcomes.reshape(
+    num_repetitions,
+    -1,
+)
+
+flat_assignment = (
+    assignment[:, :, None]
+    .expand(
+        -1,
+        -1,
+        episodes_per_user,
+    )
+    .reshape(
+        num_repetitions,
+        -1,
+    )
+)
+
+flat_control_assignment = (
+    1.0 - flat_assignment
+)
+
+candidate_episode_counts = (
+    flat_assignment.sum(dim=1)
+)
+
+control_episode_counts = (
+    flat_control_assignment.sum(dim=1)
+)
+
+naive_candidate_means = masked_mean(
+    flat_outcomes,
+    flat_assignment,
+)
+
+naive_control_means = masked_mean(
+    flat_outcomes,
+    flat_control_assignment,
+)
+
+naive_effects = (
+    naive_candidate_means
+    - naive_control_means
+)
+
+naive_standard_errors = torch.sqrt(
+    masked_variance(
+        flat_outcomes,
+        flat_assignment,
+    ) / candidate_episode_counts
+    +
+    masked_variance(
+        flat_outcomes,
+        flat_control_assignment,
+    ) / control_episode_counts
+)</code></pre>
+<p>User-level calculation:</p>
+<pre class="code python"><code class="language-python">user_mean_outcomes = outcomes.mean(
+    dim=-1
+)
+
+control_assignment = (
+    1.0 - assignment
+)
+
+candidate_user_counts = assignment.sum(
+    dim=1
+)
+
+control_user_counts = (
+    control_assignment.sum(dim=1)
+)
+
+cluster_candidate_means = masked_mean(
+    user_mean_outcomes,
+    assignment,
+)
+
+cluster_control_means = masked_mean(
+    user_mean_outcomes,
+    control_assignment,
+)
+
+cluster_effects = (
+    cluster_candidate_means
+    - cluster_control_means
+)
+
+cluster_standard_errors = torch.sqrt(
+    masked_variance(
+        user_mean_outcomes,
+        assignment,
+    ) / candidate_user_counts
+    +
+    masked_variance(
+        user_mean_outcomes,
+        control_assignment,
+    ) / control_user_counts
+)</code></pre>
+<p>False-positive comparison:</p>
+<pre class="code python"><code class="language-python">naive_z_scores = (
+    naive_effects
+    / naive_standard_errors
+)
+
+cluster_z_scores = (
+    cluster_effects
+    / cluster_standard_errors
+)
+
+naive_false_positives = (
+    naive_z_scores.abs()
+    &gt; two_sided_z
+)
+
+cluster_false_positives = (
+    cluster_z_scores.abs()
+    &gt; two_sided_z
+)
+
+naive_false_positive_rate = (
+    naive_false_positives
+    .to(torch.float64)
+    .mean()
+)
+
+cluster_false_positive_rate = (
+    cluster_false_positives
+    .to(torch.float64)
+    .mean()
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">maximum_effect_difference = (
+    naive_effects
+    - cluster_effects
+).abs().max()
+
+mean_naive_standard_error = (
+    naive_standard_errors.mean()
+)
+
+mean_cluster_standard_error = (
+    cluster_standard_errors.mean()
+)
+
+empirical_se_ratio = (
+    mean_cluster_standard_error
+    / mean_naive_standard_error
+)
+
+predicted_se_ratio = (
+    design_effect ** 0.5
+)</code></pre>
+<p>Here:</p>
+<p><span class="math display">\[\rho
+=
+\frac{1.5^2}{1.5^2+1^2}
+=
+\frac{2.25}{3.25}
+\approx0.692\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[D
+=
+1+9(0.692)
+\approx7.23\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\sqrt D\approx2.69\]</span></p>
+<p>Although the dataset contains 2,000 episode rows, their information is approximately:</p>
+<p><span class="math display">\[N_{\text{effective}}
+\approx
+\frac{2000}{7.23}
+\approx277\]</span></p>
+<p>Because every user contributes ten episodes, the naive and clustered point estimates are effectively identical. Their uncertainty estimates are not: the naive method counts the shared user effect ten times.</p>
+<p>Typical results:</p>
+<ul>
+<li><p>mean naive SE: approximately <span style="background-color: codeinlinebg"><code> 0.08</code></span>;</p></li>
+<li><p>mean clustered SE: approximately <span style="background-color: codeinlinebg"><code> 0.22</code></span>;</p></li>
+<li><p>naive false-positive rate: roughly <span style="background-color: codeinlinebg"><code> 0.45</code></span>;</p></li>
+<li><p>clustered false-positive rate: near <span style="background-color: codeinlinebg"><code> 0.05</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Equal cluster sizes give every user the same weight under either calculation. Clustering changes the estimated number of independent observations, not their mean difference.</p></li>
+<li><p>It increases with observations per cluster and with within-cluster correlation.</p></li>
+<li><p>Unequal episode counts, time-varying effects, covariate adjustment, multiple assignment levels or an episode-weighted estimand may require cluster-robust regression or cluster bootstrap.</p></li>
+<li><p>Randomize at the highest level where carryover or interference is plausible—commonly the user or complete conversation—and analyze uncertainty at that level.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Micro averaging weights groups by deployment frequency; macro averaging gives each specified group equal weight.</p></li>
+<li><p>Simultaneous bounds account for the multiple opportunities to make a false subgroup claim across a prespecified family.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> a million correlated turns are not a million independent experiments. Log stable user and conversation identifiers, randomize complete clusters, and make uncertainty reflect the unit that actually received the policy.</p>

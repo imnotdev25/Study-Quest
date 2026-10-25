@@ -1,0 +1,323 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Variable token counts:</strong> in language models, each microbatch holds a different number of valid (unmasked) tokens. The target objective is still the mean over <em>all</em> valid tokens in the full batch, <span class="math inline">\(L=S/N\)</span>, where <span class="math inline">\(S\)</span> is the total loss sum and <span class="math inline">\(N\)</span> the total valid count. Session 14’s rule applies with “elements” meaning valid tokens.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why does distillation conventionally multiply KL loss by <span class="math inline">\(T^2\)</span>?</p></li>
+<li><p>Why should teacher probabilities normally be detached?</p></li>
+</ol>
+<p>For token features, targets, and a validity mask:</p>
+<p><span class="math display">\[X\in\mathbb{R}^{B\times T\times D},
+\qquad
+Y,M\in\mathbb{R}^{B\times T}\]</span></p>
+<p>suppose token losses are:</p>
+<p><span class="math display">\[\ell_{bt}(\theta)\]</span></p>
+<p>The correct valid-token mean is:</p>
+<p><span class="math display">\[L
+=
+\frac{
+\sum_{b,t}M_{bt}\ell_{bt}
+}{
+\sum_{b,t}M_{bt}
+}
+=
+\frac{S}{N}\]</span></p>
+<p>Gradient accumulation divides the batch into <span class="math inline">\(K\)</span> microbatches. If microbatch <span class="math inline">\(k\)</span> has loss sum <span class="math inline">\(S_k\)</span> and <span class="math inline">\(N_k\)</span> valid tokens:</p>
+<p><span class="math display">\[L
+=
+\frac{\sum_k S_k}{\sum_kN_k}\]</span></p>
+<p>A common implementation instead computes:</p>
+<p><span class="math display">\[L_{\text{wrong}}
+=
+\frac1K
+\sum_k\frac{S_k}{N_k}\]</span></p>
+<p>This weights every microbatch equally. A microbatch containing 10 valid tokens receives the same aggregate influence as one containing 1,000.</p>
+<p>Correct implementations either:</p>
+<p><span class="math display">\[\text{backward}\left(\frac{S_k}{N_{\text{global}}}\right)\]</span></p>
+<p>for each microbatch, or weight every local mean by:</p>
+<p><span class="math display">\[\frac{N_k}{N_{\text{global}}}\]</span></p>
+<p>This matters for variable-length LLM batches, packing, ignored labels, gradient accumulation, and distributed training.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the wrong and right scaling with masks</div>
+<p><strong>Step 1.</strong> Correct: <span class="math inline">\(L=\frac{\sum_kS_k}{\sum_kN_k}\)</span>, so microbatch <span class="math inline">\(k\)</span> backpropagates <span class="math inline">\(S_k/N\)</span>.</p>
+<p><strong>Step 2.</strong> Common bug: <span class="math inline">\(L_{\text{wrong}}=\frac1K\sum_k\frac{S_k}{N_k}\)</span>. A token in microbatch <span class="math inline">\(k\)</span> gets weight <span class="math inline">\(\frac{1}{KN_k}\)</span> instead of <span class="math inline">\(\frac1N\)</span>.</p>
+<p><strong>Step 3.</strong> Ratio of weights: <span class="math inline">\(\frac{N}{KN_k}\)</span>. A microbatch with half the average token count has its tokens counted twice as much.</p>
+<p><strong>Step 4.</strong> With data parallelism, <span class="math inline">\(N\)</span> must be the global count across ranks. Each rank computes local <span class="math inline">\(S_k\)</span>, but divides by the all-reduced <span class="math inline">\(N\)</span>. DDP then <em>averages</em> gradients over <span class="math inline">\(W\)</span> ranks, so multiply by <span class="math inline">\(W\)</span> (or divide by <span class="math inline">\(N/W\)</span>) to keep the sum correct.</p>
+<p><strong>Step 5.</strong> <strong>Test:</strong> the accumulated gradient must match a single full-batch backward to float precision, whatever the microbatch split.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: token-exact accumulation with data parallelism</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(W\)</span> ranks, <span class="math inline">\(K\)</span> microbatches per rank, masks</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(N\gets\operatorname{all\_reduce\_sum}\big(\sum_{k}\sum M_k\big)\)</span> <em>▷ before any backward</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(k=1,\dots,K\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(S_k\gets\sum M_k\ell_k\)</span>; backward on <span class="math inline">\(W\cdot S_k/N\)</span> <em>▷ <span class="math inline">\(W\)</span> cancels DDP’s averaging</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">optimizer step; verify once against a single-batch reference</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Compare full-batch gradients with naive and correctly normalized accumulation.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(371)
+
+B, T, D = 4, 5, 3
+
+features = torch.randn(B, T, D)             # [B,T,D]
+targets = torch.randn(B, T)                 # [B,T]
+
+valid_mask = torch.tensor([
+    [1, 0, 0, 0, 0],  # 1 valid token
+    [1, 1, 0, 0, 0],  # 2
+    [1, 1, 1, 1, 0],  # 4
+    [1, 1, 1, 1, 1],  # 5
+], dtype=torch.bool)                         # [B,T]
+
+initial_weight = torch.randn(D)              # [D]
+
+microbatches = [
+    (0, 2),   # 3 valid tokens
+    (2, 4),   # 9 valid tokens
+]
+
+
+def token_loss(weight, x, y):
+    predictions = ...                       # TODO 1: [B,T]
+    return ...                              # TODO 2: [B,T]
+
+
+full_weight = (
+    initial_weight.clone()
+    .requires_grad_()
+)
+
+full_token_losses = ...                     # TODO 3
+full_loss = ...                             # TODO 4: valid-token mean
+
+full_gradient = torch.autograd.grad(
+    full_loss,
+    full_weight,
+)[0]
+
+print(&quot;full-batch loss:&quot;, full_loss.item())
+print(&quot;full-batch gradient:&quot;, full_gradient)</code></pre>
+<p>Implement the common mean-of-means bug:</p>
+<pre class="code python"><code class="language-python">naive_weight = (
+    initial_weight.clone()
+    .requires_grad_()
+)
+
+for start, end in microbatches:
+    local_losses = ...                      # TODO 5: [b,T]
+    local_mask = ...                        # TODO 6: [b,T]
+
+    local_mean = ...                        # TODO 7
+
+    # Equal microbatch weighting.
+    scaled_local_mean = ...                 # TODO 8
+    scaled_local_mean.backward()
+
+naive_gradient = naive_weight.grad.clone()
+
+print(&quot;\nnaively accumulated gradient:&quot;,
+      naive_gradient)
+
+print(
+    &quot;naive max error:&quot;,
+    (naive_gradient - full_gradient).abs().max().item(),
+)
+
+assert not torch.allclose(
+    naive_gradient,
+    full_gradient,
+)</code></pre>
+<p>Now accumulate token sums using one global denominator:</p>
+<pre class="code python"><code class="language-python">correct_weight = (
+    initial_weight.clone()
+    .requires_grad_()
+)
+
+global_valid_count = ...                    # TODO 9: scalar
+
+for start, end in microbatches:
+    local_losses = ...                      # TODO 10
+    local_mask = ...                        # TODO 11
+
+    local_sum = ...                         # TODO 12
+
+    normalized_local_sum = ...              # TODO 13
+    normalized_local_sum.backward()
+
+correct_gradient = correct_weight.grad.clone()
+
+print(&quot;\ncorrectly accumulated gradient:&quot;,
+      correct_gradient)
+
+print(
+    &quot;correct max error:&quot;,
+    (correct_gradient - full_gradient).abs().max().item(),
+)
+
+assert torch.allclose(
+    correct_gradient,
+    full_gradient,
+    atol=1e-6,
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Which microbatch is overweighted by the naive method?</p></li>
+<li><p>Would dividing every local mean by two recover the full-batch gradient?</p></li>
+<li><p>If both microbatches contained exactly six valid tokens, would the naive method become correct?</p></li>
+</ul>
+<p>Inspect the effective weights:</p>
+<pre class="code python"><code class="language-python">local_counts = torch.tensor([
+    valid_mask[start:end].sum()
+    for start, end in microbatches
+], dtype=torch.float)
+
+correct_weights = ...                      # TODO 14
+naive_weights = ...                        # TODO 15
+
+print(&quot;\nvalid tokens per microbatch:&quot;,
+      local_counts)
+
+print(&quot;correct aggregate weights:&quot;,
+      correct_weights)
+
+print(&quot;naive aggregate weights:&quot;,
+      naive_weights)</code></pre>
+<p>Hints:</p>
+<ul>
+<li><p>Predictions are <code>x @ weight</code>.</p></li>
+<li><p>Use per-token loss <span class="math inline">\(\frac12(\hat y-y)^2\)</span>.</p></li>
+<li><p>Boolean-index valid positions before reducing.</p></li>
+<li><p>The naive method backpropagates <code>local_mean / len(microbatches)</code>.</p></li>
+<li><p>Correct accumulation backpropagates <code>local_sum / global_valid_count</code>.</p></li>
+<li><p>Accumulated <code>.grad</code> tensors add contributions across backward calls.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why is averaging microbatch means generally different from computing the global token mean?</p></li>
+<li><p>Prediction: if a one-token microbatch and a 1,000-token microbatch are equally weighted, which token has greater individual influence?</p></li>
+<li><p>When does dividing every microbatch loss by the accumulation-step count work correctly?</p></li>
+<li><p>Debugging: training changes when sequences are repartitioned into different microbatches, although the examples are unchanged. What reduction bug should you inspect?</p></li>
+<li><p>In distributed training, why can averaging rank-local mean losses be wrong when ranks contain different numbers of valid tokens?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<p>Full-batch computation:</p>
+<pre class="code python"><code class="language-python">def token_loss(weight, x, y):
+    predictions = x @ weight
+
+    return 0.5 * (
+        predictions - y
+    ).square()
+
+
+full_token_losses = token_loss(
+    full_weight,
+    features,
+    targets,
+)
+
+full_loss = full_token_losses[
+    valid_mask
+].mean()</code></pre>
+<p>Naive accumulation:</p>
+<pre class="code python"><code class="language-python">naive_weight = (
+    initial_weight.clone()
+    .requires_grad_()
+)
+
+for start, end in microbatches:
+    local_losses = token_loss(
+        naive_weight,
+        features[start:end],
+        targets[start:end],
+    )
+
+    local_mask = valid_mask[start:end]
+
+    local_mean = local_losses[
+        local_mask
+    ].mean()
+
+    scaled_local_mean = (
+        local_mean / len(microbatches)
+    )
+
+    scaled_local_mean.backward()</code></pre>
+<p>Correct accumulation:</p>
+<pre class="code python"><code class="language-python">correct_weight = (
+    initial_weight.clone()
+    .requires_grad_()
+)
+
+global_valid_count = valid_mask.sum()
+
+for start, end in microbatches:
+    local_losses = token_loss(
+        correct_weight,
+        features[start:end],
+        targets[start:end],
+    )
+
+    local_mask = valid_mask[start:end]
+
+    local_sum = local_losses[
+        local_mask
+    ].sum()
+
+    normalized_local_sum = (
+        local_sum / global_valid_count
+    )
+
+    normalized_local_sum.backward()</code></pre>
+<p>Effective weights:</p>
+<pre class="code python"><code class="language-python">correct_weights = (
+    local_counts / local_counts.sum()
+)
+
+naive_weights = torch.full_like(
+    local_counts,
+    1.0 / len(microbatches),
+)</code></pre>
+<p>The correct microbatch weights are:</p>
+<p><span class="math display">\[\left[
+\frac3{12},
+\frac9{12}
+\right]
+=
+[0.25,0.75]\]</span></p>
+<p>The naive calculation instead uses:</p>
+<p><span class="math display">\[[0.5,0.5]\]</span></p>
+<p>It therefore doubles the aggregate influence of the three-token microbatch and reduces the nine-token microbatch’s influence.</p>
+<p>Dividing each local mean by the number of accumulation steps works when all microbatches have equal effective denominators—for example, equal numbers of valid tokens. Equal tensor shapes are insufficient if padding or ignored labels differ.</p>
+<p>For distributed data parallelism, rank-local gradients are commonly averaged. If rank <span class="math inline">\(r\)</span> computes:</p>
+<p><span class="math display">\[\frac{S_r}{N_r}\]</span></p>
+<p>then averaging ranks weights each rank equally, not each token equally. Correct global normalization requires the global valid-token count:</p>
+<p><span class="math display">\[N_{\text{global}}=\sum_rN_r\]</span></p>
+<p>and consistent handling of the framework’s gradient averaging factor.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Each microbatch mean has denominator <span class="math inline">\(N_k\)</span>; averaging those means assigns equal weight to unequal token populations.</p></li>
+<li><p>A token in the one-token microbatch receives 1,000 times the influence of a token in the other microbatch.</p></li>
+<li><p>When every microbatch has the same number of effective observations, or when local means are explicitly weighted by their counts.</p></li>
+<li><p>Inspect whether independently normalized microbatch losses are averaged instead of accumulating numerators under one global denominator.</p></li>
+<li><p>Rank-local averaging weights ranks equally and can overrepresent ranks with fewer valid tokens.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p><span class="math inline">\(T^2\)</span> compensates for the approximate <span class="math inline">\(1/T^2\)</span> reduction in distillation-gradient magnitude.</p></li>
+<li><p>Detachment prevents the teacher from moving toward the student and avoids retaining an unnecessary teacher computation graph.</p></li>
+</ul>

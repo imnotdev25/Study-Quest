@@ -1,0 +1,227 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: likes shape what you post</div>
+<p>Post a photo, get lots of likes, and you’ll post more photos like it. Get none, and you’ll post fewer. You didn’t calculate “the gradient of likes with respect to photo style.” You just made rewarded behaviour more likely. That’s a policy gradient: <em>actions that were followed by reward become more probable</em>.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/b7b31ba39307.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A uniform softmax policy samples <span class="math inline">\(a_2\)</span> and gets <span class="math inline">\(R=2\)</span>. One gradient step (learning rate 0.5) shifts probability toward <span class="math inline">\(a_2\)</span>.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Does DQN directly learn action probabilities?</p></li>
+<li><p>Why does Q-learning require explicit exploration such as <span class="math inline">\(\epsilon\)</span>-greedy?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="learn-the-policy-directly">2. Learn the policy directly</h3>
+<p>DQN first learns action values and then chooses:</p>
+<p><span class="math display">\[a=\arg\max_a Q(s,a)\]</span></p>
+<p>A policy-gradient method directly learns a probability distribution:</p>
+<p><span class="math display">\[\pi_\theta(a\mid s)\]</span></p>
+<p>For discrete actions, a network produces logits:</p>
+<p><span class="math display">\[z_\theta(s)\in\mathbb R^A\]</span></p>
+<p>Softmax converts them into probabilities:</p>
+<p><span class="math display">\[\pi_\theta(a\mid s)
+=
+\frac{\exp(z_a)}
+{\sum_j\exp(z_j)}\]</span></p>
+<p>For a batch:</p>
+<ul>
+<li><p>logits: <span style="background-color: codeinlinebg"><code> [B, actions]</code></span></p></li>
+<li><p>sampled actions: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>selected log-probabilities: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>rewards: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="the-sampling-problem">The sampling problem</h3>
+<p>Sampling an action is discrete:</p>
+<pre class="code python"><code class="language-python">action = distribution.sample()</code></pre>
+<p>We cannot backpropagate through the sampled integer. The log-probability trick gives another route:</p>
+<p><span class="math display">\[\nabla_\theta J(\theta)
+=
+\mathbb E_{a\sim\pi_\theta}
+\left[
+R(a)\nabla_\theta\log\pi_\theta(a)
+\right]\]</span></p>
+<p>To use gradient descent, minimize:</p>
+<p><span class="math display">\[L(\theta)
+=
+-\mathbb E
+\left[
+R(a)\log\pi_\theta(a)
+\right]\]</span></p>
+<p>Interpret it as reward-weighted cross-entropy:</p>
+<ul>
+<li><p>ordinary cross-entropy increases the probability of a labelled answer;</p></li>
+<li><p>policy-gradient loss increases the probability of a sampled action when its reward is positive;</p></li>
+<li><p>negative reward decreases its probability.</p></li>
+</ul>
+<h3 class="unnumbered" id="why-the-negative-sign">Why the negative sign?</h3>
+<p>Optimizers minimize losses, but RL wants to maximize reward.</p>
+<p>If <span class="math inline">\(R&gt;0\)</span>:</p>
+<p><span class="math display">\[L=-R\log\pi(a)\]</span></p>
+<p>Minimizing this makes <span class="math inline">\(\log\pi(a)\)</span> larger, meaning the sampled action becomes more probable.</p>
+<p>If <span class="math inline">\(R&lt;0\)</span>, the update reverses and reduces that action’s probability.</p>
+<h3 class="unnumbered" id="line-slope-connection">Line-slope connection</h3>
+<p>A derivative measures how an objective changes when one parameter moves. A gradient collects one derivative per parameter:</p>
+<p><span class="math display">\[\nabla_\theta J
+=
+\left[
+\frac{\partial J}{\partial\theta_1},
+\ldots,
+\frac{\partial J}{\partial\theta_n}
+\right]\]</span></p>
+<p>The policy-gradient estimator uses sampled data to approximate that unknown expected slope:</p>
+<p><span class="math display">\[\widehat{\nabla_\theta J}
+=
+\frac1B\sum_{i=1}^{B}
+R_i\nabla_\theta\log\pi_\theta(A_i)\]</span></p>
+<p>It is unbiased under standard assumptions, but can have high variance.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>For an LLM, the policy is the next-token distribution. The same structure appears:</p>
+<p><span class="math display">\[-\text{reward}\times
+\log\pi_\theta(\text{sampled token}\mid\text{prefix})\]</span></p>
+<p>Later we will handle multiple tokens, delayed sequence rewards and credit assignment.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the log-derivative trick</div>
+<p>We want <span class="math inline">\(\nabla_\theta\mathbb E_{a\sim\pi_\theta}[R(a)]\)</span>, but sampling isn’t differentiable. Use <span class="math inline">\(\nabla\pi=\pi\nabla\log\pi\)</span>: <span class="math display">\[\nabla_\theta\sum_a\pi_\theta(a)R(a)=\sum_a\pi_\theta(a)\,\nabla_\theta\log\pi_\theta(a)\,R(a)=\mathbb E_{a\sim\pi_\theta}\big[R(a)\,\nabla_\theta\log\pi_\theta(a)\big].\]</span> Now it’s an expectation we can <em>sample</em>, and that gives an unbiased gradient estimate.</p>
+<p><strong>Softmax case:</strong> with <span class="math inline">\(\pi=\operatorname{softmax}(z)\)</span>, <span class="math inline">\(\nabla_z\log\pi(a)=e_a-\pi\)</span> (a one-hot vector minus the probabilities).</p>
+<p><strong>Worked example (the chart):</strong> <span class="math inline">\(z=0\)</span>, so <span class="math inline">\(\pi=(\tfrac13,\tfrac13,\tfrac13)\)</span>. Sample <span class="math inline">\(a_2\)</span> with <span class="math inline">\(R=2\)</span>: gradient <span class="math inline">\(=2\big((0,1,0)-\pi\big)=(-\tfrac23,\tfrac43,-\tfrac23)\)</span>. After a step of 0.5: <span class="math inline">\(z=(-\tfrac13,\tfrac23,-\tfrac13)\)</span>, so <span class="math inline">\(\pi\approx(0.212,0.576,0.212)\)</span>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p><span class="math inline">\(\nabla J=\mathbb E[R\,\nabla\log\pi]\)</span>: push up log-probability in proportion to reward.</p></li>
+<li><p>You never differentiate through the environment or the sampling step.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: a negative reward pushes probability away</div>
+<p>Uniform policy over 3 actions, sample <span class="math inline">\(a_2\)</span>, <span class="math inline">\(R=-1\)</span>, step 0.5. Gradient <span class="math inline">\(=-1\cdot(e_2-\pi)=(\tfrac13,-\tfrac23,\tfrac13)\)</span>. Logits become <span class="math inline">\((\tfrac16,-\tfrac13,\tfrac16)\)</span>, so <span class="math inline">\(\pi\approx(0.384,0.233,0.384)\)</span>. The punished action loses probability, and the others share the gain equally.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Minimizing <span class="math inline">\(R\log\pi\)</span> instead of <span class="math inline">\(-R\log\pi\)</span> (the sign flip learns the opposite).</p></li>
+<li><p>Using probabilities instead of log-probabilities.</p></li>
+<li><p>Feeding argmax actions instead of sampled actions into the loss.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Policy gradient for a softmax bandit</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logits <span class="math inline">\(z\in\mathbb R^k\)</span>, learning rate <span class="math inline">\(\eta\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each iteration <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\pi\gets\operatorname{softmax}(z)\)</span>; sample <span class="math inline">\(a\sim\pi\)</span>; observe reward <span class="math inline">\(R\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(z\gets z+\eta\,R\,(e_a-\pi)\)</span> <em>▷ <span class="math inline">\(=\ z+\eta R\nabla_z\log\pi(a)\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-learn-a-two-action-bandit-policy">3. PyTorch exercise — learn a two-action bandit policy</h3>
+<p>Action <span style="background-color: codeinlinebg"><code> 1</code></span> has the larger expected reward, but observed rewards are noisy.</p>
+<p>Complete the TODOs:</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+
+true_means = torch.tensor([0.0, 1.0])  # [actions=2]
+
+# Directly learn one logit per action.
+logits = torch.nn.Parameter(torch.zeros(2))  # [actions=2]
+optimizer = torch.optim.Adam([logits], lr=0.1)
+
+batch_size = 64
+
+for step in range(200):
+    # Categorical(logits=...) performs stable normalization.
+    policy = Categorical(logits=logits)
+
+    # TODO 1: Sample one action per batch item.
+    actions = ...
+
+    # The environment is outside the computation graph.
+    rewards = (
+        true_means[actions]
+        + 0.3 * torch.randn(batch_size)
+    )  # [batch]
+
+    # TODO 2: Log-probability of every sampled action.
+    log_probs = ...
+
+    # TODO 3: Reward-weighted policy-gradient loss.
+    # Treat observed rewards as fixed data.
+    loss = ...
+
+    optimizer.zero_grad()
+    loss.backward()
+
+    # TODO 4: Record the gradient before optimizer.step().
+    gradient = ...
+
+    optimizer.step()
+
+    if step in [0, 1, 9, 49, 199]:
+        with torch.no_grad():
+            probs = logits.softmax(dim=0)
+
+        print(
+            f&quot;step={step:3d}&quot;,
+            f&quot;probs={probs.tolist()}&quot;,
+            f&quot;mean_reward={rewards.mean().item():.3f}&quot;,
+            f&quot;grad={gradient.tolist()}&quot;,
+        )
+
+print(&quot;Final probabilities:&quot;, logits.softmax(dim=0).detach())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action’s probability should approach one?</p></li>
+<li><p>At initialization, what are the two probabilities?</p></li>
+<li><p>Must the mean reward increase on every step?</p></li>
+<li><p>Why should the two logit gradients often have opposite signs?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample shape: <span style="background-color: codeinlinebg"><code> policy.sample((batch_size,))</code></span></p></li>
+<li><p>Log probabilities: <span style="background-color: codeinlinebg"><code> policy.log_prob(actions)</code></span></p></li>
+<li><p>Loss: negative mean of <span style="background-color: codeinlinebg"><code> log_prob * reward</code></span></p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> rewards.detach()</code></span></p></li>
+<li><p>Clone the gradient because <span style="background-color: codeinlinebg"><code> optimizer.step()</code></span> changes parameters, not gradients:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">gradient = logits.grad.detach().clone()</code></pre>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Remove the negative sign:</p>
+<pre class="code python"><code class="language-python">loss = (log_probs * rewards.detach()).mean()</code></pre>
+<p>The optimizer now minimizes expected reward: actions receiving positive rewards become less probable.</p>
+<p>Also prefer:</p>
+<pre class="code python"><code class="language-python">Categorical(logits=logits)</code></pre>
+<p>over manually calculating <span style="background-color: codeinlinebg"><code> torch.log(softmax(logits))</code></span>. The distribution API handles log-probabilities more stably.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can’t we simply backpropagate through the sampled action index?</p></li>
+<li><p>What does a positive reward do to the sampled action’s probability?</p></li>
+<li><p>If all rewards are multiplied by 1000, what happens to gradient scale?</p></li>
+<li><p>Why can one batch produce a gradient pointing in an unhelpful direction?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">actions = policy.sample((batch_size,))</code></pre>
+<pre class="code python"><code class="language-python">log_probs = policy.log_prob(actions)</code></pre>
+<pre class="code python"><code class="language-python">loss = -(
+    log_probs * rewards.detach()
+).mean()</code></pre>
+<p>After <span style="background-color: codeinlinebg"><code> loss.backward()</code></span>:</p>
+<pre class="code python"><code class="language-python">gradient = logits.grad.detach().clone()</code></pre>
+<p>The final policy should strongly prefer action <span style="background-color: codeinlinebg"><code> 1</code></span>:</p>
+<pre class="code text"><code class="language-plaintext">P(action 0) → near 0
+P(action 1) → near 1</code></pre>
+<p>At initialization:</p>
+<p><span class="math display">\[\operatorname{softmax}([0,0])=[0.5,0.5]\]</span></p>
+<p>The probabilities need not improve monotonically. Rewards and actions are sampled, so individual gradient estimates are noisy.</p>
+<p>For two-action softmax, raising one action’s relative probability lowers the other’s. Consequently, their logit gradients usually have opposite signs and approximately sum to zero.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>A sampled integer is a discrete operation without the ordinary differentiable path required by backpropagation.</p></li>
+<li><p>It increases the sampled action’s log-probability under gradient descent.</p></li>
+<li><p>Gradients become roughly 1000 times larger, which may destabilize training unless rewards or learning rates are rescaled.</p></li>
+<li><p>A finite sample can contain unusually lucky bad actions or unusually unlucky good actions.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>No. DQN learns action values and derives a policy using operations such as <span style="background-color: codeinlinebg"><code> argmax</code></span>.</p></li>
+<li><p>A greedy value policy would otherwise keep choosing its current favourite and might never discover better actions.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> policy gradients do not differentiate through sampled actions. They use reward-weighted log-probabilities to answer: “Should actions like the one I sampled become more or less likely?”</p>

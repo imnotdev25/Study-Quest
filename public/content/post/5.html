@@ -1,0 +1,94 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>One GPU runs out of either memory or time. <strong>Data parallelism</strong> copies the model to every GPU and splits the batch. <strong>Sharding</strong> (ZeRO / FSDP) splits the model’s <em>state</em> across GPUs, so each holds <span class="math inline">\(1/G\)</span>. <strong>Tensor</strong> and <strong>pipeline</strong> parallelism split the model’s <em>computation</em> when even a sharded layer is too big or too slow.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/ee12b0e16962.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Training state for an 8B model on 8 GPUs (16 bytes/parameter, activations excluded). Only full sharding gets it to 16 GB per GPU.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: what FSDP communicates</div>
+<p><strong>Step 1.</strong> <strong>DDP:</strong> each GPU computes gradients on its own batch, then an <strong>all-reduce</strong> averages them. Ring all-reduce sends about <span class="math inline">\(2\Phi\)</span> bytes per GPU for a gradient of <span class="math inline">\(\Phi\)</span> bytes, independent of <span class="math inline">\(G\)</span>.</p>
+<p><strong>Step 2.</strong> <strong>FSDP:</strong> before a block’s forward, <strong>all-gather</strong> its weight shards into a full copy; free it after. Backward: all-gather again, compute gradients, then <strong>reduce-scatter</strong>, so each GPU ends up with the summed gradient for its own shard only. Each GPU then updates only its shard.</p>
+<p><strong>Step 3.</strong> Volume per step <span class="math inline">\(\approx\Phi\)</span> (all-gather forward) <span class="math inline">\(+\Phi\)</span> (all-gather backward) <span class="math inline">\(+\Phi\)</span> (reduce-scatter) <span class="math inline">\(=3\Phi\)</span>: 1.5<span class="math inline">\(\times\)</span> DDP’s traffic, in exchange for <span class="math inline">\(G\times\)</span> less memory.</p>
+<p><strong>Step 4.</strong> The traffic overlaps with compute: FSDP prefetches block <span class="math inline">\(\ell+1\)</span>’s weights while block <span class="math inline">\(\ell\)</span> computes. That’s why it shards <em>per block</em> (<code>fully_shard(blk)</code> in the code), not the whole model at once.</p>
+<p><strong>Step 5.</strong> <strong>When FSDP isn’t enough:</strong> tensor parallelism splits each matrix multiply across GPUs inside a node (fast NVLink); pipeline parallelism puts different layers on different nodes; expert parallelism spreads MoE experts; context parallelism splits very long sequences. Frontier runs combine all of them (“4D/5D parallelism”).</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Multi-GPU pre-training with FSDP2 (fully_shard): every GPU holds 1/N of the weights, grads and Adam state.
+
+Local smoke test (2 CPU processes):  torchrun --nproc_per_node=2 fsdp_train.py
+On Modal (8x H100):                  modal run fsdp_train.py::launch
+&quot;&quot;&quot;
+import os
+import time
+
+import modal
+import torch
+import torch.distributed as dist
+
+from pretrain_gpt import GPT, Config, lr_at, make_optimizer
+
+
+def main(max_steps: int = 20, small: bool = True):
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+    cuda = torch.cuda.is_available()
+    dist.init_process_group(&quot;nccl&quot; if cuda else &quot;gloo&quot;)
+    rank, world = dist.get_rank(), dist.get_world_size()
+    device = torch.device(f&quot;cuda:{int(os.environ[&#x27;LOCAL_RANK&#x27;])}&quot; if cuda else &quot;cpu&quot;)
+    if cuda:
+        torch.cuda.set_device(device)
+
+    c = (Config(vocab_size=1024, d_model=64, n_layers=2, n_heads=4, seq_len=32, batch_size=4, max_steps=max_steps, warmup=2)
+         if small else Config(max_steps=max_steps))
+    torch.manual_seed(0)
+    model = GPT(c).to(device)
+
+    # Shard each block separately, then the root. BF16 compute, FP32 gradient reduction.
+    mesh = init_device_mesh(&quot;cuda&quot; if cuda else &quot;cpu&quot;, (world,))   # explicit: avoids picking MPS on a Mac
+    kw = {&quot;mesh&quot;: mesh, **({&quot;mp_policy&quot;: MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)} if cuda else {})}
+    for blk in model.blocks:
+        fully_shard(blk, **kw)
+    fully_shard(model, **kw)
+
+    opt = make_optimizer(model, c, fused=cuda)
+    g = torch.Generator().manual_seed(1234 + rank)                 # each rank sees different data
+    t0 = time.time()
+    for step in range(c.max_steps):
+        x = torch.randint(0, c.vocab_size, (c.batch_size, c.seq_len + 1), generator=g).to(device)
+        for grp in opt.param_groups:
+            grp[&quot;lr&quot;] = lr_at(step, c)
+        loss = model(x[:, :-1], x[:, 1:])
+        loss.backward()                                            # reduce-scatter: each rank keeps its shard of grads
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        opt.step()                                                 # each rank updates only its shard
+        opt.zero_grad(set_to_none=True)
+        if rank == 0 and step % 5 == 0:
+            local = sum(p.to_local().numel() for p in model.parameters())
+            total = sum(p.numel() for p in model.parameters())
+            print(f&quot;step {step:3d} loss {loss.item():.3f}  params on this rank {local:,} of {total:,}  &quot;
+                  f&quot;({time.time() - t0:.1f}s)&quot;)
+    dist.destroy_process_group()
+
+
+app = modal.App(&quot;pt-book-fsdp&quot;)
+image = (modal.Image.debian_slim(python_version=&quot;3.12&quot;)
+         .uv_pip_install(&quot;torch==2.14.1&quot;, &quot;transformers==5.20.2&quot;, &quot;datasets==5.1.0&quot;)
+         .add_local_python_source(&quot;pretrain_gpt&quot;, &quot;fsdp_train&quot;))
+
+
+@app.function(gpu=&quot;H100:8&quot;, image=image, timeout=4 * 60 * 60)
+def launch(max_steps: int = 1000):
+    import subprocess
+
+    subprocess.run([&quot;torchrun&quot;, &quot;--nproc_per_node=8&quot;, &quot;-m&quot;, &quot;fsdp_train&quot;, &quot;--full&quot;, str(max_steps)], check=True)
+
+
+if __name__ == &quot;__main__&quot;:
+    import sys
+
+    if &quot;--full&quot; in sys.argv:
+        main(max_steps=int(sys.argv[sys.argv.index(&quot;--full&quot;) + 1]), small=False)
+    else:
+        main()</code></pre>
+<p><strong>Not run locally.</strong> FSDP2 on a CPU-only PyTorch 2.6 fails inside <code>fully_shard</code>’s stream bookkeeping, and the Modal image (PyTorch 2.14.1, CUDA) is the intended target, so this listing is checked only for syntax and imports. Run it with <code>modal run fsdp_train.py::launch</code> and check that rank 0 reports about <span class="math inline">\(1/8\)</span> of the parameters per GPU.</p>

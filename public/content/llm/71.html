@@ -1,0 +1,283 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>A reward model</strong> outputs one number per (prompt, response). It’s trained from <em>comparisons</em>, not absolute scores. <strong>Bradley–Terry</strong> models the probability that <span class="math inline">\(y^+\)</span> beats <span class="math inline">\(y^-\)</span> as <span class="math inline">\(\sigma(r^+-r^-)\)</span>, so only score <em>differences</em> have meaning.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why can the sampled PPO estimator <span class="math inline">\(k_1=-\log r\)</span> be negative?</p></li>
+<li><p>Why is <span class="math inline">\(k_3=r-1-\log r\)</span> nonnegative for every sample?</p></li>
+</ol>
+<p>A reward model maps a prompt–response sequence to one scalar:</p>
+<p><span class="math display">\[H\in\mathbb{R}^{B\times T\times D}\]</span></p>
+<p><span class="math display">\[r_\phi(x,y)\in\mathbb{R}^{B}\]</span></p>
+<p>For preferred and rejected responses:</p>
+<p><span class="math display">\[r^+,r^-\in\mathbb{R}^{B}\]</span></p>
+<p>the Bradley–Terry preference probability is:</p>
+<p><span class="math display">\[P(y^+\succ y^-\mid x)
+=
+\sigma(r^+-r^-)\]</span></p>
+<p>Define the margin:</p>
+<p><span class="math display">\[\Delta=r^+-r^-\]</span></p>
+<p>The pairwise loss is:</p>
+<p><span class="math display">\[L_{\text{RM}}
+=
+-\log\sigma(\Delta)
+=
+\operatorname{softplus}(-\Delta)\]</span></p>
+<p>Its score derivatives are:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial r^+}
+=
+-\sigma(-\Delta)\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial r^-}
+=
++\sigma(-\Delta)\]</span></p>
+<p>Thus gradient descent raises the chosen score and lowers the rejected score.</p>
+<p>Only score differences are identified:</p>
+<p><span class="math display">\[(r^++c)-(r^-+c)=r^+-r^-\]</span></p>
+<p>so adding the same constant to both scores changes nothing. Scale is not invariant: on separable data, margins can keep growing while accuracy is already perfect.</p>
+<p>For decoder reward models, the score is commonly read from the final valid response token—not blindly from tensor position <code>-1</code>, which may be padding.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the pairwise loss, its gradients, and identifiability</div>
+<p><strong>Step 1.</strong> NLL of the observed preference: <span class="math inline">\(L=-\log\sigma(\Delta)=\softplus(-\Delta)\)</span>, with <span class="math inline">\(\Delta=r^+-r^-\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\frac{dL}{d\Delta}=-\sigma(-\Delta)\)</span>. Chain: <span class="math inline">\(\frac{\partial L}{\partial r^+}=-\sigma(-\Delta)\)</span> and <span class="math inline">\(\frac{\partial L}{\partial r^-}=+\sigma(-\Delta)\)</span>. Equal and opposite.</p>
+<p><strong>Step 3.</strong> Weight <span class="math inline">\(\sigma(-\Delta)\)</span>: <span class="math inline">\(\approx1\)</span> for a wrongly ranked pair, <span class="math inline">\(\approx0\)</span> for a confidently correct one.</p>
+<p><strong>Step 4.</strong> <strong>Identifiability:</strong> replace <span class="math inline">\(r(x,y)\)</span> by <span class="math inline">\(r(x,y)+c(x)\)</span>. Then <span class="math inline">\(\Delta\)</span> is unchanged, so the loss, every gradient, and every prediction are unchanged. The data can never determine <span class="math inline">\(c(x)\)</span>.</p>
+<p><strong>Step 5.</strong> Consequence: raw scores aren’t comparable across prompts, and their scale drifts. Before RL, normalize (e.g. subtract a per-prompt or global mean), and add a small <span class="math inline">\(\lambda\,\overline{(r^++r^-)^2}\)</span> penalty if you want to pin the scale.</p>
+<p><strong>Step 6.</strong> <strong>Accuracy</strong> is <span class="math inline">\(P(\Delta&gt;0)\)</span> on held-out pairs. It says nothing about calibration or scale.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: pairwise reward-model training step</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> pairs <span class="math inline">\((x,y^+,y^-)\)</span>, reward model <span class="math inline">\(r_\phi\)</span> (score taken at the last real token)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\Delta\gets r_\phi(x,y^+)-r_\phi(x,y^-)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets\operatorname{mean}\softplus(-\Delta)\)</span>; gradient step</div>
+<div class="algo-line" style="--d:0">log accuracy <span class="math inline">\(\operatorname{mean}\mathbb 1[\Delta&gt;0]\)</span> and the mean and std of raw scores</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement terminal-token reward scoring and the pairwise loss.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(281)
+
+B, T, D = 4, 6, 5
+
+chosen_hidden = torch.randn(B, T, D)
+rejected_hidden = torch.randn(B, T, D)
+
+chosen_mask = torch.tensor([
+    [1, 1, 1, 1, 0, 0],
+    [1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 0, 0, 0],
+    [1, 1, 1, 1, 1, 0],
+], dtype=torch.bool)
+
+rejected_mask = torch.tensor([
+    [1, 1, 1, 0, 0, 0],
+    [1, 1, 1, 1, 1, 0],
+    [1, 1, 1, 1, 0, 0],
+    [1, 1, 1, 1, 1, 1],
+], dtype=torch.bool)
+
+reward_weight = torch.randn(
+    D,
+    requires_grad=True,
+)
+
+reward_bias = torch.tensor(
+    0.0,
+    requires_grad=True,
+)
+
+
+def terminal_hidden(hidden, mask):
+    &quot;&quot;&quot;
+    hidden: [B,T,D]
+    mask:   [B,T], left-aligned valid tokens
+    &quot;&quot;&quot;
+    lengths = ...                                    # TODO 1: [B]
+    terminal_indices = ...                            # TODO 2: [B]
+
+    batch_indices = ...                               # TODO 3: [B]
+
+    return ...                                        # TODO 4: [B,D]
+
+
+chosen_terminal = ...                                 # TODO 5
+rejected_terminal = ...                               # TODO 6
+
+chosen_scores = ...                                   # TODO 7: [B]
+rejected_scores = ...                                 # TODO 8: [B]
+
+margin = ...                                          # TODO 9
+per_pair_loss = ...                                   # TODO 10: stable
+loss = ...                                            # TODO 11: scalar
+
+d_chosen, d_rejected = torch.autograd.grad(
+    loss,
+    [chosen_scores, rejected_scores],
+    retain_graph=True,
+)
+
+print(&quot;chosen scores:&quot;, chosen_scores.detach())
+print(&quot;rejected scores:&quot;, rejected_scores.detach())
+print(&quot;margins:&quot;, margin.detach())
+print(&quot;pair losses:&quot;, per_pair_loss.detach())
+
+print(&quot;\ndL/d chosen:&quot;, d_chosen)
+print(&quot;dL/d rejected:&quot;, d_rejected)
+
+assert torch.all(d_chosen &lt; 0)
+assert torch.all(d_rejected &gt; 0)
+assert torch.allclose(d_chosen, -d_rejected)
+
+loss.backward()
+
+print(
+    &quot;\nreward-weight gradient norm:&quot;,
+    reward_weight.grad.norm().item(),
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>The loss when <span class="math inline">\(r^+=r^-\)</span>.</p></li>
+<li><p>Whether a badly misranked pair has a larger or smaller score-gradient magnitude than a confidently correct pair.</p></li>
+</ul>
+<p>Verify shift invariance:</p>
+<pre class="code python"><code class="language-python">shift = 1000.0
+
+shifted_loss = F.softplus(
+    -(
+        (chosen_scores.detach() + shift)
+        - (rejected_scores.detach() + shift)
+    )
+).mean()
+
+print(
+    &quot;\nloss unchanged by common shift:&quot;,
+    torch.allclose(loss.detach(), shifted_loss),
+)</code></pre>
+<p>Now reproduce a padding bug:</p>
+<pre class="code python"><code class="language-python">wrong_chosen_scores = (
+    chosen_hidden[:, -1] @ reward_weight.detach()
+    + reward_bias.detach()
+)
+
+wrong_rejected_scores = (
+    rejected_hidden[:, -1] @ reward_weight.detach()
+    + reward_bias.detach()
+)
+
+wrong_loss = F.softplus(
+    -(wrong_chosen_scores - wrong_rejected_scores)
+).mean()
+
+print(&quot;\ncorrect loss:&quot;, loss.item())
+print(&quot;last-physical-position loss:&quot;, wrong_loss.item())
+
+print(
+    &quot;examples with chosen padding at position -1:&quot;,
+    ~chosen_mask[:, -1],
+)</code></pre>
+<p>Why can this bug create a spurious association between padding pattern, response length, and reward?</p>
+<p>Hints:</p>
+<ul>
+<li><p>For left-aligned masks, the last valid index is <code>mask.sum(dim=-1) - 1</code>.</p></li>
+<li><p>Create batch indices with <code>torch.arange(B)</code>.</p></li>
+<li><p>Index as <code>hidden</code><span><code>[</code></span><code>batch_indices, terminal_indices</code><span><code>]</code></span>.</p></li>
+<li><p>A linear reward head is <code>terminal @ weight + bias</code>.</p></li>
+<li><p>Use <code>F.softplus(-margin)</code>.</p></li>
+<li><p>The loss depends only on the chosen–rejected difference.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why is the reward model’s absolute score offset unidentifiable?</p></li>
+<li><p>Prediction: at margin zero, what are the loss and both score derivatives?</p></li>
+<li><p>Debugging: reward strongly correlates with response length. Which pooling or masking mistake should you inspect?</p></li>
+<li><p>What happens to the loss if chosen and rejected responses are accidentally swapped?</p></li>
+<li><p>Why can reward-score scale matter during PPO even when reward-model ranking accuracy is unchanged?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def terminal_hidden(hidden, mask):
+    lengths = mask.sum(dim=-1)
+    terminal_indices = lengths - 1
+
+    batch_indices = torch.arange(
+        hidden.shape[0],
+        device=hidden.device,
+    )
+
+    return hidden[
+        batch_indices,
+        terminal_indices,
+    ]
+
+
+chosen_terminal = terminal_hidden(
+    chosen_hidden,
+    chosen_mask,
+)
+
+rejected_terminal = terminal_hidden(
+    rejected_hidden,
+    rejected_mask,
+)
+
+chosen_scores = (
+    chosen_terminal @ reward_weight
+    + reward_bias
+)
+
+rejected_scores = (
+    rejected_terminal @ reward_weight
+    + reward_bias
+)
+
+margin = chosen_scores - rejected_scores
+
+per_pair_loss = F.softplus(-margin)
+loss = per_pair_loss.mean()</code></pre>
+<p>For one pair:</p>
+<p><span class="math display">\[L=\operatorname{softplus}(-\Delta)\]</span></p>
+<p>At equal scores:</p>
+<p><span class="math display">\[\Delta=0\]</span></p>
+<p><span class="math display">\[L=\log 2\approx0.693\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial r^+}
+=-\sigma(0)=-\frac12\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial r^-}
+=+\frac12\]</span></p>
+<p>With batch-mean reduction, each derivative is additionally divided by <span class="math inline">\(B\)</span>.</p>
+<p>For a badly misranked pair:</p>
+<p><span class="math display">\[\Delta\ll0\]</span></p>
+<p><span class="math display">\[\sigma(-\Delta)\approx1\]</span></p>
+<p>so its gradient magnitude is large. For a confidently correct pair:</p>
+<p><span class="math display">\[\Delta\gg0\]</span></p>
+<p><span class="math display">\[\sigma(-\Delta)\approx0\]</span></p>
+<p>and the gradient saturates.</p>
+<p>The shared bias receives no gradient:</p>
+<p><span class="math display">\[(r^++b)-(r^-+b)=r^+-r^-\]</span></p>
+<p>This is another direct consequence of shift invariance.</p>
+<p>Reading <code>hidden</code><span><code>[</code></span><code>:, -1</code><span><code>]</code></span> scores padding positions whenever sequences have unequal lengths. The model can then learn artifacts associated with padded locations or length instead of response quality.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Pairwise likelihood depends only on <span class="math inline">\(r^+-r^-\)</span>, so any common additive offset cancels.</p></li>
+<li><p>The loss is <span class="math inline">\(\log2\)</span>; derivatives are <span class="math inline">\(-1/2\)</span> and <span class="math inline">\(+1/2\)</span> before batch averaging.</p></li>
+<li><p>Check whether the scorer uses the last physical tensor position instead of the final valid response token, or whether padding enters mean pooling.</p></li>
+<li><p>The margin changes sign. Correct preferences become misranked examples, reversing the training signal.</p></li>
+<li><p>PPO uses reward magnitudes to construct returns and advantages. Rescaling rewards changes actor/critic gradient scales and the effective strength of KL penalties and clipping thresholds.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p><span class="math inline">\(k_1\)</span> is a single Monte Carlo log-ratio term; only its old-policy expectation must be nonnegative.</p></li>
+<li><p><span class="math inline">\(k_3\ge0\)</span> follows from: <span class="math display">\[e^x\ge1+x\]</span></p></li>
+</ul>

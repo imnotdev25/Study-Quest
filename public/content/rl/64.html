@@ -1,0 +1,295 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: two identical hotel corridors</div>
+<p>Two hotel floors have identical corridors. Standing in one, you can’t tell which floor you’re on, unless you remember which elevator button you pressed. Tool agents face this constantly: the current tool output looks the same in different situations, and only history tells them apart.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/6e96de5c3f0c.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why must return recursion reset between unrelated trajectories?</p></li>
+<li><p>Why must rollout and PPO training use the same action mask?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-agent-may-observe-only-part-of-the-state">2. The agent may observe only part of the state</h3>
+<p>An MDP assumes <span class="math inline">\(s_t\)</span> contains everything needed to predict the future. Tool agents often receive only an observation <span class="math inline">\(o_t\)</span>:</p>
+<ul>
+<li><p>a tool may hide internal state;</p></li>
+<li><p>an API response may omit information;</p></li>
+<li><p>earlier messages may leave the context window;</p></li>
+<li><p>a summary may discard an important constraint.</p></li>
+</ul>
+<p>Two different hidden states can therefore produce the same observation while requiring different actions. This is <strong>observation aliasing</strong>.</p>
+<p>A partially observable process can be written as:</p>
+<p><span class="math display">\[o_t\sim O(o_t\mid s_t)\]</span></p>
+<p>A memoryless policy uses:</p>
+<p><span class="math display">\[a_t\sim\pi_\theta(a_t\mid o_t)\]</span></p>
+<p>A history-aware policy instead uses:</p>
+<p><span class="math display">\[h_t=(o_0,a_0,\ldots,o_t)\]</span></p>
+<p>or a compressed recurrent state:</p>
+<p><span class="math display">\[z_t=f_\theta(z_{t-1},o_t,a_{t-1})\]</span></p>
+<p><span class="math display">\[a_t\sim\pi_\theta(a_t\mid z_t)\]</span></p>
+<p>Think of <span class="math inline">\(z_t\)</span> as a notebook. If two identical-looking situations require different actions, the notebook must contain the missing clue.</p>
+<p>For actor training:</p>
+<p><span class="math display">\[L_\pi=
+-\frac{\sum_{i,t}M_{i,t}
+\log\pi_\theta(a_{i,t}\mid z_{i,t})
+\hat A_{i,t}}
+{\sum_{i,t}M_{i,t}}\]</span></p>
+<p>Detach <span class="math inline">\(\hat A\)</span>, but keep gradients through the recurrent state within the trajectory. Reset recurrent state at episode boundaries.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>observations: <span style="background-color: codeinlinebg"><code> [B, T, D]</code></span>;</p></li>
+<li><p>recurrent outputs: <span style="background-color: codeinlinebg"><code> [B, T, H]</code></span>;</p></li>
+<li><p>action logits: <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span>;</p></li>
+<li><p>actions, advantages and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span>;</p></li>
+<li><p>GRU hidden state: <span style="background-color: codeinlinebg"><code> [layers, B, H]</code></span>.</p></li>
+</ul>
+<p>An LLM’s context acts as explicit memory. Context truncation, incorrect masking or lossy summarization can turn a previously observable task into a partially observable one.</p>
+<p>DPO can prefer successful complete traces over unsuccessful ones, but it still trains from fixed comparisons. It does not collect fresh observations or repair missing environment state through exploration.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: beliefs and memory</div>
+<p>A POMDP adds observations <span class="math inline">\(o\sim O(\cdot|s)\)</span>. The Markov “state” becomes the <strong>belief</strong> <span class="math inline">\(b_t(s)=P(s_t=s\mid o_{1:t},a_{1:t-1})\)</span>, updated by Bayes: <span class="math inline">\(b_{t+1}(s&#39;)\propto O(o_{t+1}|s&#39;)\sum_sP(s&#39;|s,a_t)\,b_t(s)\)</span>. Policies therefore condition on history, via an RNN state or, for LLMs, the context window. <strong>Limit:</strong> a memoryless policy in the corridor above can’t beat 50%, while a policy with memory gets 100%.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Identical observations that need different actions require history.</p></li>
+<li><p>Reset memory only at real boundaries, and test under context truncation.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: why memoryless caps at 50%</div>
+<p>In “hall” the policy must pick L or R with the same probability <span class="math inline">\(q\)</span> in both cases. Success <span class="math inline">\(=\tfrac12q+\tfrac12(1-q)=\tfrac12\)</span> for every <span class="math inline">\(q\)</span>. With memory of the cue: <span class="math inline">\(1\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Truncating context so the cue falls off.</p></li>
+<li><p>Resetting hidden state mid-episode (on a truncation boundary).</p></li>
+<li><p>Not resetting it at a new episode (leaking the previous episode’s memory).</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-solve-an-aliased-observation-with-memory">3. PyTorch exercise — solve an aliased observation with memory</h3>
+<p>At time <span style="background-color: codeinlinebg"><code> 0</code></span>, the agent sees which hidden mode it is in. At time <span style="background-color: codeinlinebg"><code> 1</code></span>, every observation is identical, but the correct action still depends on the earlier cue.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+
+batch_size = 256
+
+def make_batch(size):
+    # TODO 1: Sample hidden mode 0 or 1.
+    hidden_mode = ...
+
+    # The first observation reveals the mode.
+    cue = ...
+
+    # The final observation is identical in both modes.
+    neutral = ...
+
+    # Shape: [B, T=2, D=2]
+    observations = ...
+
+    # Correct final action equals the hidden mode.
+    targets = ...
+
+    return observations, targets
+
+
+# Sees only the current observation.
+memoryless_policy = nn.Linear(
+    in_features=2,
+    out_features=2,
+)
+
+# Sees the complete observation sequence.
+recurrent_encoder = nn.GRU(
+    input_size=2,
+    hidden_size=8,
+    batch_first=True,
+)
+
+recurrent_head = nn.Linear(
+    in_features=8,
+    out_features=2,
+)
+
+memoryless_optimizer = torch.optim.Adam(
+    memoryless_policy.parameters(),
+    lr=0.03,
+)
+
+recurrent_optimizer = torch.optim.Adam(
+    list(recurrent_encoder.parameters())
+    + list(recurrent_head.parameters()),
+    lr=0.03,
+)
+
+for step in range(200):
+    observations, targets = make_batch(
+        batch_size
+    )
+
+    # TODO 2: Memoryless model sees only time 1.
+    memoryless_logits = ...
+
+    # TODO 3: Recurrent model processes both steps
+    # and predicts from the final recurrent state.
+    recurrent_states, final_hidden = ...
+    recurrent_logits = ...
+
+    # TODO 4: Classification losses.
+    memoryless_loss = ...
+    recurrent_loss = ...
+
+    memoryless_optimizer.zero_grad()
+    recurrent_optimizer.zero_grad()
+
+    total_loss = (
+        memoryless_loss + recurrent_loss
+    )
+
+    total_loss.backward()
+
+    memoryless_optimizer.step()
+    recurrent_optimizer.step()
+
+
+# TODO 5: Evaluate both models.
+with torch.no_grad():
+    observations, targets = make_batch(10_000)
+
+    memoryless_predictions = ...
+    recurrent_predictions = ...
+
+    memoryless_accuracy = ...
+    recurrent_accuracy = ...
+
+print(
+    &quot;Memoryless accuracy:&quot;,
+    memoryless_accuracy.item(),
+)
+
+print(
+    &quot;Recurrent accuracy:&quot;,
+    recurrent_accuracy.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Can the memoryless policy substantially exceed 50% accuracy?</p></li>
+<li><p>Should the recurrent model approach 100%?</p></li>
+<li><p>What happens if the GRU hidden state is reset immediately before time <span style="background-color: codeinlinebg"><code> 1</code></span>?</p></li>
+<li><p>Can carrying hidden state between unrelated episodes create misleadingly good results?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.randint(0, 2, (size,))</code></span>.</p></li>
+<li><p>Convert the hidden mode into a two-class one-hot cue.</p></li>
+<li><p>Stack the cue and neutral observation along <span style="background-color: codeinlinebg"><code> dim=1</code></span>.</p></li>
+<li><p>The memoryless policy receives <span style="background-color: codeinlinebg"><code> observations[:, 1]</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> recurrent_states[:, -1]</code></span>.</p></li>
+<li><p>Both losses use <span style="background-color: codeinlinebg"><code> F.cross_entropy</code></span>.</p></li>
+<li><p>Accuracy is the mean of <span style="background-color: codeinlinebg"><code> prediction == target</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Reset memory before the final step:</p>
+<pre class="code python"><code class="language-python">final_states, _ = recurrent_encoder(
+    observations[:, 1:]
+)</code></pre>
+<p>The model now sees only the shared neutral observation and should fall toward chance.</p>
+<p>Next, carry <span style="background-color: codeinlinebg"><code> final_hidden</code></span> into the following batch without resetting it. Information can leak between unrelated prompts, making evaluation depend on batch ordering.</p>
+<p>For variable-length traces, reading <span style="background-color: codeinlinebg"><code> recurrent_states[:, -1]</code></span> may select padding. Select each trajectory’s final valid position using its length or mask.</p>
+<p>Detaching the hidden state between truncated training segments is sometimes necessary for memory control. Detaching at every step blocks long-range credit assignment.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What distinguishes a hidden state from an observation?</p></li>
+<li><p>Why can context-window truncation break an otherwise capable tool agent?</p></li>
+<li><p>Which quantities should be detached in the actor loss?</p></li>
+<li><p>What diagnostics could reveal observation aliasing?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Batch generation:</p>
+<pre class="code python"><code class="language-python">def make_batch(size):
+    hidden_mode = torch.randint(
+        0, 2, (size,)
+    )
+
+    cue = F.one_hot(
+        hidden_mode,
+        num_classes=2,
+    ).to(torch.float32)
+
+    neutral = torch.zeros_like(cue)
+
+    observations = torch.stack(
+        [cue, neutral],
+        dim=1,
+    )
+
+    targets = hidden_mode
+
+    return observations, targets</code></pre>
+<p>Policy forward passes:</p>
+<pre class="code python"><code class="language-python">memoryless_logits = memoryless_policy(
+    observations[:, 1]
+)
+
+recurrent_states, final_hidden = (
+    recurrent_encoder(observations)
+)
+
+recurrent_logits = recurrent_head(
+    recurrent_states[:, -1]
+)</code></pre>
+<p>Losses:</p>
+<pre class="code python"><code class="language-python">memoryless_loss = F.cross_entropy(
+    memoryless_logits,
+    targets,
+)
+
+recurrent_loss = F.cross_entropy(
+    recurrent_logits,
+    targets,
+)</code></pre>
+<p>Evaluation:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    observations, targets = make_batch(10_000)
+
+    memoryless_predictions = (
+        memoryless_policy(
+            observations[:, 1]
+        ).argmax(dim=-1)
+    )
+
+    recurrent_states, _ = (
+        recurrent_encoder(observations)
+    )
+
+    recurrent_predictions = (
+        recurrent_head(
+            recurrent_states[:, -1]
+        ).argmax(dim=-1)
+    )
+
+    memoryless_accuracy = (
+        memoryless_predictions == targets
+    ).to(torch.float32).mean()
+
+    recurrent_accuracy = (
+        recurrent_predictions == targets
+    ).to(torch.float32).mean()</code></pre>
+<p>The final observation is <span style="background-color: codeinlinebg"><code> [0, 0]</code></span> for every example. A memoryless model therefore produces identical logits for both hidden modes and remains near 50%.</p>
+<p>The GRU can retain the initial cue in its hidden state and should approach 100%.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Hidden state describes the environment; the observation contains only the information exposed to the agent.</p></li>
+<li><p>Truncation can remove evidence needed to distinguish states that now look identical.</p></li>
+<li><p>Detach advantages, returns and frozen rollout quantities. Preserve gradients through within-trajectory policy memory.</p></li>
+<li><p>Compare performance with full versus truncated histories, group failures by identical observations, shuffle histories, inspect hidden-state probes and test counterfactual earlier cues.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Otherwise, rewards from one prompt can propagate into another prompt and create fictitious credit.</p></li>
+<li><p>A sampled action must remain valid under the training distribution; mismatched masks can produce undefined log-probabilities and invalid PPO ratios.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> when identical current observations require different actions, the policy needs history. Reset memory at real boundaries, preserve it within trajectories and evaluate explicitly under context truncation.</p>

@@ -1,0 +1,378 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: “no cracks found” after a quick look</div>
+<p>A bridge inspector who glanced for ten seconds and found no cracks hasn’t certified the bridge. “We didn’t detect harm” isn’t “we showed harm is small.” Noninferiority testing makes the claim explicit: the <em>upper bound</em> on harm must sit below a margin you chose in advance.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/c1121bda2be9.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>How does required sample size change when the target MDE is halved?</p></li>
+<li><p>What problem does an underpowered but correctly analyzed experiment have?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="failing-to-detect-harm-does-not-bound-the-harm">2. Failing to detect harm does not bound the harm</h3>
+<p>Suppose an incident rate may increase by at most:</p>
+<p><span class="math display">\[\Delta_{\max}=0.015\]</span></p>
+<p>Define harm as:</p>
+<p><span class="math display">\[d=p_{\text{candidate}}-p_{\text{control}}\]</span></p>
+<p>Positive <span class="math inline">\(d\)</span> is worse.</p>
+<p>A common but invalid rule is:</p>
+<blockquote>
+<p>The candidate was not significantly worse, so it is safe.</p>
+</blockquote>
+<p>A nonsignificant result may simply have a wide confidence interval containing both zero and severe harm.</p>
+<p>Noninferiority asks the correct question:</p>
+<p><span class="math display">\[H_0:d\geq\Delta_{\max}\]</span></p>
+<p><span class="math display">\[H_1:d&lt;\Delta_{\max}\]</span></p>
+<p>With estimated harm <span class="math inline">\(\hat d\)</span> and standard error <span class="math inline">\(SE\)</span>, construct a one-sided upper bound:</p>
+<p><span class="math display">\[U_d
+=
+\hat d+z_{1-\alpha}SE\]</span></p>
+<p>Certify noninferiority only when:</p>
+<p><span class="math display">\[U_d&lt;\Delta_{\max}\]</span></p>
+<p>Three distinct conclusions are possible:</p>
+<ul>
+<li><p><span class="math inline">\(U_d&lt;0\)</span>: evidence the candidate is safer;</p></li>
+<li><p><span class="math inline">\(0\le U_d&lt;\Delta_{\max}\)</span>: possibly worse, but bounded within the accepted margin;</p></li>
+<li><p><span class="math inline">\(U_d\ge\Delta_{\max}\)</span>: insufficient evidence to rule out unacceptable harm.</p></li>
+</ul>
+<p>The margin must be chosen before observing results. It represents a product or safety judgment, not something statistics can select automatically.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>conditions and repeated experiments: <span style="background-color: codeinlinebg"><code> [C, R]</code></span></p></li>
+<li><p>incident counts and rates: <span style="background-color: codeinlinebg"><code> [C, R]</code></span></p></li>
+<li><p>harm estimates, bounds and decisions: <span style="background-color: codeinlinebg"><code> [C, R]</code></span></p></li>
+<li><p>summary rates across sample sizes: <span style="background-color: codeinlinebg"><code> [S, C]</code></span></p></li>
+</ul>
+<p>For rare incidents, the normal approximation used below is instructional. Production analyses may need score, exact, bootstrap or cluster-aware bounds.</p>
+<p>DPO preference improvements do not establish noninferiority for incidents, hallucinations or subgroup regressions. Those require outcome-specific margins and evaluation data.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the noninferiority test</div>
+<p><span class="math inline">\(H_0:\Delta\le-M\)</span> vs <span class="math inline">\(H_1:\Delta&gt;-M\)</span>. Declare noninferior iff the lower confidence bound <span class="math inline">\(\mathrm{LCB}(\Delta)&gt;-M\)</span>. <span class="math inline">\(M\)</span> is a product and safety decision, fixed before the study, and the study must be powered for it (Topic 96). A non-significant difference from 0 says nothing about whether <span class="math inline">\(\Delta&gt;-M\)</span>.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Safety needs a bound on possible harm, not just no significant p-value.</p></li>
+<li><p>Precommit the margin, power for it, and call inconclusive results inconclusive.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the middle case</div>
+<p>Estimate <span class="math inline">\(-0.5\)</span>, 95% CI <span class="math inline">\([-2.5,1.5]\)</span>, margin <span class="math inline">\(M=1\)</span>. The interval includes 0 (no significant harm) <em>and</em> includes <span class="math inline">\(-2.5\)</span> (harm beyond the margin). That’s inconclusive, not safe.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Setting <span class="math inline">\(M\)</span> after seeing the data.</p></li>
+<li><p>Treating “<span class="math inline">\(p&gt;0.05\)</span>” as evidence of safety.</p></li>
+<li><p>Using an underpowered canary for a noninferiority claim.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-distinguish-uncertainty-from-acceptable-harm">3. PyTorch exercise — distinguish uncertainty from acceptable harm</h3>
+<p>Compare three candidates:</p>
+<ul>
+<li><p>acceptable harm: <span style="background-color: codeinlinebg"><code> 0.005</code></span>;</p></li>
+<li><p>boundary harm: <span style="background-color: codeinlinebg"><code> 0.015</code></span>;</p></li>
+<li><p>unacceptable harm: <span style="background-color: codeinlinebg"><code> 0.025</code></span>.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 5_000
+
+control_incident_rate = 0.040
+maximum_acceptable_harm = 0.015
+
+true_harms = torch.tensor([
+    0.005,
+    0.015,
+    0.025,
+])
+
+condition_names = [
+    &quot;Acceptable harm&quot;,
+    &quot;At margin&quot;,
+    &quot;Unacceptable harm&quot;,
+]
+
+sample_sizes_per_arm = [
+    500,
+    5_000,
+]
+
+alpha = 0.05
+
+standard_normal = torch.distributions.Normal(
+    torch.tensor(0.0),
+    torch.tensor(1.0),
+)
+
+one_sided_z = standard_normal.icdf(
+    torch.tensor(1.0 - alpha)
+)
+
+# TODO 1: Candidate rates implied by each harm.
+candidate_incident_rates = ...
+
+mean_estimates = []
+mean_upper_bounds = []
+naive_pass_rates = []
+noninferiority_pass_rates = []
+
+for sample_size in sample_sizes_per_arm:
+    # TODO 2: Simulate incident counts for both arms.
+    control_probabilities = torch.full(
+        (
+            true_harms.numel(),
+            num_repetitions,
+        ),
+        control_incident_rate,
+    )
+
+    candidate_probabilities = ...
+
+    control_counts = ...
+
+    candidate_counts = ...
+
+    control_rates = ...
+    candidate_rates = ...
+
+    # TODO 3: Estimate harm and its standard error.
+    estimated_harms = ...
+
+    standard_errors = ...
+
+    harm_lower_bounds = ...
+    harm_upper_bounds = ...
+
+    # TODO 4: Compare the invalid and valid rules.
+    significantly_worse_than_zero = ...
+
+    naive_no_detected_harm = ...
+
+    passes_noninferiority = ...
+
+    # TODO 5: Store summaries by condition.
+    mean_estimates.append(...)
+
+    mean_upper_bounds.append(...)
+
+    naive_pass_rates.append(...)
+
+    noninferiority_pass_rates.append(...)
+
+mean_estimates = ...
+mean_upper_bounds = ...
+naive_pass_rates = ...
+noninferiority_pass_rates = ...
+
+for index, sample_size in enumerate(
+    sample_sizes_per_arm
+):
+    results = torch.stack([
+        true_harms,
+        mean_estimates[index],
+        mean_upper_bounds[index],
+        naive_pass_rates[index],
+        noninferiority_pass_rates[index],
+    ], dim=1)
+
+    print(
+        &quot;\nSample size per arm:&quot;,
+        sample_size,
+    )
+    print(
+        &quot;Columns: true harm, mean estimate, &quot;
+        &quot;mean UCB, naive pass rate, &quot;
+        &quot;noninferiority pass rate&quot;
+    )
+    print(results)
+
+print(
+    &quot;\nOne-sided critical value:&quot;,
+    one_sided_z.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>With only 500 observations per arm, how often might the unacceptable candidate pass the naive rule?</p></li>
+<li><p>Should the boundary candidate pass noninferiority around 5%, 50% or 95% of the time?</p></li>
+<li><p>Will increasing the sample size automatically make the acceptable candidate look safer than control?</p></li>
+<li><p>Which rule directly answers whether harm is below <span style="background-color: codeinlinebg"><code> 0.015</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Candidate rate is <span style="background-color: codeinlinebg"><code> control_incident_rate + true_harm</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.distributions.Binomial</code></span>.</p></li>
+<li><p>For independent proportions:</p></li>
+</ul>
+<p><span class="math display">\[SE=
+\sqrt{
+\frac{\hat p_c(1-\hat p_c)}{n}
++
+\frac{\hat p_0(1-\hat p_0)}{n}
+}\]</span></p>
+<ul>
+<li><p>“Significantly worse” means the lower bound on harm exceeds zero.</p></li>
+<li><p>The naive rule passes when significant harm was not detected.</p></li>
+<li><p>Noninferiority passes only when the upper bound is below the margin.</p></li>
+<li><p>Stack each list along dimension <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Interpret <span style="background-color: codeinlinebg"><code> p &gt; 0.05</code></span> as proof of equality.</p></li>
+<li><p>Choose the noninferiority margin after seeing the observed harm.</p></li>
+<li><p>Reverse the sign of an incident-rate difference.</p></li>
+<li><p>Use a reward-improvement lower bound where a harm upper bound is required.</p></li>
+<li><p>Ignore user-level clustering when users generate several incidents.</p></li>
+<li><p>Check many safety metrics without multiplicity adjustment.</p></li>
+<li><p>Keep an absolute margin unchanged after rescaling the metric.</p></li>
+<li><p>Repeatedly inspect fixed-horizon bounds and stop at the first pass.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is failing to reject <span class="math inline">\(d=0\)</span> different from establishing <span class="math inline">\(d&lt;\Delta_{\max}\)</span>?</p></li>
+<li><p>Can a candidate be statistically worse than control but still noninferior?</p></li>
+<li><p>What does a failed noninferiority test mean?</p></li>
+<li><p>How should the margin be selected?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Candidate rates:</p>
+<pre class="code python"><code class="language-python">candidate_incident_rates = (
+    control_incident_rate
+    + true_harms
+)</code></pre>
+<p>Simulation:</p>
+<pre class="code python"><code class="language-python">candidate_probabilities = (
+    candidate_incident_rates[:, None]
+    .expand(
+        -1,
+        num_repetitions,
+    )
+)
+
+control_counts = (
+    torch.distributions.Binomial(
+        total_count=sample_size,
+        probs=control_probabilities,
+    ).sample()
+)
+
+candidate_counts = (
+    torch.distributions.Binomial(
+        total_count=sample_size,
+        probs=candidate_probabilities,
+    ).sample()
+)
+
+control_rates = (
+    control_counts / sample_size
+)
+
+candidate_rates = (
+    candidate_counts / sample_size
+)</code></pre>
+<p>Harm estimates and bounds:</p>
+<pre class="code python"><code class="language-python">estimated_harms = (
+    candidate_rates
+    - control_rates
+)
+
+standard_errors = torch.sqrt(
+    candidate_rates
+    * (1.0 - candidate_rates)
+    / sample_size
+    +
+    control_rates
+    * (1.0 - control_rates)
+    / sample_size
+)
+
+harm_lower_bounds = (
+    estimated_harms
+    - one_sided_z * standard_errors
+)
+
+harm_upper_bounds = (
+    estimated_harms
+    + one_sided_z * standard_errors
+)</code></pre>
+<p>Decision rules:</p>
+<pre class="code python"><code class="language-python">significantly_worse_than_zero = (
+    harm_lower_bounds &gt; 0.0
+)
+
+naive_no_detected_harm = (
+    ~significantly_worse_than_zero
+)
+
+passes_noninferiority = (
+    harm_upper_bounds
+    &lt; maximum_acceptable_harm
+)</code></pre>
+<p>Summaries:</p>
+<pre class="code python"><code class="language-python">mean_estimates.append(
+    estimated_harms.mean(dim=1)
+)
+
+mean_upper_bounds.append(
+    harm_upper_bounds.mean(dim=1)
+)
+
+naive_pass_rates.append(
+    naive_no_detected_harm
+    .to(torch.float64)
+    .mean(dim=1)
+)
+
+noninferiority_pass_rates.append(
+    passes_noninferiority
+    .to(torch.float64)
+    .mean(dim=1)
+)</code></pre>
+<p>Stacking:</p>
+<pre class="code python"><code class="language-python">mean_estimates = torch.stack(
+    mean_estimates,
+    dim=0,
+)
+
+mean_upper_bounds = torch.stack(
+    mean_upper_bounds,
+    dim=0,
+)
+
+naive_pass_rates = torch.stack(
+    naive_pass_rates,
+    dim=0,
+)
+
+noninferiority_pass_rates = torch.stack(
+    noninferiority_pass_rates,
+    dim=0,
+)</code></pre>
+<p>With 500 observations per arm, the standard error is large. The candidate with unacceptable <span style="background-color: codeinlinebg"><code> 0.025</code></span> harm may still show no statistically significant harm in roughly 40–50% of experiments. The naive rule would incorrectly call those experiments safe.</p>
+<p>The valid noninferiority rule behaves differently:</p>
+<ul>
+<li><p>true harm <span style="background-color: codeinlinebg"><code> 0.005</code></span>: small samples often remain inconclusive; around 5,000 observations per arm provide roughly 80% power;</p></li>
+<li><p>true harm <span style="background-color: codeinlinebg"><code> 0.015</code></span>: certification occurs near the chosen 5% error rate;</p></li>
+<li><p>true harm <span style="background-color: codeinlinebg"><code> 0.025</code></span>: certification is rare because the effect exceeds the permitted margin.</p></li>
+</ul>
+<p>As sample size grows, the acceptable candidate may become significantly worse than control because its true harm is positive:</p>
+<p><span class="math display">\[d=0.005&gt;0\]</span></p>
+<p>Yet it can simultaneously be noninferior because:</p>
+<p><span class="math display">\[0.005&lt;0.015\]</span></p>
+<p>Those claims are not contradictory. “Exactly no harm” and “no more than acceptable harm” are different hypotheses.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The first test asks whether there is evidence of any harm. Noninferiority asks whether the data rule out harm at or above a specified unacceptable level.</p></li>
+<li><p>Yes. A precise estimate can establish both <span class="math inline">\(d&gt;0\)</span> and <span class="math inline">\(d&lt;\Delta_{\max}\)</span>.</p></li>
+<li><p>It means unacceptable harm has not been ruled out. It does not prove that the candidate is harmful.</p></li>
+<li><p>Choose it before evaluation using domain severity, baseline risk, user impact and deployment trade-offs—not the observed estimate or desired statistical outcome.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Because <span class="math inline">\(n\propto1/\Delta_*^2\)</span>, halving the target effect requires approximately four times the independent sample.</p></li>
+<li><p>It has low probability of detecting meaningful real effects, producing false negatives. Its false-positive rate remains controlled if its analysis and stopping rule are valid.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> safety requires an upper bound on possible harm, not merely the absence of a small p-value. Precommit the acceptable margin, power the study for it, and treat inconclusive evidence as inconclusive.</p>

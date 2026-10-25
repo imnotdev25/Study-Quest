@@ -1,0 +1,640 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can marginalized importance sampling have higher effective sample size than PDIS?</p></li>
+<li><p>When does token-level marginalization provide little benefit for an autoregressive LLM?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="combine-fqe-with-occupancy-ratio-corrections">2. Combine FQE with occupancy-ratio corrections</h3>
+<p>Suppose FQE provides a value model:</p>
+<p><span class="math display">\[\hat V_t(s)
+=
+\underbrace{
+\sum_a\pi(a\mid s)\hat Q_t(s,a)
+}_{\text{modelled target-policy return}}\]</span></p>
+<p>For each logged transition, calculate its TD residual:</p>
+<p><span class="math display">\[\delta_t
+=
+\underbrace{R_t}_{\text{observed reward}}
++
+\underbrace{
+\gamma(1-D_t)\hat V_{t+1}(S_{t+1})
+}_{\text{modelled future return}}
+-
+\underbrace{
+\hat Q_t(S_t,A_t)
+}_{\text{modelled return before transition}}\]</span></p>
+<p>Marginalized doubly robust evaluation corrects these residuals using occupancy ratios:</p>
+<p><span class="math display">\[\hat V_{\mathrm{MDR}}
+=
+\underbrace{
+\frac1N\sum_i\hat V_0(S_0^{(i)})
+}_{\text{FQE baseline}}
++
+\sum_{t=0}^{T-1}
+\underbrace{\gamma^t}_{\text{discount}}
+\frac1N\sum_i
+\underbrace{
+\frac{d_t^\pi(S_t^{(i)},A_t^{(i)})}
+     {d_t^\mu(S_t^{(i)},A_t^{(i)})}
+}_{\text{marginal occupancy correction}}
+\underbrace{\delta_t^{(i)}}_{\text{observed model error}}\]</span></p>
+<p>It has two rescue routes:</p>
+<ul>
+<li><p>Correct occupancy ratios make the residuals repair an incorrect <span class="math inline">\(Q\)</span>-model.</p></li>
+<li><p>A correct <span class="math inline">\(Q\)</span>-model gives:</p></li>
+</ul>
+<p><span class="math display">\[E[\delta_t\mid S_t,A_t]
+=
+\underbrace{0}_{\text{no systematic correction}}\]</span></p>
+<p>even if the ratios are incorrect.</p>
+<p>If both are wrong, the estimator can be confidently biased. Marginalization reduces variance; it does not create missing support.</p>
+<p>For LLM agents, <span class="math inline">\(\hat Q\)</span> must estimate future task return—not merely the current reward-model score. DPO supplies neither this trajectory-value model nor deployment occupancy ratios.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>trajectories: <span style="background-color: codeinlinebg"><code> [R, N, T]</code></span></p></li>
+<li><p><span class="math inline">\(Q\)</span>-values: <span style="background-color: codeinlinebg"><code> [T, S, A]</code></span></p></li>
+<li><p><span class="math inline">\(V\)</span>-values: <span style="background-color: codeinlinebg"><code> [T+1, S]</code></span></p></li>
+<li><p>occupancy ratios: <span style="background-color: codeinlinebg"><code> [T, S, A]</code></span></p></li>
+<li><p>repeated estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-either-the-ratios-or-the-model-may-be-wrong">3. PyTorch exercise — either the ratios or the model may be wrong</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 3_000
+episodes_per_repetition = 300
+horizon = 8
+gamma = 0.90
+
+num_states = 2
+num_actions = 2
+
+behavior_policy = torch.tensor([
+    [0.75, 0.25],
+    [0.75, 0.25],
+])
+
+target_policy = torch.tensor([
+    [0.25, 0.75],
+    [0.25, 0.75],
+])
+
+# High reward probability when the next state is 1.
+reward_probability_table = torch.tensor([
+    [0.10, 0.90],
+    [0.90, 0.10],
+])
+
+bad_reward_model = torch.full(
+    (num_states, num_actions),
+    0.50,
+)
+
+discounts = gamma ** torch.arange(horizon)
+
+
+# Provided from the previous session.
+def exact_occupancy(policy):
+    state_occupancy = torch.zeros(
+        horizon + 1,
+        num_states,
+    )
+
+    state_action_occupancy = torch.zeros(
+        horizon,
+        num_states,
+        num_actions,
+    )
+
+    state_occupancy[0, 0] = 1.0
+
+    for time in range(horizon):
+        state_action_occupancy[time] = (
+            state_occupancy[time, :, None]
+            * policy
+        )
+
+        for state in range(num_states):
+            for action in range(num_actions):
+                next_state = state ^ action
+
+                state_occupancy[
+                    time + 1,
+                    next_state,
+                ] += state_action_occupancy[
+                    time,
+                    state,
+                    action,
+                ]
+
+    return state_action_occupancy
+
+
+behavior_occupancy = exact_occupancy(
+    behavior_policy
+)
+
+target_occupancy = exact_occupancy(
+    target_policy
+)
+
+
+# TODO 1: Build a finite-horizon Q/V model.
+def build_value_model(reward_model):
+    q_values = ...
+
+    v_values = ...
+
+    for time in reversed(range(horizon)):
+        for state in range(num_states):
+            for action in range(num_actions):
+                next_state = ...
+
+                q_values[
+                    time,
+                    state,
+                    action,
+                ] = ...
+
+        v_values[time] = ...
+
+    return q_values, v_values
+
+
+exact_q, exact_v = ...
+bad_q, bad_v = ...
+
+exact_target_value = ...
+
+
+# TODO 2: Generate behavior-policy trajectories.
+states = ...
+actions = ...
+next_states = ...
+rewards = ...
+
+current_states = torch.zeros(
+    num_repetitions,
+    episodes_per_repetition,
+    dtype=torch.long,
+)
+
+for time in range(horizon):
+    states[..., time] = ...
+
+    action_one_probabilities = ...
+
+    sampled_actions = ...
+
+    actions[..., time] = ...
+
+    next_state = ...
+
+    next_states[..., time] = ...
+
+    reward_probabilities = ...
+
+    rewards[..., time] = ...
+
+    current_states = ...
+
+
+# TODO 3: Construct correct and incorrect ratio tables.
+marginal_ratio_table = ...
+
+# Incorrect: corrects actions but ignores state occupancy.
+action_only_ratio_table = ...
+
+time_indices = torch.arange(
+    horizon
+).view(1, 1, horizon)
+
+marginal_weights = ...
+
+action_only_weights = ...
+
+
+# TODO 4: Implement MIS and marginalized DR.
+mis_estimates = ...
+
+
+def marginalized_dr(
+    q_model,
+    v_model,
+    weights,
+):
+    logged_q_values = ...
+
+    next_values = ...
+
+    td_residuals = ...
+
+    corrections = ...
+
+    return ...
+
+
+mdr_exact_model_exact_ratios = ...
+mdr_bad_model_exact_ratios = ...
+
+mdr_exact_model_wrong_ratios = ...
+mdr_bad_model_wrong_ratios = ...
+
+
+# TODO 5: Compare estimators.
+bad_model_only = torch.full_like(
+    mis_estimates,
+    bad_v[0, 0],
+)
+
+all_estimates = torch.stack([
+    mis_estimates,
+    bad_model_only,
+    mdr_exact_model_exact_ratios,
+    mdr_bad_model_exact_ratios,
+    mdr_exact_model_wrong_ratios,
+    mdr_bad_model_wrong_ratios,
+], dim=1)
+
+means = ...
+biases = ...
+standard_deviations = ...
+rmses = ...
+
+results = torch.stack([
+    means,
+    biases,
+    standard_deviations,
+    rmses,
+], dim=1)
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(&quot;Exact target value:&quot;, exact_target_value.item())
+print(&quot;Bad model baseline:&quot;, bad_v[0, 0].item())
+
+print(
+    &quot;\nRows: MIS, model-only bad, &quot;
+    &quot;MDR exact/exact, MDR bad/exact, &quot;
+    &quot;MDR exact/wrong, MDR both-wrong&quot;
+)
+print(&quot;Columns: mean, bias, SD, RMSE&quot;)
+print(results)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the bad model baseline be above or below truth?</p></li>
+<li><p>Can correct occupancy ratios repair the bad model?</p></li>
+<li><p>Can a correct <span class="math inline">\(Q\)</span>-model tolerate action-only ratios?</p></li>
+<li><p>Should MDR with an exact model have lower variance than MIS?</p></li>
+<li><p>What happens when both components are wrong?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>The model recursion is:</p>
+<p><span class="math display">\[\hat Q_t(s,a)
+=
+\underbrace{\hat r(s,a)}_{\text{modelled immediate reward}}
++
+\underbrace{
+\gamma\hat V_{t+1}(s\oplus a)
+}_{\text{modelled future after XOR transition}}\]</span></p>
+<p><span class="math display">\[\hat V_t(s)
+=
+\underbrace{
+\sum_a\pi(a\mid s)\hat Q_t(s,a)
+}_{\text{target-policy expectation}}\]</span></p>
+<ul>
+<li><p>Initialize <span class="math inline">\(V_T=0\)</span>.</p></li>
+<li><p>Sample rewards from <span style="background-color: codeinlinebg"><code> reward_probability_table[state, action]</code></span>.</p></li>
+<li><p>Index time-dependent tensors with <span style="background-color: codeinlinebg"><code> time_indices</code></span>.</p></li>
+<li><p>Add the residual correction to the initial baseline.</p></li>
+<li><p>Do not multiply the initial baseline by an importance weight.</p></li>
+<li><p>In a variable-length batch, multiply the next value by <span style="background-color: codeinlinebg"><code> 1 - done</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Weight rewards instead of TD residuals and still add the baseline.</p></li>
+<li><p>Omit the initial FQE baseline.</p></li>
+<li><p>Use behavior-policy continuation values inside <span class="math inline">\(\hat Q\)</span>.</p></li>
+<li><p>Replace the target-policy expectation with <span style="background-color: codeinlinebg"><code> max</code></span>.</p></li>
+<li><p>Allow gradients through evaluation targets and ratios.</p></li>
+<li><p>Use action ratios while claiming they are occupancy ratios.</p></li>
+<li><p>Hide missing-support cells by clamping their denominators.</p></li>
+<li><p>Treat DPO preference scores as future task-return predictions.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>What are MDR’s two consistency routes?</p></li>
+<li><p>Why can MDR have lower variance than MIS?</p></li>
+<li><p>Why is an exact-model/wrong-ratio result not permission to ignore logging?</p></li>
+<li><p>What does cross-fitting protect against?</p></li>
+<li><p>Can MDR identify outcomes for unsupported target actions?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Value models:</p>
+<pre class="code python"><code class="language-python">def build_value_model(reward_model):
+    q_values = torch.zeros(
+        horizon,
+        num_states,
+        num_actions,
+    )
+
+    v_values = torch.zeros(
+        horizon + 1,
+        num_states,
+    )
+
+    for time in reversed(range(horizon)):
+        for state in range(num_states):
+            for action in range(num_actions):
+                next_state = state ^ action
+
+                q_values[
+                    time,
+                    state,
+                    action,
+                ] = (
+                    reward_model[state, action]
+                    + gamma
+                    * v_values[
+                        time + 1,
+                        next_state,
+                    ]
+                )
+
+        v_values[time] = (
+            target_policy
+            * q_values[time]
+        ).sum(dim=-1)
+
+    return q_values, v_values
+
+
+exact_q, exact_v = build_value_model(
+    reward_probability_table
+)
+
+bad_q, bad_v = build_value_model(
+    bad_reward_model
+)
+
+exact_target_value = exact_v[0, 0]</code></pre>
+<p>Trajectory generation:</p>
+<pre class="code python"><code class="language-python">states = torch.zeros(
+    num_repetitions,
+    episodes_per_repetition,
+    horizon,
+    dtype=torch.long,
+)
+
+actions = torch.zeros_like(states)
+next_states = torch.zeros_like(states)
+
+rewards = torch.zeros(
+    num_repetitions,
+    episodes_per_repetition,
+    horizon,
+)
+
+current_states = torch.zeros(
+    num_repetitions,
+    episodes_per_repetition,
+    dtype=torch.long,
+)
+
+for time in range(horizon):
+    states[..., time] = current_states
+
+    action_one_probabilities = (
+        behavior_policy[
+            current_states,
+            1,
+        ]
+    )
+
+    sampled_actions = (
+        torch.rand(
+            num_repetitions,
+            episodes_per_repetition,
+        )
+        &lt; action_one_probabilities
+    ).to(torch.long)
+
+    actions[..., time] = sampled_actions
+
+    next_state = (
+        current_states ^ sampled_actions
+    )
+
+    next_states[..., time] = next_state
+
+    reward_probabilities = (
+        reward_probability_table[
+            current_states,
+            sampled_actions,
+        ]
+    )
+
+    rewards[..., time] = (
+        torch.rand(
+            num_repetitions,
+            episodes_per_repetition,
+        )
+        &lt; reward_probabilities
+    ).to(torch.float64)
+
+    current_states = next_state</code></pre>
+<p>Ratio tables:</p>
+<pre class="code python"><code class="language-python">marginal_ratio_table = torch.where(
+    behavior_occupancy &gt; 0,
+    target_occupancy
+    / behavior_occupancy.clamp_min(1e-12),
+    torch.zeros_like(behavior_occupancy),
+)
+
+action_only_ratio_table = (
+    target_policy
+    / behavior_policy
+)[None, :, :].expand(
+    horizon,
+    -1,
+    -1,
+)
+
+marginal_weights = marginal_ratio_table[
+    time_indices,
+    states,
+    actions,
+]
+
+action_only_weights = action_only_ratio_table[
+    time_indices,
+    states,
+    actions,
+]</code></pre>
+<p>Estimators:</p>
+<pre class="code python"><code class="language-python">mis_estimates = (
+    discounts
+    * marginal_weights
+    * rewards
+).sum(dim=-1).mean(dim=1)
+
+
+def marginalized_dr(
+    q_model,
+    v_model,
+    weights,
+):
+    logged_q_values = q_model[
+        time_indices,
+        states,
+        actions,
+    ]
+
+    next_time_indices = torch.arange(
+        1,
+        horizon + 1,
+    ).view(1, 1, horizon)
+
+    next_values = v_model[
+        next_time_indices,
+        next_states,
+    ]
+
+    td_residuals = (
+        rewards
+        + gamma * next_values
+        - logged_q_values
+    )
+
+    corrections = (
+        discounts
+        * weights
+        * td_residuals
+    ).sum(dim=-1).mean(dim=1)
+
+    return (
+        v_model[0, 0]
+        + corrections
+    )
+
+
+mdr_exact_model_exact_ratios = marginalized_dr(
+    exact_q,
+    exact_v,
+    marginal_weights,
+)
+
+mdr_bad_model_exact_ratios = marginalized_dr(
+    bad_q,
+    bad_v,
+    marginal_weights,
+)
+
+mdr_exact_model_wrong_ratios = marginalized_dr(
+    exact_q,
+    exact_v,
+    action_only_weights,
+)
+
+mdr_bad_model_wrong_ratios = marginalized_dr(
+    bad_q,
+    bad_v,
+    action_only_weights,
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">means = all_estimates.mean(dim=0)
+
+biases = means - exact_target_value
+
+standard_deviations = all_estimates.std(
+    dim=0,
+    correction=1,
+)
+
+rmses = (
+    (
+        all_estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)</code></pre>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Estimator</strong></th>
+<th style="text-align: left;"><strong>Mean</strong></th>
+<th style="text-align: left;"><strong>Bias</strong></th>
+<th style="text-align: left;"><strong>SD</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Estimator</strong></td>
+<td style="text-align: left;"><strong>Mean</strong></td>
+<td style="text-align: left;"><strong>Bias</strong></td>
+<td style="text-align: left;"><strong>SD</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">MIS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 2.986</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.116</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Bad model only</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 2.848</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.138</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">MDR exact model/exact ratios</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 2.985</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.062</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">MDR bad model/exact ratios</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 2.985</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.081</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">MDR exact model/wrong ratios</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 2.985</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.055</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">MDR both wrong</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 3.212</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> +0.226</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.068</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The both-wrong estimator is especially dangerous: its variance is small, so repeated runs consistently return the wrong answer.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Either the occupancy ratios are correct or the trajectory <span class="math inline">\(Q\)</span>-model is correct.</p></li>
+<li><p>It importance-weights residual surprises rather than full rewards; a useful model removes predictable reward variation.</p></li>
+<li><p>Real <span class="math inline">\(Q\)</span>-models are not exact. Incorrect ratios expose any remaining systematic model error.</p></li>
+<li><p>It prevents nuisance models from fitting the same random reward noise later used to assess their corrections.</p></li>
+<li><p>No. Neither a value model nor a density-ratio model can identify an outcome absent from the logs.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>MIS conditions cumulative history ratios on the current state–action pair, averaging away irrelevant differences between histories that merged.</p></li>
+<li><p>A complete autoregressive prefix nearly identifies its history, leaving few alternative trajectories to average over.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> the strongest offline estimator is not automatically the one with the smallest variance. MDR is reliable when at least one nuisance component is credible—and dangerously precise when both are wrong.</p>

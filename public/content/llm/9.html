@@ -1,0 +1,61 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> The expectation <span class="math inline">\(\mathbb E[g(X)]=\sum_xg(x)p(x)\)</span> or <span class="math inline">\(\int g(x)f(x)dx\)</span> is a probability-weighted average. The <span class="math inline">\(k\)</span>-th moment is <span class="math inline">\(\mathbb E[X^k]\)</span>; the variance <span class="math inline">\(\operatorname{Var}X=\mathbb E[(X-\mathbb EX)^2]\)</span> measures spread, and its square root, the standard deviation, is in the same units as <span class="math inline">\(X\)</span>.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: The rules of expectation and variance</div>
+<p><strong>Step 1.</strong> Linearity: <span class="math inline">\(\mathbb E[aX+bY+c]=a\mathbb EX+b\mathbb EY+c\)</span>, always, even for dependent <span class="math inline">\(X,Y\)</span> (the integral is linear).</p>
+<p><strong>Step 2.</strong> Expand the square: <span class="math inline">\(\operatorname{Var}X=\mathbb E[X^2]-2(\mathbb EX)^2+(\mathbb EX)^2=\mathbb E[X^2]-(\mathbb EX)^2\)</span>.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(\operatorname{Var}(aX+c)=a^2\operatorname{Var}X\)</span>: shifting doesn’t change spread; scaling multiplies it by <span class="math inline">\(a^2\)</span>.</p>
+<p><strong>Step 4.</strong> <span class="math inline">\(\operatorname{Var}(X+Y)=\operatorname{Var}X+\operatorname{Var}Y+2\operatorname{Cov}(X,Y)\)</span>, so variances add for independent variables. Averaging <span class="math inline">\(n\)</span> independent copies divides the variance by <span class="math inline">\(n\)</span>: the reason more samples help.</p>
+</div>
+<ul>
+<li><p><strong>Jensen</strong>: for convex <span class="math inline">\(\phi\)</span>, <span class="math inline">\(\phi(\mathbb EX)\le\mathbb E\phi(X)\)</span> (reverse for concave). <span class="math inline">\(\mathbb E\log X\le\log\mathbb EX\)</span> is why the ELBO is a lower bound, and why <span class="math inline">\(\mathrm{KL}\ge0\)</span>.</p></li>
+<li><p><strong>Markov</strong>: for <span class="math inline">\(X\ge0\)</span>, <span class="math inline">\(P(X\ge t)\le\mathbb EX/t\)</span>. <strong>Chebyshev</strong>: <span class="math inline">\(P(|X-\mu|\ge t)\le\sigma^2/t^2\)</span>. Both hold for any distribution, so they are loose for any particular one (the output compares them with the exponential’s exact tail).</p></li>
+<li><p><strong>Moment generating function</strong> <span class="math inline">\(M(s)=\mathbb E[e^{sX}]\)</span>: <span class="math inline">\(M^{(k)}(0)=\mathbb E[X^k]\)</span>. The MGF of a sum of independent variables is the product of their MGFs.</p></li>
+<li><p><strong>Shape</strong>: skewness <span class="math inline">\(\mathbb E[Z^3]\)</span> (asymmetry) and excess kurtosis <span class="math inline">\(\mathbb E[Z^4]-3\)</span> (heavy tails) of the standardised <span class="math inline">\(Z\)</span>. Laplace and exponential noise have the same mean and variance as a normal but very different tails.</p></li>
+</ul>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Probability: expectation, variance, Jensen, tail bounds, moment generating functions.&quot;&quot;&quot;
+import math
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+N = 2_000_000
+
+X, Y = rng.exponential(2.0, N), rng.uniform(0, 6, N)          # independent; E 2, 3; Var 4, 3
+print(f&quot;[linear] E[3X + 2Y + 1] = {np.mean(3 * X + 2 * Y + 1):.3f}   formula 3*2 + 2*3 + 1 = 13&quot;)
+print(f&quot;[var] Var(X + Y) = {np.var(X + Y):.3f} = Var X + Var Y = {4 + 3}   Var(3X) = {np.var(3 * X):.2f} = 9 Var X = 36&quot;)
+print(f&quot;[var] Var X = E[X^2] - (E X)^2: {np.mean(X**2) - np.mean(X)**2:.3f}&quot;)
+
+G = rng.gamma(3.0, 1.0, N)
+print(f&quot;[jensen] log is concave: E[log G] = {np.mean(np.log(G)):.4f} &lt;= log E[G] = {np.log(np.mean(G)):.4f}&quot;)
+
+# Tail of Exponential(mean 1): exact e^{-t}; Markov 1/t; Chebyshev (one-sided) &lt;= 1/(t-1)^2.
+print(&quot;[tail] t   exact P(X &gt;= t)   Markov 1/t   Chebyshev 1/(t-1)^2&quot;)
+for t in (2, 4, 8):
+    print(f&quot;[tail] {t}   {math.exp(-t):.5f}           {1 / t:.4f}       {1 / (t - 1) ** 2:.4f}&quot;)
+
+# MGF of Poisson(lam): M(s) = exp(lam (e^s - 1)). M&#x27;(0) = E X, M&#x27;&#x27;(0) = E X^2.
+lam, h = 3.0, 1e-4
+M = lambda s: math.exp(lam * (math.exp(s) - 1))
+m1, m2 = (M(h) - M(-h)) / (2 * h), (M(h) - 2 * M(0) + M(-h)) / h**2
+P = rng.poisson(lam, N)
+print(f&quot;[mgf] M&#x27;(0) = {m1:.4f} (E X = {P.mean():.4f})   M&#x27;&#x27;(0) = {m2:.4f} (E X^2 = {np.mean(P.astype(float)**2):.4f})&quot;)
+
+# Skewness and kurtosis distinguish shapes that share a mean and variance.
+for name, s in ((&quot;normal&quot;, rng.normal(0, 1, N)), (&quot;laplace&quot;, rng.laplace(0, 1 / math.sqrt(2), N)),
+                (&quot;exponential-1&quot;, rng.exponential(1, N) - 1)):
+    z = (s - s.mean()) / s.std()
+    print(f&quot;[shape] {name:13s} mean {s.mean():+.3f} var {s.var():.3f} skew {np.mean(z**3):+.3f} excess kurt {np.mean(z**4) - 3:+.3f}&quot;)</code></pre>
+<pre class="code output"><code class="output">[linear] E[3X + 2Y + 1] = 12.997   formula 3*2 + 2*3 + 1 = 13
+[var] Var(X + Y) = 7.004 = Var X + Var Y = 7   Var(3X) = 36.00 = 9 Var X = 36
+[var] Var X = E[X^2] - (E X)^2: 4.000
+[jensen] log is concave: E[log G] = 0.9230 &lt;= log E[G] = 1.0987
+[tail] t   exact P(X &gt;= t)   Markov 1/t   Chebyshev 1/(t-1)^2
+[tail] 2   0.13534           0.5000       1.0000
+[tail] 4   0.01832           0.2500       0.1111
+[tail] 8   0.00034           0.1250       0.0204
+[mgf] M&#x27;(0) = 3.0000 (E X = 3.0000)   M&#x27;&#x27;(0) = 12.0000 (E X^2 = 12.0001)
+[shape] normal        mean +0.001 var 0.999 skew +0.001 excess kurt +0.001
+[shape] laplace       mean +0.000 var 1.001 skew -0.000 excess kurt +2.964
+[shape] exponential-1 mean +0.000 var 0.999 skew +2.000 excess kurt +6.007</code></pre>

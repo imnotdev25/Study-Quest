@@ -1,0 +1,295 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: hiking downhill in thick fog</div>
+<p>In fog, you can see the slope right at your feet. That slope is real, but it only tells you about the next few metres. Take one giant leap in that direction and you might go off a cliff. A trust region says: “trust the local slope only within a small radius, take a step, then look again.”</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/58ca43a8c781.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The local model says “bigger step = better forever.” The truth peaks and falls. Steps are trustworthy only near the current <span class="math inline">\(\theta\)</span> (green).</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Write the importance ratio between a new policy and the behaviour policy.</p></li>
+<li><p>What does low effective sample size indicate?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="why-a-correct-gradient-can-still-cause-damage">2. Why a correct gradient can still cause damage</h3>
+<p>A policy gradient gives a locally useful direction. It does not say how far to move.</p>
+<p>Imagine adjusting a recipe after tasting one spoonful. The feedback may correctly say “add salt,” but pouring in the entire container is still disastrous.</p>
+<p>Using data collected by an old policy <span class="math inline">\(\pi_{\text{old}}\)</span>, the surrogate objective is:</p>
+<p><span class="math display">\[L(\theta)
+=
+\mathbb E_t
+\left[
+\rho_t(\theta)\hat A_t
+\right]\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[\rho_t(\theta)
+=
+\frac{
+\pi_\theta(A_t\mid S_t)
+}{
+\pi_{\text{old}}(A_t\mid S_t)
+}\]</span></p>
+<p>This objective is reliable only near the policy that generated the data. After a large update:</p>
+<ul>
+<li><p>stored advantages may no longer describe the new policy well;</p></li>
+<li><p>importance ratios can become extreme;</p></li>
+<li><p>useful behaviours can disappear abruptly;</p></li>
+<li><p>the same rollout batch becomes increasingly off-policy.</p></li>
+</ul>
+<p>A <strong>trust region</strong> limits the update:</p>
+<p><span class="math display">\[\max_\theta
+\quad
+\mathbb E_t[\rho_t(\theta)\hat A_t]\]</span></p>
+<p>subject to:</p>
+<p><span class="math display">\[\mathbb E_t
+\left[
+D_{\mathrm{KL}}
+\left(
+\pi_{\text{old}}(\cdot\mid S_t)
+\;\|\;
+\pi_\theta(\cdot\mid S_t)
+\right)
+\right]
+\leq \delta\]</span></p>
+<p>The KL divergence measures how much the complete action distribution changed:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(p\|q)
+=
+\sum_a p(a)\log\frac{p(a)}{q(a)}\]</span></p>
+<p>Important limits:</p>
+<ul>
+<li><p>KL is asymmetric: <span class="math inline">\(D_{\mathrm{KL}}(p\|q)\neq D_{\mathrm{KL}}(q\|p)\)</span>.</p></li>
+<li><p>Small average KL does not guarantee every state changed only slightly.</p></li>
+<li><p>A trust region controls update size; it does not guarantee good rewards, advantages or data.</p></li>
+</ul>
+<p>TRPO approximately solves this constrained problem using curvature information and a line search. Today’s toy uses an ordinary gradient plus backtracking to isolate the trust-region idea.</p>
+<p>For a batch:</p>
+<ul>
+<li><p>sampled actions and old log-probabilities: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>advantages and ratios: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>action distributions: <span style="background-color: codeinlinebg"><code> [actions]</code></span></p></li>
+<li><p>surrogate objective and KL: scalars</p></li>
+</ul>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>A language model can forget formatting, reasoning or safety behaviours after an overly large reward-driven update. Monitoring KL from the rollout policy is therefore important.</p>
+<p>This “old-policy KL” controls optimization stability. It is related to, but not identical to, RLHF’s KL penalty against a fixed SFT reference model.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: TRPO and the natural gradient</div>
+<p>TRPO solves <span class="math display">\[\max_\theta\ \mathbb E_{s,a\sim\pi_{\text{old}}}\Big[\tfrac{\pi_\theta(a|s)}{\pi_{\text{old}}(a|s)}\hat A(s,a)\Big]
+\quad\text{s.t.}\quad \mathbb E_s\big[\mathrm{KL}(\pi_{\text{old}}\|\pi_\theta)\big]\le\delta .\]</span> <strong>Second-order view:</strong> near <span class="math inline">\(\theta_{\text{old}}\)</span>, <span class="math inline">\(\mathrm{KL}\approx\tfrac12\Delta^\top F\Delta\)</span>, where <span class="math inline">\(F\)</span> is the Fisher information matrix. Maximizing <span class="math inline">\(g^\top\Delta\)</span> under that quadratic constraint (with a Lagrangian) gives <span class="math display">\[\Delta^*=\sqrt{\frac{2\delta}{g^\top F^{-1}g}}\;F^{-1}g .\]</span> This is the <strong>natural gradient</strong>: it measures step size in “how much the policy’s behaviour changes,” not in raw parameter distance. A backtracking line search then shrinks the step until KL and improvement both check out (your exercise).</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>A gradient gives a direction. A trust region decides how far to believe it.</p></li>
+<li><p>Measure steps in KL (behaviour), not in parameter units.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: backtracking</div>
+<p>KL limit <span class="math inline">\(\delta=0.01\)</span>. The full natural step gives KL <span class="math inline">\(0.04\)</span>. KL grows roughly with the square of step size, so halving gives about <span class="math inline">\(0.01\)</span>, which is accepted. If the surrogate had dropped at the half step, halve again (KL <span class="math inline">\(\approx0.0025\)</span>) and recheck.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Measuring KL in the wrong direction or on a different batch.</p></li>
+<li><p>Accepting a step that satisfies KL but makes the surrogate worse.</p></li>
+<li><p>Recomputing advantages between line-search tries.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Trust-region step with backtracking line search</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> current <span class="math inline">\(\theta_{\text{old}}\)</span>, proposed step <span class="math inline">\(\Delta\)</span> (e.g. natural gradient), KL limit <span class="math inline">\(\delta\)</span>, shrink factor <span class="math inline">\(c\in(0,1)\)</span>, max tries <span class="math inline">\(J\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(j=0,1,\dots,J\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\theta\gets\theta_{\text{old}}+c^j\Delta\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(\overline{\mathrm{KL}}(\pi_{\theta_{\text{old}}}\|\pi_\theta)\le\delta\)</span> <strong>and</strong> surrogate <span class="math inline">\(L(\theta)&gt;L(\theta_{\text{old}})\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> <span class="math inline">\(\theta\)</span> <em>▷ accept the largest safe step</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\theta_{\text{old}}\)</span> <em>▷ no safe improving step found</em></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-backtrack-until-kl-is-safe">3. PyTorch exercise — backtrack until KL is safe</h3>
+<p>We collect one batch from a uniform old policy. Action <span style="background-color: codeinlinebg"><code> 2</code></span> is best, but we will reject any update whose KL exceeds the trust-region budget.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical, kl_divergence
+
+torch.manual_seed(7)
+
+batch_size = 1024
+max_kl = 0.01
+
+reward_means = torch.tensor([
+    -1.0, 0.0, 2.0
+])
+
+old_logits = torch.zeros(3)
+old_policy = Categorical(logits=old_logits)
+
+# Rollout data must remain fixed during this update.
+actions = old_policy.sample((batch_size,))
+rewards = (
+    reward_means[actions]
+    + 0.5 * torch.randn(batch_size)
+)
+
+old_log_probs = old_policy.log_prob(actions).detach()
+
+# Simple state-independent baseline.
+advantages = (
+    rewards - rewards.mean()
+).detach()
+
+new_logits = torch.nn.Parameter(old_logits.clone())
+
+
+def surrogate(logits):
+    policy = Categorical(logits=logits)
+
+    # TODO 1: New-to-old probability ratios.
+    ratios = ...
+
+    # TODO 2: Importance-weighted advantage objective.
+    return ...
+
+
+# TODO 3: Find the local gradient direction that increases the surrogate.
+objective = surrogate(new_logits)
+loss = ...
+loss.backward()
+ascent_direction = ...
+
+initial_objective = objective.detach()
+initial_logits = new_logits.detach().clone()
+
+# First inspect an intentionally aggressive update.
+aggressive_logits = initial_logits + 10.0 * ascent_direction
+aggressive_policy = Categorical(logits=aggressive_logits)
+
+# TODO 4: Exact categorical KL: old policy || aggressive policy.
+aggressive_kl = ...
+
+# Backtracking line search.
+step_size = 10.0
+accepted = False
+
+for attempt in range(12):
+    candidate_logits = (
+        initial_logits
+        + step_size * ascent_direction
+    )
+    candidate_policy = Categorical(logits=candidate_logits)
+
+    # TODO 5: Candidate KL and surrogate objective.
+    candidate_kl = ...
+    candidate_objective = ...
+
+    if (
+        candidate_kl &lt;= max_kl
+        and candidate_objective &gt;= initial_objective
+    ):
+        with torch.no_grad():
+            new_logits.copy_(candidate_logits)
+
+        accepted = True
+        break
+
+    # TODO 6: Shrink the proposed update.
+    step_size = ...
+
+print(&quot;Accepted:&quot;, accepted)
+print(&quot;Backtracking attempts:&quot;, attempt + 1)
+print(&quot;Accepted step size:&quot;, step_size)
+print(&quot;Old probabilities:&quot;, old_policy.probs)
+print(
+    &quot;New probabilities:&quot;,
+    new_logits.detach().softmax(dim=0),
+)
+print(&quot;Aggressive KL:&quot;, aggressive_kl)
+print(&quot;Accepted KL:&quot;, candidate_kl)
+print(&quot;Old surrogate:&quot;, initial_objective)
+print(&quot;New surrogate:&quot;, candidate_objective)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action’s probability should increase?</p></li>
+<li><p>Is the intentionally aggressive update likely to satisfy <span style="background-color: codeinlinebg"><code> max_kl=0.01</code></span>?</p></li>
+<li><p>Should the accepted surrogate be below its initial value?</p></li>
+<li><p>Why are <span style="background-color: codeinlinebg"><code> old_log_probs</code></span> detached?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Ratio:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">(new_log_prob - old_log_prob).exp()</code></pre>
+<ul>
+<li><p>We maximize the surrogate but PyTorch minimizes losses.</p></li>
+<li><p>Gradient-ascent direction is the negative loss gradient.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> kl_divergence(old_policy, candidate_policy)</code></span> returns a scalar here.</p></li>
+<li><p>Backtracking commonly multiplies the step size by <span style="background-color: codeinlinebg"><code> 0.5</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Reverse the KL arguments:</p>
+<pre class="code python"><code class="language-python">kl_divergence(candidate_policy, old_policy)</code></pre>
+<p>The value may differ because KL is asymmetric. A consistent implementation must use the same direction used to define and tune its constraint.</p>
+<p>Then remove the improvement check and accept based only on KL. A small update can still point in a harmful direction; “nearby” does not mean “better.”</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does a rollout batch become less trustworthy after a large policy update?</p></li>
+<li><p>Does a small KL prove that expected return improved?</p></li>
+<li><p>Why inspect both KL and the surrogate objective during line search?</p></li>
+<li><p>What problem will PPO’s clipping approximately address?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Importance ratios and surrogate:</p>
+<pre class="code python"><code class="language-python">def surrogate(logits):
+    policy = Categorical(logits=logits)
+
+    ratios = (
+        policy.log_prob(actions)
+        - old_log_probs
+    ).exp()
+
+    return (
+        ratios * advantages
+    ).mean()</code></pre>
+<p>Gradient direction:</p>
+<pre class="code python"><code class="language-python">objective = surrogate(new_logits)
+loss = -objective
+
+loss.backward()
+
+ascent_direction = -new_logits.grad.detach()</code></pre>
+<p>Aggressive KL:</p>
+<pre class="code python"><code class="language-python">aggressive_kl = kl_divergence(
+    old_policy,
+    aggressive_policy,
+)</code></pre>
+<p>Candidate measurements:</p>
+<pre class="code python"><code class="language-python">candidate_kl = kl_divergence(
+    old_policy,
+    candidate_policy,
+)
+
+candidate_objective = surrogate(
+    candidate_logits
+).detach()</code></pre>
+<p>Backtracking:</p>
+<pre class="code python"><code class="language-python">step_size = step_size * 0.5</code></pre>
+<p>The accepted policy should increase the probability of action <span style="background-color: codeinlinebg"><code> 2</code></span>, but only modestly because the KL budget is small.</p>
+<p>The initial surrogate is approximately zero:</p>
+<p><span class="math display">\[\frac1B\sum_t\hat A_t\approx0\]</span></p>
+<p>A valid accepted candidate should have:</p>
+<pre class="code text"><code class="language-plaintext">candidate KL &lt;= 0.01
+candidate surrogate &gt;= initial surrogate</code></pre>
+<p>The aggressive candidate will generally have a much larger KL and be rejected. Exact probabilities depend on sampled rewards, but the fixed seed makes the run reproducible.</p>
+<p>This toy performs line search along an ordinary gradient. TRPO instead scales directions using policy curvature because an equal Euclidean change in parameters need not produce an equal change in action probabilities.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The stored actions and advantages describe <span class="math inline">\(\pi_{\text{old}}\)</span>; after a large change, they poorly represent the new policy’s trajectories.</p></li>
+<li><p>No. It only says the policy stayed nearby.</p></li>
+<li><p>KL checks update size, while the surrogate checks whether the sampled local objective improved.</p></li>
+<li><p>It limits how much extreme probability ratios can influence a policy update, avoiding TRPO’s more expensive constrained optimization.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p><span class="math inline">\(\rho_t=\exp(\log\pi_\theta(A_t\mid S_t)-\log\pi_{\text{old}}(A_t\mid S_t))\)</span>.</p></li>
+<li><p>A small number of heavily weighted samples dominate the estimate.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> the gradient suggests a direction; a trust region decides how far that suggestion remains believable. This is the bridge from importance ratios to PPO.</p>

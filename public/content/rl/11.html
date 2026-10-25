@@ -1,0 +1,319 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: grading your own exam while you write it</div>
+<p>Imagine an exam where the answer key changes every time you change an answer. You’d chase your own tail forever. A target network freezes the answer key for a while: study against it, then update the key, then study again. It’s like chasing a shadow that only moves every few minutes instead of every time you move.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/23dc881d2590.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What two problems does experience replay reduce?</p></li>
+<li><p>Why can a detached Q-learning target still change between optimizer steps?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-moving-target-problem">2. The moving-target problem</h3>
+<p>Suppose a student writes an answer while the answer key is being rewritten after every sentence. Even if gradients do not flow into the key, the destination keeps moving.</p>
+<p>Using one network for both sides creates this target:</p>
+<p><span class="math display">\[Y_t=
+R_{t+1}
++\gamma(1-D_t)
+\max_{a&#39;}Q_\theta(S_{t+1},a&#39;)\]</span></p>
+<p>An SGD update changes <span class="math inline">\(Q_\theta(S_t,A_t)\)</span>, but also changes the network used to calculate future targets.</p>
+<p>DQN maintains two networks:</p>
+<ul>
+<li><p><strong>Online network</strong> <span class="math inline">\(Q_\theta\)</span>: trained every optimizer step.</p></li>
+<li><p><strong>Target network</strong> <span class="math inline">\(Q_{\bar\theta}\)</span>: held fixed temporarily.</p></li>
+</ul>
+<p>The target becomes:</p>
+<p><span class="math display">\[Y_t=
+R_{t+1}
++\gamma(1-D_t)
+\max_{a&#39;}Q_{\bar\theta}(S_{t+1},a&#39;)\]</span></p>
+<p>The loss is:</p>
+<p><span class="math display">\[L(\theta)=
+\frac1B\sum_i
+\operatorname{Huber}
+\left(
+Q_\theta(S_i,A_i)-Y_i
+\right)\]</span></p>
+<p>Notice the separation:</p>
+<ul>
+<li><p>gradients update <span class="math inline">\(\theta\)</span>;</p></li>
+<li><p>no gradients update <span class="math inline">\(\bar\theta\)</span>;</p></li>
+<li><p>periodically, <span class="math inline">\(\theta\)</span> is copied into <span class="math inline">\(\bar\theta\)</span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="hard-and-soft-updates">Hard and soft updates</h3>
+<p>A hard update every <span class="math inline">\(C\)</span> steps is:</p>
+<p><span class="math display">\[\bar\theta\leftarrow\theta\]</span></p>
+<p>A soft update makes a small change every step:</p>
+<p><span class="math display">\[\bar\theta
+\leftarrow
+(1-\tau)\bar\theta+\tau\theta\]</span></p>
+<p>For example, <span class="math inline">\(\tau=0.005\)</span> moves the target network 0.5% toward the online network.</p>
+<p>There is a trade-off:</p>
+<ul>
+<li><p>update too frequently: targets move rapidly;</p></li>
+<li><p>update too slowly: targets become stale.</p></li>
+</ul>
+<h3 class="unnumbered" id="what-now-makes-this-dqn">What now makes this DQN?</h3>
+<p>The core recipe is:</p>
+<ol>
+<li><p>neural Q-function;</p></li>
+<li><p>replay buffer;</p></li>
+<li><p>detached bootstrapped targets;</p></li>
+<li><p>separate target network;</p></li>
+<li><p>exploratory behaviour policy.</p></li>
+</ol>
+<p>Together, these form the basic DQN training structure.</p>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>Target networks are common in value-based deep RL, but they are not the same thing as the frozen reference model used in RLHF. A DQN target network supplies bootstrapped value targets; an RLHF reference model usually constrains policy drift through a KL penalty.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: hard copies, Polyak averaging, and the full loss</div>
+<p><strong>Hard update:</strong> <span class="math inline">\(\theta^-\leftarrow\theta\)</span> every <span class="math inline">\(C\)</span> steps. <strong>Soft (Polyak) update:</strong> <span class="math inline">\(\theta^-\leftarrow\tau\theta+(1-\tau)\theta^-\)</span> every step. The target lags by roughly <span class="math inline">\(1/\tau\)</span> steps, so <span class="math inline">\(\tau=0.005\)</span> is about a 200-step lag.</p>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/7725cfd71dfa.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Stylized picture: a hard target jumps in steps, while a Polyak target follows smoothly with a lag.</em></p>
+</div>
+<p><strong>DQN loss:</strong> <span class="math inline">\(\mathcal L=\mathbb E_{\mathcal D}\big[\ell_{\text{Huber}}\big(y-Q_\theta(s,a)\big)\big]\)</span>. The <span class="math inline">\((1-d)\)</span> factor zeroes the bootstrap at true terminal states, and Huber loss limits the gradient size on big TD errors.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Replay stabilizes the inputs, and the target network stabilizes the labels.</p></li>
+<li><p>Copying rarely makes learning stable but slow. Copying often makes it fast but wobbly.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: three targets for one transition</div>
+<p><span class="math inline">\(r=1\)</span>, <span class="math inline">\(\gamma=0.9\)</span>. Target net at <span class="math inline">\(s&#39;\)</span>: <span class="math inline">\((2.0,2.8,1.9)\)</span>. Online net at <span class="math inline">\(s&#39;\)</span>: <span class="math inline">\((1.0,0.5,3.0)\)</span>.</p>
+<ul>
+<li><p>DQN: <span class="math inline">\(1+0.9\cdot2.8=3.52\)</span>.</p></li>
+<li><p>Double DQN (online picks <span class="math inline">\(a_3\)</span>, target scores it): <span class="math inline">\(1+0.9\cdot1.9=2.71\)</span>.</p></li>
+<li><p>If <span class="math inline">\(d=1\)</span>: target <span class="math inline">\(=1\)</span>, whatever the networks say.</p></li>
+</ul>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Computing targets with the online network (no stabilization).</p></li>
+<li><p>Forgetting <code>torch.no_grad()</code> around the target computation.</p></li>
+<li><p>Copying <span class="math inline">\(\theta^-\gets\theta\)</span> every step, which removes the point of having a target.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Deep Q-Network (DQN)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> network <span class="math inline">\(Q_\theta\)</span>, copy period <span class="math inline">\(C\)</span>, replay buffer <span class="math inline">\(\mathcal D\)</span>, <span class="math inline">\(\epsilon\)</span> schedule</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\theta^-\gets\theta\)</span> <em>▷ target network</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t=1,2,\dots\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">act <span class="math inline">\(\epsilon_t\)</span>-greedily with <span class="math inline">\(Q_\theta\)</span>; store <span class="math inline">\((s,a,r,s&#39;,d)\)</span> in <span class="math inline">\(\mathcal D\)</span></div>
+<div class="algo-line" style="--d:1">sample a minibatch from <span class="math inline">\(\mathcal D\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(y_j\gets r_j+\gamma(1-d_j)\max_{a&#39;}Q_{\theta^-}(s&#39;_j,a&#39;)\)</span> <em>▷ labels from the frozen network</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\theta\gets\theta-\eta\nabla_\theta\frac1B\sum_j\operatorname{Huber}\big(y_j-Q_\theta(s_j,a_j)\big)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(t\bmod C=0\)</span> <strong>then</strong> <span class="math inline">\(\theta^-\gets\theta\)</span> <em>▷ or Polyak: <span class="math inline">\(\theta^-\gets\tau\theta+(1-\tau)\theta^-\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-train-with-a-frozen-target-network">3. PyTorch exercise — train with a frozen target network</h3>
+<p>This replay dataset contains every possible nonterminal transition in a four-state line world:</p>
+<pre class="code python"><code class="language-python">import copy
+import random
+
+import torch
+from torch import nn
+
+random.seed(7)
+torch.manual_seed(7)
+
+num_states = 4
+num_actions = 2
+gamma = 0.95
+batch_size = 16
+target_update_every = 20
+
+# (state, action, reward, next_state, done)
+replay = [
+    (0, 0, -0.01, 0, False),
+    (0, 1, -0.01, 1, False),
+    (1, 0, -0.01, 0, False),
+    (1, 1, -0.01, 2, False),
+    (2, 0, -0.01, 1, False),
+    (2, 1,  1.00, 3, True),
+]
+
+
+def encode(states):
+    return torch.tensor(
+        states, dtype=torch.float32
+    ).unsqueeze(1) / (num_states - 1)
+
+
+online_net = nn.Sequential(
+    nn.Linear(1, 32),
+    nn.ReLU(),
+    nn.Linear(32, num_actions),
+)
+
+# TODO 1:
+# Create an independent target network with identical initial weights.
+target_net = ...
+
+# Target parameters should not be optimized.
+target_net.requires_grad_(False)
+
+optimizer = torch.optim.Adam(
+    online_net.parameters(),
+    lr=3e-3,
+)
+
+losses = []
+drifts_before_sync = []
+
+for training_step in range(300):
+    # Sampling with replacement permits B &gt; len(replay).
+    batch = random.choices(replay, k=batch_size)
+    states, actions, rewards, next_states, dones = zip(*batch)
+
+    states = encode(states)              # [B, 1]
+    next_states = encode(next_states)    # [B, 1]
+    actions = torch.tensor(actions).unsqueeze(1)  # [B, 1]
+    rewards = torch.tensor(
+        rewards, dtype=torch.float32
+    ).unsqueeze(1)                       # [B, 1]
+    dones = torch.tensor(
+        dones, dtype=torch.float32
+    ).unsqueeze(1)                       # [B, 1]
+
+    # TODO 2: Online network predicts Q(s, selected action).
+    predictions = ...
+
+    with torch.no_grad():
+        # TODO 3:
+        # Future values must come from the target network.
+        best_next_q = ...
+
+        targets = (
+            rewards
+            + gamma * (1.0 - dones) * best_next_q
+        )
+
+    assert predictions.shape == targets.shape == (batch_size, 1)
+
+    loss = nn.functional.smooth_l1_loss(
+        predictions,
+        targets,
+    )
+
+    optimizer.zero_grad()
+    loss.backward()
+    nn.utils.clip_grad_norm_(online_net.parameters(), 5.0)
+    optimizer.step()
+
+    losses.append(loss.item())
+
+    if (training_step + 1) % target_update_every == 0:
+        # TODO 4:
+        # Measure the largest online-target parameter difference.
+        drift = ...
+
+        drifts_before_sync.append(drift)
+
+        # TODO 5: Hard target-network update.
+        ...
+
+
+with torch.no_grad():
+    all_states = encode(range(num_states))
+    learned_q = online_net(all_states)
+
+print(&quot;Learned Q:\n&quot;, learned_q)
+print(&quot;Greedy actions:&quot;, learned_q.argmax(dim=1))
+print(&quot;Last five pre-sync drifts:&quot;, drifts_before_sync[-5:])
+print(&quot;Final mean loss:&quot;, sum(losses[-50:]) / 50)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action should become greedy in states <span style="background-color: codeinlinebg"><code> 0</code></span>, <span style="background-color: codeinlinebg"><code> 1</code></span>, and <span style="background-color: codeinlinebg"><code> 2</code></span>?</p></li>
+<li><p>Should parameter drift be zero immediately before each synchronization?</p></li>
+<li><p>Which network should the optimizer contain?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Independent copy: <span style="background-color: codeinlinebg"><code> copy.deepcopy(online_net)</code></span></p></li>
+<li><p>Prediction: online output followed by <span style="background-color: codeinlinebg"><code> gather</code></span></p></li>
+<li><p>Target: <span style="background-color: codeinlinebg"><code> target_net(next_states)</code></span></p></li>
+<li><p>Parameter drift can be measured with paired <span style="background-color: codeinlinebg"><code> named_parameters()</code></span> or <span style="background-color: codeinlinebg"><code> parameters()</code></span>.</p></li>
+<li><p>Hard synchronization: <span style="background-color: codeinlinebg"><code> target_net.load_state_dict(...)</code></span></p></li>
+<li><p>Do not reassign <span style="background-color: codeinlinebg"><code> target_net = online_net</code></span>; that would make both names reference the same object.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Replace:</p>
+<pre class="code python"><code class="language-python">target_net = copy.deepcopy(online_net)</code></pre>
+<p>with:</p>
+<pre class="code python"><code class="language-python">target_net = online_net</code></pre>
+<p>Now both variables point to the same module. Every optimizer update changes both “networks,” so there is no fixed target.</p>
+<p>A quick identity check catches this:</p>
+<pre class="code python"><code class="language-python">assert online_net is not target_net</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>How is detaching a target different from using a target network?</p></li>
+<li><p>Why should the optimizer receive only online-network parameters?</p></li>
+<li><p>What happens if the target network is never synchronized?</p></li>
+<li><p>Does a low training loss alone prove that the greedy policy is good?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">target_net = copy.deepcopy(online_net)
+target_net.requires_grad_(False)</code></pre>
+<p>Inside the training loop:</p>
+<pre class="code python"><code class="language-python">predictions = online_net(states).gather(
+    dim=1,
+    index=actions,
+)
+
+with torch.no_grad():
+    best_next_q = (
+        target_net(next_states)
+        .max(dim=1, keepdim=True)
+        .values
+    )
+
+    targets = (
+        rewards
+        + gamma * (1.0 - dones) * best_next_q
+    )</code></pre>
+<p>Measure drift and synchronize:</p>
+<pre class="code python"><code class="language-python">drift = max(
+    (online_param - target_param).abs().max().item()
+    for online_param, target_param
+    in zip(online_net.parameters(), target_net.parameters())
+)
+
+drifts_before_sync.append(drift)
+
+target_net.load_state_dict(
+    online_net.state_dict()
+)</code></pre>
+<p>The expected greedy actions are:</p>
+<pre class="code text"><code class="language-plaintext">state 0: right
+state 1: right
+state 2: right</code></pre>
+<p>Parameter drift should normally be positive immediately before synchronization because the online network has received optimizer updates while the target network remained fixed. Immediately after copying, corresponding parameters should match.</p>
+<p>You can verify this with:</p>
+<pre class="code python"><code class="language-python">post_sync_drift = max(
+    (p - tp).abs().max().item()
+    for p, tp in zip(
+        online_net.parameters(),
+        target_net.parameters(),
+    )
+)
+
+assert post_sync_drift == 0.0</code></pre>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Detaching blocks gradients through one target calculation; a target network also keeps the numerical target function unchanged across multiple updates.</p></li>
+<li><p>Only the online network minimizes the loss. Target parameters are updated by copying, not gradient descent.</p></li>
+<li><p>Its targets eventually become severely outdated, preventing newer value information from propagating properly.</p></li>
+<li><p>No. The network may fit biased targets or an unrepresentative replay distribution; evaluate episode return and greedy behaviour too.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Replay reduces sequential sample correlation and improves sample efficiency by reusing transitions.</p></li>
+<li><p>Detachment blocks gradients but does not freeze the online network’s parameters between optimizer steps.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> replay stabilizes the data; the target network stabilizes the labels. Basic DQN needs both.</p>

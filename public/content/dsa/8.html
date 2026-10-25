@@ -1,0 +1,176 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Weighted shortest paths (Dijkstra, Bellman–Ford, Floyd–Warshall, A*), minimum spanning trees (Kruskal, Prim), maximum flow and minimum cut, bipartite matching, and the Hungarian algorithm, with the proofs that make each correct and the conditions under which each one fails.</p>
+</div>
+<h1 id="choosing-a-shortest-path-algorithm">Choosing a Shortest-Path Algorithm</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Graph</th>
+<th style="text-align: left;">Algorithm</th>
+<th style="text-align: left;">Time</th>
+<th style="text-align: left;">Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Unweighted</td>
+<td style="text-align: left;">BFS</td>
+<td style="text-align: left;"><span class="math inline">\(O(V+E)\)</span></td>
+<td style="text-align: left;">Chapter 8</td>
+</tr>
+<tr>
+<td style="text-align: left;">Weights 0/1</td>
+<td style="text-align: left;">0-1 BFS (deque)</td>
+<td style="text-align: left;"><span class="math inline">\(O(V+E)\)</span></td>
+<td style="text-align: left;"></td>
+</tr>
+<tr>
+<td style="text-align: left;">Non-negative weights</td>
+<td style="text-align: left;">Dijkstra (binary heap)</td>
+<td style="text-align: left;"><span class="math inline">\(O((V+E)\log V)\)</span></td>
+<td style="text-align: left;">the default</td>
+</tr>
+<tr>
+<td style="text-align: left;">Negative weights, no negative cycles</td>
+<td style="text-align: left;">Bellman–Ford</td>
+<td style="text-align: left;"><span class="math inline">\(O(VE)\)</span></td>
+<td style="text-align: left;">detects negative cycles</td>
+</tr>
+<tr>
+<td style="text-align: left;">DAG (any weights)</td>
+<td style="text-align: left;">DP in topological order</td>
+<td style="text-align: left;"><span class="math inline">\(O(V+E)\)</span></td>
+<td style="text-align: left;">also longest path</td>
+</tr>
+<tr>
+<td style="text-align: left;">All pairs, small <span class="math inline">\(V\)</span></td>
+<td style="text-align: left;">Floyd–Warshall</td>
+<td style="text-align: left;"><span class="math inline">\(O(V^3)\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(V \le\)</span> a few hundred</td>
+</tr>
+<tr>
+<td style="text-align: left;">Known goal, good heuristic</td>
+<td style="text-align: left;">A*</td>
+<td style="text-align: left;">depends on heuristic</td>
+<td style="text-align: left;">maps, games, planning</td>
+</tr>
+</tbody>
+</table>
+<h1 id="dijkstras-algorithm">Dijkstra’s Algorithm</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Imagine water flowing from the source through pipes of different lengths. It reaches nearby junctions first. Dijkstra always finalizes the closest not-yet-finalized junction, because nothing can reach it sooner: every other path would have to go through junctions that are already farther away.</p>
+</div>
+<p><em>Dijkstra with a binary heap (lazy deletion)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> graph with non-negative weights <span class="math inline">\(w\)</span>, source <span class="math inline">\(s\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(dist[v] \gets \infty\)</span>; <span class="math inline">\(dist[s] \gets 0\)</span>; <span class="math inline">\(H \gets\)</span> min-heap <span class="math inline">\(\{(0, s)\}\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(H\)</span> not empty <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\((d, u) \gets\)</span> pop<span class="math inline">\((H)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(d &gt; dist[u]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>continue</strong> <em>▷ stale entry: a shorter path was found later</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each edge <span class="math inline">\((u, v, w)\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(dist[u] + w &lt; dist[v]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(dist[v] \gets dist[u] + w\)</span>; <span class="math inline">\(parent[v] \gets u\)</span>; push <span class="math inline">\((dist[v], v)\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(dist\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Claim:</strong> when <span class="math inline">\(u\)</span> is popped with <span class="math inline">\(d = dist[u]\)</span>, that distance is final. Suppose a shorter path existed. It leaves the set of finalized nodes at some edge <span class="math inline">\((x, y)\)</span> with <span class="math inline">\(y\)</span> not finalized. Then <span class="math inline">\(dist[y] \le dist[x] + w(x,y) \le\)</span> length of that path <span class="math inline">\(&lt; d\)</span>, so <span class="math inline">\(y\)</span> would have been popped before <span class="math inline">\(u\)</span>. Contradiction. The step “the rest of the path after <span class="math inline">\(y\)</span> only adds length” is exactly where <strong>non-negative weights</strong> are required; with a negative edge later on the path, the argument fails and Dijkstra can return wrong answers.</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>“Minimum cost / time / effort to reach,” network delay time, cheapest flight (with at most <span class="math inline">\(k\)</span> stops: state = (node, stops), or Bellman–Ford limited to <span class="math inline">\(k+1\)</span> rounds), path with maximum probability (maximize a product = Dijkstra on <span class="math inline">\(-\log p\)</span>, or a max-heap variant), minimum effort path (minimize the maximum edge on the path: Dijkstra where path cost is the max, or binary search plus BFS, or a union-find on sorted edges).</p>
+</div>
+<h1 id="bellmanford-and-negative-cycles">Bellman–Ford and Negative Cycles</h1>
+<p><em>Bellman–Ford</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(dist[v] \gets \infty\)</span>; <span class="math inline">\(dist[s] \gets 0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i \gets 1\)</span> <strong>to</strong> <span class="math inline">\(V-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each edge <span class="math inline">\((u, v, w)\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(dist[u] + w &lt; dist[v]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(dist[v] \gets dist[u] + w\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each edge <span class="math inline">\((u, v, w)\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(dist[u] + w &lt; dist[v]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> NEGATIVE CYCLE</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(dist\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>After round <span class="math inline">\(i\)</span>, <span class="math inline">\(dist[v]\)</span> is at most the length of the shortest path to <span class="math inline">\(v\)</span> using at most <span class="math inline">\(i\)</span> edges (induction on <span class="math inline">\(i\)</span>). A shortest path without cycles has at most <span class="math inline">\(V-1\)</span> edges, so <span class="math inline">\(V-1\)</span> rounds suffice. If anything still improves in round <span class="math inline">\(V\)</span>, some path keeps getting shorter by looping, which means a reachable negative cycle. Detecting arbitrage in currency exchange (edge weight <span class="math inline">\(-\log(\text{rate})\)</span>) is the classic application.</p>
+</div>
+<h1 id="floydwarshall">Floyd–Warshall</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><span class="math inline">\(dist[i][j] \gets \min(dist[i][j], dist[i][k] + dist[k][j])\)</span> for <span class="math inline">\(k\)</span> in the outer loop, then <span class="math inline">\(i\)</span>, then <span class="math inline">\(j\)</span>. After processing <span class="math inline">\(k\)</span>, <span class="math inline">\(dist[i][j]\)</span> is the shortest path using only intermediate nodes from <span class="math inline">\(\{0..k\}\)</span>. The loop order matters: <span class="math inline">\(k\)</span> must be outermost. <span class="math inline">\(O(V^3)\)</span> time, <span class="math inline">\(O(V^2)\)</span> space. Also computes transitive closure (with booleans) and detects negative cycles (<span class="math inline">\(dist[i][i] &lt; 0\)</span>).</p>
+</div>
+<h1 id="a-search">A* Search</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A* is Dijkstra ordered by <span class="math inline">\(f(v) = g(v) + h(v)\)</span>, where <span class="math inline">\(g\)</span> is the cost so far and <span class="math inline">\(h\)</span> is a heuristic estimate of the remaining cost. If <span class="math inline">\(h\)</span> never overestimates (<em>admissible</em>), A* returns an optimal path; if it is also <em>consistent</em> (<span class="math inline">\(h(u) \le w(u,v) + h(v)\)</span>), each node is expanded at most once. On a grid, Manhattan distance (4-neighbors) or Euclidean distance is admissible. <span class="math inline">\(h = 0\)</span> is Dijkstra; a better <span class="math inline">\(h\)</span> explores fewer nodes.</p>
+</div>
+<h1 id="minimum-spanning-trees">Minimum Spanning Trees</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Connect every town with roads using the least total road length, without building any loop. Kruskal’s method: sort all possible roads by length and build each one unless it would create a loop.</p>
+</div>
+<p><em>Kruskal’s MST</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0">sort edges by weight ascending; <span class="math inline">\(T \gets []\)</span>; initialize union-find on <span class="math inline">\(V\)</span> nodes</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each edge <span class="math inline">\((u, v, w)\)</span> in sorted order <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <strong>then</strong> <em>▷ true if <span class="math inline">\(u\)</span>, <span class="math inline">\(v\)</span> were in different components</em></div>
+<div class="algo-line" style="--d:2">append <span class="math inline">\((u, v, w)\)</span> to <span class="math inline">\(T\)</span></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> <span class="math inline">\(|T| = V-1\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:3"><strong>break</strong></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(T\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>The cut property:</strong> for any partition of the nodes into two sets, the lightest edge crossing the cut belongs to some MST. Proof by exchange: if an MST <span class="math inline">\(T\)</span> does not contain the lightest crossing edge <span class="math inline">\(e\)</span>, add <span class="math inline">\(e\)</span> to <span class="math inline">\(T\)</span>; this creates a cycle that must cross the cut again through some edge <span class="math inline">\(e&#39;\)</span> with <span class="math inline">\(w(e&#39;) \ge
+w(e)\)</span>; removing <span class="math inline">\(e&#39;\)</span> gives a spanning tree no heavier than <span class="math inline">\(T\)</span>. Kruskal’s chosen edge is the lightest crossing the cut between its endpoint’s component and the rest, so every choice is safe. <strong>Time:</strong> <span class="math inline">\(O(E\log E)\)</span> <strong>Space:</strong> <span class="math inline">\(O(V)\)</span>. <strong>Prim</strong> grows one tree, always adding the lightest edge leaving it (a heap), <span class="math inline">\(O(E\log V)\)</span>; better for dense graphs with an adjacency matrix (<span class="math inline">\(O(V^2)\)</span> without a heap).</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<p><strong>Single-linkage hierarchical clustering</strong> is exactly Kruskal: merge the two closest clusters repeatedly; stopping at <span class="math inline">\(k\)</span> components gives <span class="math inline">\(k\)</span> clusters (equivalently, remove the <span class="math inline">\(k-1\)</span> heaviest MST edges). HDBSCAN builds on a minimum spanning tree of mutual reachability distances.</p>
+</div>
+<h1 id="maximum-flow-and-minimum-cut">Maximum Flow and Minimum Cut</h1>
+<figure class="tikz"><img src="figs/dsa/ca5d53ec92f9.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A flow network: edge labels are capacities. Max flow from s to t is 14 here.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Ford–Fulkerson:</strong> repeatedly find a path from <span class="math inline">\(s\)</span> to <span class="math inline">\(t\)</span> in the <em>residual graph</em> (remaining capacity forward, plus “undo” capacity backward for flow already sent) and push the bottleneck amount along it. <strong>Edmonds–Karp</strong> finds augmenting paths with BFS (shortest first): <span class="math inline">\(O(VE^2)\)</span>. <strong>Dinic’s algorithm</strong> uses BFS level graphs and blocking flows: <span class="math inline">\(O(V^2E)\)</span>, much faster in practice, <span class="math inline">\(O(E\sqrt V)\)</span> on unit-capacity bipartite graphs.</p>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Max-flow min-cut theorem:</strong> the maximum flow equals the minimum total capacity of edges whose removal separates <span class="math inline">\(s\)</span> from <span class="math inline">\(t\)</span>. When no augmenting path remains, the nodes reachable from <span class="math inline">\(s\)</span> in the residual graph form a cut whose forward edges are all saturated and backward edges all empty, so the flow equals that cut’s capacity; since no flow can exceed any cut, both are optimal. Backward residual edges are what allow the algorithm to fix earlier bad choices.</p>
+</div>
+<h1 id="bipartite-matching-and-assignment">Bipartite Matching and Assignment</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Maximum bipartite matching</strong>: add a source connected to every left node and a sink connected from every right node, all capacities 1; max flow = maximum matching. The direct augmenting-path algorithm (Kuhn’s) is <span class="math inline">\(O(VE)\)</span>; Hopcroft–Karp is <span class="math inline">\(O(E\sqrt V)\)</span>. <strong>Weighted assignment</strong> (minimum-cost perfect matching of <span class="math inline">\(n\)</span> workers to <span class="math inline">\(n\)</span> jobs) is solved by the <strong>Hungarian algorithm</strong> in <span class="math inline">\(O(n^3)\)</span>, or by min-cost max-flow.</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<ul>
+<li><p><strong>DETR-style object detection</strong> matches predicted boxes to ground-truth boxes with the Hungarian algorithm before computing the loss, so each object is predicted exactly once (no NMS needed).</p></li>
+<li><p><strong>Multi-object tracking</strong> assigns detections in a new frame to existing tracks with Hungarian matching on IoU or appearance cost.</p></li>
+<li><p><strong>Ride matching and delivery dispatch</strong> are assignment problems at scale.</p></li>
+<li><p><strong>Graph cuts</strong> perform image segmentation (min-cut between foreground and background seeds).</p></li>
+<li><p><strong>Optimal transport</strong> (Sinkhorn) generalizes assignment to soft matching and appears in distribution alignment and some loss functions.</p></li>
+</ul>
+</div>
+<h1 id="euler-paths">Euler Paths</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>An Euler path uses every <em>edge</em> exactly once. In a directed graph it exists iff the graph is connected (ignoring isolated nodes) and at most one node has <span class="math inline">\(out - in = 1\)</span> (the start), at most one has <span class="math inline">\(in - out = 1\)</span> (the end), and all others are balanced. <strong>Hierholzer’s algorithm</strong>: DFS that removes edges as it uses them, appending a node to the result when it has no unused edges left, then reverse. <span class="math inline">\(O(E)\)</span>. Applications: “reconstruct itinerary” (use a min-heap per node for lexicographic order), de Bruijn sequences (“cracking the safe”), genome assembly.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Network delay time</div>
+<p>“Given directed weighted edges and a source, how long until all nodes receive the signal?” Answer = the maximum over nodes of the shortest-path distance, or <span class="math inline">\(-1\)</span> if some node is unreachable. Weights are non-negative times, so Dijkstra. Build an adjacency list, run Dijkstra with lazy deletion, take the max finite distance. <span class="math inline">\(O(E\log V)\)</span>. Trace a small graph to show stale entries being skipped. Follow-ups: negative delays (Bellman–Ford); the graph is huge and on disk (Dijkstra with an external priority queue, or contraction hierarchies used by map routing); many queries on a fixed road network (precomputation such as contraction hierarchies or landmarks with A*).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Dijkstra for non-negative weights; know exactly why negatives break it.</p></li>
+<li><p>Bellman–Ford handles negatives and finds negative cycles; DAGs need only topological DP.</p></li>
+<li><p>MSTs come from the cut property: Kruskal with union-find, Prim with a heap.</p></li>
+<li><p>Max flow = min cut; matching and assignment reduce to flow or the Hungarian algorithm.</p></li>
+</ul>
+</div>

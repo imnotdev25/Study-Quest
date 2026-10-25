@@ -1,0 +1,185 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A language model computes <span class="math inline">\(p(\text{output}\mid\text{context})\)</span>. A prompt is the part of the context you control, so prompting is choosing a context that makes the output you want likely. Every pattern below does one of three things: tells the model <em>what</em> the task is, shows it <em>examples</em> of the task, or gives it <em>room to compute</em> before it answers. <strong>Real-life version:</strong> briefing a smart new colleague. “Do X” works for easy tasks. For hard ones you show a finished example, explain why it matters, and let them think before answering.</p>
+</div>
+<div class="center">
+<table style="width:90%;">
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 42%" />
+<col style="width: 28%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Pattern</strong></th>
+<th style="text-align: left;"><strong>What it is</strong></th>
+<th style="text-align: left;"><strong>Use when</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Zero-shot</td>
+<td style="text-align: left;">instruction only</td>
+<td style="text-align: left;">the task is common and clearly stated</td>
+</tr>
+<tr>
+<td style="text-align: left;">Few-shot</td>
+<td style="text-align: left;">2–8 input/output demonstrations before the query (as prior turns or in a tagged block)</td>
+<td style="text-align: left;">the format or labelling convention is unusual</td>
+</tr>
+<tr>
+<td style="text-align: left;">Chain of thought</td>
+<td style="text-align: left;">ask for reasoning before the answer, or show worked examples (few-shot CoT)</td>
+<td style="text-align: left;">multi-step maths, logic, planning</td>
+</tr>
+<tr>
+<td style="text-align: left;">Zero-shot CoT</td>
+<td style="text-align: left;">“think step by step” with no examples</td>
+<td style="text-align: left;">quick boost on non-reasoning models</td>
+</tr>
+<tr>
+<td style="text-align: left;">Self-consistency</td>
+<td style="text-align: left;">sample several reasoning paths, majority-vote the final answers</td>
+<td style="text-align: left;">answers are short and checkable for equality</td>
+</tr>
+<tr>
+<td style="text-align: left;">Role / system prompt</td>
+<td style="text-align: left;">who the model is, the audience, the constraints</td>
+<td style="text-align: left;">every production prompt</td>
+</tr>
+<tr>
+<td style="text-align: left;">Structured output</td>
+<td style="text-align: left;">a JSON schema, enforced by the API or by grammar-constrained decoding</td>
+<td style="text-align: left;">a program reads the output</td>
+</tr>
+<tr>
+<td style="text-align: left;">Decomposition</td>
+<td style="text-align: left;">least-to-most, plan-and-solve: split into sub-questions, solve in order</td>
+<td style="text-align: left;">long problems with clear sub-steps</td>
+</tr>
+<tr>
+<td style="text-align: left;">Prompt chaining</td>
+<td style="text-align: left;">the output of one call is the input of the next, with checks between</td>
+<td style="text-align: left;">pipelines; each step stays simple</td>
+</tr>
+<tr>
+<td style="text-align: left;">Generated knowledge, step-back</td>
+<td style="text-align: left;">first ask for relevant facts or the general principle, then the specific question</td>
+<td style="text-align: left;">knowledge-heavy questions</td>
+</tr>
+<tr>
+<td style="text-align: left;">Meta-prompting</td>
+<td style="text-align: left;">ask a model to write or critique a prompt</td>
+<td style="text-align: left;">drafting prompts; then evaluate them</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 class="unnumbered" id="why-few-shot-and-chain-of-thought-work">Why few-shot and chain of thought work</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Few-shot as inference over the task</div>
+<p><strong>Step 1.</strong> Treat the task as a hidden variable <span class="math inline">\(\tau\)</span> (“translate”, “classify sentiment with labels A/B”, …). Then <span class="math inline">\(p(y\mid x,\text{demos})=\sum_\tau p(y\mid x,\tau)\,p(\tau\mid\text{demos})\)</span>.</p>
+<p><strong>Step 2.</strong> Each demonstration multiplies in a likelihood <span class="math inline">\(p(x_i,y_i\mid\tau)\)</span>, so <span class="math inline">\(p(\tau\mid\text{demos})\)</span> concentrates on tasks consistent with all of them (Bayesian updating, Part III).</p>
+<p><strong>Step 3.</strong> So demonstrations mostly teach the <em>format and label space</em>, not new facts. Consistent, diverse examples matter more than many; examples that all share one surface feature teach that feature.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Chain of thought buys serial computation</div>
+<p><strong>Step 1.</strong> A transformer does a fixed amount of computation per generated token (<span class="math inline">\(L\)</span> layers).</p>
+<p><strong>Step 2.</strong> Answering immediately gives the problem one token’s worth of depth. Writing <span class="math inline">\(m\)</span> reasoning tokens first gives <span class="math inline">\(m\)</span> more passes, each able to read everything written so far: a scratchpad.</p>
+<p><strong>Step 3.</strong> That is the same idea as the tiny recursive model in Toolkit II: depth from iteration. Reasoning models are trained with RL (Parts on GRPO) to use this scratchpad well, which is why “think step by step” adds little to them: they already do. Give them the goal and the constraints, and set the reasoning effort or budget instead.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: When self-consistency helps, and when it hurts</div>
+<p><strong>Step 1.</strong> Each sample’s final answer is drawn from a distribution over answers; let the correct one have probability <span class="math inline">\(p_c\)</span> and the most likely wrong one <span class="math inline">\(p_w\)</span>.</p>
+<p><strong>Step 2.</strong> With <span class="math inline">\(n\)</span> samples, counts are multinomial; by the law of large numbers each answer’s share converges to its probability.</p>
+<p><strong>Step 3.</strong> So as <span class="math inline">\(n\to\infty\)</span> the majority vote returns the <em>mode</em>. If the correct answer is the mode, accuracy goes to 1 even when <span class="math inline">\(p_c\)</span> is only 0.4. If a wrong answer is the mode (a systematic error), voting makes things <em>worse</em>, approaching 0.</p>
+<p><strong>Step 4.</strong> Voting removes noise, not bias. The output shows both: 0.40 <span class="math inline">\(\to\)</span> 0.98 in one case, 0.30 <span class="math inline">\(\to\)</span> 0.12 in the other.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Agents ch. &#x27;Prompting Patterns&#x27;: prompt builders, answer parsing, and why voting helps or hurts.&quot;&quot;&quot;
+import json
+import re
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+Q = &quot;Pens cost $3 and notebooks $5. Ana buys 4 pens and 2 notebooks. How much does she pay?&quot;
+
+
+def zero_shot(q):
+    return [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: q}]
+
+
+def few_shot(q, examples):
+    msgs = []
+    for x, y in examples:                                  # demonstrations as real prior turns
+        msgs += [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: x}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: y}]
+    return msgs + [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: q}]
+
+
+def chain_of_thought(q):
+    return [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: q + &quot;\n\nWork it out step by step. End with a line &#x27;Answer: &lt;number&gt;&#x27;.&quot;}]
+
+
+def structured(q, schema):
+    system = &quot;Reply with one JSON object that matches this schema, and nothing else:\n&quot; + json.dumps(schema)
+    return [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: system}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: q}]
+
+
+SCHEMA = {&quot;type&quot;: &quot;object&quot;, &quot;required&quot;: [&quot;total&quot;, &quot;currency&quot;],
+          &quot;properties&quot;: {&quot;total&quot;: {&quot;type&quot;: &quot;number&quot;}, &quot;currency&quot;: {&quot;type&quot;: &quot;string&quot;}}}
+
+for name, msgs in ((&quot;zero-shot&quot;, zero_shot(Q)),
+                   (&quot;few-shot&quot;, few_shot(Q, [(&quot;Apples cost $2. Tom buys 3. Total?&quot;, &quot;Answer: 6&quot;)])),
+                   (&quot;chain-of-thought&quot;, chain_of_thought(Q)), (&quot;structured&quot;, structured(Q, SCHEMA))):
+    print(f&quot;[prompt] {name:16s} {len(msgs)} messages, roles {[m[&#x27;role&#x27;] for m in msgs]}&quot;)
+
+
+def parse_answer(text):
+    m = re.search(r&quot;Answer:\s*\$?(-?\d+(?:\.\d+)?)\s*$&quot;, text.strip(), re.M)
+    return float(m[1]) if m else None
+
+
+def validate(obj, schema):
+    &quot;&quot;&quot;Tiny JSON-schema check: required keys and primitive types.&quot;&quot;&quot;
+    types = {&quot;number&quot;: (int, float), &quot;string&quot;: str}
+    missing = [k for k in schema[&quot;required&quot;] if k not in obj]
+    wrong = [k for k, s in schema[&quot;properties&quot;].items() if k in obj and not isinstance(obj[k], types[s[&quot;type&quot;]])]
+    return not missing and not wrong, missing, wrong
+
+
+reply = &quot;4 pens cost 4 x 3 = 12.\n2 notebooks cost 2 x 5 = 10.\n12 + 10 = 22.\nAnswer: 22&quot;
+print(f&quot;[parse] CoT reply -&gt; {parse_answer(reply)}   no answer line -&gt; {parse_answer(&#x27;It is 22 dollars.&#x27;)}&quot;)
+for raw in (&#x27;{&quot;total&quot;: 22, &quot;currency&quot;: &quot;USD&quot;}&#x27;, &#x27;{&quot;total&quot;: &quot;22&quot;}&#x27;):
+    print(f&quot;[schema] {raw:34s} valid/missing/wrong-type: {validate(json.loads(raw), SCHEMA)}&quot;)
+
+
+# Self-consistency: sample n answers, take the most common. Simulated with a fixed answer distribution.
+def vote_accuracy(probs, n, trials=100_000):
+    &quot;&quot;&quot;probs[0] = P(correct answer); others = distinct wrong answers. Ties broken at random.&quot;&quot;&quot;
+    counts = rng.multinomial(n, probs, size=trials).astype(float)
+    counts += rng.random(counts.shape) * 1e-3
+    return np.mean(counts.argmax(1) == 0)
+
+
+cases = {&quot;correct is the most likely answer (0.40 vs 0.12 x5)&quot;: [0.40] + [0.12] * 5,
+         &quot;one wrong answer is more likely (0.30 vs 0.45)&quot;: [0.30, 0.45, 0.25]}
+for name, probs in cases.items():
+    accs = &quot;  &quot;.join(f&quot;n={n}: {vote_accuracy(probs, n):.3f}&quot; for n in (1, 5, 15, 41))
+    print(f&quot;[vote] {name}\n[vote]   {accs}&quot;)</code></pre>
+<pre class="code output"><code class="output">[prompt] zero-shot        1 messages, roles [&#x27;user&#x27;]
+[prompt] few-shot         3 messages, roles [&#x27;user&#x27;, &#x27;assistant&#x27;, &#x27;user&#x27;]
+[prompt] chain-of-thought 1 messages, roles [&#x27;user&#x27;]
+[prompt] structured       2 messages, roles [&#x27;system&#x27;, &#x27;user&#x27;]
+[parse] CoT reply -&gt; 22.0   no answer line -&gt; None
+[schema] {&quot;total&quot;: 22, &quot;currency&quot;: &quot;USD&quot;}   valid/missing/wrong-type: (True, [], [])
+[schema] {&quot;total&quot;: &quot;22&quot;}                    valid/missing/wrong-type: (False, [&#x27;currency&#x27;], [&#x27;total&#x27;])
+[vote] correct is the most likely answer (0.40 vs 0.12 x5)
+[vote]   n=1: 0.400  n=5: 0.578  n=15: 0.832  n=41: 0.983
+[vote] one wrong answer is more likely (0.30 vs 0.45)
+[vote]   n=1: 0.301  n=5: 0.270  n=15: 0.206  n=41: 0.120</code></pre>
+<h2 class="unnumbered" id="writing-prompts-that-work">Writing prompts that work</h2>
+<ul>
+<li><p><strong>Say what good looks like</strong>: audience, length, format, and what to do when unsure (“say you don’t know”; “ask one question if the request is ambiguous”).</p></li>
+<li><p><strong>Explain why.</strong> “Keep it under 100 words because it’s read on a phone” generalises better than “under 100 words”.</p></li>
+<li><p><strong>Separate instructions from data</strong> with tags or delimiters (<code>&lt;document&gt;...&lt;/document&gt;</code>), and treat retrieved or user-supplied text as data that cannot change the instructions (prompt-injection defence).</p></li>
+<li><p><strong>Put long documents first, the question last</strong> in long-context prompts.</p></li>
+<li><p><strong>Prefer positive instructions</strong> (“write in flowing paragraphs”) over long lists of don’ts, and avoid shouting (ALL CAPS, “CRITICAL”): recent models follow instructions closely and over-apply emphasised rules.</p></li>
+<li><p><strong>Evaluate</strong>: a prompt is a hypothesis. Keep 20–100 test inputs with expected properties and re-run them on every change (the interval and paired-test chapters tell you when a change is real).</p></li>
+</ul>

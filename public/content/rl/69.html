@@ -1,0 +1,307 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: knowing when to hand back the wheel</div>
+<p>A good assistant knows when a task is done and returns control. One who checks in every five seconds is useless, and so is one who never stops. Learned option termination faces exactly this: without care, options collapse into one-step actions or never end.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/c8e7c05d3989.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Positive values mean “terminate more.” The cost <span class="math inline">\(\xi\)</span> shifts the line so small disadvantages don’t trigger a switch.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does an option-level value target bootstrap with <span class="math inline">\(\gamma^k\)</span>?</p></li>
+<li><p>How many times should the high-level option log-probability appear for one option execution?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-agent-must-learn-when-to-return-control">2. The agent must learn when to return control</h3>
+<p>A hierarchical agent needs a termination rule:</p>
+<p><span class="math display">\[\beta_\psi(s,o)
+=
+P(\text{terminate option }o\mid s)\]</span></p>
+<p>If termination probability is always high, every option lasts one step and hierarchy disappears. If it is always low, the agent remains trapped in an unsuitable routine.</p>
+<p>Define the current option’s advantage over switching:</p>
+<p><span class="math display">\[A_\Omega(s,o)
+=
+Q_\Omega(s,o)-V_\Omega(s)\]</span></p>
+<p>Interpretation:</p>
+<ul>
+<li><p><span class="math inline">\(A_\Omega&gt;0\)</span>: the current option is better than switching; continue.</p></li>
+<li><p><span class="math inline">\(A_\Omega&lt;0\)</span>: alternatives are better; terminate.</p></li>
+<li><p><span class="math inline">\(A_\Omega\approx0\)</span>: the decision is uncertain.</p></li>
+</ul>
+<p>A simple termination loss is:</p>
+<p><span class="math display">\[L_\beta
+=
+\mathbb E[
+\beta_\psi(s,o)
+A_\Omega(s,o)
+]\]</span></p>
+<p>Gradient descent reduces <span class="math inline">\(\beta\)</span> when the advantage is positive and increases it when the advantage is negative.</p>
+<p>Frequent switching may itself have a cost: rebuilding context, issuing another model call or losing cached state. With deliberation cost <span class="math inline">\(\eta&gt;0\)</span>:</p>
+<p><span class="math display">\[L_\beta
+=
+\mathbb E[
+\beta_\psi(s,o)
+(A_\Omega(s,o)+\eta)
+]\]</span></p>
+<p>The option now terminates only when switching is sufficiently better:</p>
+<p><span class="math display">\[A_\Omega&lt;-\eta\]</span></p>
+<p>Detach the option advantage during the termination update. Apply this loss only where termination is actually learnable—not on padding, forced episode endings or invalid option states.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>termination logits and probabilities: <span style="background-color: codeinlinebg"><code> [B, T]</code></span> or <span style="background-color: codeinlinebg"><code> [N]</code></span>;</p></li>
+<li><p>option advantages: matching shape;</p></li>
+<li><p>valid termination mask: matching Boolean shape;</p></li>
+<li><p>reduced termination loss: scalar.</p></li>
+</ul>
+<p>DPO may learn preferences for shorter or longer traces, but it does not explicitly estimate option advantages or interactively learn a termination rule.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the termination gradient</div>
+<p>Option-critic (Bacon et al., 2017) updates the termination parameters <span class="math inline">\(\vartheta\)</span> with <span class="math inline">\(\vartheta\gets\vartheta-\alpha\,\nabla_\vartheta\beta_\vartheta(s&#39;)\,\big(A_\Omega(s&#39;,o)+\xi\big)\)</span>.</p>
+<ul>
+<li><p><span class="math inline">\(A_\Omega&lt;0\)</span>: continuing <span class="math inline">\(o\)</span> is worse than average, so increase <span class="math inline">\(\beta\)</span> (stop).</p></li>
+<li><p><span class="math inline">\(\xi&gt;0\)</span> (deliberation cost): switching must be better by at least <span class="math inline">\(\xi\)</span>, which discourages one-step options.</p></li>
+<li><p>Forced boundaries (episode end, truncation) are not decisions to terminate. Mask them out of this gradient.</p></li>
+</ul>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Terminate when switching is meaningfully better.</p></li>
+<li><p>Mask forced boundaries and watch average option length.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the sign flips with <span class="math inline">\(\xi\)</span></div>
+<p><span class="math inline">\(Q_\Omega(s&#39;,o)=1.0\)</span>, <span class="math inline">\(V_\Omega(s&#39;)=1.3\)</span>, so <span class="math inline">\(A=-0.3\)</span>. Without cost, <span class="math inline">\(A+\xi=-0.3&lt;0\)</span>: terminate more. With <span class="math inline">\(\xi=0.5\)</span>: <span class="math inline">\(A+\xi=+0.2&gt;0\)</span>: continue, since the gain from switching doesn’t cover the switching cost.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Not detaching <span class="math inline">\(A_\Omega\)</span>.</p></li>
+<li><p>Counting truncation as a learned termination.</p></li>
+<li><p>Never logging average option duration.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Option-critic update at one step</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> current option <span class="math inline">\(o\)</span>, transition <span class="math inline">\((s,a,r,s&#39;)\)</span>, critics <span class="math inline">\(Q_\Omega,Q_U\)</span>, deliberation cost <span class="math inline">\(\xi\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(U\gets(1-\beta_o(s&#39;))Q_\Omega(s&#39;,o)+\beta_o(s&#39;)\max_{o&#39;}Q_\Omega(s&#39;,o&#39;)\)</span> <em>▷ value on arrival</em></div>
+<div class="algo-line" style="--d:0">update <span class="math inline">\(Q_U(s,o,a)\)</span> toward <span class="math inline">\(r+\gamma U\)</span> (detached)</div>
+<div class="algo-line" style="--d:0">intra-option policy: <span class="math inline">\(\theta_o\gets\theta_o+\alpha\nabla\log\pi_o(a|s)\,Q_U(s,o,a)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> <span class="math inline">\(s&#39;\)</span> is not a forced boundary <strong>then</strong></div>
+<div class="algo-line" style="--d:1">termination: <span class="math inline">\(\vartheta\gets\vartheta-\alpha\nabla\beta_o(s&#39;)\big(Q_\Omega(s&#39;,o)-V_\Omega(s&#39;)+\xi\big)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">with probability <span class="math inline">\(\beta_o(s&#39;)\)</span>, pick a new option with the policy over options</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-see-the-termination-gradients-sign">3. PyTorch exercise — see the termination gradient’s sign</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+# Current-option advantage in four states.
+# The final entry is padding with an extreme value.
+option_advantages = torch.tensor([
+     2.0,   # clearly continue
+    -1.0,   # clearly terminate
+    -0.2,   # weak reason to terminate
+    99.0,   # padding
+])
+
+valid_mask = torch.tensor([
+    True, True, True, False
+])
+
+deliberation_cost = 0.3
+
+termination_logits_no_cost = (
+    torch.nn.Parameter(
+        torch.zeros(4)
+    )
+)
+
+termination_logits_with_cost = (
+    torch.nn.Parameter(
+        torch.zeros(4)
+    )
+)
+
+optimizer_no_cost = torch.optim.Adam(
+    [termination_logits_no_cost],
+    lr=0.1,
+)
+
+optimizer_with_cost = torch.optim.Adam(
+    [termination_logits_with_cost],
+    lr=0.1,
+)
+
+def termination_loss(
+    logits,
+    switching_cost,
+):
+    # TODO 1: Termination probabilities.
+    probabilities = ...
+
+    # TODO 2: Detached effective advantages.
+    effective_advantages = ...
+
+    per_state_loss = ...
+
+    # TODO 3: Masked mean.
+    loss = ...
+
+    return loss, probabilities
+
+
+# Inspect the gradient before optimization.
+initial_loss, _ = termination_loss(
+    termination_logits_no_cost,
+    switching_cost=0.0,
+)
+
+# TODO 4: Initial gradient with respect
+# to each termination logit.
+initial_gradient = ...
+
+for step in range(150):
+    loss_no_cost, _ = termination_loss(
+        termination_logits_no_cost,
+        switching_cost=0.0,
+    )
+
+    loss_with_cost, _ = termination_loss(
+        termination_logits_with_cost,
+        switching_cost=deliberation_cost,
+    )
+
+    optimizer_no_cost.zero_grad()
+    optimizer_with_cost.zero_grad()
+
+    # TODO 5: Optimize both independent losses.
+    ...
+
+with torch.no_grad():
+    final_no_cost = torch.sigmoid(
+        termination_logits_no_cost
+    )
+
+    final_with_cost = torch.sigmoid(
+        termination_logits_with_cost
+    )
+
+print(
+    &quot;Initial termination-logit gradient:&quot;,
+    initial_gradient,
+)
+
+print(
+    &quot;Final probabilities without cost:&quot;,
+    final_no_cost,
+)
+
+print(
+    &quot;Final probabilities with cost:&quot;,
+    final_with_cost,
+)
+
+print(
+    &quot;Effective advantages with cost:&quot;,
+    option_advantages
+    + deliberation_cost,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which valid state should learn termination probability near zero?</p></li>
+<li><p>Which state should terminate under both objectives?</p></li>
+<li><p>How should the weak <span style="background-color: codeinlinebg"><code> -0.2</code></span> state change when cost <span style="background-color: codeinlinebg"><code> 0.3</code></span> is added?</p></li>
+<li><p>Should the padded <span style="background-color: codeinlinebg"><code> 99</code></span> entry influence any parameter update?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Termination probability is <span style="background-color: codeinlinebg"><code> torch.sigmoid(logits)</code></span>.</p></li>
+<li><p>Effective advantage is detached advantage plus switching cost.</p></li>
+<li><p>Multiply per-state losses by <span style="background-color: codeinlinebg"><code> valid_mask</code></span>.</p></li>
+<li><p>Divide by <span style="background-color: codeinlinebg"><code> valid_mask.sum()</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.autograd.grad(initial_loss, logits)[0]</code></span>.</p></li>
+<li><p>Backpropagate the sum of the two independent losses.</p></li>
+<li><p>Step both optimizers.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Remove <span style="background-color: codeinlinebg"><code> .detach()</code></span> from the option advantages when they come from a critic. The termination loss can then change the critic merely to make termination decisions look easier.</p>
+<p>Remove the validity mask. The padded advantage of <span style="background-color: codeinlinebg"><code> 99</code></span> drives its termination probability toward zero and contaminates aggregate diagnostics.</p>
+<p>Reverse the loss sign. Good options learn to terminate while bad options continue.</p>
+<p>Increase the deliberation cost above <span style="background-color: codeinlinebg"><code> 1.0</code></span>. Even the state with advantage <span style="background-color: codeinlinebg"><code> -1</code></span> may stop terminating, creating excessively long options.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does positive option advantage discourage termination?</p></li>
+<li><p>What behavior does deliberation cost encourage?</p></li>
+<li><p>Where should termination loss be masked out?</p></li>
+<li><p>Which metrics reveal termination collapse?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Termination probabilities and effective advantages:</p>
+<pre class="code python"><code class="language-python">probabilities = torch.sigmoid(
+    logits
+)
+
+effective_advantages = (
+    option_advantages.detach()
+    + switching_cost
+)
+
+per_state_loss = (
+    probabilities
+    * effective_advantages
+)</code></pre>
+<p>Masked mean:</p>
+<pre class="code python"><code class="language-python">loss = (
+    per_state_loss
+    * valid_mask.to(
+        per_state_loss.dtype
+    )
+).sum() / valid_mask.sum()</code></pre>
+<p>Initial gradient:</p>
+<pre class="code python"><code class="language-python">initial_gradient = torch.autograd.grad(
+    initial_loss,
+    termination_logits_no_cost,
+)[0]</code></pre>
+<p>Optimization:</p>
+<pre class="code python"><code class="language-python">(
+    loss_no_cost
+    + loss_with_cost
+).backward()
+
+optimizer_no_cost.step()
+optimizer_with_cost.step()</code></pre>
+<p>At zero logits:</p>
+<p><span class="math display">\[\beta=\sigma(0)=0.5\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\frac{\partial\beta}{\partial z}
+=
+\beta(1-\beta)
+=
+0.25\]</span></p>
+<p>Therefore, ignoring the batch-mean factor:</p>
+<p><span class="math display">\[\frac{\partial L_\beta}{\partial z}
+=
+0.25(A_\Omega+\eta)\]</span></p>
+<p>Gradient descent lowers the termination logit when this quantity is positive and raises it when negative.</p>
+<p>Expected behavior:</p>
+<ul>
+<li><p><span class="math inline">\(A=2\)</span>: termination approaches zero.</p></li>
+<li><p><span class="math inline">\(A=-1\)</span>: termination approaches one.</p></li>
+<li><p><span class="math inline">\(A=-0.2\)</span>, no cost: termination approaches one.</p></li>
+<li><p><span class="math inline">\(A=-0.2\)</span>, <span class="math inline">\(\eta=0.3\)</span>: effective advantage is <span class="math inline">\(0.1\)</span>, so termination approaches zero.</p></li>
+<li><p>Padding remains near its initial probability because its gradient is masked.</p></li>
+</ul>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Continuing the current option has greater expected value than returning control to the high-level policy.</p></li>
+<li><p>It introduces a threshold against unnecessary switching, generally producing longer options.</p></li>
+<li><p>Padding, forced terminal states, states outside the option’s domain and positions where termination was not sampled.</p></li>
+<li><p>Log option-length histograms, one-step-option rate, maximum-length rate, termination probabilities, switching frequency and success per option.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The next high-level choice occurs <span class="math inline">\(k\)</span> primitive transitions later.</p></li>
+<li><p>Once—at the state where the high-level policy selected that option.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> terminate when switching is meaningfully better. Mask forced boundaries, detach critic estimates and monitor whether options collapse toward one step or never return control.</p>

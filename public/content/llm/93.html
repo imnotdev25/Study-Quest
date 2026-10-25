@@ -1,0 +1,23 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Training happens once; inference happens every time anyone uses the model. Inference engineering is making that cheap and fast without changing the answers. <strong>Real-life version:</strong> a restaurant kitchen. The recipe (the model) is fixed. What you control is how many orders the cooks work on at once (batching), how much counter space each order takes (KV memory), whether two orders that start the same share prep (prefix caching), and whether a junior cook can prepare a guess that the head chef just checks (speculative decoding).</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/56124771fca5.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The inference stack. Levels of the craft go bottom-up: using an engine, tuning it, changing it, writing kernels.</em></p>
+</div>
+<h2 class="unnumbered" id="levels">Levels</h2>
+<ol>
+<li><p><strong>Run</strong> a model and serve it over HTTP (Hugging Face <code>generate</code>, then vLLM or SGLang).</p></li>
+<li><p><strong>Measure</strong>: TTFT, TPOT, throughput, goodput under an SLO, at realistic load.</p></li>
+<li><p><strong>Tune</strong> one GPU: batch limits, memory fraction, chunked prefill, prefix caching, quantisation.</p></li>
+<li><p><strong>Scale</strong>: tensor, pipeline, expert and context parallelism; prefill/decode disaggregation; routing.</p></li>
+<li><p><strong>Build</strong>: kernels in Triton or CUDA, scheduler changes, a new engine feature.</p></li>
+</ol>
+<h2 class="unnumbered" id="prerequisites-and-where-they-are-in-this-book">Prerequisites, and where they are in this book</h2>
+<p>Memory math is bytes per parameter times parameters (below). Vectors, dot products, softmax and sampling: Toolkit I and the decoding sessions. Transformers, RoPE, GQA and MLA: Sessions 6–10 and the Architectures part. Running remotely on a GPU: the post-training book’s Modal chapter (no SSH or driver setup needed; <code>nvidia-smi</code> inside a Modal function shows the GPU). The first lab is the minimal path:</p>
+<pre class="code output"><code class="output">pip install vllm==0.32.0
+vllm serve Qwen/Qwen3-8B --max-model-len 8192 --gpu-memory-utilization 0.9
+curl localhost:8000/v1/chat/completions -H &#x27;Content-Type: application/json&#x27; \
+  -d &#x27;{&quot;model&quot;: &quot;Qwen/Qwen3-8B&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Hi&quot;}], &quot;stream&quot;: true}&#x27;</code></pre>
+<p><code>vllm serve</code> has <strong>no authentication</strong> by default; pass <code>--api-key</code> or keep it behind a private network.</p>

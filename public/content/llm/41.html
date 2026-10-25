@@ -1,0 +1,275 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>A directional derivative</strong> is how fast <span class="math inline">\(L\)</span> changes when <span class="math inline">\(\theta\)</span> moves along a unit vector <span class="math inline">\(v\)</span>: <span class="math inline">\(D_vL=\lim_{\epsilon\to0}\frac{L(\theta+\epsilon v)-L(\theta)}{\epsilon}=\nabla L^\top v\)</span>. A <strong>gradient check</strong> computes the right side with autograd and the left side numerically. If they disagree, the backward pass has a bug.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>In attention backward, what is the softmax vector–Jacobian product?</p></li>
+<li><p>If <code>V.grad</code> is healthy but <code>Q.grad</code> and <code>K.grad</code> vanish, what attention behavior might explain it?</p></li>
+</ol>
+<p>For parameters:</p>
+<p><span class="math display">\[\theta\in\mathbb{R}^{P},
+\qquad
+g=\nabla_\theta L\in\mathbb{R}^{P}\]</span></p>
+<p>checking every coordinate is expensive. Instead, choose a unit direction <span class="math inline">\(v\in\mathbb{R}^{P}\)</span> and compare the autograd directional derivative:</p>
+<p><span class="math display">\[D_vL=g^\top v\]</span></p>
+<p>with a central finite difference:</p>
+<p><span class="math display">\[D_vL
+\approx
+\frac{L(\theta+\epsilon v)-L(\theta-\epsilon v)}
+{2\epsilon}\]</span></p>
+<p>Central differences have <span class="math inline">\(O(\epsilon^2)\)</span> truncation error, but <span class="math inline">\(\epsilon\)</span> cannot be arbitrarily small:</p>
+<ul>
+<li><p>Large <span class="math inline">\(\epsilon\)</span>: poor local approximation.</p></li>
+<li><p>Tiny <span class="math inline">\(\epsilon\)</span>: floating-point cancellation.</p></li>
+<li><p>Intermediate <span class="math inline">\(\epsilon\)</span>: usually the best agreement.</p></li>
+</ul>
+<p>Use relative error:</p>
+<p><span class="math display">\[\text{relative error}
+=
+\frac{|g^\top v-D_v^{FD}L|}
+{\max(1,|g^\top v|,|D_v^{FD}L|)}\]</span></p>
+<p>For reliable checks:</p>
+<ul>
+<li><p>Use <code>float64</code>.</p></li>
+<li><p>Disable dropout and other randomness.</p></li>
+<li><p>Avoid checking exactly at ReLU kinks.</p></li>
+<li><p>Compare the same scalar loss and reduction.</p></li>
+<li><p>Test several directions and <span class="math inline">\(\epsilon\)</span> values.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why central differences, and how to choose <span class="math inline">\(\epsilon\)</span></div>
+<p><strong>Step 1.</strong> Taylor in direction <span class="math inline">\(v\)</span>: <span class="math inline">\(L(\theta\pm\epsilon v)=L\pm\epsilon L&#39;+\frac{\epsilon^2}{2}L&#39;&#39;\pm\frac{\epsilon^3}{6}L&#39;&#39;&#39;+O(\epsilon^4)\)</span>, with <span class="math inline">\(L&#39;=D_vL\)</span>.</p>
+<p><strong>Step 2.</strong> Subtract: <span class="math inline">\(\frac{L(\theta+\epsilon v)-L(\theta-\epsilon v)}{2\epsilon}=L&#39;+\frac{\epsilon^2}{6}L&#39;&#39;&#39;+O(\epsilon^4)\)</span>. The even terms cancel, so the truncation error is <span class="math inline">\(O(\epsilon^2)\)</span>. A forward difference keeps <span class="math inline">\(\frac{\epsilon}{2}L&#39;&#39;\)</span>, which is <span class="math inline">\(O(\epsilon)\)</span>.</p>
+<p><strong>Step 3.</strong> Roundoff: each <span class="math inline">\(L\)</span> has error about <span class="math inline">\(u|L|\)</span> (<span class="math inline">\(u\approx10^{-16}\)</span> in float64, <span class="math inline">\(10^{-7}\)</span> in float32). Dividing by <span class="math inline">\(2\epsilon\)</span> gives error <span class="math inline">\(\approx u|L|/\epsilon\)</span>.</p>
+<p><strong>Step 4.</strong> Total <span class="math inline">\(\approx\frac{\epsilon^2}{6}|L&#39;&#39;&#39;|+\frac{u|L|}{\epsilon}\)</span>. Minimizing over <span class="math inline">\(\epsilon\)</span> gives <span class="math inline">\(\epsilon^*\propto u^{1/3}\)</span>: about <span class="math inline">\(5\times10^{-6}\)</span> in float64. In float32, <span class="math inline">\(\epsilon^*\approx5\times10^{-3}\)</span> and the best achievable error is about <span class="math inline">\(10^{-5}\)</span> relative, which is too coarse. Check in float64.</p>
+<p><strong>Step 5.</strong> Compare with a relative error <span class="math inline">\(\frac{|a-b|}{\max(|a|,|b|,10^{-12})}\)</span>, and expect <span class="math inline">\(\lesssim10^{-7}\)</span> in float64.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: directional gradient check</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(L(\theta)\)</span> in float64, deterministic (no dropout), <span class="math inline">\(\epsilon\approx10^{-6}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(g\gets\)</span> autograd gradient; draw random <span class="math inline">\(v\)</span>, normalize <span class="math inline">\(\|v\|=1\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(a\gets g^\top v\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(b\gets\big(L(\theta+\epsilon v)-L(\theta-\epsilon v)\big)/(2\epsilon)\)</span></div>
+<div class="algo-line" style="--d:0">pass iff <span class="math inline">\(|a-b|/\max(|a|,|b|)&lt;10^{-6}\)</span>; repeat for several <span class="math inline">\(v\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Gradient-check a small MLP represented by one flat parameter vector.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(131)
+torch.set_default_dtype(torch.float64)
+
+B, D, H, C = 6, 3, 4, 2
+
+X = torch.randn(B, D)
+targets = torch.tensor([0, 1, 1, 0, 1, 0])
+
+num_parameters = D * H + H + H * C + C
+
+theta = (
+    torch.randn(num_parameters) * 0.2
+).requires_grad_()
+
+
+def unpack(theta):
+    offset = 0
+
+    W1 = theta[offset:offset + D * H].view(D, H)
+    offset += D * H
+
+    b1 = ...                                    # TODO 1: [H]
+    offset += H
+
+    W2 = ...                                    # TODO 2: [H, C]
+    offset += H * C
+
+    b2 = ...                                    # TODO 3: [C]
+
+    return W1, b1, W2, b2
+
+
+def loss_fn(theta, detach_hidden=False):
+    W1, b1, W2, b2 = unpack(theta)
+
+    hidden = ...                                # TODO 4: tanh MLP
+
+    if detach_hidden:
+        hidden = hidden.detach()                # intentional bug
+
+    logits = ...                                # TODO 5: [B, C]
+    return ...                                  # TODO 6: cross-entropy
+
+
+# Autograd directional derivative
+loss = loss_fn(theta)
+gradient = torch.autograd.grad(loss, theta)[0]
+
+direction = torch.randn_like(theta)
+direction = ...                                 # TODO 7: unit norm
+
+analytic = ...                                  # TODO 8: gᵀv
+
+
+def central_difference(theta, direction, epsilon, detach_hidden=False):
+    with torch.no_grad():
+        loss_plus = ...                         # TODO 9
+        loss_minus = ...                        # TODO 10
+
+    return ...                                  # TODO 11
+
+
+for epsilon in [
+    1e-1,
+    1e-3,
+    1e-5,
+    1e-7,
+    1e-9,
+    1e-11,
+]:
+    numerical = central_difference(
+        theta, direction, epsilon
+    )
+
+    relative_error = (
+        (analytic - numerical).abs()
+        / max(
+            1.0,
+            analytic.abs().item(),
+            numerical.abs().item(),
+        )
+    )
+
+    print(
+        f&quot;eps={epsilon:.0e}&quot;,
+        f&quot;analytic={analytic.item(): .8f}&quot;,
+        f&quot;numerical={numerical.item(): .8f}&quot;,
+        f&quot;relative_error={relative_error.item():.3e}&quot;,
+    )</code></pre>
+<p>Before running, predict how error changes as <span class="math inline">\(\epsilon\)</span> moves from <code>1e-1</code> toward <code>1e-11</code>.</p>
+<p>Now detect an intentional <code>detach()</code> bug. Restrict the direction to first-layer parameters:</p>
+<pre class="code python"><code class="language-python">first_layer_size = D * H + H
+
+first_direction = torch.zeros_like(theta)
+first_direction[:first_layer_size] = torch.randn(first_layer_size)
+first_direction /= first_direction.norm()
+
+bug_loss = loss_fn(theta, detach_hidden=True)
+bug_gradient = torch.autograd.grad(bug_loss, theta)[0]
+
+bug_analytic = (bug_gradient * first_direction).sum()
+
+bug_numerical = central_difference(
+    theta,
+    first_direction,
+    epsilon=1e-5,
+    detach_hidden=True,
+)
+
+print(&quot;\ndetach bug&quot;)
+print(&quot;analytic: &quot;, bug_analytic.item())
+print(&quot;numerical:&quot;, bug_numerical.item())</code></pre>
+<p>Predict why the numerical derivative can be nonzero even though autograd reports zero.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Slice each bias directly from <code>theta</code>.</p></li>
+<li><p>The first layer is <code>torch.tanh(X @ W1 + b1)</code>.</p></li>
+<li><p>Normalize with <code>direction / direction.norm()</code>.</p></li>
+<li><p>Evaluate at <code>theta ± epsilon * direction</code>.</p></li>
+<li><p>Central differences divide by <code>2 * epsilon</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why is a directional check cheaper than checking every parameter coordinate?</p></li>
+<li><p>Why should finite-difference checks generally use <code>float64</code>?</p></li>
+<li><p>Prediction: what error pattern do you expect as <span class="math inline">\(\epsilon\)</span> becomes progressively smaller?</p></li>
+<li><p>Debugging: autograd and finite differences disagree only when dropout is enabled. What is wrong with the check?</p></li>
+<li><p>Why can a gradient check fail near <span class="math inline">\(z=0\)</span> for ReLU even when the implementation is reasonable?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def unpack(theta):
+    offset = 0
+
+    W1 = theta[offset:offset + D * H].view(D, H)
+    offset += D * H
+
+    b1 = theta[offset:offset + H]
+    offset += H
+
+    W2 = theta[offset:offset + H * C].view(H, C)
+    offset += H * C
+
+    b2 = theta[offset:offset + C]
+
+    return W1, b1, W2, b2
+
+
+def loss_fn(theta, detach_hidden=False):
+    W1, b1, W2, b2 = unpack(theta)
+
+    hidden = torch.tanh(X @ W1 + b1)
+
+    if detach_hidden:
+        hidden = hidden.detach()
+
+    logits = hidden @ W2 + b2
+    return F.cross_entropy(logits, targets)
+
+
+loss = loss_fn(theta)
+gradient = torch.autograd.grad(loss, theta)[0]
+
+direction = torch.randn_like(theta)
+direction = direction / direction.norm()
+
+analytic = (gradient * direction).sum()
+
+
+def central_difference(theta, direction, epsilon, detach_hidden=False):
+    with torch.no_grad():
+        loss_plus = loss_fn(
+            theta + epsilon * direction,
+            detach_hidden=detach_hidden,
+        )
+        loss_minus = loss_fn(
+            theta - epsilon * direction,
+            detach_hidden=detach_hidden,
+        )
+
+    return (loss_plus - loss_minus) / (2 * epsilon)</code></pre>
+<p>The expected error is roughly U-shaped:</p>
+<ul>
+<li><p>At large <span class="math inline">\(\epsilon\)</span>, the approximation is not sufficiently local.</p></li>
+<li><p>At moderate <span class="math inline">\(\epsilon\)</span>, numerical and analytic derivatives agree closely.</p></li>
+<li><p>At extremely small <span class="math inline">\(\epsilon\)</span>, subtracting nearly equal losses causes cancellation.</p></li>
+</ul>
+<p>For the detach bug, the forward value of <code>hidden</code> still changes when the first-layer parameters change. Finite differences therefore observe a change in the loss.</p>
+<p>Autograd, however, treats the detached hidden tensor as constant:</p>
+<p><span class="math display">\[\frac{\partial\,\text{hidden.detach()}}
+{\partial\theta_{\text{first}}}
+=0\]</span></p>
+<p>This mismatch is exactly the kind of silent broken-gradient path that gradient checking can expose.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>It requires only two additional forward evaluations, rather than roughly <span class="math inline">\(2P\)</span> evaluations for all coordinates.</p></li>
+<li><p>FP64 reduces rounding and cancellation error, allowing a much more informative comparison.</p></li>
+<li><p>Error generally decreases, reaches a minimum, and then increases again due to floating-point cancellation.</p></li>
+<li><p>The positive and negative perturbations are being evaluated with different random dropout masks. Disable randomness or restore identical RNG state.</p></li>
+<li><p>ReLU is not differentiable at zero. Autograd selects a convention, while finite differences may cross between two different linear regions.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<p><span class="math display">\[dS=A\odot
+\left(dA-\sum_j dA_jA_j\right)\]</span></p>
+<p>Saturated or nearly one-hot attention can preserve value gradients while making query/key gradients extremely small.</p>

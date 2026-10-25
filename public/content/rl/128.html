@@ -1,0 +1,488 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can pairwise reward accuracy reach 100% while reward magnitudes keep growing?</p></li>
+<li><p>What does temperature calibration change, and what does it preserve?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="selecting-the-highest-proxy-score-selects-its-errors-too">2. Selecting the highest proxy score selects its errors too</h3>
+<p>Suppose true utility is <span class="math inline">\(r(y)\)</span>, while a reward model produces:</p>
+<p><span class="math display">\[\hat r(y)=r(y)+\epsilon(y)\]</span></p>
+<p>For a random completion, the error may average to zero:</p>
+<p><span class="math display">\[E[\epsilon]\approx0\]</span></p>
+<p>But best-of-<span class="math inline">\(N\)</span> chooses:</p>
+<p><span class="math display">\[y^*=\arg\max_{i\le N}\hat r(y_i)\]</span></p>
+<p>The selected error is no longer centered:</p>
+<p><span class="math display">\[E[\epsilon(y^*)]&gt;0\]</span></p>
+<p>This is the optimizer’s curse: selection actively searches for positive measurement errors.</p>
+<p>Now suppose some completion contains an exploitable feature <span class="math inline">\(h(y)\)</span>:</p>
+<p><span class="math display">\[\hat r(y)
+=
+r(y)+\epsilon(y)+b\,h(y)\]</span></p>
+<p>If exploits occur independently with probability <span class="math inline">\(p\)</span>, the probability that at least one appears among <span class="math inline">\(N\)</span> candidates is:</p>
+<p><span class="math display">\[P(\text{exploit available})
+=
+1-(1-p)^N\]</span></p>
+<p>Even with <span class="math inline">\(p=0.005\)</span>:</p>
+<p><span class="math display">\[1-(0.995)^{256}\approx0.723\]</span></p>
+<p>A rare exploit becomes common under enough search.</p>
+<p>Best-of-<span class="math inline">\(N\)</span> is not policy-gradient RL, but it isolates the same pressure. PPO changes the generation distribution to find high reward; if reward-model errors are systematic, later rollouts contain increasingly unusual and exploitable outputs.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>candidate rewards and proxy scores: <span style="background-color: codeinlinebg"><code> [B, N]</code></span></p></li>
+<li><p>selected candidate IDs: <span style="background-color: codeinlinebg"><code> [B, 1]</code></span></p></li>
+<li><p>selected proxy reward, true reward and exploit flag: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<p>The dangerous region is the optimized tail, not average validation traffic. Overall correlation can remain positive while top-scoring outputs are mostly failures.</p>
+<p>Use an evaluator independent of the training reward model. Useful diagnostics include proxy–true gaps versus search budget, exploit frequency, ensemble disagreement, score-tail audits and human evaluation of top-reward outputs.</p>
+<p>DPO does not perform online reward-model search, but it can still learn systematic shortcuts in preference data. It also requires independent evaluation outside the training preference pipeline.</p>
+<h3 class="unnumbered" id="pytorch-exercise-a-0.5-exploit-dominates-large-searches">3. PyTorch exercise — a 0.5% exploit dominates large searches</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float32)
+
+num_prompts = 8_000
+maximum_candidates = 256
+
+candidate_counts = torch.tensor([
+    1,
+    4,
+    16,
+    64,
+    256,
+])
+
+proxy_noise_sd = 0.50
+
+exploit_probability = 0.005
+exploit_true_reward = -2.0
+exploit_proxy_bonus = 8.0
+
+
+# TODO 1: Construct true rewards and two proxies.
+ordinary_true_rewards = ...
+
+exploit_flags = ...
+
+true_rewards = ...
+
+proxy_noise = ...
+
+clean_proxy_scores = ...
+
+vulnerable_proxy_scores = ...
+
+
+# TODO 2: Select one completion per prompt.
+def select_candidates(
+    selection_scores,
+    candidate_count,
+):
+    scores = ...
+
+    corresponding_true_rewards = ...
+
+    corresponding_exploits = ...
+
+    selected_indices = ...
+
+    selected_proxy_scores = ...
+
+    selected_true_rewards = ...
+
+    selected_exploits = ...
+
+    return (
+        selected_proxy_scores,
+        selected_true_rewards,
+        selected_exploits,
+    )
+
+
+# TODO 3: Compare search budgets.
+rows = []
+
+for candidate_count in candidate_counts.tolist():
+    (
+        vulnerable_selected_proxy,
+        vulnerable_selected_true,
+        vulnerable_selected_exploit,
+    ) = ...
+
+    (
+        _,
+        clean_selected_true,
+        _,
+    ) = ...
+
+    (
+        _,
+        oracle_selected_true,
+        _,
+    ) = ...
+
+    any_exploit_rate = ...
+
+    theoretical_any_exploit_rate = ...
+
+    proxy_true_gap = ...
+
+    oracle_regret = ...
+
+    rows.append(
+        torch.tensor([
+            candidate_count,
+            any_exploit_rate,
+            theoretical_any_exploit_rate,
+            vulnerable_selected_exploit
+            .to(torch.float32).mean(),
+            vulnerable_selected_proxy.mean(),
+            vulnerable_selected_true.mean(),
+            clean_selected_true.mean(),
+            oracle_selected_true.mean(),
+            proxy_true_gap,
+            oracle_regret,
+        ])
+    )
+
+results = torch.stack(rows)
+
+
+# TODO 4: Compare average behavior with the top 1%.
+flat_proxy = ...
+flat_true = ...
+flat_exploits = ...
+
+pool_correlation = ...
+
+num_tail_examples = ...
+
+tail_indices = ...
+
+tail_true_mean = ...
+
+tail_exploit_rate = ...
+
+overall_true_mean = ...
+overall_exploit_rate = ...
+
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Columns: N, observed-any-exploit, theoretical, &quot;
+    &quot;selected-exploit, selected-proxy, selected-true, &quot;
+    &quot;clean-selected-true, oracle-true, proxy gap, regret&quot;
+)
+print(results)
+
+print(
+    &quot;\nOverall proxy/true correlation:&quot;,
+    pool_correlation.item(),
+)
+
+print(
+    &quot;Overall true reward and exploit rate:&quot;,
+    overall_true_mean.item(),
+    overall_exploit_rate.item(),
+)
+
+print(
+    &quot;Top-1% true reward and exploit rate:&quot;,
+    tail_true_mean.item(),
+    tail_exploit_rate.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Approximately what fraction of 256-candidate sets contain an exploit?</p></li>
+<li><p>Will vulnerable-proxy reward increase with <span class="math inline">\(N\)</span>?</p></li>
+<li><p>Must selected true reward also increase?</p></li>
+<li><p>How will the clean proxy behave differently?</p></li>
+<li><p>Can overall proxy correlation remain positive while the optimized tail fails?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Exploits occur where <span style="background-color: codeinlinebg"><code> torch.rand(...) &lt; exploit_probability</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span> to assign their true reward.</p></li>
+<li><p>The clean proxy is <span style="background-color: codeinlinebg"><code> true_reward + noise</code></span>.</p></li>
+<li><p>Add the exploit bonus only to the vulnerable proxy.</p></li>
+<li><p>Select with <span style="background-color: codeinlinebg"><code> .argmax(dim=1, keepdim=True)</code></span> and retrieve values using <span style="background-color: codeinlinebg"><code> .gather</code></span>.</p></li>
+<li><p>Oracle selection uses true reward itself as the selection score.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.topk</code></span> on flattened proxy scores for the tail audit.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Evaluate only randomly sampled model outputs.</p></li>
+<li><p>Report mean reward without reward-versus-search-budget curves.</p></li>
+<li><p>Use the training reward model as the final evaluator.</p></li>
+<li><p>Increase rollout count or PPO epochs without auditing new score tails.</p></li>
+<li><p>Conclude that high global correlation guarantees reliable ranking at the maximum.</p></li>
+<li><p>Retrain the judge on discovered exploits and reuse the same test set indefinitely.</p></li>
+<li><p>Hide verifier failures by clipping exceptionally high scores.</p></li>
+<li><p>Let reward-model inputs include metadata unavailable to human evaluators.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does zero-mean proxy error become positive after selection?</p></li>
+<li><p>Why are rare vulnerabilities dangerous under strong optimization?</p></li>
+<li><p>What distinguishes ordinary winner’s curse from reward hacking?</p></li>
+<li><p>Why is random-sample reward-model validation insufficient?</p></li>
+<li><p>What should a trusted evaluation pipeline keep separate?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Candidate construction:</p>
+<pre class="code python"><code class="language-python">ordinary_true_rewards = torch.randn(
+    num_prompts,
+    maximum_candidates,
+)
+
+exploit_flags = (
+    torch.rand(
+        num_prompts,
+        maximum_candidates,
+    )
+    &lt; exploit_probability
+)
+
+true_rewards = torch.where(
+    exploit_flags,
+    torch.full_like(
+        ordinary_true_rewards,
+        exploit_true_reward,
+    ),
+    ordinary_true_rewards,
+)
+
+proxy_noise = (
+    proxy_noise_sd
+    * torch.randn_like(true_rewards)
+)
+
+clean_proxy_scores = (
+    true_rewards + proxy_noise
+)
+
+vulnerable_proxy_scores = (
+    clean_proxy_scores
+    + exploit_proxy_bonus
+    * exploit_flags.to(torch.float32)
+)</code></pre>
+<p>Selection:</p>
+<pre class="code python"><code class="language-python">def select_candidates(
+    selection_scores,
+    candidate_count,
+):
+    scores = selection_scores[
+        :, :candidate_count
+    ]
+
+    corresponding_true_rewards = true_rewards[
+        :, :candidate_count
+    ]
+
+    corresponding_exploits = exploit_flags[
+        :, :candidate_count
+    ]
+
+    selected_indices = scores.argmax(
+        dim=1,
+        keepdim=True,
+    )
+
+    selected_proxy_scores = scores.gather(
+        dim=1,
+        index=selected_indices,
+    ).squeeze(1)
+
+    selected_true_rewards = (
+        corresponding_true_rewards.gather(
+            dim=1,
+            index=selected_indices,
+        ).squeeze(1)
+    )
+
+    selected_exploits = (
+        corresponding_exploits.gather(
+            dim=1,
+            index=selected_indices,
+        ).squeeze(1)
+    )
+
+    return (
+        selected_proxy_scores,
+        selected_true_rewards,
+        selected_exploits,
+    )</code></pre>
+<p>Search-budget comparison:</p>
+<pre class="code python"><code class="language-python">rows = []
+
+for candidate_count in candidate_counts.tolist():
+    (
+        vulnerable_selected_proxy,
+        vulnerable_selected_true,
+        vulnerable_selected_exploit,
+    ) = select_candidates(
+        vulnerable_proxy_scores,
+        candidate_count,
+    )
+
+    (
+        _,
+        clean_selected_true,
+        _,
+    ) = select_candidates(
+        clean_proxy_scores,
+        candidate_count,
+    )
+
+    (
+        _,
+        oracle_selected_true,
+        _,
+    ) = select_candidates(
+        true_rewards,
+        candidate_count,
+    )
+
+    any_exploit_rate = (
+        exploit_flags[
+            :, :candidate_count
+        ].any(dim=1)
+        .to(torch.float32)
+        .mean()
+    )
+
+    theoretical_any_exploit_rate = (
+        1.0
+        - (
+            1.0
+            - exploit_probability
+        ) ** candidate_count
+    )
+
+    proxy_true_gap = (
+        vulnerable_selected_proxy
+        - vulnerable_selected_true
+    ).mean()
+
+    oracle_regret = (
+        oracle_selected_true
+        - vulnerable_selected_true
+    ).mean()
+
+    rows.append(
+        torch.tensor([
+            candidate_count,
+            any_exploit_rate,
+            theoretical_any_exploit_rate,
+            vulnerable_selected_exploit
+            .to(torch.float32).mean(),
+            vulnerable_selected_proxy.mean(),
+            vulnerable_selected_true.mean(),
+            clean_selected_true.mean(),
+            oracle_selected_true.mean(),
+            proxy_true_gap,
+            oracle_regret,
+        ])
+    )
+
+results = torch.stack(rows)</code></pre>
+<p>Tail audit:</p>
+<pre class="code python"><code class="language-python">flat_proxy = vulnerable_proxy_scores.flatten()
+flat_true = true_rewards.flatten()
+flat_exploits = exploit_flags.flatten()
+
+pool_correlation = torch.corrcoef(
+    torch.stack([
+        flat_proxy,
+        flat_true,
+    ])
+)[0, 1]
+
+num_tail_examples = max(
+    1,
+    int(0.01 * flat_proxy.numel()),
+)
+
+tail_indices = torch.topk(
+    flat_proxy,
+    k=num_tail_examples,
+).indices
+
+tail_true_mean = (
+    flat_true[tail_indices].mean()
+)
+
+tail_exploit_rate = (
+    flat_exploits[tail_indices]
+    .to(torch.float32)
+    .mean()
+)
+
+overall_true_mean = flat_true.mean()
+
+overall_exploit_rate = (
+    flat_exploits
+    .to(torch.float32)
+    .mean()
+)</code></pre>
+<p>The probability of encountering at least one exploit is approximately:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong><span class="math inline">\(N\)</span></strong></th>
+<th style="text-align: left;"><strong><span class="math inline">\(1-(1-0.005)^N\)</span></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong><span class="math inline">\(N\)</span></strong></td>
+<td style="text-align: left;"><strong><span class="math inline">\(1-(1-0.005)^N\)</span></strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">1</td>
+<td style="text-align: left;">0.005</td>
+</tr>
+<tr>
+<td style="text-align: left;">4</td>
+<td style="text-align: left;">0.020</td>
+</tr>
+<tr>
+<td style="text-align: left;">16</td>
+<td style="text-align: left;">0.077</td>
+</tr>
+<tr>
+<td style="text-align: left;">64</td>
+<td style="text-align: left;">0.274</td>
+</tr>
+<tr>
+<td style="text-align: left;">256</td>
+<td style="text-align: left;">0.723</td>
+</tr>
+</tbody>
+</table>
+<p>Because an exploit receives proxy score around:</p>
+<p><span class="math display">\[-2+8=6\]</span></p>
+<p>it usually wins whenever present. At large <span class="math inline">\(N\)</span>, vulnerable-proxy score rises while selected true reward eventually falls toward the exploit’s true value.</p>
+<p>The clean noisy proxy exhibits ordinary selection bias: its selected proxy score is optimistic, but selected true quality generally improves because its errors are not systematically attached to a bad feature.</p>
+<p>The vulnerable proxy’s aggregate correlation with truth can remain positive. The top-scoring tail nevertheless contains a far larger exploit fraction than the full candidate population.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Conditioning on the maximum preferentially selects candidates whose measurement error happened to be positive.</p></li>
+<li><p>Their appearance probability compounds with samples, rollout volume and optimization steps.</p></li>
+<li><p>Winner’s curse selects random positive noise; reward hacking exploits a repeatable feature that systematically raises proxy reward while harming true utility.</p></li>
+<li><p>Optimization moves probability mass toward rare score tails that random validation barely measures.</p></li>
+<li><p>Keep the training reward, final evaluator, human audit set, adversarial probes and confirmation data operationally independent.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>On separable data, every finite margin can be enlarged to reduce logistic loss, even after all pairwise rankings are correct.</p></li>
+<li><p>Temperature rescales confidence probabilities while preserving the ordering of every positive-temperature margin.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> evaluate the reward model where optimization will take it. A proxy that looks adequate on random outputs can fail catastrophically once sampling or PPO repeatedly searches for its highest-scoring mistakes.</p>

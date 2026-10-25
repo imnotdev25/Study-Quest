@@ -1,0 +1,210 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>For SFT, you need <em>prompts</em> and <em>responses</em>. Responses are easy: ask a strong model. Diverse, realistic prompts are the hard part. Each method below is a different answer to “where do the prompts come from?”</p>
+</div>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Method</th>
+<th style="text-align: left;">where prompts come from</th>
+<th style="text-align: left;">known datasets</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Self-Instruct (2022)</td>
+<td style="text-align: left;">175 human seeds; the model writes new tasks in their style, filtered by ROUGE overlap</td>
+<td style="text-align: left;">Alpaca (52K)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Evol-Instruct (2023)</td>
+<td style="text-align: left;">rewrite prompts to be harder (add constraints, deepen, concretize) over several rounds</td>
+<td style="text-align: left;">WizardLM, WizardCoder</td>
+</tr>
+<tr>
+<td style="text-align: left;">Magpie (2024)</td>
+<td style="text-align: left;"><em>none</em>: give an aligned model only the chat template up to the user turn, and it writes a user query itself</td>
+<td style="text-align: left;"><code>Magpie-Pro-300K-Filtered</code>, part of SmolTalk</td>
+</tr>
+<tr>
+<td style="text-align: left;">Persona-driven (2024)</td>
+<td style="text-align: left;">“You are &lt;persona&gt;. Write a problem you’d face” over a billion personas</td>
+<td style="text-align: left;">PersonaHub, Tulu 3 math/code, <code>nvidia/Nemotron-Personas-*</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">Rejection sampling</td>
+<td style="text-align: left;">real problems with answers; sample many solutions, keep verified ones</td>
+<td style="text-align: left;">OpenThoughts, NuminaMath, R1 distills</td>
+</tr>
+<tr>
+<td style="text-align: left;">LLM-as-judge</td>
+<td style="text-align: left;">any prompts; responses scored or ranked by a judge model</td>
+<td style="text-align: left;">UltraFeedback (preferences)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why Magpie works</div>
+<p><strong>Step 1.</strong> An aligned chat model has been trained on <span class="math inline">\(p(\text{user turn}, \text{assistant turn})\)</span> in its template, so it models the distribution of user queries too.</p>
+<p><strong>Step 2.</strong> Sampling from <span class="math inline">\(p(\text{user text}\mid\texttt{&lt;|im\_start|&gt;user\textbackslash n})\)</span> draws from that learned query distribution. High temperature (1.0, top-<span class="math inline">\(p\)</span> 0.99) spreads samples across it.</p>
+<p><strong>Step 3.</strong> Then sample the answer from <span class="math inline">\(p(\text{assistant}\mid\text{query})\)</span> at a lower temperature. The result is a conversation in the model’s own distribution, with no human seed.</p>
+<p><strong>Step 4.</strong> The catch: queries reflect what the teacher was trained on, with many near-duplicates. That’s why <code>magpie</code> runs <code>near_dedup</code> and drops very short queries.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: rejection sampling as expectation-maximization</div>
+<p><strong>Step 1.</strong> Goal: maximize <span class="math inline">\(\log p_\theta(\text{correct}\mid x)=\log\sum_yp_\theta(y|x)\,\mathbb 1[\text{verify}(y)]\)</span>, marginalizing over reasoning traces <span class="math inline">\(y\)</span>.</p>
+<p><strong>Step 2.</strong> E-step: sample <span class="math inline">\(y\sim p_{\text{teacher}}(\cdot|x)\)</span> and keep those that verify. These approximate samples from the posterior <span class="math inline">\(p(y\mid x,\text{correct})\)</span>.</p>
+<p><strong>Step 3.</strong> M-step: SFT on the kept traces, i.e. maximize <span class="math inline">\(\sum\log p_\theta(y|x)\)</span> over them.</p>
+<p><strong>Step 4.</strong> With the student as its own teacher and repeated rounds, that’s expert iteration (RL book, Topic 169). With a stronger teacher, it’s distillation of reasoning: how OpenThoughts and most “R1-distill” models are made.</p>
+<p><strong>Step 5.</strong> Cap traces per problem (2 here) so easy problems, which give many correct samples, don’t dominate the dataset.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Synthetic data with an LLM: rephrased pre-training text, Magpie instructions, persona prompts,
+and rejection-sampled reasoning traces, all generated with vLLM on Modal.
+
+Local test of the filters:  python synth.py
+On Modal:                   modal run synth.py::magpie         (or ::rephrase, ::rejection_sample)
+&quot;&quot;&quot;
+import re
+
+import modal
+
+TEACHER = &quot;Qwen/Qwen3-8B&quot;
+
+REPHRASE_PROMPTS = {   # WRAP / Nemotron-CC style: same facts, new style
+    &quot;wiki&quot;: &quot;Rewrite the following text as a clear, well-organized encyclopedia article. Keep every fact.\n\n{doc}&quot;,
+    &quot;qa&quot;: &quot;Read the text and write 5 diverse question-answer pairs that test understanding of it.\n\n{doc}&quot;,
+    &quot;textbook&quot;: &quot;Turn the following text into a short textbook section for a high-school student, with an example.\n\n{doc}&quot;,
+}
+
+
+# ---------- pure functions (tested locally) ----------
+def boxed(text):
+    m = re.findall(r&quot;\\boxed\{([^{}]*)\}&quot;, text)
+    return m[-1].replace(&quot;,&quot;, &quot;&quot;).strip() if m else None
+
+
+def is_correct(text, ref):
+    p = boxed(text)
+    try:
+        return p is not None and abs(float(p) - float(ref)) &lt; 1e-6
+    except ValueError:
+        return False
+
+
+def judge_score(text):
+    &quot;&quot;&quot;Parse &#x27;Score: 7/10&#x27; from an LLM-judge reply; None if absent.&quot;&quot;&quot;
+    m = re.search(r&quot;Score:\s*(\d+(?:\.\d+)?)\s*/\s*10&quot;, text)
+    return float(m[1]) if m else None
+
+
+def near_dedup(texts, threshold=0.7):
+    &quot;&quot;&quot;Drop near-duplicate generations (synthetic data repeats itself a lot).&quot;&quot;&quot;
+    from dedup import MinHasher, shingles
+
+    mh, kept, sigs = MinHasher(64), [], []
+    for t in texts:
+        s = mh.signature(shingles(t, n=3))
+        if all((s == o).mean() &lt; threshold for o in sigs):
+            kept.append(t)
+            sigs.append(s)
+    return kept
+
+
+# ---------- Modal + vLLM ----------
+app = modal.App(&quot;pt-book-synth&quot;)
+image = (modal.Image.debian_slim(python_version=&quot;3.12&quot;)
+         .uv_pip_install(&quot;vllm==0.32.0&quot;, &quot;datasets==5.1.0&quot;)
+         .add_local_python_source(&quot;dedup&quot;, &quot;synth&quot;))
+out = modal.Volume.from_name(&quot;pt-book-data&quot;, create_if_missing=True)
+GPU = dict(gpu=&quot;H100&quot;, image=image, volumes={&quot;/data&quot;: out}, timeout=3 * 60 * 60,
+           secrets=[modal.Secret.from_name(&quot;huggingface-secret&quot;)])
+
+
+def llm():
+    from vllm import LLM
+    return LLM(TEACHER, max_model_len=8192, gpu_memory_utilization=0.9)
+
+
+@app.function(**GPU)
+def rephrase(n_docs: int = 5000):
+    &quot;&quot;&quot;Pre-training data: rewrite web documents in several styles.&quot;&quot;&quot;
+    from datasets import Dataset, load_dataset
+    from vllm import SamplingParams
+
+    docs = [d[&quot;text&quot;][:4000] for d in load_dataset(&quot;HuggingFaceFW/fineweb&quot;, name=&quot;sample-10BT&quot;,
+                                                   split=&quot;train&quot;, streaming=True).take(n_docs)]
+    chats = [[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: p.format(doc=d)}] for d in docs for p in REPHRASE_PROMPTS.values()]
+    gens = llm().chat(chats, SamplingParams(temperature=0.7, max_tokens=1024),
+                      chat_template_kwargs={&quot;enable_thinking&quot;: False})
+    Dataset.from_list([{&quot;text&quot;: g.outputs[0].text} for g in gens]).save_to_disk(&quot;/data/rephrased&quot;)
+    out.commit()
+
+
+@app.function(**GPU)
+def magpie(n: int = 20_000):
+    &quot;&quot;&quot;SFT data with no seed prompts: feed only the template prefix up to the user turn,
+    so the aligned model writes a plausible user query itself; then answer it.&quot;&quot;&quot;
+    from datasets import Dataset
+    from vllm import SamplingParams
+
+    model = llm()
+    prefix = &quot;&lt;|im_start|&gt;user\n&quot;                                  # Qwen chat template, user turn opened
+    qs = model.generate([prefix] * n, SamplingParams(temperature=1.0, top_p=0.99, max_tokens=256, stop=[&quot;&lt;|im_end|&gt;&quot;]))
+    queries = near_dedup([q.outputs[0].text.strip() for q in qs if len(q.outputs[0].text.split()) &gt;= 5])
+    ans = model.chat([[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: q}] for q in queries],
+                     SamplingParams(temperature=0.7, max_tokens=1024), chat_template_kwargs={&quot;enable_thinking&quot;: False})
+    rows = [{&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: q}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: a.outputs[0].text}]}
+            for q, a in zip(queries, ans)]
+    Dataset.from_list(rows).save_to_disk(&quot;/data/magpie&quot;)
+    out.commit()
+    return len(rows)
+
+
+@app.function(**GPU)
+def persona_prompts(n: int = 10_000):
+    &quot;&quot;&quot;Diversity from personas: &#x27;You are &lt;persona&gt;. Write a hard math word problem you would face.&#x27;&quot;&quot;&quot;
+    from datasets import Dataset, load_dataset
+    from vllm import SamplingParams
+
+    personas = load_dataset(&quot;proj-persona/PersonaHub&quot;, &quot;persona&quot;, split=&quot;train&quot;).select(range(n))[&quot;persona&quot;]
+    chats = [[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;Persona: {p}\nWrite one challenging math word problem this person &quot;
+                                          f&quot;might face in their work. Output only the problem.&quot;}] for p in personas]
+    gens = llm().chat(chats, SamplingParams(temperature=0.8, max_tokens=300), chat_template_kwargs={&quot;enable_thinking&quot;: False})
+    Dataset.from_list([{&quot;problem&quot;: g.outputs[0].text.strip()} for g in gens]).save_to_disk(&quot;/data/persona_math&quot;)
+    out.commit()
+
+
+@app.function(**GPU)
+def rejection_sample(k: int = 8):
+    &quot;&quot;&quot;Reasoning traces: sample k solutions per GSM8K problem, keep only verified-correct ones.&quot;&quot;&quot;
+    from datasets import Dataset, load_dataset
+    from vllm import SamplingParams
+
+    ds = load_dataset(&quot;openai/gsm8k&quot;, &quot;main&quot;, split=&quot;train&quot;)
+    refs = [a.split(&quot;####&quot;)[-1].replace(&quot;,&quot;, &quot;&quot;).strip() for a in ds[&quot;answer&quot;]]
+    chats = [[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: q + &quot;\nReason step by step, end with \\boxed{answer}.&quot;}] for q in ds[&quot;question&quot;]]
+    gens = llm().chat(chats, SamplingParams(n=k, temperature=0.8, max_tokens=4096))  # thinking on: long traces
+    rows, solved = [], 0
+    for q, ref, g in zip(ds[&quot;question&quot;], refs, gens):
+        good = [o.text for o in g.outputs if is_correct(o.text, ref)]
+        solved += bool(good)
+        rows += [{&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: q}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: t}]}
+                 for t in near_dedup(good)[:2]]                    # at most 2 distinct traces per problem
+    Dataset.from_list(rows).save_to_disk(&quot;/data/gsm8k_traces&quot;)
+    out.commit()
+    return {&quot;problems&quot;: len(ds), &quot;solved_at_least_once&quot;: solved, &quot;traces_kept&quot;: len(rows)}
+
+
+if __name__ == &quot;__main__&quot;:
+    print(&quot;boxed:&quot;, boxed(&quot;... so \\boxed{1,250}&quot;), &quot;| correct:&quot;, is_correct(&quot;\\boxed{72}&quot;, &quot;72&quot;), is_correct(&quot;72&quot;, &quot;72&quot;))
+    print(&quot;judge:&quot;, judge_score(&quot;Helpful and accurate. Score: 8/10&quot;), judge_score(&quot;no score here&quot;))
+    gens = [&quot;How do I reverse a linked list in Python?&quot;,
+            &quot;How do I reverse a linked list in Python?&quot;,
+            &quot;How can I reverse a linked list using Python?&quot;,
+            &quot;Explain the causes of the French Revolution.&quot;]
+    print(&quot;near_dedup kept:&quot;, near_dedup(gens))</code></pre>
+<p>Local output (the pure filters; the generation functions run on Modal):</p>
+<pre class="code output"><code class="output">boxed: 1250 | correct: True False
+judge: 8.0 None
+near_dedup kept: [&#x27;How do I reverse a linked list in Python?&#x27;, &#x27;How can I reverse a linked list using Python?&#x27;, &#x27;Explain the causes of the French Revolution.&#x27;]</code></pre>
+<p><strong>Judging.</strong> A judge prompt asks for a score in a fixed format (<code>Score: 7/10</code>), and <code>judge_score</code> parses it. Judges have position and length biases (RL book, Topic 179): for pairwise judging, score both orders; for absolute scores, calibrate on a few hundred human-labeled examples.</p>

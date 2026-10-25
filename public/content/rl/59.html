@@ -1,0 +1,260 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a game controller that disables moves</div>
+<p>In a game, you can’t jump while swimming, so the button just does nothing. A well-designed tool agent works the same way: if no document is loaded, “summarize document” isn’t a legal action. Topic 36 introduced masks. Here the mask changes with the agent’s state, and it must be identical during rollout and training.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What pattern indicates reward overoptimization?</p></li>
+<li><p>Why can KL regularization reduce—but not eliminate—reward hacking?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-tool-agent-has-state-dependent-legal-actions">2. A tool agent has state-dependent legal actions</h3>
+<p>For a tool-using agent, actions might be:</p>
+<ul>
+<li><p>answer the user;</p></li>
+<li><p>call search;</p></li>
+<li><p>query a database;</p></li>
+<li><p>execute code;</p></li>
+<li><p>finish.</p></li>
+</ul>
+<p>Not every action is valid in every state. For example, <span style="background-color: codeinlinebg"><code> finish</code></span> may be invalid before required evidence is collected, or a tool may be unavailable for a particular user.</p>
+<p>Let <span class="math inline">\(M(s,a)\in\{0,1\}\)</span> indicate whether action <span class="math inline">\(a\)</span> is valid. Mask invalid logits before constructing the policy:</p>
+<p><span class="math display">\[\tilde z_a=
+\begin{cases}
+z_a,&amp;M(s,a)=1\\
+-\infty,&amp;M(s,a)=0
+\end{cases}\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\pi(a\mid s)
+=
+\operatorname{softmax}(\tilde z)_a\]</span></p>
+<p>Invalid actions receive exactly zero probability, while valid actions are renormalized.</p>
+<p>Masking only the loss is insufficient. If the original policy samples an invalid action, removing its training loss does not undo the invalid environment interaction.</p>
+<p>For a sampled valid action:</p>
+<p><span class="math display">\[L_\pi
+=
+-\log\pi_\theta(a_t\mid s_t)
+\hat A_t\]</span></p>
+<p>A positive advantage increases its probability; a negative advantage decreases it. Advantages should remain detached.</p>
+<p>Practical cautions:</p>
+<ul>
+<li><p>every state must have at least one valid action;</p></li>
+<li><p>generation and training must use the identical mask;</p></li>
+<li><p>masking syntax does not guarantee semantic correctness;</p></li>
+<li><p>environment rejection should still be handled explicitly;</p></li>
+<li><p>log invalid probability mass before masking—it reveals what the unconstrained model wanted to do.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>logits and valid-action mask: <span style="background-color: codeinlinebg"><code> [B, A]</code></span></p></li>
+<li><p>sampled actions and advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>selected log-probabilities: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>policy loss: scalar</p></li>
+</ul>
+<p>DPO can prefer valid tool traces over invalid ones, but it trains on fixed comparisons. Tool-use RL receives fresh observations and rewards from actual interaction.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: state-dependent masks</div>
+<p><span class="math inline">\(\pi_\theta(a|s)=\dfrac{v_a(s)\,e^{z_a(s)}}{\sum_bv_b(s)\,e^{z_b(s)}}\)</span>, where <span class="math inline">\(v(s)\in\{0,1\}^k\)</span> is computed from the state, e.g. from the tool registry and the current context.</p>
+<ul>
+<li><p>Store <span class="math inline">\(v(s)\)</span> with each rollout step. Recomputing it at training time from a changed registry silently changes the policy.</p></li>
+<li><p>Masked logits get exactly zero gradient (Topic 36), so the agent never learns to avoid invalid tools by penalty. It never sees them.</p></li>
+<li><p>Monitor the <em>unmasked</em> probability mass on invalid actions. If it’s high, the network hasn’t learned the structure, and a mask bug would be catastrophic.</p></li>
+</ul>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Masks belong inside the distribution used for rollout and training.</p></li>
+<li><p>Every state needs a legal fallback, such as “answer” or “stop.”</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: how much mass does the mask remove?</div>
+<p>Logits: search <span class="math inline">\(1\)</span>, answer <span class="math inline">\(0\)</span>, summarize <span class="math inline">\(3\)</span>. Summarize is illegal: no document yet. Masked: <span class="math inline">\(\pi=(0.731,0.269)\)</span>. Unmasked, the network would put <span class="math inline">\(e^3/(e+1+e^3)=84\%\)</span> on the illegal action, so the logits have learned almost nothing about legality.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Recomputing masks at training time.</p></li>
+<li><p>No legal action in some states.</p></li>
+<li><p>Penalizing invalid actions instead of masking them.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-mask-update-and-inspect-gradients">3. PyTorch exercise — mask, update and inspect gradients</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.set_default_dtype(torch.float64)
+
+# Three states and four possible actions.
+logits = torch.nn.Parameter(
+    torch.tensor([
+        [1.0, 2.0, 0.0, 3.0],
+        [2.0, 0.0, 1.0, 2.5],
+        [0.0, 4.0, 1.0, 2.0],
+    ])
+)
+
+valid_mask = torch.tensor([
+    [True,  False, True,  False],
+    [False, True,  False, True ],
+    [True,  False, True,  True ],
+])
+
+actions = torch.tensor([
+    2,  # valid, positive advantage
+    3,  # valid, negative advantage
+    0,  # valid, positive advantage
+])
+
+advantages = torch.tensor([
+     1.0,
+    -1.0,
+     0.5,
+])
+
+# Probability mass the unconstrained policy would
+# assign to invalid actions.
+unmasked_probs = logits.softmax(dim=-1)
+
+# TODO 1: Invalid probability mass per state.
+invalid_mass = ...
+
+# TODO 2: Verify that every state has at least
+# one legal action.
+...
+
+# TODO 3: Mask logits before constructing the policy.
+masked_logits = ...
+
+policy = Categorical(
+    logits=masked_logits
+)
+
+masked_probs = policy.probs
+
+# TODO 4: Selected log-probabilities and
+# detached-advantage policy loss.
+selected_log_probs = ...
+policy_loss = ...
+
+policy_loss.backward()
+
+# TODO 5: Diagnostics for invalid probabilities
+# and invalid-logit gradients.
+invalid_probability_max = ...
+invalid_gradient_max = ...
+
+print(&quot;Unmasked probabilities:\n&quot;,
+      unmasked_probs.detach())
+
+print(&quot;Invalid mass before masking:&quot;,
+      invalid_mass.detach())
+
+print(&quot;Masked probabilities:\n&quot;,
+      masked_probs.detach())
+
+print(&quot;Selected log-probabilities:&quot;,
+      selected_log_probs.detach())
+
+print(&quot;Policy loss:&quot;,
+      policy_loss.item())
+
+print(&quot;Logit gradients:\n&quot;,
+      logits.grad)
+
+print(&quot;Maximum invalid probability:&quot;,
+      invalid_probability_max.item())
+
+print(&quot;Maximum invalid gradient:&quot;,
+      invalid_gradient_max.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which state initially assigns the most probability to invalid actions?</p></li>
+<li><p>What probability should every masked action receive?</p></li>
+<li><p>Should invalid logits receive policy-gradient updates?</p></li>
+<li><p>What update should the negative-advantage action receive?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sum <span style="background-color: codeinlinebg"><code> unmasked_probs * (~valid_mask)</code></span> across actions.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> valid_mask.any(dim=-1).all()</code></span>.</p></li>
+<li><p>Fill invalid logits with <span style="background-color: codeinlinebg"><code> -torch.inf</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> policy.log_prob(actions)</code></span>.</p></li>
+<li><p>Minimize negative log-probability times detached advantage.</p></li>
+<li><p>Index diagnostics with <span style="background-color: codeinlinebg"><code> ~valid_mask</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Mask the loss but construct <span style="background-color: codeinlinebg"><code> Categorical</code></span> from the original logits. Invalid actions remain sampleable even though some loss elements are ignored.</p>
+<p>Reverse the mask:</p>
+<pre class="code python"><code class="language-python">masked_logits = logits.masked_fill(
+    valid_mask,
+    -torch.inf,
+)</code></pre>
+<p>The policy now permits precisely the forbidden actions.</p>
+<p>Create a row with no valid action. An all-<span class="math inline">\(-\infty\)</span> softmax is undefined, producing invalid probabilities. Validate masks before sampling and define a safe fallback such as “abort.”</p>
+<p>Finally, use different masks during rollout and training. Stored actions may become impossible under the training policy, making log-probabilities and PPO ratios invalid.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why must masking happen before sampling?</p></li>
+<li><p>Does zero probability for an action imply zero gradient for every model parameter?</p></li>
+<li><p>Why log invalid probability mass before applying the mask?</p></li>
+<li><p>When is environment rejection still needed?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Invalid probability mass:</p>
+<pre class="code python"><code class="language-python">invalid_mass = (
+    unmasked_probs
+    * (~valid_mask).to(
+        unmasked_probs.dtype
+    )
+).sum(dim=-1)</code></pre>
+<p>Validate the mask:</p>
+<pre class="code python"><code class="language-python">assert bool(
+    valid_mask.any(dim=-1).all()
+), &quot;Every state needs a valid action&quot;</code></pre>
+<p>Mask logits:</p>
+<pre class="code python"><code class="language-python">masked_logits = logits.masked_fill(
+    ~valid_mask,
+    -torch.inf,
+)</code></pre>
+<p>Policy loss:</p>
+<pre class="code python"><code class="language-python">selected_log_probs = policy.log_prob(
+    actions
+)
+
+policy_loss = -(
+    selected_log_probs
+    * advantages.detach()
+).mean()</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">invalid_probability_max = (
+    masked_probs[~valid_mask]
+    .abs()
+    .max()
+)
+
+invalid_gradient_max = (
+    logits.grad[~valid_mask]
+    .abs()
+    .max()
+)</code></pre>
+<p>All invalid actions should have:</p>
+<p><span class="math display">\[\pi(a_{\text{invalid}}\mid s)=0\]</span></p>
+<p>and their individual logits should receive zero gradient in this direct categorical parameterization.</p>
+<p>The negative-advantage action contributes:</p>
+<p><span class="math display">\[-\log\pi(a\mid s)(-1)
+=
+\log\pi(a\mid s)\]</span></p>
+<p>Minimizing this decreases its log-probability relative to other valid actions.</p>
+<p>In a shared neural network, parameters used by an invalid action’s representation can still change because they are shared with valid states or actions. Zero gradient for one masked logit does not freeze the corresponding model parameters globally.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The environment must never receive the invalid action; ignoring its loss after execution is too late.</p></li>
+<li><p>No. Shared parameters can receive gradients through other valid outputs, states or auxiliary losses.</p></li>
+<li><p>It measures how strongly the unconstrained policy prefers illegal behavior and can reveal distribution shift or insufficient training.</p></li>
+<li><p>Masks usually enforce known syntactic constraints. Runtime failures, permissions, stale schemas and semantic preconditions still require environment validation.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Training proxy reward rises while independent quality peaks, stalls or falls.</p></li>
+<li><p>KL constrains movement from a reference policy, but reward errors can still be exploited inside that permitted region.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> action masks belong inside the policy distribution used for both rollout and training. Validate that each state has a legal fallback, detach advantages and monitor the probability mass the unconstrained agent assigns to invalid tools.</p>

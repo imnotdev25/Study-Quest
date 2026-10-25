@@ -1,0 +1,169 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Fourteen more worked designs, each in the six-step shape from Chapter (foundations): requirements, estimates, API and data, architecture, deep dives, and failure modes. They reuse the building blocks from earlier chapters, so each points back to where the details live.</p>
+</div>
+<h1 id="url-shortener-on-one-machine">URL Shortener on One Machine</h1>
+<h4 id="requirements.">Requirements.</h4>
+<p>Same features as the URL shortener in Chapter (design), but for a company-internal tool or an early startup: 10<span>,</span>000 new links a day, 1 million redirects a day.</p>
+<h4 id="estimates.">Estimates.</h4>
+<p>1M redirects/day is about 12 per second on average, perhaps 100 at peak. 10K links/day <span class="math inline">\(\times\)</span> 5 years <span class="math inline">\(\times\)</span> 500 bytes <span class="math inline">\(\approx\)</span> 9 GB. All of it fits on one server’s disk and most of it in memory.</p>
+<h4 id="design.">Design.</h4>
+<p>One application server and one Postgres (or SQLite) database: <code>links(code PK, url, owner_id, created_at, expires_at)</code>. Codes come from the database sequence encoded in base62. An in-process LRU cache holds hot redirects. Nightly backups to object storage with tested restores; a standby replica if downtime matters.</p>
+<h4 id="why-this-is-the-right-answer.">Why this is the right answer.</h4>
+<p>Every component added beyond this (Redis, Kafka, a CDN, sharding) adds cost, failure modes, and on-call load without solving a problem the system has. A single modern server handles thousands of simple requests per second. Say what would trigger scaling (sustained CPU above 60%, data beyond memory, an availability target above what one region provides) and which step comes first.</p>
+<h1 id="rate-limiting-and-abuse-prevention-for-the-url-shortener">Rate Limiting and Abuse Prevention for the URL Shortener</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Public shorteners attract spam and phishing because a short link hides its destination.</p>
+<ul>
+<li><p><strong>Creation limits</strong>: per API key, per account, and per IP (token buckets, Chapter (gateway)); stricter for anonymous users; CAPTCHA or proof of work after suspicious bursts.</p></li>
+<li><p><strong>Destination checks</strong> at creation and periodically after: Safe Browsing style blocklists, domain reputation, newly registered domains, redirect chains (a short link to another shortener).</p></li>
+<li><p><strong>Interstitial warning page</strong> for links flagged as risky; disable links reported for abuse (with an appeals path).</p></li>
+<li><p><strong>Redirect limits</strong> per IP to stop scraping of the code space, and non-sequential codes (Chapter (design)) so codes cannot be enumerated.</p></li>
+<li><p><strong>Analytics privacy</strong>: aggregate click data; do not expose visitors’ IPs to link owners.</p></li>
+</ul>
+</div>
+<h1 id="a-product-listing-page">A Product Listing Page</h1>
+<h4 id="requirements.-1">Requirements.</h4>
+<p>An e-commerce product page and category listings: title, images, price, stock, reviews summary, recommendations. 50M page views a day, 99.9% of traffic is reads, price and stock must be accurate at checkout.</p>
+<h4 id="design.-1">Design.</h4>
+<ul>
+<li><p><strong>Catalog service</strong> owns product data in a relational database (products, variants, attributes with a JSON column for category-specific attributes); images in object storage behind an image CDN (Chapter (media)).</p></li>
+<li><p><strong>Read path</strong>: the page is assembled from cached fragments with different freshness: product content (cached minutes, invalidated on edit via CDC), price and stock (short TTL or read from a fast inventory cache), reviews summary (cached hours), recommendations (precomputed per product). Edge micro-caching absorbs spikes.</p></li>
+<li><p><strong>Category listings and filters</strong> come from a search index (Chapter (search)), synced by CDC, with facet counts computed by the engine.</p></li>
+<li><p><strong>Pagination</strong>: keyset pagination for stable, fast deep pages (Chapter (data)).</p></li>
+<li><p><strong>Correctness</strong>: the page may show a slightly stale price, but the cart and checkout re-read the authoritative price and stock.</p></li>
+</ul>
+<h1 id="an-object-store-s3">An Object Store (S3)</h1>
+<h4 id="requirements.-2">Requirements.</h4>
+<p>PUT/GET/DELETE objects in buckets, list by prefix, versioning, multipart upload, 11 nines durability, high availability, petabytes to exabytes.</p>
+<h4 id="design">Design</h4>
+<p>(details in Chapter (storage)):</p>
+<ul>
+<li><p>Stateless front ends (auth, request routing, rate limits per bucket).</p></li>
+<li><p>A <strong>metadata index</strong> range-partitioned by <code>(bucket, key)</code> so listing is a range scan, managed by a partition manager that splits hot ranges.</p></li>
+<li><p>A <strong>data layer</strong> of append-only extents: new writes replicated three ways across zones, sealed extents erasure-coded (e.g. 6+3) in the background.</p></li>
+<li><p>PUT = write bytes, then commit metadata (atomic visibility); orphaned bytes are garbage-collected.</p></li>
+<li><p>End-to-end checksums, background scrubbing, and automatic repair.</p></li>
+<li><p>Multipart: parts stored independently and stitched by metadata on completion.</p></li>
+</ul>
+<h4 id="deep-dive-questions.">Deep dive questions.</h4>
+<p>How listing stays strongly consistent (metadata is the source of truth, read from the partition leader); hot prefixes; repair bandwidth after a rack failure; lifecycle rules moving data to colder, cheaper tiers.</p>
+<h1 id="a-kafka-style-log">A Kafka-Style Log</h1>
+<h4 id="requirements.-3">Requirements.</h4>
+<p>Durable, ordered, replayable streams; topics with partitions; many producers and consumer groups; millions of messages per second; configurable retention.</p>
+<figure class="tikz"><img src="figs/sd/458fd784fba8.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A partition is a sequence of segment files.</em></p>
+<ul>
+<li><p><strong>Storage</strong>: each partition is a directory of segment files. Appends go to the active segment; a sparse index maps offsets to file positions (binary search, then a short scan); a time index maps timestamps to offsets. Retention deletes whole old segments (cheap). <strong>Log compaction</strong> (optional per topic) keeps only the latest value per key, for changelogs.</p></li>
+<li><p><strong>Performance</strong>: sequential appends, the OS page cache instead of an application cache, batching and compression per batch, zero-copy sends to consumers.</p></li>
+<li><p><strong>Replication</strong>: leader per partition, followers fetch; in-sync replica set, high watermark, <code>acks=all</code> with <code>min.insync.replicas=2</code> (Chapter (messaging)).</p></li>
+<li><p><strong>Metadata</strong>: controller with a Raft quorum stores topics, partition assignments, and leaders (KRaft).</p></li>
+<li><p><strong>Consumers</strong>: group coordinator assigns partitions to members and stores committed offsets in an internal compacted topic.</p></li>
+<li><p><strong>Tiered storage</strong>: old segments move to object storage, keeping broker disks small.</p></li>
+</ul>
+<h1 id="a-notifications-system">A Notifications System</h1>
+<h4 id="requirements.-4">Requirements.</h4>
+<p>Send push, email, SMS, and in-app notifications triggered by product events or campaigns; respect user preferences and quiet hours; no duplicates; track delivery; 1 billion notifications a day with campaign spikes.</p>
+<figure class="tikz"><img src="figs/sd/e418ac5dfc98.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Notifications: decide once, deliver per channel.</em></p>
+<ul>
+<li><p><strong>Decide</strong>: the notification service receives an event, resolves recipients, checks preferences (opt-outs per type and channel), quiet hours and time zone, frequency caps (per user per day), and deduplicates by <code>(user, notification key)</code> within a window. It renders a localized template.</p></li>
+<li><p><strong>Deliver</strong>: one queue per channel and priority (a password reset must not wait behind a marketing campaign). Workers call providers (APNs, FCM, an email service, an SMS gateway) with retries, backoff, and per-provider rate limits; failures go to a DLQ.</p></li>
+<li><p><strong>Idempotency</strong>: each notification has an ID passed to providers where supported, so retries do not double-send.</p></li>
+<li><p><strong>Tracking</strong>: store status per notification (queued, sent, delivered, opened, failed); process provider feedback (invalid device tokens are deleted, email bounces suppress the address).</p></li>
+<li><p><strong>Scheduling</strong>: campaigns are expanded in batches by a scheduler and spread over time to avoid traffic spikes against the app when users tap.</p></li>
+<li><p><strong>In-app inbox</strong>: a per-user list in a key-value store plus an unread count (Chapter (socialgeo)).</p></li>
+</ul>
+<h1 id="a-payment-system">A Payment System</h1>
+<h4 id="requirements.-5">Requirements.</h4>
+<p>Accept card payments for an online marketplace, pay out sellers, refunds; never lose or double-count money; integrate with an external payment service provider (PSP); reconcile daily.</p>
+<ul>
+<li><p><strong>Payment state machine</strong>: <code>CREATED </code><span class="math inline">\(\to\)</span><code> AUTHORIZED </code><span class="math inline">\(\to\)</span><code> CAPTURED </code><span class="math inline">\(\to\)</span><code> SETTLED</code>, with <code>FAILED</code>, <code>REFUNDED</code>, <code>DISPUTED</code>; transitions are persisted, never skipped, and every external call is keyed by an idempotency key derived from the payment ID and step (Stripe case, Part (cases)).</p></li>
+<li><p><strong>Double-entry ledger</strong>: every money movement is a transaction with entries that sum to zero (debit the buyer’s receivable, credit the seller’s payable and the platform’s fee account). Ledger rows are immutable and append-only; corrections are new entries. Balances are derived (and cached), never edited directly.</p></li>
+<li><p><strong>PSP integration</strong>: card details go directly from the client to the PSP (hosted fields or SDK) so the platform never touches raw card numbers (reducing PCI scope); the platform stores a token. Webhooks from the PSP are verified (signatures), deduplicated by event ID, and processed idempotently; the system also polls for payments whose outcome is unknown after a timeout.</p></li>
+<li><p><strong>Exactly-once effects</strong>: at-least-once messaging plus idempotent handlers and unique constraints; the outbox pattern for publishing payment events.</p></li>
+<li><p><strong>Reconciliation</strong>: daily, match internal ledger entries with the PSP’s settlement reports and bank statements; mismatches become tickets and automatic fixes.</p></li>
+<li><p><strong>Payouts</strong>: batched to sellers on a schedule, after risk holds; a saga with compensation if a bank transfer fails.</p></li>
+<li><p><strong>Data</strong>: a strongly consistent relational database; money as integers in minor units with a currency code, never floating point.</p></li>
+</ul>
+<h1 id="a-search-service">A Search Service</h1>
+<h4 id="requirements.-6">Requirements.</h4>
+<p>Full-text and filtered search over 100M documents for an app, under 200 ms p99, updates visible within seconds, per-tenant permissions.</p>
+<h4 id="design-1">Design</h4>
+<p>(Chapter (search)): CDC from the source database into an indexing pipeline (enrich, embed, write with external versions); a document-partitioned index with replicas; query service doing query understanding, BM25 plus vector retrieval, permission filters, and a re-ranker; autocomplete from query logs; offline judged sets plus online interleaving for quality. Reindex via a new index and alias swap.</p>
+<h4 id="failure-modes.">Failure modes.</h4>
+<p>Indexing lag (alert on consumer lag; show results anyway); a shard down (serve partial results from replicas, mark them partial); a bad ranker (feature flag back to the previous model).</p>
+<h1 id="a-recommendation-system">A Recommendation System</h1>
+<h4 id="requirements.-7">Requirements.</h4>
+<p>“Recommended for you” on a marketplace home page, 100M users, 10M items, 50 ms budget, measured by purchases and long-term retention.</p>
+<h4 id="design.-2">Design.</h4>
+<p>Candidate generation from several sources (a two-tower model with ANN search, item-to-item co-purchase lists, recent views, trending in the user’s region, fresh items for exploration) yields about 1<span>,</span>000 candidates; seen and purchased filtering (Bloom filters, Chapter (socialgeo)); a ranking model scores them with features from a feature store; re-ranking adds diversity, business rules, and an exploration slot. Batch training daily, near-real-time features (last few clicks) from a stream. Evaluate offline with recall@k and NDCG on time-split data, online with A/B tests on purchases and guardrails. Cold start: popular-by-segment for new users, content embeddings and exploration boosts for new items. The companion interview book covers the models in depth.</p>
+<h1 id="nearby-search-yelp-style">Nearby Search (Yelp-Style)</h1>
+<h4 id="requirements.-8">Requirements.</h4>
+<p>Find businesses near a location, filtered by category and rating; 200M businesses; 10K queries per second; business data changes rarely.</p>
+<h4 id="design.-3">Design.</h4>
+<p>Business data in a relational database; a read-optimized geo index built from it: geohash (precision chosen per search radius) or S2 cell IDs as an indexed column, or a search engine with geo-point fields (Elasticsearch <code>geo_distance</code>). Query the user’s cell and its neighbors, filter by exact distance, then rank by distance, rating, and relevance. Because data changes rarely, the index is rebuilt or updated hourly and the whole thing replicates well across read replicas or regions. Dense cities need smaller cells than rural areas: quadtrees adapt automatically (Chapter (socialgeo)).</p>
+<h1 id="a-file-sync-service">A File Sync Service</h1>
+<h4 id="design-2">Design</h4>
+<p>(Chapter (media)): clients chunk files (content-defined), hash chunks, upload only missing ones to a content-addressed block store; a metadata service sharded by namespace commits block lists to a per-namespace journal; clients sync with cursors and are woken by notifications; conflicts produce conflicted copies; retention windows allow undelete. Estimate: 500M users <span class="math inline">\(\times\)</span> 10 GB average <span class="math inline">\(=\)</span> 5 EB raw, much less after deduplication, which is why storage design and cost dominate (Dropbox’s Magic Pocket, Part (cases)).</p>
+<h1 id="observability-and-slos-for-a-service">Observability and SLOs for a Service</h1>
+<h4 id="prompt.">Prompt.</h4>
+<p>“Design the monitoring for a checkout service.”</p>
+<ul>
+<li><p><strong>SLIs</strong>: availability (fraction of checkout requests returning a non-5xx response) and latency (fraction under 800 ms), measured at the load balancer, plus a business SLI (successful orders per minute vs forecast).</p></li>
+<li><p><strong>SLOs</strong>: 99.9% availability over 28 days; alert on multi-window burn rates (Chapter (obs)).</p></li>
+<li><p><strong>Instrumentation</strong>: OpenTelemetry traces through checkout, payments, and inventory; RED metrics per endpoint; structured logs with trace IDs; dependency dashboards.</p></li>
+<li><p><strong>Pipeline</strong>: agents and collectors to a metrics store, log store, and trace store, with sampling that keeps all errors and slow traces.</p></li>
+<li><p><strong>Runbooks and ownership</strong> linked from every alert.</p></li>
+</ul>
+<h1 id="a-database-migration">A Database Migration</h1>
+<h4 id="prompt.-1">Prompt.</h4>
+<p>“Move the orders table from a monolith’s MySQL database to a new orders service with its own Postgres, without downtime.”</p>
+<figure class="tikz"><img src="figs/sd/ab8b694512b7.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Migrating data out of a monolith in reversible steps.</em></p>
+<ol>
+<li><p><strong>Backfill</strong>: copy existing rows to the new store (versioned writes so backfill and live changes can interleave safely, as in Notion’s migration, Part (cases)).</p></li>
+<li><p><strong>Keep in sync</strong>: CDC from the old database (preferred over application dual writes, which can diverge on partial failure), with the old database still the source of truth.</p></li>
+<li><p><strong>Shadow (parallel) reads</strong>: for a sample of requests, read from both, return the old result, log mismatches; fix until mismatches are zero.</p></li>
+<li><p><strong>Parallel monolith read drain</strong>: route an increasing percentage of <em>reads</em> to the new service behind a feature flag (1%, 10%, 50%, 100%), watching errors and latency; roll back instantly by flipping the flag. The monolith’s reads drain away while writes still go to the old path.</p></li>
+<li><p><strong>Switch writes</strong>: make the new service the writer and source of truth, with reverse sync to the old table for a while as a rollback path.</p></li>
+<li><p><strong>Retire</strong>: stop reverse sync, remove old code paths, archive and drop the table.</p></li>
+</ol>
+<p>Each step is reversible on its own; that is the point. Schema changes inside one database follow expand/contract (Chapter (cicd)).</p>
+<h1 id="a-photo-sharing-app-instagram-style-interview">A Photo-Sharing App (Instagram-Style Interview)</h1>
+<h4 id="requirements.-9">Requirements.</h4>
+<p>Upload photos with captions, follow users, a home feed, likes and comments, profile grids; 500M daily active users; 100M photos uploaded a day.</p>
+<h4 id="estimates.-1">Estimates.</h4>
+<p>100M uploads/day <span class="math inline">\(\approx\)</span> 1<span>,</span>200/s average. At about 2 MB of renditions per photo, 200 TB/day of new storage, roughly 70 PB/year. Feed reads: 500M users <span class="math inline">\(\times\)</span> 10 feed loads <span class="math inline">\(\approx\)</span> 60K/s average.</p>
+<h4 id="design.-4">Design.</h4>
+<ul>
+<li><p><strong>Upload</strong>: presigned direct upload, then async processing: renditions, EXIF stripping, moderation (Chapter (media)); photo metadata in a sharded database keyed by time-sortable IDs that embed the shard (Instagram case, Part (cases)).</p></li>
+<li><p><strong>Serving</strong>: immutable image URLs through a CDN.</p></li>
+<li><p><strong>Social graph and feed</strong>: follow edges in both directions; hybrid fan-out with feed lists of post IDs in Redis; ranking (Chapter (design)).</p></li>
+<li><p><strong>Likes and comments</strong>: edges plus sharded counters; “liked by you” point lookups (Chapter (socialgeo)).</p></li>
+<li><p><strong>Profile grid</strong>: posts by author ordered by ID (one partition range scan).</p></li>
+<li><p><strong>Search</strong>: users and hashtags in a search index.</p></li>
+</ul>
+<h4 id="deep-dives.">Deep dives.</h4>
+<p>Celebrity fan-out, hot photos, storage tiering of old photos to colder storage classes, and deletion (remove from CDN, feeds, search, and backups within a retention policy, Chapter (obs)).</p>
+<h1 id="a-ticket-booking-system">A Ticket Booking System</h1>
+<h4 id="requirements.-10">Requirements.</h4>
+<p>Users browse events, pick seats, pay within 10 minutes; no seat is ever sold twice; a popular on-sale has 2 million users at once for 50<span>,</span>000 seats.</p>
+<ul>
+<li><p><strong>Inventory</strong>: a <code>seats</code> table with <code>event_id</code>, <code>seat_id</code>, <code>status</code>, <code>hold_id</code>, <code>hold_expires_at</code>, and <code>order_id</code>, partitioned by event.</p></li>
+<li><p><strong>Hold</strong>: an atomic conditional update,<br />
+<code>UPDATE seats SET status='HELD', hold_id=?, hold_expires_at=now()+10min</code><br />
+<code>WHERE event_id=? AND seat_id IN (...) AND status='AVAILABLE'</code>,<br />
+succeeding only if every requested seat was available (check the row count, within one transaction). Expired holds are released by a sweeper or treated as available by queries.</p></li>
+<li><p><strong>Payment</strong>: a saga: hold <span class="math inline">\(\to\)</span> charge <span class="math inline">\(\to\)</span> confirm (<code>SOLD</code>); release the hold if payment fails; idempotency keys throughout.</p></li>
+<li><p><strong>On-sale surge</strong>: a virtual waiting room admits users at the rate the inventory service can handle; bot defense at the edge; seat maps served from a cache with availability updated every few seconds (Ticketmaster case, Part (cases)).</p></li>
+<li><p><strong>General admission</strong> (no seat numbers): a counter per ticket type with an atomic decrement guarded by <code>remaining &gt; 0</code>, or pre-split the inventory into buckets to avoid one hot row.</p></li>
+</ul>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Start from the simplest design that meets the numbers, and name the trigger for each scaling step.</p></li>
+<li><p>Money and inventory need state machines, conditional writes, idempotency, and reconciliation.</p></li>
+<li><p>Notification, search, and recommendation systems are pipelines with clear decide and deliver stages.</p></li>
+<li><p>Migrations succeed as a series of individually reversible steps verified by shadow reads.</p></li>
+</ul>
+</div>

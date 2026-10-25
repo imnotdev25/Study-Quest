@@ -1,0 +1,585 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does repeatedly inspecting an ordinary 95% confidence interval inflate false promotions?</p></li>
+<li><p>What assumption made the previous Hoeffding confidence sequence valid?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="hoeffding-protects-against-worst-case-variance">2. Hoeffding protects against worst-case variance</h3>
+<p>For independent policy-difference scores:</p>
+<p><span class="math display">\[a\le d_i\le b,
+\qquad
+\Delta=
+\underbrace{E[d_i]}_{\text{true policy improvement}}\]</span></p>
+<p>Hoeffding uses only the range <span class="math inline">\(b-a\)</span>:</p>
+<p><span class="math display">\[r_k^{\mathrm H}
+=
+\underbrace{
+(b-a)
+\sqrt{
+\frac{\log(1/\alpha_k)}
+{2n_k}
+}
+}_{\text{range-only radius}}\]</span></p>
+<p>It remains valid even if scores frequently reach both bounds. But suppose most episodes produce scores near zero. The actual variance may be far below the worst case.</p>
+<p>Estimate that variance with:</p>
+<p><span class="math display">\[\hat v_k
+=
+\underbrace{
+\frac{1}{n_k-1}
+\sum_{i=1}^{n_k}
+(d_i-\bar d_{n_k})^2
+}_{\text{sample variance at look }k}\]</span></p>
+<p>A conservative empirical Bernstein radius is:</p>
+<p><span class="math display">\[r_k^{\mathrm{EB}}
+=
+\underbrace{
+\sqrt{
+\frac{
+2\hat v_k\log(3/\alpha_k)
+}{
+n_k
+}
+}
+}_{\text{variance-sensitive term}}
++
+\underbrace{
+\frac{
+3(b-a)\log(3/\alpha_k)
+}{
+n_k
+}
+}_{\text{range correction for rare extremes}}\]</span></p>
+<p>The lower bound is:</p>
+<p><span class="math display">\[LCB_k^{\mathrm{EB}}
+=
+\underbrace{\bar d_{n_k}-r_k^{\mathrm{EB}}}
+_{\text{variance-adaptive lower confidence bound}}\]</span></p>
+<p>Using the spending schedule:</p>
+<p><span class="math display">\[\alpha_k
+=
+\underbrace{
+\frac{6\alpha}{\pi^2k^2}
+}_{\text{error allocated to look }k}\]</span></p>
+<p>and a union bound gives simultaneous validity over the scheduled looks.</p>
+<p>The second term prevents a few initial low-variance observations from creating unjustified confidence. Early in evaluation it often dominates; later, the variance-sensitive term becomes more important.</p>
+<p>This is not equivalent to using:</p>
+<p><span class="math display">\[\bar d_n-z\frac{\hat s_n}{\sqrt n}\]</span></p>
+<p>at every look. That ordinary standard-error interval remains vulnerable to optional stopping.</p>
+<p>For OPE, the bound requires genuinely bounded scores. Raw importance-weighted scores may violate this. Clipping supplies a bound but changes the estimand and introduces bias.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>simulated scores: <span style="background-color: codeinlinebg"><code> [R, T]</code></span></p></li>
+<li><p>means and variances at monitoring looks: <span style="background-color: codeinlinebg"><code> [R, K]</code></span></p></li>
+<li><p>Hoeffding radii: <span style="background-color: codeinlinebg"><code> [K]</code></span></p></li>
+<li><p>empirical Bernstein radii: <span style="background-color: codeinlinebg"><code> [R, K]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-most-scores-are-zero">3. PyTorch exercise — most scores are zero</h3>
+<p>Scores lie in <span style="background-color: codeinlinebg"><code> [-0.1, 0.1]</code></span>, but 85–90% of episodes contribute exactly zero. Compare range-only and variance-adaptive monitoring.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 1_000
+maximum_episodes = 5_000
+
+look_sizes = torch.arange(
+    125,
+    maximum_episodes + 1,
+    125,
+)
+
+num_looks = look_sizes.numel()
+family_alpha = 0.05
+
+lower_score = -0.10
+upper_score = 0.10
+score_range = upper_score - lower_score
+
+# Null: +0.1 and -0.1 are equally likely.
+null_positive_probability = 0.05
+null_negative_probability = 0.05
+
+# Alternative has a small positive mean.
+alternative_positive_probability = 0.10
+alternative_negative_probability = 0.05
+
+
+# TODO 1: Allocate error across monitoring looks.
+look_indices = ...
+
+alpha_spending = ...
+
+look_sizes_float = ...
+
+
+# TODO 2: Range-only Hoeffding radii.
+hoeffding_radii = ...
+
+
+# TODO 3: Simulate means and sample variances.
+def simulate_running_statistics(
+    positive_probability,
+    negative_probability,
+):
+    uniforms = ...
+
+    scores = ...
+
+    cumulative_sums = ...
+    cumulative_square_sums = ...
+
+    sums_at_looks = ...
+    square_sums_at_looks = ...
+
+    running_means = ...
+
+    running_variances = ...
+
+    return (
+        running_means,
+        running_variances,
+    )
+
+
+(
+    null_means,
+    null_variances,
+) = ...
+
+(
+    alternative_means,
+    alternative_variances,
+) = ...
+
+
+# TODO 4: Variance-adaptive radii.
+def empirical_bernstein_radii(
+    sample_variances,
+):
+    log_terms = ...
+
+    variance_terms = ...
+
+    range_corrections = ...
+
+    return ...
+
+
+null_eb_radii = ...
+
+alternative_eb_radii = ...
+
+
+# TODO 5: Compare promotion rates.
+def promotion_rate(
+    running_means,
+    radii,
+):
+    lower_bounds = ...
+
+    promoted = ...
+
+    return ...
+
+
+null_hoeffding_rate = ...
+null_eb_rate = ...
+
+alternative_hoeffding_rate = ...
+alternative_eb_rate = ...
+
+exact_null_mean = ...
+
+exact_alternative_mean = ...
+
+exact_null_variance = ...
+
+exact_alternative_variance = ...
+
+print(&quot;Number of looks:&quot;, num_looks)
+print(
+    &quot;Exact means: null, alternative&quot;,
+    exact_null_mean,
+    exact_alternative_mean,
+)
+print(
+    &quot;Exact variances: null, alternative&quot;,
+    exact_null_variance,
+    exact_alternative_variance,
+)
+
+print(
+    &quot;Null promotion rates: Hoeffding, EB&quot;,
+    null_hoeffding_rate.item(),
+    null_eb_rate.item(),
+)
+
+print(
+    &quot;Alternative detection rates: Hoeffding, EB&quot;,
+    alternative_hoeffding_rate.item(),
+    alternative_eb_rate.item(),
+)
+
+print(
+    &quot;Final mean radii: Hoeffding, null EB, alt EB&quot;
+)
+print(
+    hoeffding_radii[-1].item(),
+    null_eb_radii[:, -1].mean().item(),
+    alternative_eb_radii[:, -1].mean().item(),
+)
+
+print(
+    &quot;Total alpha spent:&quot;,
+    alpha_spending.sum().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What are the exact null and alternative means?</p></li>
+<li><p>Is the actual score variance near the maximum possible variance of <span style="background-color: codeinlinebg"><code> 0.01</code></span>?</p></li>
+<li><p>Which bound should be narrower after several thousand episodes?</p></li>
+<li><p>Why should empirical Bernstein still contain a range-dependent term?</p></li>
+<li><p>What happens if one score unexpectedly equals <span style="background-color: codeinlinebg"><code> 0.8</code></span>?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>Generate the three possible scores with nested <span style="background-color: codeinlinebg"><code> torch.where</code></span>:</p>
+<pre class="code python"><code class="language-python">torch.where(
+    uniforms &lt; positive_probability,
+    upper_score,
+    torch.where(
+        uniforms
+        &lt; positive_probability
+        + negative_probability,
+        lower_score,
+        0.0,
+    ),
+)</code></pre>
+<p>Recover an unbiased sample variance from sums:</p>
+<p><span class="math display">\[\hat v_n
+=
+\underbrace{
+\frac{
+\sum_i d_i^2
+-
+(\sum_i d_i)^2/n
+}{
+n-1
+}
+}_{\text{variance from first and second moments}}\]</span></p>
+<p>Clamp small negative values caused by floating-point error to zero.</p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Remove the range correction and trust an initial run of all-zero scores.</p></li>
+<li><p>Use the observed minimum and maximum as though they were known population bounds.</p></li>
+<li><p>Apply this i.i.d. formula to adaptively collected dependent trajectories.</p></li>
+<li><p>Treat tokens from one response as independent samples.</p></li>
+<li><p>Clip importance weights but omit clipping bias.</p></li>
+<li><p>Change the target policy after inspecting results without adding multiplicity control.</p></li>
+<li><p>Interpret a preference-score bound as a guarantee about online environment reward.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Error allocation and Hoeffding radii:</p>
+<pre class="code python"><code class="language-python">look_indices = torch.arange(
+    1,
+    num_looks + 1,
+    dtype=torch.float64,
+)
+
+alpha_spending = (
+    6.0
+    * family_alpha
+    / (
+        math.pi**2
+        * look_indices.square()
+    )
+)
+
+look_sizes_float = look_sizes.to(
+    torch.float64
+)
+
+hoeffding_radii = (
+    score_range
+    * torch.sqrt(
+        torch.log(
+            1.0 / alpha_spending
+        )
+        / (
+            2.0 * look_sizes_float
+        )
+    )
+)</code></pre>
+<p>Simulation:</p>
+<pre class="code python"><code class="language-python">def simulate_running_statistics(
+    positive_probability,
+    negative_probability,
+):
+    uniforms = torch.rand(
+        num_repetitions,
+        maximum_episodes,
+    )
+
+    scores = torch.where(
+        uniforms &lt; positive_probability,
+        torch.tensor(upper_score),
+        torch.where(
+            uniforms
+            &lt; (
+                positive_probability
+                + negative_probability
+            ),
+            torch.tensor(lower_score),
+            torch.tensor(0.0),
+        ),
+    )
+
+    cumulative_sums = scores.cumsum(
+        dim=1
+    )
+
+    cumulative_square_sums = (
+        scores.square().cumsum(dim=1)
+    )
+
+    sums_at_looks = cumulative_sums[
+        :,
+        look_sizes - 1,
+    ]
+
+    square_sums_at_looks = (
+        cumulative_square_sums[
+            :,
+            look_sizes - 1,
+        ]
+    )
+
+    running_means = (
+        sums_at_looks
+        / look_sizes_float[None, :]
+    )
+
+    running_variances = (
+        (
+            square_sums_at_looks
+            - sums_at_looks.square()
+            / look_sizes_float[None, :]
+        )
+        / (
+            look_sizes_float[None, :]
+            - 1.0
+        )
+    ).clamp_min(0.0)
+
+    return (
+        running_means,
+        running_variances,
+    )
+
+
+(
+    null_means,
+    null_variances,
+) = simulate_running_statistics(
+    null_positive_probability,
+    null_negative_probability,
+)
+
+(
+    alternative_means,
+    alternative_variances,
+) = simulate_running_statistics(
+    alternative_positive_probability,
+    alternative_negative_probability,
+)</code></pre>
+<p>Empirical Bernstein radii:</p>
+<pre class="code python"><code class="language-python">def empirical_bernstein_radii(
+    sample_variances,
+):
+    log_terms = torch.log(
+        3.0 / alpha_spending
+    )[None, :]
+
+    variance_terms = torch.sqrt(
+        2.0
+        * sample_variances
+        * log_terms
+        / look_sizes_float[None, :]
+    )
+
+    range_corrections = (
+        3.0
+        * score_range
+        * log_terms
+        / look_sizes_float[None, :]
+    )
+
+    return (
+        variance_terms
+        + range_corrections
+    )
+
+
+null_eb_radii = (
+    empirical_bernstein_radii(
+        null_variances
+    )
+)
+
+alternative_eb_radii = (
+    empirical_bernstein_radii(
+        alternative_variances
+    )
+)</code></pre>
+<p>Promotion rates:</p>
+<pre class="code python"><code class="language-python">def promotion_rate(
+    running_means,
+    radii,
+):
+    lower_bounds = (
+        running_means - radii
+    )
+
+    promoted = (
+        lower_bounds &gt; 0.0
+    ).any(dim=1)
+
+    return (
+        promoted
+        .to(torch.float64)
+        .mean()
+    )
+
+
+null_hoeffding_rate = promotion_rate(
+    null_means,
+    hoeffding_radii[None, :],
+)
+
+null_eb_rate = promotion_rate(
+    null_means,
+    null_eb_radii,
+)
+
+alternative_hoeffding_rate = (
+    promotion_rate(
+        alternative_means,
+        hoeffding_radii[None, :],
+    )
+)
+
+alternative_eb_rate = promotion_rate(
+    alternative_means,
+    alternative_eb_radii,
+)</code></pre>
+<p>Population quantities:</p>
+<pre class="code python"><code class="language-python">exact_null_mean = (
+    upper_score
+    * null_positive_probability
+    + lower_score
+    * null_negative_probability
+)
+
+exact_alternative_mean = (
+    upper_score
+    * alternative_positive_probability
+    + lower_score
+    * alternative_negative_probability
+)
+
+null_second_moment = (
+    upper_score**2
+    * null_positive_probability
+    + lower_score**2
+    * null_negative_probability
+)
+
+alternative_second_moment = (
+    upper_score**2
+    * alternative_positive_probability
+    + lower_score**2
+    * alternative_negative_probability
+)
+
+exact_null_variance = (
+    null_second_moment
+    - exact_null_mean**2
+)
+
+exact_alternative_variance = (
+    alternative_second_moment
+    - exact_alternative_mean**2
+)</code></pre>
+<p>The population values are:</p>
+<p><span class="math display">\[\Delta_0
+=
+\underbrace{0.05(0.1)+0.05(-0.1)}_{\text{null score mixture}}
+=
+0\]</span></p>
+<p><span class="math display">\[\Delta_1
+=
+\underbrace{0.10(0.1)+0.05(-0.1)}_{\text{candidate-positive mixture}}
+=
+0.005\]</span></p>
+<p>For the alternative:</p>
+<p><span class="math display">\[\operatorname{Var}(d)
+=
+\underbrace{
+0.10(0.1^2)+0.05((-0.1)^2)
+}_{E[d^2]=0.0015}
+-
+\underbrace{0.005^2}_{E[d]^2}
+=
+0.001475\]</span></p>
+<p>The maximum variance allowed by <span style="background-color: codeinlinebg"><code> [-0.1, 0.1]</code></span> is <span style="background-color: codeinlinebg"><code> 0.01</code></span>, so the actual variance is almost seven times smaller.</p>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Condition</strong></th>
+<th style="text-align: left;"><strong>Hoeffding</strong></th>
+<th style="text-align: left;"><strong>Empirical Bernstein</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Condition</strong></td>
+<td style="text-align: left;"><strong>Hoeffding</strong></td>
+<td style="text-align: left;"><strong>Empirical Bernstein</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Null false promotion</td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Alternative detection</td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.95</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Final radius</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.0066</code></span></td>
+<td style="text-align: left;">about <span style="background-color: codeinlinebg"><code> 0.0036–0.0041</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>Both bounds are conservative under the null. Empirical Bernstein gains power because it learns that most episodes contribute zero.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Null: <span style="background-color: codeinlinebg"><code> 0</code></span>; alternative: <span style="background-color: codeinlinebg"><code> 0.005</code></span>.</p></li>
+<li><p>No. The alternative variance is <span style="background-color: codeinlinebg"><code> 0.001475</code></span>, compared with the maximum <span style="background-color: codeinlinebg"><code> 0.01</code></span>.</p></li>
+<li><p>Empirical Bernstein, because it incorporates the much smaller observed variance.</p></li>
+<li><p>A low observed variance may simply mean rare extreme outcomes have not appeared yet; the range term protects against that.</p></li>
+<li><p>The claimed bound is invalid because the assumed score range was false.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Every inspection is another chance for random noise to cross the promotion threshold, so a pointwise interval does not control the probability of ever making a false promotion.</p></li>
+<li><p>Each independent score had to lie within a known fixed range.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> Hoeffding asks, “How bad could variance be within this range?” Empirical Bernstein also asks, “How variable have the scores actually been?” The latter can certify small policy gains sooner—but only when the range, independence and monitoring plan are honest.</p>

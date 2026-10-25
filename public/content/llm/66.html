@@ -1,0 +1,242 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>The critic</strong> is trained by regression: predict the return target <span class="math inline">\(\hat R_t\)</span>. That’s MSE, the Gaussian NLL from Part 0. Both <span class="math inline">\(\hat R_t=A_t+V_{\text{old}}(s_t)\)</span> and <span class="math inline">\(V_{\text{old}}\)</span> are fixed numbers from the rollout. Only <span class="math inline">\(V_{\text{new}}\)</span> carries gradient. <strong>Value clipping</strong> optionally limits how far <span class="math inline">\(V_{\text{new}}\)</span> can move from <span class="math inline">\(V_{\text{old}}\)</span> in one update.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>For which two combinations of advantage sign and probability ratio does PPO’s policy gradient become flat?</p></li>
+<li><p>Why is directly clamping the importance ratio different from PPO’s pessimistic minimum?</p></li>
+</ol>
+<p>GAE produces a fixed critic target:</p>
+<p><span class="math display">\[\hat R_t=A_t^{\text{GAE}}+V_{\text{old}}(s_t)\]</span></p>
+<p>For a rollout batch:</p>
+<p><span class="math display">\[V_{\text{old}},V_{\text{new}},A,\hat R
+\in\mathbb{R}^{B\times T}\]</span></p>
+<p>The ordinary critic loss is:</p>
+<p><span class="math display">\[L_V
+=
+\frac{1}{2}
+\left(V_{\text{new}}-\hat R\right)^2\]</span></p>
+<p>Both the return target and old value prediction must be treated as fixed rollout data.</p>
+<p>PPO implementations may restrict value-prediction movement:</p>
+<p><span class="math display">\[V_{\text{clip}}
+=
+V_{\text{old}}
++
+\operatorname{clip}
+\left(
+V_{\text{new}}-V_{\text{old}},
+-\epsilon_V,\epsilon_V
+\right)\]</span></p>
+<p>The pessimistic loss is:</p>
+<p><span class="math display">\[L_V^{\text{clip}}
+=
+\frac{1}{2}
+\max\left[
+(V_{\text{new}}-\hat R)^2,
+(V_{\text{clip}}-\hat R)^2
+\right]\]</span></p>
+<p>The <code>max</code> matters:</p>
+<ul>
+<li><p>An excessively large beneficial movement becomes flat.</p></li>
+<li><p>An excessively large harmful movement remains penalized.</p></li>
+<li><p>Simply clamping <span class="math inline">\(V_{\text{new}}\)</span> before MSE would incorrectly flatten both.</p></li>
+</ul>
+<p>Unlike the policy ratio, value errors have reward units. Therefore <span class="math inline">\(\epsilon_V\)</span> interacts strongly with reward scaling and normalization. Monitor value loss, explained variance, prediction scale, and value-clip fraction.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the clipped value loss and when its gradient is zero</div>
+<p><strong>Step 1.</strong> Plain loss <span class="math inline">\(\frac12(V-\hat R)^2\)</span>, gradient <span class="math inline">\(V-\hat R\)</span>.</p>
+<p><strong>Step 2.</strong> Clipped prediction <span class="math inline">\(V_c=V_{\text{old}}+\operatorname{clip}(V-V_{\text{old}},-\epsilon,\epsilon)\)</span>. Inside the band, <span class="math inline">\(V_c=V\)</span>; outside, <span class="math inline">\(V_c\)</span> is constant.</p>
+<p><strong>Step 3.</strong> Loss <span class="math inline">\(L=\frac12\max\big((V-\hat R)^2,(V_c-\hat R)^2\big)\)</span>. The max is pessimistic, like PPO’s min.</p>
+<p><strong>Step 4.</strong> Outside the band, if <span class="math inline">\((V_c-\hat R)^2\)</span> is the larger term, <span class="math inline">\(L\)</span> is constant in <span class="math inline">\(V\)</span>, so the gradient is 0. That happens when <span class="math inline">\(V\)</span> has moved past the band boundary <em>toward</em> <span class="math inline">\(\hat R\)</span>: <span class="math inline">\(V\)</span> has already moved “enough” this update.</p>
+<p><strong>Step 5.</strong> If <span class="math inline">\(V\)</span> moved <em>away</em> from <span class="math inline">\(\hat R\)</span>, the unclipped term is larger and the full gradient pulls it back.</p>
+<p><strong>Step 6.</strong> <strong>Scale warning:</strong> <span class="math inline">\(\epsilon\)</span> is in return units. With returns around 100 and <span class="math inline">\(\epsilon=0.2\)</span>, <span class="math inline">\(V\)</span> can only move 0.2 per update, so normalize returns or scale <span class="math inline">\(\epsilon\)</span>.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: PPO critic loss</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(V_{\text{new}}\)</span> (with gradient), fixed <span class="math inline">\(V_{\text{old}},\hat R\)</span>, mask <span class="math inline">\(M\)</span>, <span class="math inline">\(\epsilon_v\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(V_c\gets V_{\text{old}}+\operatorname{clip}(V_{\text{new}}-V_{\text{old}},-\epsilon_v,\epsilon_v)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L_V\gets\frac12\sum M\max\big((V_{\text{new}}-\hat R)^2,(V_c-\hat R)^2\big)/\sum M\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement clipped value loss and inspect which predictions receive zero gradients.</p>
+<pre class="code python"><code class="language-python">import torch
+
+value_epsilon = 0.2
+
+old_values = torch.zeros(1, 5)                     # [B,T]
+
+returns = torch.tensor([
+    [2.0, 2.0, -2.0, -2.0, 10.0]
+])                                                  # fixed targets [B,T]
+
+new_values = torch.tensor([
+    [0.5, -0.5, -0.5, 0.5, 5.0]
+], requires_grad=True)                              # [B,T]
+
+valid_mask = torch.tensor([
+    [1, 1, 1, 1, 0]
+], dtype=torch.bool)
+
+
+value_delta = ...                                   # TODO 1
+
+clipped_values = ...                                # TODO 2
+
+unclipped_error = ...                               # TODO 3
+clipped_error = ...                                 # TODO 4
+
+unclipped_loss = ...                                # TODO 5: squared error
+clipped_loss = ...                                  # TODO 6: squared error
+
+per_token_loss = ...                                # TODO 7: pessimistic loss
+value_loss = ...                                    # TODO 8: masked mean
+
+value_loss.backward()
+
+print(&quot;new values:\n&quot;, new_values.detach())
+print(&quot;clipped values:\n&quot;, clipped_values.detach())
+print(&quot;unclipped losses:\n&quot;, unclipped_loss.detach())
+print(&quot;clipped losses:\n&quot;, clipped_loss.detach())
+print(&quot;selected losses:\n&quot;, per_token_loss.detach())
+print(&quot;gradients:\n&quot;, new_values.grad)
+
+beneficial_but_too_far = torch.tensor([
+    [1, 0, 1, 0, 0]
+], dtype=torch.bool)
+
+assert torch.allclose(
+    new_values.grad[beneficial_but_too_far],
+    torch.zeros_like(new_values.grad[beneficial_but_too_far]),
+)
+
+assert torch.all(new_values.grad[valid_mask &amp; ~beneficial_but_too_far] != 0)
+
+assert torch.allclose(
+    new_values.grad[~valid_mask],
+    torch.zeros_like(new_values.grad[~valid_mask]),
+)</code></pre>
+<p>Before running, predict the gradients for:</p>
+<ul>
+<li><p>Target <span class="math inline">\(2\)</span>, prediction <span class="math inline">\(0.5\)</span>: beneficial but beyond the upper clip.</p></li>
+<li><p>Target <span class="math inline">\(2\)</span>, prediction <span class="math inline">\(-0.5\)</span>: harmful and beyond the lower clip.</p></li>
+<li><p>Target <span class="math inline">\(-2\)</span>, prediction <span class="math inline">\(-0.5\)</span>: beneficial but beyond the lower clip.</p></li>
+<li><p>Target <span class="math inline">\(-2\)</span>, prediction <span class="math inline">\(0.5\)</span>: harmful and beyond the upper clip.</p></li>
+</ul>
+<p>Now introduce a target-construction bug:</p>
+<pre class="code python"><code class="language-python">bad_new_values = (
+    new_values.detach().clone().requires_grad_()
+)
+
+rollout_advantages = returns - old_values
+
+# Bug: uses the current trainable prediction instead of old rollout values.
+bad_returns = ...                                   # TODO 9
+
+bad_loss = 0.5 * (
+    bad_new_values - bad_returns
+).square()[valid_mask].mean()
+
+bad_loss.backward()
+
+print(&quot;\nbad target gradients:\n&quot;, bad_new_values.grad)</code></pre>
+<p>Predict why the critic gradient becomes zero even though its predictions remain far from the intended returns.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Clip <code>new_values - old_values</code>, then add <code>old_values</code>.</p></li>
+<li><p>Both error tensors are prediction minus target.</p></li>
+<li><p>Use <code>torch.maximum</code> on the two squared errors.</p></li>
+<li><p>Construct valid targets as <code>rollout_advantages + old_values</code>, not with current values.</p></li>
+<li><p>The conventional factor <span class="math inline">\(1/2\)</span> simplifies the MSE gradient but does not change its optimum.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does clipped value loss use <code>maximum</code>, whereas the PPO policy objective uses <code>minimum</code>?</p></li>
+<li><p>Prediction: if a value prediction moves too far toward its target, which loss branch is selected?</p></li>
+<li><p>Debugging: value loss is constant and critic gradients are zero despite inaccurate predictions. What target-construction mistake could cause exact cancellation?</p></li>
+<li><p>Why can the same value-clipping threshold behave very differently after rewards are rescaled by 100?</p></li>
+<li><p>In an LLM PPO model with a shared transformer backbone, why can a large critic-loss coefficient degrade policy behavior?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">value_delta = new_values - old_values
+
+clipped_values = (
+    old_values
+    + torch.clamp(
+        value_delta,
+        -value_epsilon,
+        value_epsilon,
+    )
+)
+
+unclipped_error = new_values - returns
+clipped_error = clipped_values - returns
+
+unclipped_loss = unclipped_error.square()
+clipped_loss = clipped_error.square()
+
+per_token_loss = 0.5 * torch.maximum(
+    unclipped_loss,
+    clipped_loss,
+)
+
+value_loss = per_token_loss[valid_mask].mean()</code></pre>
+<p>Target-construction bug:</p>
+<pre class="code python"><code class="language-python">bad_new_values = (
+    new_values.detach().clone().requires_grad_()
+)
+
+rollout_advantages = returns - old_values
+
+bad_returns = rollout_advantages + bad_new_values
+
+bad_loss = 0.5 * (
+    bad_new_values - bad_returns
+).square()[valid_mask].mean()
+
+bad_loss.backward()</code></pre>
+<p>For target <span class="math inline">\(2\)</span>, prediction <span class="math inline">\(0.5\)</span>:</p>
+<p><span class="math display">\[(0.5-2)^2=2.25\]</span></p>
+<p><span class="math display">\[(0.2-2)^2=3.24\]</span></p>
+<p>The clipped branch is larger and locally constant, so the gradient is zero.</p>
+<p>For target <span class="math inline">\(2\)</span>, prediction <span class="math inline">\(-0.5\)</span>:</p>
+<p><span class="math display">\[(-0.5-2)^2=6.25\]</span></p>
+<p><span class="math display">\[(-0.2-2)^2=4.84\]</span></p>
+<p>The harmful, unclipped prediction has the larger loss, so it retains a gradient toward the target.</p>
+<p>The two negative-target cases are symmetric. Prediction <span class="math inline">\(-0.5\)</span> is beneficial and clipped flat; prediction <span class="math inline">\(0.5\)</span> is harmful and remains penalized.</p>
+<p>With the broken target:</p>
+<p><span class="math display">\[\hat R_{\text{bad}}
+=
+A+V_{\text{new}}\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[V_{\text{new}}-\hat R_{\text{bad}}
+=
+V_{\text{new}}-(A+V_{\text{new}})
+=
+-A\]</span></p>
+<p>The prediction cancels from the error, producing zero critic gradient. Correct targets use stored rollout values and are detached:</p>
+<p><span class="math display">\[\hat R=A+V_{\text{old}}\]</span></p>
+<p>Check answers:</p>
+<ol>
+<li><p>The actor maximizes a conservative improvement estimate, so it chooses the smaller objective. The critic minimizes a conservative error estimate, so it chooses the larger loss.</p></li>
+<li><p>The clipped-value branch becomes worse than the improved prediction and is selected, producing a flat region.</p></li>
+<li><p>The target may have been recomputed as <code>advantage + current_value</code> without detaching the current value.</p></li>
+<li><p>Value differences have reward units. Rescaling rewards also rescales returns and prediction errors, but a fixed <span class="math inline">\(\epsilon_V\)</span> does not rescale automatically.</p></li>
+<li><p>Critic gradients also update the shared backbone. An oversized critic term can dominate representation learning and interfere with the policy objective.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Policy clipping is flat for <span class="math inline">\(A&gt;0,r&gt;1+\epsilon\)</span> and <span class="math inline">\(A&lt;0,r&lt;1-\epsilon\)</span>.</p></li>
+<li><p>Direct clamping suppresses both beneficial and harmful out-of-range gradients; PPO suppresses only excessive beneficial movement.</p></li>
+</ul>

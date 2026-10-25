@@ -1,0 +1,255 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Gradient-norm clipping</strong> limits the <em>length</em> of the update when gradients spike. Treat all parameters’ gradients as one long vector <span class="math inline">\(g\)</span>. If <span class="math inline">\(\|g\|_2&gt;\tau\)</span>, rescale the whole vector to length <span class="math inline">\(\tau\)</span>. Its <em>direction</em> is unchanged.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why must mixed-precision gradients be unscaled before clipping?</p></li>
+<li><p>What error pattern should a finite-difference gradient check show as <span class="math inline">\(\epsilon\)</span> decreases?</p></li>
+</ol>
+<p>Treat all parameter gradients as one concatenated vector:</p>
+<p><span class="math display">\[g=
+\begin{bmatrix}
+\operatorname{vec}(g_1)\\
+\operatorname{vec}(g_2)\\
+\vdots
+\end{bmatrix}\]</span></p>
+<p>Its global <span class="math inline">\(L_2\)</span> norm is:</p>
+<p><span class="math display">\[\lVert g\rVert_2
+=
+\sqrt{\sum_p\sum_i g_{p,i}^2}\]</span></p>
+<p>Given threshold <span class="math inline">\(\tau\)</span>, global-norm clipping computes:</p>
+<p><span class="math display">\[c=
+\min\left(
+1,\frac{\tau}{\lVert g\rVert_2+\epsilon}
+\right)\]</span></p>
+<p><span class="math display">\[g&#39;_p=cg_p\]</span></p>
+<p>Every parameter gradient receives the same coefficient. Therefore clipping preserves the direction of the complete gradient vector while reducing its magnitude.</p>
+<p>For SGD:</p>
+<p><span class="math display">\[\Delta\theta=-\eta g&#39;\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[\lVert\Delta\theta\rVert_2\leq\eta\tau\]</span></p>
+<p>For Adam, clipping bounds the gradient entering the moment estimates, but does not directly bound the final adaptive parameter update.</p>
+<p>Correct training order:</p>
+<pre class="code text"><code class="language-plaintext">accumulate gradients
+→ unscale AMP gradients
+→ compute global norm
+→ clip
+→ optimizer step
+→ clear gradients</code></pre>
+<p>Clipping every parameter independently is different: it changes the relative scale between layers and therefore changes the overall gradient direction.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: global clipping preserves direction, and per-tensor clipping doesn’t</div>
+<p><strong>Step 1.</strong> Global norm <span class="math inline">\(\|g\|=\sqrt{\sum_p\|g_p\|^2}\)</span>, and coefficient <span class="math inline">\(c=\min\big(1,\tau/(\|g\|+\epsilon)\big)\)</span>.</p>
+<p><strong>Step 2.</strong> Every tensor gets <span class="math inline">\(g&#39;_p=cg_p\)</span>, so <span class="math inline">\(g&#39;=cg\)</span> is parallel to <span class="math inline">\(g\)</span>, and <span class="math inline">\(\|g&#39;\|=\min(\|g\|,\tau)\)</span>.</p>
+<p><strong>Step 3.</strong> <strong>Example:</strong> <span class="math inline">\(g=(3,4)\)</span>, <span class="math inline">\(\|g\|=5\)</span>, <span class="math inline">\(\tau=1\)</span>: <span class="math inline">\(c=0.2\)</span>, <span class="math inline">\(g&#39;=(0.6,0.8)\)</span>. Same direction, length 1.</p>
+<p><strong>Step 4.</strong> <strong>Per-tensor clipping:</strong> clip <span class="math inline">\((3)\)</span> and <span class="math inline">\((4)\)</span> separately to length 1, giving <span class="math inline">\((1,1)\)</span>, which points at <span class="math inline">\(45^\circ\)</span> instead of <span class="math inline">\(53^\circ\)</span>. It changes the balance between layers.</p>
+<p><strong>Step 5.</strong> <strong>First-order effect:</strong> <span class="math inline">\(\Delta L\approx-\eta c\|g\|^2\le0\)</span>. Clipping only shortens the step, so it remains a descent direction.</p>
+<p><strong>Step 6.</strong> Clip once, after all accumulation and unscaling (Sessions 14, 16, 51).</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: global gradient-norm clipping</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> gradients <span class="math inline">\(g_1,\dots,g_P\)</span> (after accumulation and unscaling), threshold <span class="math inline">\(\tau\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(n\gets\sqrt{\sum_p\|g_p\|_2^2}\)</span> <em>▷ over all ranks if sharded</em></div>
+<div class="algo-line" style="--d:0">log <span class="math inline">\(n\)</span> (the pre-clip norm)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(c\gets\min(1,\tau/(n+10^{-6}))\)</span>; <span class="math inline">\(g_p\gets cg_p\)</span> for every <span class="math inline">\(p\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement global clipping manually and compare it with PyTorch.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(141)
+
+B, D, H, C = 16, 8, 12, 4
+max_norm = 1.0
+
+X = torch.randn(B, D)
+targets = torch.randint(0, C, (B,))
+
+model = nn.Sequential(
+    nn.Linear(D, H),
+    nn.Tanh(),
+    nn.Linear(H, C),
+)
+
+logits = model(X)                             # [B, C]
+
+# Deliberately amplify the loss to force clipping
+loss = ...                                    # TODO 1
+loss.backward()
+
+parameters = [
+    p for p in model.parameters()
+    if p.grad is not None
+]
+
+original_gradients = [
+    p.grad.detach().clone()
+    for p in parameters
+]
+
+# Manual global norm
+squared_norms = [
+    ...                                       # TODO 2: scalar for each gradient
+    for gradient in original_gradients
+]
+
+total_norm = ...                              # TODO 3: scalar
+clip_coefficient = ...                        # TODO 4: scalar &lt;= 1
+
+manual_clipped = [
+    ...                                       # TODO 5
+    for gradient in original_gradients
+]
+
+print(&quot;original global norm:&quot;, total_norm.item())
+print(&quot;clip coefficient:&quot;, clip_coefficient.item())
+
+# PyTorch clips gradients in place and returns the pre-clipping norm
+returned_norm = torch.nn.utils.clip_grad_norm_(
+    parameters,
+    max_norm=max_norm,
+)
+
+print(&quot;returned norm:&quot;, returned_norm.item())
+
+for index, (manual, parameter) in enumerate(
+    zip(manual_clipped, parameters)
+):
+    error = (manual - parameter.grad).abs().max().item()
+    print(f&quot;parameter {index}: max error={error:.3e}&quot;)
+    assert torch.allclose(manual, parameter.grad, atol=1e-6)
+
+clipped_global_norm = torch.sqrt(
+    sum(parameter.grad.square().sum() for parameter in parameters)
+)
+
+print(&quot;clipped global norm:&quot;, clipped_global_norm.item())
+assert clipped_global_norm &lt;= max_norm + 1e-5</code></pre>
+<p>Now compare global clipping with independently clipping each tensor:</p>
+<pre class="code python"><code class="language-python">independently_clipped = []
+
+for gradient in original_gradients:
+    local_norm = ...                           # TODO 6
+    local_coefficient = ...                    # TODO 7
+    independently_clipped.append(
+        gradient * local_coefficient
+    )
+
+global_vector = torch.cat([
+    gradient.flatten()
+    for gradient in manual_clipped
+])
+
+independent_vector = torch.cat([
+    gradient.flatten()
+    for gradient in independently_clipped
+])
+
+cosine = F.cosine_similarity(
+    global_vector,
+    independent_vector,
+    dim=0,
+)
+
+print(&quot;direction cosine:&quot;, cosine.item())</code></pre>
+<p>Predict whether the cosine is exactly one.</p>
+<p>Debugging extension:</p>
+<pre class="code python"><code class="language-python">parameters[0].grad[0, 0] = float(&quot;nan&quot;)
+
+torch.nn.utils.clip_grad_norm_(
+    parameters,
+    max_norm,
+    error_if_nonfinite=True,
+)</code></pre>
+<p>Predict what happens and why silently continuing would be dangerous.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Each squared norm is <code>gradient.square().sum()</code>.</p></li>
+<li><p>Sum them before applying the square root.</p></li>
+<li><p>Use <code>torch.clamp(value, max=1.0)</code>.</p></li>
+<li><p>Local clipping computes a separate coefficient for every tensor.</p></li>
+<li><p>PyTorch returns the norm before clipping.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>If the global gradient norm is below <span class="math inline">\(\tau\)</span>, what is the clipping coefficient?</p></li>
+<li><p>Why does global clipping preserve gradient direction?</p></li>
+<li><p>Prediction: if the loss is multiplied by 100 and clipping is always active, does the resulting clipped SGD gradient also become 100 times larger?</p></li>
+<li><p>Debugging: gradient norms look reasonable before AMP unscaling but become enormous afterward. What does that imply about the inspected values?</p></li>
+<li><p>Why should clipping normally happen once after gradient accumulation rather than once per microbatch?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">logits = model(X)
+
+loss = 100.0 * F.cross_entropy(logits, targets)
+loss.backward()
+
+parameters = [
+    p for p in model.parameters()
+    if p.grad is not None
+]
+
+original_gradients = [
+    p.grad.detach().clone()
+    for p in parameters
+]
+
+squared_norms = [
+    gradient.square().sum()
+    for gradient in original_gradients
+]
+
+total_norm = torch.stack(squared_norms).sum().sqrt()
+
+clip_coefficient = torch.clamp(
+    max_norm / (total_norm + 1e-6),
+    max=1.0,
+)
+
+manual_clipped = [
+    gradient * clip_coefficient
+    for gradient in original_gradients
+]</code></pre>
+<p>Independent clipping:</p>
+<pre class="code python"><code class="language-python">independently_clipped = []
+
+for gradient in original_gradients:
+    local_norm = gradient.norm()
+
+    local_coefficient = torch.clamp(
+        max_norm / (local_norm + 1e-6),
+        max=1.0,
+    )
+
+    independently_clipped.append(
+        gradient * local_coefficient
+    )</code></pre>
+<p>The cosine generally is not exactly one. Global clipping multiplies every gradient by one shared scalar. Independent clipping applies different scalars to different tensors, altering their relative contributions.</p>
+<p>With <code>error_if_nonfinite=True</code>, PyTorch raises an error after detecting the non-finite norm. Continuing could feed <code>nan</code> into optimizer moments, after which future parameters and optimizer state may also become non-finite.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>The coefficient is one, so the gradients remain unchanged.</p></li>
+<li><p>Multiplication of every component by the same positive scalar changes magnitude but not direction.</p></li>
+<li><p>No. If clipping remains active, both the gradient and its norm scale by 100, causing the clipping coefficient to shrink by approximately <span class="math inline">\(1/100\)</span>.</p></li>
+<li><p>The values inspected before unscaling were still multiplied by the loss scale and were not the true gradients.</p></li>
+<li><p>The optimizer update should depend on the clipped sum of all microbatch gradients. Separately clipping microbatches changes both their relative weighting and final direction.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>AMP gradients must be unscaled because otherwise the clipping threshold is implicitly multiplied or divided by the loss scale.</p></li>
+<li><p>Finite-difference error typically decreases, reaches a minimum, then increases as cancellation dominates.</p></li>
+</ul>

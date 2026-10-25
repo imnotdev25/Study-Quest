@@ -1,0 +1,237 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Reusing old samples:</strong> PPO collects actions with <span class="math inline">\(\pi_{\text{old}}\)</span> and then takes several gradient steps. The <strong>importance ratio</strong> <span class="math inline">\(r=\pi_\theta(a)/\pi_{\text{old}}(a)\)</span> reweights each old sample to estimate the new policy’s objective. <strong>The clip</strong> stops the policy from exploiting that estimate by moving too far.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Write the backward GAE recurrence.</p></li>
+<li><p>Why should a rollout truncation usually retain the bootstrap value while a true terminal state should not?</p></li>
+</ol>
+<p>PPO reuses actions sampled from an old policy. For each selected action:</p>
+<p><span class="math display">\[\ell_{\text{new}},\ell_{\text{old}},A
+\in\mathbb{R}^{B\times T}\]</span></p>
+<p>The importance ratio is:</p>
+<p><span class="math display">\[r_t(\theta)
+=
+\frac{\pi_\theta(a_t\mid s_t)}
+{\pi_{\text{old}}(a_t\mid s_t)}
+=
+\exp(\ell_{\text{new},t}-\ell_{\text{old},t})\]</span></p>
+<p>The unclipped policy objective is:</p>
+<p><span class="math display">\[r_tA_t\]</span></p>
+<p>PPO uses the pessimistic surrogate:</p>
+<p><span class="math display">\[J_t^{\text{clip}}
+=
+\min\left(
+r_tA_t,\;
+\operatorname{clip}(r_t,1-\epsilon,1+\epsilon)A_t
+\right)\]</span></p>
+<p>and minimizes:</p>
+<p><span class="math display">\[L_{\text{policy}}
+=
+-\frac{\sum_t M_tJ_t^{\text{clip}}}
+{\sum_t M_t}\]</span></p>
+<p>The clipping is asymmetric because the sign of <span class="math inline">\(A_t\)</span> determines which ratio movement is beneficial:</p>
+<ul>
+<li><p><span class="math inline">\(A_t&gt;0\)</span>: increasing the selected action’s probability is beneficial; gradient vanishes beyond <span class="math inline">\(r_t&gt;1+\epsilon\)</span>.</p></li>
+<li><p><span class="math inline">\(A_t&lt;0\)</span>: decreasing its probability is beneficial; gradient vanishes beyond <span class="math inline">\(r_t&lt;1-\epsilon\)</span>.</p></li>
+<li><p>Harmful movements remain penalized even outside the interval.</p></li>
+</ul>
+<p>PPO does not simply clamp every ratio. Nor does clipping guarantee bounded KL divergence or a bounded parameter update. In practice, monitor ratio statistics, clip fraction, approximate KL, and entropy—especially across multiple epochs on the same rollout.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: which gradients vanish under the clip</div>
+<p><strong>Step 1.</strong> Importance sampling: <span class="math inline">\(\mathbb E_{a\sim\pi_\theta}[A]=\mathbb E_{a\sim\pi_{\text{old}}}[rA]\)</span>, so <span class="math inline">\(rA\)</span> is the surrogate. Its gradient at <span class="math inline">\(\theta=\theta_{\text{old}}\)</span> is <span class="math inline">\(A\nabla\log\pi_\theta\)</span>: plain policy gradient.</p>
+<p><strong>Step 2.</strong> Per sample <span class="math inline">\(J=\min\big(rA,\operatorname{clip}(r,1-\epsilon,1+\epsilon)A\big)\)</span>. The min picks the smaller (more pessimistic) term.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(A&gt;0\)</span>: if <span class="math inline">\(r&gt;1+\epsilon\)</span>, the clipped term <span class="math inline">\((1+\epsilon)A\)</span> is smaller and constant, so <span class="math inline">\(\partial J/\partial\theta=0\)</span>. If <span class="math inline">\(r&lt;1+\epsilon\)</span>, <span class="math inline">\(J=rA\)</span> and the gradient flows.</p>
+<p><strong>Step 4.</strong> <span class="math inline">\(A&lt;0\)</span>: if <span class="math inline">\(r&lt;1-\epsilon\)</span>, the clipped term <span class="math inline">\((1-\epsilon)A\)</span> is smaller (more negative), so the gradient is 0. If <span class="math inline">\(r&gt;1\)</span>, <span class="math inline">\(rA\)</span> is smaller and the full penalty applies, unclipped.</p>
+<p><strong>Step 5.</strong> Summary: the gradient vanishes only when the ratio has <em>already</em> moved past the clip in the direction the advantage wants. Moves in the wrong direction are always penalized.</p>
+<p><strong>Step 6.</strong> <span class="math inline">\(\partial r/\partial\theta=r\nabla\log\pi_\theta\)</span>, so where it doesn’t vanish the gradient is <span class="math inline">\(rA\nabla\log\pi_\theta\)</span>. Compute <span class="math inline">\(r\)</span> as <span class="math inline">\(\exp(\ell_{\text{new}}-\ell_{\text{old}})\)</span> for stability.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: PPO clipped policy loss</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(\ell_{\text{new}}\)</span> (with gradient), <span class="math inline">\(\ell_{\text{old}},A\)</span> (fixed), mask <span class="math inline">\(M\)</span>, <span class="math inline">\(\epsilon\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(r\gets\exp(\ell_{\text{new}}-\ell_{\text{old}})\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(J\gets\min\big(rA,\operatorname{clip}(r,1-\epsilon,1+\epsilon)A\big)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets-\sum MJ/\sum M\)</span></div>
+<div class="algo-line" style="--d:0">log clip fraction <span class="math inline">\(\sum M\,\mathbb 1[|r-1|&gt;\epsilon]/\sum M\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement the clipped surrogate and identify exactly where its gradient vanishes.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(231)
+
+epsilon = 0.2
+
+old_logp = torch.full((2, 4), -1.0)              # [B,T]
+
+initial_ratios = torch.tensor([
+    [1.4, 0.6, 1.1, 0.9],
+    [0.6, 1.4, 0.8, 1.3],
+])
+
+new_logp = (
+    old_logp + initial_ratios.log()
+).clone().requires_grad_()                         # [B,T]
+
+advantages = torch.tensor([
+    [ 2.0,  2.0, -2.0, -2.0],
+    [-1.0,  1.0,  1.0, -1.0],
+])                                                 # [B,T]
+
+valid_mask = torch.tensor([
+    [1, 1, 1, 0],
+    [1, 1, 1, 1],
+], dtype=torch.bool)
+
+
+ratio = ...                                        # TODO 1: [B,T]
+
+unclipped_objective = ...                          # TODO 2
+clipped_ratio = ...                                # TODO 3
+clipped_objective = ...                            # TODO 4
+
+surrogate = ...                                    # TODO 5: pessimistic choice
+policy_loss = ...                                  # TODO 6: masked mean loss
+
+policy_loss.backward()
+
+print(&quot;ratio:\n&quot;, ratio.detach())
+print(&quot;\nunclipped objective:\n&quot;, unclipped_objective.detach())
+print(&quot;\nclipped objective:\n&quot;, clipped_objective.detach())
+print(&quot;\nselected surrogate:\n&quot;, surrogate.detach())
+print(&quot;\ngradient w.r.t. new log-probability:\n&quot;, new_logp.grad)
+
+favorable_clipped = (
+    ((advantages &gt; 0) &amp; (ratio.detach() &gt; 1 + epsilon))
+    | ((advantages &lt; 0) &amp; (ratio.detach() &lt; 1 - epsilon))
+) &amp; valid_mask
+
+print(&quot;\nfavorable clipped positions:\n&quot;, favorable_clipped)
+print(&quot;clip fraction:&quot;, favorable_clipped.float().sum()
+      / valid_mask.float().sum())
+
+assert torch.allclose(
+    new_logp.grad[favorable_clipped],
+    torch.zeros_like(new_logp.grad[favorable_clipped]),
+)
+
+assert torch.allclose(
+    new_logp.grad[~valid_mask],
+    torch.zeros_like(new_logp.grad[~valid_mask]),
+)</code></pre>
+<p>Before running, predict the gradients at:</p>
+<ul>
+<li><p><span><code>[</code></span><code>0,0</code><span><code>]</code></span>: <span class="math inline">\(A&gt;0,\ r=1.4\)</span></p></li>
+<li><p><span><code>[</code></span><code>0,1</code><span><code>]</code></span>: <span class="math inline">\(A&gt;0,\ r=0.6\)</span></p></li>
+<li><p><span><code>[</code></span><code>1,0</code><span><code>]</code></span>: <span class="math inline">\(A&lt;0,\ r=0.6\)</span></p></li>
+<li><p><span><code>[</code></span><code>1,3</code><span><code>]</code></span>: <span class="math inline">\(A&lt;0,\ r=1.3\)</span></p></li>
+</ul>
+<p>Now implement a common incorrect version that clamps the ratio directly:</p>
+<pre class="code python"><code class="language-python">wrong_new_logp = new_logp.detach().clone().requires_grad_()
+
+wrong_ratio = ...                                  # TODO 7
+
+wrong_surrogate = (
+    torch.clamp(
+        wrong_ratio,
+        1 - epsilon,
+        1 + epsilon,
+    )
+    * advantages
+)
+
+wrong_loss = ...                                   # TODO 8
+wrong_loss.backward()
+
+print(&quot;\ncorrect PPO gradient:\n&quot;, new_logp.grad)
+print(&quot;\ndirectly clamped gradient:\n&quot;, wrong_new_logp.grad)</code></pre>
+<p>Compare <span><code>[</code></span><code>0,1</code><span><code>]</code></span> and <span><code>[</code></span><code>1,3</code><span><code>]</code></span>. Why does direct ratio clamping suppress gradients for harmful policy changes that PPO should continue correcting?</p>
+<p>Hints:</p>
+<ul>
+<li><p>Compute ratios in log space as <code>torch.exp(new_logp - old_logp)</code>.</p></li>
+<li><p>PPO chooses <code>torch.minimum(unclipped_objective, clipped_objective)</code>.</p></li>
+<li><p>Negate the valid-position mean because optimizers minimize.</p></li>
+<li><p><code>old_logp</code> and advantages are rollout data and should be detached.</p></li>
+<li><p>Clipping the ratio before multiplying by the advantage is not equivalent to PPO’s minimum.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>What does <span class="math inline">\(r_t&gt;1\)</span> mean for the sampled action?</p></li>
+<li><p>Prediction: for <span class="math inline">\(A_t&gt;0\)</span> and <span class="math inline">\(r_t&gt;1+\epsilon\)</span>, what is the policy-loss gradient through that sample?</p></li>
+<li><p>Why does <span class="math inline">\(A_t&lt;0,\ r_t&gt;1+\epsilon\)</span> remain penalized instead of being clipped flat?</p></li>
+<li><p>Debugging: clip fraction and approximate KL rise during later epochs over one rollout. What is happening?</p></li>
+<li><p>Why can PPO clipping coexist with an unexpectedly large KL divergence?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">ratio = torch.exp(new_logp - old_logp)
+
+unclipped_objective = ratio * advantages
+
+clipped_ratio = torch.clamp(
+    ratio,
+    1 - epsilon,
+    1 + epsilon,
+)
+
+clipped_objective = clipped_ratio * advantages
+
+surrogate = torch.minimum(
+    unclipped_objective,
+    clipped_objective,
+)
+
+policy_loss = -surrogate[valid_mask].mean()</code></pre>
+<p>Incorrect direct-clamping version:</p>
+<pre class="code python"><code class="language-python">wrong_new_logp = new_logp.detach().clone().requires_grad_()
+
+wrong_ratio = torch.exp(
+    wrong_new_logp - old_logp
+)
+
+wrong_surrogate = (
+    torch.clamp(
+        wrong_ratio,
+        1 - epsilon,
+        1 + epsilon,
+    )
+    * advantages
+)
+
+wrong_loss = -wrong_surrogate[valid_mask].mean()
+wrong_loss.backward()</code></pre>
+<p>For <span class="math inline">\(A&gt;0,r=1.4\)</span>, the unclipped improvement exceeds the allowed surrogate improvement:</p>
+<p><span class="math display">\[\min(1.4A,1.2A)=1.2A\]</span></p>
+<p>The selected branch is constant with respect to the new log-probability, so its gradient is zero.</p>
+<p>For <span class="math inline">\(A&gt;0,r=0.6\)</span>:</p>
+<p><span class="math display">\[\min(0.6A,0.8A)=0.6A\]</span></p>
+<p>This is a harmful probability decrease, so PPO retains a gradient that pushes the ratio upward.</p>
+<p>For <span class="math inline">\(A&lt;0,r=0.6\)</span>:</p>
+<p><span class="math display">\[\min(0.6A,0.8A)=0.8A\]</span></p>
+<p>Because <span class="math inline">\(A\)</span> is negative, <span class="math inline">\(0.8A\)</span> is smaller. The beneficial probability reduction is clipped flat.</p>
+<p>For <span class="math inline">\(A&lt;0,r=1.3\)</span>:</p>
+<p><span class="math display">\[\min(1.3A,1.2A)=1.3A\]</span></p>
+<p>Increasing the probability of a negative-advantage action is harmful, so PPO continues penalizing it.</p>
+<p>Directly clamping the ratio makes both sides flat regardless of advantage sign. It therefore removes corrective gradients for <span class="math inline">\(A&gt;0,r&lt;1-\epsilon\)</span> and <span class="math inline">\(A&lt;0,r&gt;1+\epsilon\)</span>.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>The new policy assigns the sampled action more probability than the rollout policy did.</p></li>
+<li><p>Zero, assuming the clipped branch is strictly selected.</p></li>
+<li><p>That movement makes a below-baseline action more likely. Clipping is intended to limit excessive improvement, not protect harmful changes from correction.</p></li>
+<li><p>Repeated optimization is moving the current policy farther from the policy that generated the rollout, making the data increasingly stale.</p></li>
+<li><p>Clipping affects only selected-action surrogate terms. It does not constrain the complete action distribution, parameter-space movement, or accumulated changes across many optimizer steps.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<p><span class="math display">\[A_t=\delta_t+\gamma\lambda(1-d_t)A_{t+1}\]</span></p>
+<p>A true terminal state has no valid successor value. A time-limit truncation still has a continuing state, so discarding its bootstrap value biases the advantage estimate.</p>

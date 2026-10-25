@@ -1,0 +1,101 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Modal</strong> runs Python functions on cloud GPUs. You decorate a function with the hardware it needs, and <code>.remote()</code> runs it in a container and returns the result. The four objects you use constantly: an <strong>App</strong> (a named group of functions), an <strong>Image</strong> (the container’s packages), a <strong>Volume</strong> (a persistent disk for datasets and checkpoints) and a <strong>Secret</strong> (API tokens as environment variables). Billing is per second of container time.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Modal crash course: an app, an image, a volume, a secret and a GPU function.
+
+One-time setup:   pip install modal &amp;&amp; modal setup
+                  modal secret create huggingface-secret HF_TOKEN=hf_...
+Run:              modal run modal_hello.py
+&quot;&quot;&quot;
+import modal
+
+app = modal.App(&quot;pt-book-hello&quot;)
+
+# The container image: a slim Debian base plus pinned Python packages.
+image = modal.Image.debian_slim(python_version=&quot;3.12&quot;).uv_pip_install(
+    &quot;torch==2.14.1&quot;, &quot;transformers==5.20.2&quot;
+)
+
+# A persistent disk shared by every function in the app (datasets, checkpoints).
+volume = modal.Volume.from_name(&quot;pt-book-data&quot;, create_if_missing=True)
+
+
+@app.function(
+    gpu=&quot;L4&quot;,                                   # &quot;T4&quot;, &quot;L4&quot;, &quot;A100-80GB&quot;, &quot;H100&quot;, &quot;H100:8&quot;, ...
+    image=image,
+    volumes={&quot;/data&quot;: volume},
+    secrets=[modal.Secret.from_name(&quot;huggingface-secret&quot;)],   # exposes HF_TOKEN as an env var
+    timeout=10 * 60,                            # seconds; the container is killed after this
+)
+def gpu_info() -&gt; dict:
+    import torch
+
+    props = torch.cuda.get_device_properties(0)
+    with open(&quot;/data/hello.txt&quot;, &quot;w&quot;) as f:     # anything written under /data persists...
+        f.write(props.name)
+    volume.commit()                             # ...once committed
+    return {
+        &quot;gpu&quot;: props.name,
+        &quot;memory_gb&quot;: round(props.total_memory / 2**30, 1),
+        &quot;bf16&quot;: torch.cuda.is_bf16_supported(),
+    }
+
+
+@app.local_entrypoint()
+def main():
+    print(gpu_info.remote())                    # .remote() runs it in the cloud and returns the result</code></pre>
+<p><strong>What to know before your first real run:</strong></p>
+<ul>
+<li><p><strong>GPU strings</strong> (from Modal’s GPU guide): <code>T4</code>, <code>L4</code>, <code>A10</code>, <code>L40S</code>, <code>A100-40GB</code>, <code>A100-80GB</code>, <code>RTX-PRO-6000</code>, <code>H100</code>, <code>H200</code>, <code>B200</code>, <code>B300</code>. Append <code>:n</code> for <span class="math inline">\(n\)</span> GPUs on one machine (up to 8, e.g. <code>"H100:8"</code>). Multi-node training is in private beta.</p></li>
+<li><p><strong>Volumes</strong> need <code>volume.commit()</code> before the function exits, or writes may be lost. Another container sees them after <code>volume.reload()</code>.</p></li>
+<li><p><strong>Imports</strong> of heavy libraries go <em>inside</em> the function body, so your laptop doesn’t need them installed.</p></li>
+<li><p><strong>Local code</strong> the remote function imports is shipped with <code>.add_local_python_source("module")</code> on the image.</p></li>
+<li><p><strong>Timeouts</strong> are in seconds. Long runs should checkpoint to a volume regularly and be able to resume.</p></li>
+<li><p><strong>Prices change</strong>, so check modal.com/pricing. Compare runs in <em>GPU-hours</em> and convert at the current rate.</p></li>
+</ul>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">GPU</th>
+<th style="text-align: right;">memory</th>
+<th style="text-align: left;">good for in this book</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">T4</td>
+<td style="text-align: right;">16 GB</td>
+<td style="text-align: left;">tokenizer experiments, inference of 1B models</td>
+</tr>
+<tr>
+<td style="text-align: left;">L4</td>
+<td style="text-align: right;">24 GB</td>
+<td style="text-align: left;">quality classifiers, LoRA SFT of 1–3B models</td>
+</tr>
+<tr>
+<td style="text-align: left;">A100-80GB</td>
+<td style="text-align: right;">80 GB</td>
+<td style="text-align: left;">full SFT of 1–3B, DPO, small GRPO</td>
+</tr>
+<tr>
+<td style="text-align: left;">H100</td>
+<td style="text-align: right;">80 GB</td>
+<td style="text-align: left;">pre-training the 124M model, GRPO with vLLM, data generation with an 8B teacher</td>
+</tr>
+<tr>
+<td style="text-align: left;">H100:8</td>
+<td style="text-align: right;">640 GB</td>
+<td style="text-align: left;">FSDP pre-training, full fine-tuning of 7–8B models</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: will it fit? GPU memory for training</div>
+<p><strong>Step 1.</strong> Mixed-precision training with Adam stores, per parameter: BF16 weights (2 bytes), BF16 gradients (2), FP32 master weights (4), FP32 Adam <span class="math inline">\(m\)</span> (4) and <span class="math inline">\(v\)</span> (4): <strong>16 bytes per parameter</strong>, before activations.</p>
+<p><strong>Step 2.</strong> Qwen3-0.6B: <span class="math inline">\(0.6\times10^9\cdot16=9.6\)</span> GB. Fits one L4 with room for activations. Qwen3-8B: 128 GB. Doesn’t fit one 80 GB GPU.</p>
+<p><strong>Step 3.</strong> <strong>LoRA</strong> keeps the base weights frozen in BF16 (2 bytes per parameter) and trains only the adapters: 8B <span class="math inline">\(\times\)</span> 2 = 16 GB plus a small adapter. Fits one 24 GB card for short sequences.</p>
+<p><strong>Step 4.</strong> <strong>FSDP across <span class="math inline">\(G\)</span> GPUs</strong> divides all 16 bytes by <span class="math inline">\(G\)</span> (Chapter 6): 128 GB / 8 = 16 GB per H100 for Qwen3-8B.</p>
+<p><strong>Step 5.</strong> <strong>Activations</strong> grow with batch <span class="math inline">\(\times\)</span> sequence length <span class="math inline">\(\times\)</span> width <span class="math inline">\(\times\)</span> layers. Gradient checkpointing (on by default in TRL’s SFT) trades about 30% more compute for storing only each layer’s input.</p>
+</div>

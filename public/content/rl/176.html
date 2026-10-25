@@ -1,0 +1,107 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: different ways to learn taste</div>
+<p>DPO learns from “A beat B.” IPO says “A should beat B by about this much, not infinitely.” KTO learns from single thumbs-up or thumbs-down, without pairs. SimPO and ORPO drop the reference model, like a critic who judges without comparing to a classic recipe.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Write the DPO loss. (Topic 56)</p></li>
+<li><p>Why can a DPO margin grow without bound? (Topic 57)</p></li>
+</ol>
+<h3 class="unnumbered" id="four-variants">2. Four variants</h3>
+<p>With <span class="math inline">\(h_w=\log\frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)}\)</span> and <span class="math inline">\(h_l\)</span> similarly:</p>
+<ul>
+<li><p><strong>DPO:</strong> <span class="math inline">\(-\log\sigma\big(\beta(h_w-h_l)\big)\)</span>.</p></li>
+<li><p><strong>IPO</strong> (Azar et al., 2023): <span class="math inline">\(\big((h_w-h_l)-\frac{1}{2\beta}\big)^2\)</span>. It targets a finite margin, so the loss rises again if the margin overshoots. That’s more robust when preferences are near-deterministic or noisy.</p></li>
+<li><p><strong>KTO</strong> (Ethayarajh et al., 2024): unpaired labels. For a desirable <span class="math inline">\(y\)</span>: <span class="math inline">\(\lambda_D\big(1-\sigma(\beta(h-z_0))\big)\)</span>. For an undesirable one: <span class="math inline">\(\lambda_U\big(1-\sigma(\beta(z_0-h))\big)\)</span>, with <span class="math inline">\(z_0\)</span> a batch estimate of the KL to the reference. Inspired by prospect theory: losses and gains weigh differently.</p></li>
+<li><p><strong>SimPO</strong> (Meng et al., 2024): no reference model. The reward is the length-normalized log-prob: <span class="math inline">\(-\log\sigma\big(\frac{\beta}{|y_w|}\log\pi(y_w)-\frac{\beta}{|y_l|}\log\pi(y_l)-\gamma\big)\)</span>, with target margin <span class="math inline">\(\gamma\)</span>.</p></li>
+<li><p><strong>ORPO</strong> (Hong et al., 2024): no reference model and no separate SFT stage. The loss is SFT negative log-likelihood plus <span class="math inline">\(\lambda\cdot\big(-\log\sigma(\log\operatorname{odds}(y_w)-\log\operatorname{odds}(y_l))\big)\)</span>, with <span class="math inline">\(\operatorname{odds}(y)=\frac{p}{1-p}\)</span> on the length-normalized probability.</p></li>
+</ul>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>IPO bounds the margin, KTO needs no pairs, and SimPO and ORPO need no reference model.</p></li>
+<li><p>All are still offline: they only see the data they’re given (next topic).</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: IPO’s target margin</div>
+<p><span class="math inline">\(\beta=0.1\)</span>, so the target is <span class="math inline">\(\frac1{2\beta}=5\)</span>. Margin 0: loss <span class="math inline">\(25\)</span>. Margin 5: loss 0. Margin 20: loss <span class="math inline">\(225\)</span>, pushed <em>back</em>. DPO at margin 20 still has a small but positive pull to grow it further.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>SimPO without length normalization (rewards long answers).</p></li>
+<li><p>Mixing summed and mean log-probs across variants.</p></li>
+<li><p>KTO with a badly skewed desirable/undesirable ratio and no <span class="math inline">\(\lambda\)</span> tuning.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-five-losses-side-by-side">3. PyTorch exercise — five losses side by side</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+
+def ipo(h_w, h_l, beta=0.1):
+    # TODO 1: squared distance from the target margin 1 / (2 beta)
+    ...
+
+
+def simpo(logp_w, logp_l, len_w, len_l, beta=2.0, gamma=0.5):
+    # TODO 2: length-normalized log-probs, margin gamma, no reference
+    ...
+
+
+def kto(h, desirable, z_ref, beta=0.1, lam_d=1.0, lam_u=1.0):
+    # TODO 3: the two branches
+    ...</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>When would you choose KTO over DPO?</p></li>
+<li><p>What does SimPO lose by dropping the reference model?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+
+def dpo(h_w, h_l, beta=0.1):
+    return -F.logsigmoid(beta * (h_w - h_l))
+
+
+def ipo(h_w, h_l, beta=0.1):
+    return ((h_w - h_l) - 1 / (2 * beta)) ** 2
+
+
+def simpo(logp_w, logp_l, len_w, len_l, beta=2.0, gamma=0.5):
+    return -F.logsigmoid(beta * logp_w / len_w - beta * logp_l / len_l - gamma)
+
+
+def orpo(mean_logp_w, mean_logp_l, lam=0.1):
+    log_odds = lambda lp: lp - torch.log1p(-lp.exp())
+    return -mean_logp_w - lam * F.logsigmoid(log_odds(mean_logp_w) - log_odds(mean_logp_l))
+
+
+def kto(h, desirable, z_ref, beta=0.1, lam_d=1.0, lam_u=1.0):
+    if desirable:
+        return lam_d - lam_d * torch.sigmoid(beta * (h - z_ref))
+    return lam_u - lam_u * torch.sigmoid(beta * (z_ref - h))
+
+
+t = torch.tensor
+for margin in (0.0, 5.0, 20.0):
+    print(f&quot;margin {margin:4.1f}:  DPO {dpo(t(margin), t(0.0)).item():.3f}   IPO {ipo(t(margin), t(0.0)).item():.3f}&quot;)
+print(&quot;SimPO:&quot;, round(simpo(t(-20.0), t(-60.0), 20, 40).item(), 3))
+print(&quot;ORPO :&quot;, round(orpo(t(-0.5), t(-1.2)).item(), 3))
+print(&quot;KTO desirable / undesirable:&quot;, round(kto(t(2.0), True, t(0.5)).item(), 3), round(kto(t(-2.0), False, t(0.5)).item(), 3))</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">margin  0.0:  DPO 0.693   IPO 25.000
+margin  5.0:  DPO 0.474   IPO 0.000
+margin 20.0:  DPO 0.127   IPO 225.000
+SimPO: 0.474
+ORPO : 0.525
+KTO desirable / undesirable: 0.463 0.438</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>When your data is thumbs-up/down on single responses, not pairs.</p></li>
+<li><p>The anchor that limits drift: nothing ties the policy to its starting behaviour except the data and the margin.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) <span class="math inline">\(-\log\sigma(\beta(h_w-h_l))\)</span>. (2) <span class="math inline">\(-\log\sigma\)</span> keeps decreasing as the margin grows, so there’s always a small push.</p>
+<p><strong>Takeaway:</strong> pick the variant by your data (pairs or single labels), your trust in the labels (bounded or unbounded margin), and whether you can afford a reference model.</p>
+<p><em>Next: why online DPO closes much of the gap to RL.</em></p>

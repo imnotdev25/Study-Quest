@@ -1,0 +1,367 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>How do you recover true prevalence <span class="math inline">\(p\)</span> from judge-positive rate <span class="math inline">\(q\)</span>, TPR and FPR?</p></li>
+<li><p>Why is correction unstable when <span class="math inline">\(\text{TPR}-\text{FPR}\)</span> is small?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="targeted-audits-change-the-sample-mixture">2. Targeted audits change the sample mixture</h3>
+<p>Suppose human review is expensive, so you audit 80% of judge-positive cases but only 5% of judge-negative cases. This is sensible for finding failures, but the audited sample no longer represents deployment.</p>
+<p>Let:</p>
+<ul>
+<li><p><span class="math inline">\(Y_i\)</span>: human label or judge-error indicator;</p></li>
+<li><p><span class="math inline">\(S_i\in\{0,1\}\)</span>: whether episode <span class="math inline">\(i\)</span> was audited;</p></li>
+<li><p><span class="math inline">\(\pi_i=P(S_i=1\mid\text{logged information})\)</span>: its audit probability.</p></li>
+</ul>
+<p>The deployment mean is:</p>
+<p><span class="math display">\[\mu=\frac1N\sum_{i=1}^N Y_i\]</span></p>
+<p>The Horvitz–Thompson estimator is:</p>
+<p><span class="math display">\[\hat\mu_{\text{HT}}
+=
+\frac1N
+\sum_{i=1}^N
+\frac{S_iY_i}{\pi_i}\]</span></p>
+<p>Each rare audit represents <span class="math inline">\(1/\pi_i\)</span> similar episodes. A commonly more stable, self-normalized version is the Hájek estimator:</p>
+<p><span class="math display">\[\hat\mu_{\text{H}}
+=
+\frac{
+\sum_i S_iY_i/\pi_i
+}{
+\sum_i S_i/\pi_i
+}\]</span></p>
+<p>HT is unbiased when its assumptions hold and <span class="math inline">\(N\)</span> is known. Hájek has small finite-sample ratio bias but remains within the outcome range.</p>
+<p>Weight concentration reduces effective sample size:</p>
+<p><span class="math display">\[N_{\text{eff}}
+=
+\frac{(\sum_i w_i)^2}
+{\sum_i w_i^2},
+\qquad
+w_i=\frac{S_i}{\pi_i}\]</span></p>
+<p>Requirements:</p>
+<ul>
+<li><p>record the actual conditional audit probability;</p></li>
+<li><p>require <span class="math inline">\(\pi_i&gt;0\)</span> for every deployment stratum;</p></li>
+<li><p>treat clipping as a bias–variance tradeoff, not a free stabilization;</p></li>
+<li><p>retain masks and episode IDs so labels and propensities cannot become misaligned.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>truth, judge output, audit mask and propensity: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>weights and weighted outcomes: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>population estimates: scalars</p></li>
+</ul>
+<p>For DPO, deliberately reviewing high-loss or disagreement pairs is useful for data collection. But an error rate computed directly on those pairs describes the targeted sample, not the deployment preference distribution. DPO remains fixed-data preference optimization, not online exploration.</p>
+<h3 class="unnumbered" id="pytorch-exercise-targeted-review-makes-a-10.8-error-rate-look-like-45">3. PyTorch exercise — targeted review makes a 10.8% error rate look like 45%</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 100_000
+
+true_incident_rate = 0.08
+judge_tpr = 0.80
+judge_fpr = 0.10
+
+audit_rate_if_judge_positive = 0.80
+audit_rate_if_judge_negative = 0.05
+
+# TODO 1: Simulate truth and automated judgments.
+true_incidents = ...
+
+judge_positive_probabilities = ...
+
+judge_positive = ...
+
+
+# TODO 2: Perform a targeted human audit.
+audit_probabilities = ...
+
+audited = ...
+
+num_audited = ...
+positive_judge_audits = ...
+negative_judge_audits = ...
+
+
+# Quantities revealed by human review.
+truth = true_incidents.to(torch.float64)
+judge = judge_positive.to(torch.float64)
+
+judge_errors = (
+    judge_positive != true_incidents
+).to(torch.float64)
+
+
+# TODO 3: Naive estimates from the targeted sample.
+naive_incident_rate = ...
+
+naive_judge_error_rate = ...
+
+
+# TODO 4: Inverse-probability estimates.
+audit_weights = ...
+
+ht_incident_rate = ...
+
+hajek_incident_rate = ...
+
+weighted_judge_error_rate = ...
+
+
+# TODO 5: Diagnostics and weighted calibration rates.
+effective_audit_size = ...
+
+effective_audit_fraction = ...
+
+maximum_weight = ...
+
+estimated_tpr = ...
+
+estimated_fpr = ...
+
+
+# Oracle values available only in this simulation.
+oracle_incident_rate = ...
+oracle_judge_error_rate = ...
+
+oracle_tpr = ...
+oracle_fpr = ...
+
+print(&quot;Audited episodes:&quot;, num_audited.item())
+print(
+    &quot;Audits from judge-positive/negative strata:&quot;,
+    positive_judge_audits.item(),
+    negative_judge_audits.item(),
+)
+
+print(
+    &quot;\nIncident rates: naive, HT, Hajek, oracle&quot;
+)
+print(
+    naive_incident_rate.item(),
+    ht_incident_rate.item(),
+    hajek_incident_rate.item(),
+    oracle_incident_rate.item(),
+)
+
+print(
+    &quot;\nJudge error rates: naive, weighted, oracle&quot;
+)
+print(
+    naive_judge_error_rate.item(),
+    weighted_judge_error_rate.item(),
+    oracle_judge_error_rate.item(),
+)
+
+print(&quot;\nEstimated TPR/FPR:&quot;)
+print(estimated_tpr.item(), estimated_fpr.item())
+
+print(&quot;Oracle TPR/FPR:&quot;)
+print(oracle_tpr.item(), oracle_fpr.item())
+
+print(
+    &quot;\nEffective audit size:&quot;,
+    effective_audit_size.item(),
+)
+print(
+    &quot;ESS fraction:&quot;,
+    effective_audit_fraction.item(),
+)
+print(&quot;Maximum weight:&quot;, maximum_weight.item())</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the naive audited incident rate be closer to <span style="background-color: codeinlinebg"><code> 0.08</code></span> or <span style="background-color: codeinlinebg"><code> 0.31</code></span>?</p></li>
+<li><p>Will the naive judge-error rate be closer to <span style="background-color: codeinlinebg"><code> 0.108</code></span> or <span style="background-color: codeinlinebg"><code> 0.45</code></span>?</p></li>
+<li><p>What weights will audited judge-positive and judge-negative cases receive?</p></li>
+<li><p>Will effective sample size equal the raw audit count?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where(true_incidents, judge_tpr, judge_fpr)</code></span>.</p></li>
+<li><p>Audit probability depends on the recorded judge output.</p></li>
+<li><p>The naive estimates use only rows where <span style="background-color: codeinlinebg"><code> audited</code></span> is true.</p></li>
+<li><p>Set unaudited weights to zero with <span style="background-color: codeinlinebg"><code> audited.float() / audit_probability</code></span>.</p></li>
+<li><p>Estimate TPR by dividing weighted true positives by weighted actual positives.</p></li>
+<li><p>Compute weighted sums in <span style="background-color: codeinlinebg"><code> float64</code></span>; extreme inverse propensities can overflow or dominate in lower precision.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Set the negative-case audit probability to zero.</p></li>
+<li><p>Shuffle labels without shuffling their audit propensities.</p></li>
+<li><p>Replace actual adaptive propensities with the original planned rates.</p></li>
+<li><p>Clip weight <span style="background-color: codeinlinebg"><code> 20</code></span> to <span style="background-color: codeinlinebg"><code> 5</code></span> and still claim unbiasedness.</p></li>
+<li><p>Report raw audit counts without weight or ESS diagnostics.</p></li>
+<li><p>Assume human labels are perfect despite reviewer disagreement.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does targeted auditing bias the unweighted incident rate?</p></li>
+<li><p>Which probability must be logged for adaptive auditing?</p></li>
+<li><p>Can importance weighting recover a stratum whose audit probability is zero?</p></li>
+<li><p>Why can 16,000 audits contain much less than 16,000 effective observations?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Simulation:</p>
+<pre class="code python"><code class="language-python">true_incidents = (
+    torch.rand(num_episodes)
+    &lt; true_incident_rate
+)
+
+judge_positive_probabilities = torch.where(
+    true_incidents,
+    torch.tensor(judge_tpr),
+    torch.tensor(judge_fpr),
+)
+
+judge_positive = (
+    torch.rand(num_episodes)
+    &lt; judge_positive_probabilities
+)</code></pre>
+<p>Targeted audit:</p>
+<pre class="code python"><code class="language-python">audit_probabilities = torch.where(
+    judge_positive,
+    torch.tensor(
+        audit_rate_if_judge_positive
+    ),
+    torch.tensor(
+        audit_rate_if_judge_negative
+    ),
+)
+
+audited = (
+    torch.rand(num_episodes)
+    &lt; audit_probabilities
+)
+
+num_audited = audited.sum()
+
+positive_judge_audits = (
+    audited &amp; judge_positive
+).sum()
+
+negative_judge_audits = (
+    audited &amp; ~judge_positive
+).sum()</code></pre>
+<p>Naive estimates:</p>
+<pre class="code python"><code class="language-python">naive_incident_rate = (
+    truth[audited].mean()
+)
+
+naive_judge_error_rate = (
+    judge_errors[audited].mean()
+)</code></pre>
+<p>Weighted estimates:</p>
+<pre class="code python"><code class="language-python">audit_weights = (
+    audited.to(torch.float64)
+    / audit_probabilities
+)
+
+ht_incident_rate = (
+    audit_weights * truth
+).sum() / num_episodes
+
+hajek_incident_rate = (
+    audit_weights * truth
+).sum() / audit_weights.sum()
+
+weighted_judge_error_rate = (
+    audit_weights * judge_errors
+).sum() / audit_weights.sum()</code></pre>
+<p>Diagnostics and calibration:</p>
+<pre class="code python"><code class="language-python">effective_audit_size = (
+    audit_weights.sum().square()
+    / audit_weights.square().sum()
+)
+
+effective_audit_fraction = (
+    effective_audit_size
+    / num_audited
+)
+
+maximum_weight = audit_weights.max()
+
+estimated_tpr = (
+    audit_weights
+    * truth
+    * judge
+).sum() / (
+    audit_weights * truth
+).sum()
+
+estimated_fpr = (
+    audit_weights
+    * (1.0 - truth)
+    * judge
+).sum() / (
+    audit_weights
+    * (1.0 - truth)
+).sum()</code></pre>
+<p>Oracle quantities:</p>
+<pre class="code python"><code class="language-python">oracle_incident_rate = truth.mean()
+
+oracle_judge_error_rate = (
+    judge_errors.mean()
+)
+
+oracle_tpr = (
+    truth * judge
+).sum() / truth.sum()
+
+oracle_fpr = (
+    (1.0 - truth) * judge
+).sum() / (
+    1.0 - truth
+).sum()</code></pre>
+<p>The expected judge-positive rate is:</p>
+<p><span class="math display">\[q
+=
+0.08(0.80)+0.92(0.10)
+=
+0.156\]</span></p>
+<p>The expected audit fraction is:</p>
+<p><span class="math display">\[0.156(0.80)+0.844(0.05)
+=
+0.167\]</span></p>
+<p>True incidents enter the audit with probability:</p>
+<p><span class="math display">\[0.08[
+0.80(0.80)+0.20(0.05)
+]
+=
+0.052\]</span></p>
+<p>Therefore, the naive audited incident rate is approximately:</p>
+<p><span class="math display">\[\frac{0.052}{0.167}
+\approx0.311\]</span></p>
+<p>The population judge-error rate is:</p>
+<p><span class="math display">\[0.08(0.20)+0.92(0.10)
+=
+0.108\]</span></p>
+<p>But targeted auditing disproportionately includes false positives, making the naive audited error rate approximately:</p>
+<p><span class="math display">\[\frac{
+0.08(0.20)(0.05)
++
+0.92(0.10)(0.80)
+}{
+0.167
+}
+\approx0.446\]</span></p>
+<p>Inverse-probability weighting should recover incident rate <span style="background-color: codeinlinebg"><code> 0.08</code></span>, judge error <span style="background-color: codeinlinebg"><code> 0.108</code></span>, TPR <span style="background-color: codeinlinebg"><code> 0.80</code></span> and FPR <span style="background-color: codeinlinebg"><code> 0.10</code></span>. Audited positive and negative predictions receive weights <span style="background-color: codeinlinebg"><code> 1.25</code></span> and <span style="background-color: codeinlinebg"><code> 20</code></span>, respectively. Those uneven weights make ESS substantially smaller than the raw audit count.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Judge-positive cases contain more true incidents and are deliberately overrepresented; the unweighted sample estimates the audit mixture.</p></li>
+<li><p>Log the probability actually used for that episode, conditional on all information that influenced selection.</p></li>
+<li><p>No. Division cannot reconstruct outcomes from a stratum that was never eligible for review.</p></li>
+<li><p>A few observations with large weights carry much of the estimate, increasing variance and reducing independent information.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li></li>
+</ol>
+<p><span class="math display">\[p=\frac{q-\text{FPR}}
+{\text{TPR}-\text{FPR}}\]</span></p>
+<ol>
+<li><p>Inverting the measurement equation divides noise by a small number, sharply amplifying standard errors and calibration uncertainty.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> targeted audits are excellent for finding failures, but raw audit percentages are not deployment rates. Log inclusion probabilities, inverse-weight population claims, and report weight concentration and support.</p>

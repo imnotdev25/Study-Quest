@@ -1,0 +1,11 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Red teaming</strong> searches for inputs that make a model violate its policy, so they can be fixed before users find them. It’s done by people, by other LLMs (automated red teaming), and by optimization. The findings feed back into safety data and guard training. This chapter is about defending: what the main failure patterns are and why they work.</p>
+</div>
+<p><strong>Attack families defenders test for:</strong> role-play and fictional framing; many-shot prompts (a long context full of fake compliant examples); encoding or translation into low-resource languages; multi-turn escalation; optimized adversarial suffixes (GCG, 2023); and prompt injection, where instructions hidden in a tool result or document hijack an agent. Each has public benchmarks, and a release should report results on each family.</p>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why “shallow” safety breaks</div>
+<p><strong>Step 1.</strong> Refusal training mostly changes the first few response tokens: harmful prompt <span class="math inline">\(\Rightarrow\)</span> “I can’t help with that.” Later tokens’ distribution, conditioned on a compliant start, changes much less.</p>
+<p><strong>Step 2.</strong> So an attack only needs to get the first tokens wrong: prefilling “Sure, here is”, or a framing that makes a compliant opening likely. After that the model continues from its pre-trained distribution.</p>
+<p><strong>Step 3.</strong> The same reasoning explains <strong>fine-tuning erosion</strong>: a few hundred gradient steps on unrelated data can move those first-token probabilities back. Several 2026 papers study this (e.g. “A Gravitational Interpretation of Safety Reversion under Fine-Tuning,” arXiv 2606.28525; “SLDR: Defending Against Malicious Fine-tuning,” arXiv 2610.10345).</p>
+<p><strong>Step 4.</strong> Defenses push safety deeper: training on examples that recover <em>after</em> a harmful start, adding safety data earlier (the 2026 “Safety Mid-Training,” arXiv 2610.26809, and “Beyond Safe Data: Pretraining-Stage Alignment,” arXiv 2606.19168), and guards that don’t share the model’s weights.</p>
+</div>

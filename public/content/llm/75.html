@@ -1,0 +1,370 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Two kinds of quantities</strong> live in an RL step. <em>Data</em> (rewards, advantages, returns, old log-probs) describe what happened during the rollout and must be constants. The <em>model’s current log-probabilities</em> are what we differentiate. A stop-gradient (<code>.detach()</code>) is the boundary between them.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Where should a sequence-level reward be inserted in a padded response tensor?</p></li>
+<li><p>How can two computations have identical forward values but different gradients?</p></li>
+</ol>
+<p>A post-training rollout pipeline should have a clear graph boundary:</p>
+<p><span class="math display">\[\text{rollout policy}
+\rightarrow
+\text{rewards}
+\rightarrow
+\text{returns/advantages}
+\quad\text{(fixed)}\]</span></p>
+<p><span class="math display">\[\text{current policy}
+\rightarrow
+\text{log-probabilities}
+\rightarrow
+L_{\text{policy}}
+\quad\text{(differentiable)}\]</span></p>
+<p>For stored rollout log-probabilities:</p>
+<p><span class="math display">\[\ell_{\text{rollout}},\ell_{\text{ref}}
+\in\mathbb{R}^{B\times T}\]</span></p>
+<p>the shaped reward may be:</p>
+<p><span class="math display">\[r_t
+=
+-\beta
+\left(
+\ell_{\text{rollout},t}
+-
+\ell_{\text{ref},t}
+\right)
++
+r_t^{\text{terminal}}\]</span></p>
+<p>These rewards produce fixed returns <span class="math inline">\(G_t\)</span>. A simple actor loss is:</p>
+<p><span class="math display">\[L_{\text{actor}}
+=
+-\frac1N\sum_t M_tG_t
+\log\pi_\theta(a_t\mid s_t)\]</span></p>
+<p>Its intended gradient is:</p>
+<p><span class="math display">\[\nabla_\theta L_{\text{actor}}
+=
+-\frac1N\sum_t
+M_tG_t
+\nabla_\theta\log\pi_\theta(a_t\mid s_t)\]</span></p>
+<p>A subtle bug occurs if rewards are recomputed from the current trainable log-probabilities:</p>
+<p><span class="math display">\[G_t=G_t(\theta)\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\nabla_\theta[-G_t(\theta)\ell_t(\theta)]
+=
+-G_t\nabla_\theta\ell_t
+-\ell_t\nabla_\theta G_t\]</span></p>
+<p>The second term is not part of the intended policy-gradient estimator.</p>
+<p>A differentiable KL loss can be valid when explicitly designed as a separate regularizer. The bug is accidentally allowing gradients through reward or advantage construction.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: what goes wrong without the stop-gradient</div>
+<p><strong>Step 1.</strong> Intended loss: <span class="math inline">\(L=-A\,\ell_\theta\)</span> with <span class="math inline">\(A\)</span> a constant, so <span class="math inline">\(\nabla L=-A\nabla\ell_\theta\)</span>: policy gradient.</p>
+<p><strong>Step 2.</strong> Bug: build the KL-shaped reward from the <em>current</em> policy, <span class="math inline">\(A(\theta)=R-\beta(\ell_\theta-\ell_{\text{ref}})\)</span>, without detaching.</p>
+<p><strong>Step 3.</strong> Product rule: <span class="math inline">\(\nabla L=-A(\theta)\nabla\ell_\theta-\ell_\theta\nabla A(\theta)=-A\nabla\ell_\theta+\beta\,\ell_\theta\nabla\ell_\theta\)</span>.</p>
+<p><strong>Step 4.</strong> The extra term <span class="math inline">\(\beta\ell_\theta\nabla\ell_\theta=\frac{\beta}{2}\nabla(\ell_\theta^2)\)</span> minimizes <span class="math inline">\(\ell_\theta^2\)</span>, pushing <span class="math inline">\(\log\pi\)</span> toward 0, i.e. toward probability 1 for the sampled tokens. That’s an objective nobody asked for.</p>
+<p><strong>Step 5.</strong> <strong>Rule:</strong> rewards, advantages, returns, <span class="math inline">\(\ell_{\text{old}}\)</span> and <span class="math inline">\(\ell_{\text{ref}}\)</span> are computed under <code>no_grad</code> or detached. Gradient flows only through <span class="math inline">\(\ell_\theta\)</span> in the ratio (and through an explicit KL loss term, if you use one).</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: correct graph boundary in an RL update</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> rollout data</div>
+<div class="algo-line" style="--d:0"><strong>with no gradient:</strong> compute <span class="math inline">\(\ell_{\text{rollout}},\ell_{\text{ref}}\)</span>, shaped rewards, advantages and returns</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each minibatch <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\ell_\theta\gets\)</span> current log-probs (with gradient)</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(L\gets\)</span> PPO loss using <span class="math inline">\(\exp(\ell_\theta-\ell_{\text{rollout}})\)</span> and the fixed advantages</div>
+<div class="algo-line" style="--d:1">check: <code>advantages.requires_grad</code> is False</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Compare correct rollout detachment with an accidental gradient path through KL-shaped returns.</p>
+<pre class="code python"><code class="language-python">import torch
+
+B, T = 2, 4
+beta = 0.2
+gamma = 0.9
+
+response_mask = torch.tensor([
+    [1, 1, 1, 0],
+    [1, 1, 1, 1],
+], dtype=torch.bool)
+
+rollout_logp = torch.tensor([
+    [-1.2, -0.7, -1.5,  0.0],
+    [-0.8, -1.1, -0.6, -1.4],
+])                                                    # [B,T]
+
+reference_logp = torch.tensor([
+    [-1.0, -0.9, -1.4,  0.0],
+    [-0.9, -1.0, -0.8, -1.2],
+])                                                    # [B,T]
+
+sequence_scores = torch.tensor([1.5, -0.5])           # [B]
+
+
+def return_to_go(rewards, gamma):
+    running = torch.zeros(
+        rewards.shape[0],
+        dtype=rewards.dtype,
+        device=rewards.device,
+    )
+
+    reversed_returns = []
+
+    for t in reversed(range(rewards.shape[1])):
+        running = ...                                  # TODO 1
+        reversed_returns.append(...)                   # TODO 2
+
+    return torch.stack(
+        reversed_returns[::-1],
+        dim=1,
+    )
+
+
+lengths = ...                                          # TODO 3: [B]
+terminal_indices = ...                                 # TODO 4: [B]
+batch_indices = ...                                    # TODO 5: [B]
+
+terminal_bonus = torch.zeros_like(rollout_logp)
+terminal_bonus[batch_indices, terminal_indices] = ...  # TODO 6
+
+
+# Correct: reward construction uses stored rollout quantities.
+rollout_kl_sample = ...                                # TODO 7: [B,T]
+
+fixed_rewards = (                                      # TODO 8
+    -beta * rollout_kl_sample
+    + terminal_bonus
+)
+
+fixed_rewards = fixed_rewards * response_mask
+
+fixed_returns = ...                                    # TODO 9: [B,T]
+
+print(&quot;fixed rewards:\n&quot;, fixed_rewards)
+print(&quot;\nfixed returns:\n&quot;, fixed_returns)</code></pre>
+<p>Compute the intended policy gradient:</p>
+<pre class="code python"><code class="language-python">current_logp = (
+    rollout_logp.clone()
+    .requires_grad_()
+)
+
+correct_loss = -(                                     # TODO 10
+    current_logp * fixed_returns.detach()
+)[response_mask].mean()
+
+correct_gradient = torch.autograd.grad(
+    correct_loss,
+    current_logp,
+)[0]
+
+print(&quot;\ncorrect loss:&quot;, correct_loss.item())
+print(&quot;correct gradient:\n&quot;, correct_gradient)</code></pre>
+<p>Now introduce the graph leak:</p>
+<pre class="code python"><code class="language-python">bad_current_logp = (
+    rollout_logp.clone()
+    .requires_grad_()
+)
+
+# Bug: KL reward is recomputed using trainable current log-probabilities.
+bad_kl_sample = ...                                    # TODO 11
+
+bad_rewards = (                                       # TODO 12
+    -beta * bad_kl_sample
+    + terminal_bonus
+)
+
+bad_rewards = (
+    bad_rewards
+    * response_mask.to(bad_rewards.dtype)
+)
+
+bad_returns = ...                                      # TODO 13
+
+bad_loss = -(                                         # TODO 14
+    bad_current_logp * bad_returns
+)[response_mask].mean()
+
+bad_gradient = torch.autograd.grad(
+    bad_loss,
+    bad_current_logp,
+)[0]
+
+print(&quot;\nbad loss:&quot;, bad_loss.item())
+print(&quot;gradient with reward leak:\n&quot;, bad_gradient)
+
+print(
+    &quot;\nforward losses match:&quot;,
+    torch.allclose(correct_loss, bad_loss),
+)
+
+print(
+    &quot;gradients match:&quot;,
+    torch.allclose(correct_gradient, bad_gradient),
+)
+
+assert torch.allclose(correct_loss, bad_loss)
+assert not torch.allclose(correct_gradient, bad_gradient)
+
+assert torch.allclose(
+    bad_gradient[~response_mask],
+    torch.zeros_like(bad_gradient[~response_mask]),
+)</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Will the correct and buggy forward losses match at initialization?</p></li>
+<li><p>Will their gradients match?</p></li>
+<li><p>If <code>bad_current_logp</code> were initialized to exactly zero, could the bug be temporarily hidden?</p></li>
+</ul>
+<p>Hints:</p>
+<ul>
+<li><p>Return recurrence: <code>rewards</code><span><code>[</code></span><code>:, t</code><span><code>]</code></span><code> + gamma * running</code>.</p></li>
+<li><p>Terminal indices are <code>lengths - 1</code>.</p></li>
+<li><p>Sampled rollout KL is <code>rollout_logp - reference_logp</code>.</p></li>
+<li><p>Correct returns depend only on stored rollout tensors.</p></li>
+<li><p>Buggy returns use <code>bad_current_logp - reference_logp</code>.</p></li>
+<li><p>Both losses use the valid-token mean.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why are rollout rewards and advantages treated as constants during PPO epochs?</p></li>
+<li><p>Prediction: what additional product-rule term appears when <span class="math inline">\(G_t\)</span> depends on <span class="math inline">\(\theta\)</span>?</p></li>
+<li><p>Why does equality of two loss values not imply equality of their gradients?</p></li>
+<li><p>Debugging: PPO behavior changes after removing a seemingly redundant <code>.detach()</code>, although logged losses are initially identical. What graph path should you inspect?</p></li>
+<li><p>When is differentiating a KL term appropriate?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def return_to_go(rewards, gamma):
+    running = torch.zeros(
+        rewards.shape[0],
+        dtype=rewards.dtype,
+        device=rewards.device,
+    )
+
+    reversed_returns = []
+
+    for t in reversed(range(rewards.shape[1])):
+        running = (
+            rewards[:, t]
+            + gamma * running
+        )
+
+        reversed_returns.append(running)
+
+    return torch.stack(
+        reversed_returns[::-1],
+        dim=1,
+    )
+
+
+lengths = response_mask.sum(dim=-1)
+terminal_indices = lengths - 1
+batch_indices = torch.arange(B)
+
+terminal_bonus = torch.zeros_like(rollout_logp)
+
+terminal_bonus[
+    batch_indices,
+    terminal_indices,
+] = sequence_scores</code></pre>
+<p>Correct rollout path:</p>
+<pre class="code python"><code class="language-python">rollout_kl_sample = (
+    rollout_logp - reference_logp
+)
+
+fixed_rewards = (
+    -beta * rollout_kl_sample
+    + terminal_bonus
+)
+
+fixed_rewards = (
+    fixed_rewards
+    * response_mask.to(fixed_rewards.dtype)
+)
+
+fixed_returns = return_to_go(
+    fixed_rewards,
+    gamma,
+)
+
+current_logp = (
+    rollout_logp.clone()
+    .requires_grad_()
+)
+
+correct_loss = -(
+    current_logp
+    * fixed_returns.detach()
+)[response_mask].mean()</code></pre>
+<p>Buggy path:</p>
+<pre class="code python"><code class="language-python">bad_current_logp = (
+    rollout_logp.clone()
+    .requires_grad_()
+)
+
+bad_kl_sample = (
+    bad_current_logp
+    - reference_logp
+)
+
+bad_rewards = (
+    -beta * bad_kl_sample
+    + terminal_bonus
+)
+
+bad_rewards = (
+    bad_rewards
+    * response_mask.to(bad_rewards.dtype)
+)
+
+bad_returns = return_to_go(
+    bad_rewards,
+    gamma,
+)
+
+bad_loss = -(
+    bad_current_logp
+    * bad_returns
+)[response_mask].mean()</code></pre>
+<p>At initialization:</p>
+<p><span class="math display">\[\ell_{\text{current}}
+=
+\ell_{\text{rollout}}\]</span></p>
+<p>so both programs produce identical KL values, returns, and scalar losses.</p>
+<p>Their graphs differ. The correct loss differentiates only through the explicit log-probability:</p>
+<p><span class="math display">\[\nabla_\theta L_{\text{correct}}
+=
+-\frac1N\sum_tG_t\nabla_\theta\ell_t\]</span></p>
+<p>The buggy loss also differentiates through return construction:</p>
+<p><span class="math display">\[\nabla_\theta L_{\text{bad}}
+=
+-\frac1N\sum_t
+\left(
+G_t\nabla_\theta\ell_t
++
+\ell_t\nabla_\theta G_t
+\right)\]</span></p>
+<p>Because each return contains future KL rewards, a token log-probability may also affect the return assigned to earlier tokens.</p>
+<p>If all trainable log-probabilities were initialized to zero, the extra product-rule term:</p>
+<p><span class="math display">\[-\ell_t\nabla_\theta G_t\]</span></p>
+<p>could vanish at that point. The bug would reappear after the log-probabilities moved away from zero, making zero-valued synthetic tests potentially misleading.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>They were estimated using the behavior policy’s completed rollout and define fixed targets for subsequent optimization.</p></li>
+<li><p>The additional term is: <span class="math display">\[-\ell_t\nabla_\theta G_t\]</span></p></li>
+<li><p>Autograd follows graph dependencies, not only numerical values. Equal values can result from graphs with different derivatives.</p></li>
+<li><p>Inspect whether current policy log-probabilities flow into KL rewards, returns, advantages, reward normalization, or value targets.</p></li>
+<li><p>Differentiation is appropriate when KL is intentionally included as an explicit regularization objective, with a clearly defined KL direction and coefficient—not accidentally routed through sampled reward targets.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Terminal reward belongs at the final valid response token, <code>length - 1</code>.</p></li>
+<li><p>Forward equality does not determine gradient equality; the computation graph determines which derivative paths exist.</p></li>
+</ul>

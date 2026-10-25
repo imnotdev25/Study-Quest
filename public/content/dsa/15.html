@@ -1,0 +1,250 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Data is the part of ML that interviews probe most and candidates prepare least. This chapter covers data structures for ML data (tensors, sparse matrices, columnar files, sharded datasets), labeling and agreement, splitting strategies, every common form of leakage, sampling and imbalance, point-in-time feature correctness, data quality and drift, and the pipeline used to build LLM training and evaluation data.</p>
+</div>
+<h1 id="data-structures-for-ml-data">Data Structures for ML Data</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Format</th>
+<th style="text-align: left;">What it is</th>
+<th style="text-align: left;">Use it for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Dense tensor</td>
+<td style="text-align: left;">contiguous array + shape + strides (Chapter 3)</td>
+<td style="text-align: left;">images, embeddings, activations</td>
+</tr>
+<tr>
+<td style="text-align: left;">COO sparse</td>
+<td style="text-align: left;">lists of (row, col, value)</td>
+<td style="text-align: left;">building sparse data incrementally</td>
+</tr>
+<tr>
+<td style="text-align: left;">CSR / CSC</td>
+<td style="text-align: left;">row pointers + column indices + values (compressed by row / column)</td>
+<td style="text-align: left;">fast row slicing / matrix–vector products; bag-of-words, user–item matrices</td>
+</tr>
+<tr>
+<td style="text-align: left;">Parquet / ORC</td>
+<td style="text-align: left;">columnar files with per-column compression and statistics</td>
+<td style="text-align: left;">tabular training data; read only needed columns, skip row groups by min/max</td>
+</tr>
+<tr>
+<td style="text-align: left;">Arrow</td>
+<td style="text-align: left;">in-memory columnar format, zero-copy between tools</td>
+<td style="text-align: left;">data frames, passing data between Spark, pandas, and training</td>
+</tr>
+<tr>
+<td style="text-align: left;">Sharded record files</td>
+<td style="text-align: left;">WebDataset (tar), TFRecord, MosaicML MDS</td>
+<td style="text-align: left;">streaming large datasets from object storage to many GPU workers</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><em>Sparse matrix–vector product with CSR</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(rowPtr[0..R]\)</span>, <span class="math inline">\(colIdx\)</span>, <span class="math inline">\(val\)</span> of a CSR matrix; dense vector <span class="math inline">\(x\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(r \gets 0\)</span> <strong>to</strong> <span class="math inline">\(R-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(y[r] \gets 0\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(p \gets rowPtr[r]\)</span> <strong>to</strong> <span class="math inline">\(rowPtr[r+1]-1\)</span> <strong>do</strong> <em>▷ only the non-zeros of row <span class="math inline">\(r\)</span></em></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(y[r] \gets y[r] + val[p]\cdot x[colIdx[p]]\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(y\)</span></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Cost <span class="math inline">\(O(\text{nnz})\)</span> instead of <span class="math inline">\(O(RC)\)</span>. A bag-of-words matrix with 1M documents and a 100K vocabulary has <span class="math inline">\(10^{11}\)</span> cells but perhaps <span class="math inline">\(10^8\)</span> non-zeros. <strong>Streaming data loaders</strong> for large-scale training must: shard data so each of <span class="math inline">\(N\)</span> workers reads different files; shuffle with a buffer (read several shards, shuffle within a buffer of a few thousand examples) because a global shuffle of terabytes is impractical; resume deterministically from a checkpoint (record shard and offset); and keep GPUs fed (prefetching, parallel decoding).</p>
+</div>
+<h1 id="collecting-and-labeling-data">Collecting and Labeling Data</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Sources of labels:</strong> natural labels from user behavior (clicks, purchases, watch time, with delays and biases), human annotation, weak supervision (heuristic labeling functions combined by a label model, as in Snorkel), model distillation (labels from a stronger model, including LLMs as annotators), and synthetic data.</p>
+<p><strong>Measuring annotation quality</strong> with <strong>Cohen’s kappa</strong>, which corrects raw agreement for chance: <span class="math display">\[\kappa = \frac{p_o - p_e}{1 - p_e}\]</span> where <span class="math inline">\(p_o\)</span> is observed agreement and <span class="math inline">\(p_e\)</span> the agreement expected if both annotators labeled randomly with their own label frequencies. Example: two annotators agree on 85% of items; one labels 70% positive, the other 60%, so <span class="math inline">\(p_e = 0.7\cdot0.6 + 0.3\cdot0.4 = 0.54\)</span> and <span class="math inline">\(\kappa = (0.85-0.54)/0.46 \approx
+0.67\)</span> (substantial). For more than two annotators use Fleiss’ kappa or Krippendorff’s alpha. Low agreement means the labeling guidelines, not the annotators, usually need work.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Active learning</strong> spends the labeling budget on the most useful examples: uncertainty sampling (lowest max-probability, smallest margin between top two classes, or highest entropy), query-by-committee (where an ensemble disagrees), and diversity sampling (cover the embedding space, e.g. <span class="math inline">\(k\)</span>-center greedy) to avoid labeling many near-identical uncertain items.</p>
+</div>
+<h1 id="splitting-data">Splitting Data</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A test set is a final exam. If students see the exam questions while studying, their score says nothing about what they learned. Every splitting rule exists to keep information about the exam out of studying.</p>
+</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Split</th>
+<th style="text-align: left;">How</th>
+<th style="text-align: left;">Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Random</td>
+<td style="text-align: left;">shuffle and cut (e.g. 80/10/10)</td>
+<td style="text-align: left;">i.i.d. data with no groups or time</td>
+</tr>
+<tr>
+<td style="text-align: left;">Stratified</td>
+<td style="text-align: left;">preserve label proportions in each split</td>
+<td style="text-align: left;">imbalanced classes, small datasets</td>
+</tr>
+<tr>
+<td style="text-align: left;">Group</td>
+<td style="text-align: left;">all rows of a group (user, patient, document, session) in one split</td>
+<td style="text-align: left;">multiple rows per entity; otherwise the model memorizes entities</td>
+</tr>
+<tr>
+<td style="text-align: left;">Temporal</td>
+<td style="text-align: left;">train on the past, validate and test on later periods</td>
+<td style="text-align: left;">anything deployed into the future: recommendations, fraud, forecasting</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(k\)</span>-fold CV</td>
+<td style="text-align: left;">rotate <span class="math inline">\(k\)</span> validation folds</td>
+<td style="text-align: left;">small data; report mean and variance</td>
+</tr>
+<tr>
+<td style="text-align: left;">Nested CV</td>
+<td style="text-align: left;">inner loop tunes, outer loop evaluates</td>
+<td style="text-align: left;">honest estimates when tuning on small data</td>
+</tr>
+</tbody>
+</table>
+<p><em>Splitting strategies</em></p>
+<p><em>Deterministic group split by hashing</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>for</strong> each row <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(u \gets \text{hash}(\text{groupId} \Vert \text{salt}) \bmod 1000\)</span> <em>▷ same group <span class="math inline">\(\to\)</span> same bucket</em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(u &lt; 800\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">assign to train</div>
+<div class="algo-line" style="--d:1"><strong>else if</strong> <span class="math inline">\(u &lt; 900\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">assign to validation</div>
+<div class="algo-line" style="--d:1"><strong>else</strong>  </div>
+<div class="algo-line" style="--d:2">assign to test</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Hashing the group key makes the split <strong>deterministic</strong> (re-running a pipeline or adding new data never moves an old group between splits) and <strong>group-consistent</strong> without a lookup table. New users land in splits by the same rule, so the test set stays stable over time. The salt allows a fresh, independent split when needed.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Temporal splits</strong> need care: leave a <em>gap</em> between train and test when labels take time to arrive (a fraud label 30 days later) or features use windows, so the last training examples do not peek at the test period. <strong>Walk-forward validation</strong> retrains on an expanding window and evaluates on the next period, repeatedly, to estimate how performance varies over time.</p>
+</div>
+<h1 id="leakage-the-most-common-way-to-fool-yourself">Leakage: The Most Common Way to Fool Yourself</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Leakage is any information available during training or evaluation that will not be available at prediction time. Signs: validation results that are too good, a single feature that dominates importance, and a big drop in production.</p>
+<ol>
+<li><p><strong>Target leakage</strong>: a feature derived from the label or from events after the prediction time (“refund issued” when predicting fraud; “discharge code” when predicting hospital readmission at admission).</p></li>
+<li><p><strong>Temporal leakage</strong>: random splits on time-dependent data, so the model trains on the future and tests on the past.</p></li>
+<li><p><strong>Group / duplicate leakage</strong>: the same user, patient, or near-duplicate document in train and test; the model recognizes the entity.</p></li>
+<li><p><strong>Preprocessing leakage</strong>: fitting a scaler, imputer, vocabulary, PCA, or feature selection on the whole dataset before splitting. Fit on the training fold only, then apply to validation and test.</p></li>
+<li><p><strong>Target encoding leakage</strong>: replacing a category with its mean label computed on rows that include the row itself. Use out-of-fold encoding.</p></li>
+<li><p><strong>Test set reuse</strong>: tuning many models against the same test set makes it a validation set. Keep a final holdout untouched.</p></li>
+<li><p><strong>Benchmark contamination</strong> for LLMs: evaluation questions present in pre-training data (below).</p></li>
+</ol>
+</div>
+<p><em>Out-of-fold target encoding</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> training rows with category <span class="math inline">\(c\)</span> and label <span class="math inline">\(y\)</span>; folds <span class="math inline">\(F_1..F_K\)</span>; prior strength <span class="math inline">\(m\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\mu \gets\)</span> global mean of <span class="math inline">\(y\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each fold <span class="math inline">\(F_k\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">compute, on rows <strong>not</strong> in <span class="math inline">\(F_k\)</span>: <span class="math inline">\(n_c\)</span> and <span class="math inline">\(s_c\)</span> = count and label sum per category</div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each row in <span class="math inline">\(F_k\)</span> with category <span class="math inline">\(c\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(enc \gets (s_c + m\,\mu)/(n_c + m)\)</span> <em>▷ smoothed toward the prior for rare categories</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">for validation/test rows, use statistics from all training rows</div>
+</div>
+<h1 id="point-in-time-correctness">Point-in-Time Correctness</h1>
+<figure class="tikz"><img src="figs/dsa/69d0aa4f1529.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A training row must use the latest feature values available at its timestamp.</em></p>
+<p><em>Point-in-time (“as of”) join</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> events <span class="math inline">\(E\)</span> (entity, <span class="math inline">\(t_e\)</span>, label); feature log <span class="math inline">\(F\)</span> (entity, <span class="math inline">\(t_f\)</span>, value)</div>
+<div class="algo-line" style="--d:0">sort <span class="math inline">\(E\)</span> and <span class="math inline">\(F\)</span> by (entity, time)</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each entity, with pointer <span class="math inline">\(p\)</span> into its feature rows <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each event <span class="math inline">\(e\)</span> in time order <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>while</strong> next feature row has <span class="math inline">\(t_f \le t_e - \text{delay}\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:3">advance <span class="math inline">\(p\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2">attach <span class="math inline">\(F[p].value\)</span> to <span class="math inline">\(e\)</span> (or null if none) <em>▷ latest value known at <span class="math inline">\(t_e\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>This two-pointer merge (Chapter 3) is what feature stores implement for training data. The <code>delay</code> models how long a feature takes to be computed and available in production; ignoring it leaks seconds or hours of future information. <strong>Training–serving skew</strong> happens when training features are computed by a batch pipeline and serving features by different online code; the fixes are one feature definition used in both places, logging served features and training on the logs, and monitoring feature distributions in both.</p>
+</div>
+<h1 id="sampling-imbalance-and-negatives">Sampling, Imbalance, and Negatives</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Class imbalance</strong> (fraud 0.1%, clicks 2%):</p>
+<ul>
+<li><p>Use the right metrics: PR-AUC, recall at a fixed precision, not accuracy.</p></li>
+<li><p><strong>Class weights</strong> in the loss (weight <span class="math inline">\(\propto 1/\text{frequency}\)</span>), or <strong>focal loss</strong> <span class="math inline">\(-(1-p_t)^\gamma\log p_t\)</span>, which down-weights easy examples.</p></li>
+<li><p><strong>Downsample negatives</strong> for training speed, then <strong>correct calibration</strong>: if negatives were kept with rate <span class="math inline">\(r\)</span>, the trained odds are inflated by <span class="math inline">\(1/r\)</span>, so the true probability is <span class="math inline">\(p = \frac{q}{q + (1-q)/r}\)</span> where <span class="math inline">\(q\)</span> is the model output. Ads CTR models must do this or bids are wrong.</p></li>
+<li><p>Oversampling / SMOTE (synthetic minority points by interpolation) helps some tabular models but can cause overfitting; prefer weighting with tree ensembles.</p></li>
+</ul>
+<p><strong>Negative sampling</strong> for retrieval and recommendation (where every non-interaction is a negative): random negatives are easy; <strong>hard negatives</strong> (items close in embedding space or shown but not clicked) teach fine distinctions but can include false negatives; <strong>in-batch negatives</strong> reuse other examples’ positives in the same batch, and need a <strong>log-Q correction</strong> (subtract <span class="math inline">\(\log\)</span> of each item’s sampling probability from its logit) because popular items appear as negatives more often. Word2vec sampled negatives from the unigram distribution raised to the <span class="math inline">\(3/4\)</span> power, which up-weights rare words.</p>
+<p><strong>Importance weighting</strong>: if training data comes from distribution <span class="math inline">\(q\)</span> but you care about <span class="math inline">\(p\)</span>, weight each example by <span class="math inline">\(p(x)/q(x)\)</span>; this underlies off-policy evaluation of recommendation policies (inverse propensity scoring) and correcting position bias in click logs.</p>
+</div>
+<h1 id="data-quality">Data Quality</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Validation</strong>: schema checks (types, ranges, allowed categories, null rates) on every pipeline run; block training when they fail.</p></li>
+<li><p><strong>Missing values</strong>: “missing” is often informative; add an indicator feature and impute with training statistics (median for skewed numerics, a dedicated “unknown” category for categoricals). Tree models (XGBoost, LightGBM) learn a default direction for missing values.</p></li>
+<li><p><strong>Outliers</strong>: robust scaling (median and IQR), clipping to percentiles, or log transforms for heavy tails; check whether outliers are errors or the most important cases (fraud).</p></li>
+<li><p><strong>Label noise</strong>: <strong>confident learning</strong> estimates the joint distribution of noisy and true labels from out-of-fold predicted probabilities and flags examples whose given label disagrees with a confident prediction; review or drop them. Cross-validated loss ranking finds the same issues.</p></li>
+<li><p><strong>Deduplication</strong>: exact (hash of normalized content) then near-duplicate (MinHash/LSH, Chapter 15; or embedding similarity for images and semantic duplicates).</p></li>
+</ul>
+</div>
+<h1 id="drift-and-monitoring">Drift and Monitoring</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Covariate shift</strong> (<span class="math inline">\(p(x)\)</span> changes), <strong>label shift</strong> (<span class="math inline">\(p(y)\)</span> changes), <strong>concept drift</strong> (<span class="math inline">\(p(y|x)\)</span> changes). Detection compares a reference window to a recent window per feature:</p>
+<ul>
+<li><p><strong>PSI</strong> (population stability index): <span class="math inline">\(\sum_b (a_b - e_b)\ln(a_b/e_b)\)</span> over bins of expected (<span class="math inline">\(e\)</span>) and actual (<span class="math inline">\(a\)</span>) proportions. Rule of thumb: <span class="math inline">\(&lt; 0.1\)</span> stable, <span class="math inline">\(0.1\)</span>–<span class="math inline">\(0.25\)</span> moderate, <span class="math inline">\(&gt; 0.25\)</span> significant.</p></li>
+<li><p><strong>KS test</strong> for continuous features, <strong>chi-square</strong> for categoricals; with huge samples everything is “significant,” so use effect sizes like PSI.</p></li>
+<li><p><strong>Domain classifier</strong>: train a model to distinguish reference from recent data; AUC near 0.5 means no detectable shift, and its feature importances show what changed.</p></li>
+<li><p>Monitor prediction distributions and, when labels arrive, the actual metric.</p></li>
+</ul>
+</div>
+<h1 id="feature-engineering-essentials">Feature Engineering Essentials</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Numeric</strong>: standardize (fit on train), log-transform heavy tails, bucketize (quantile bins) for linear models.</p></li>
+<li><p><strong>Categorical</strong>: one-hot for low cardinality; embeddings, the hashing trick, or target encoding (out-of-fold) for high cardinality.</p></li>
+<li><p><strong>Crosses</strong>: products of categorical features (country <span class="math inline">\(\times\)</span> device) let linear models learn interactions; deep models (DCN, wide-and-deep) learn them automatically.</p></li>
+<li><p><strong>Aggregates</strong>: counts and rates over time windows (clicks in the last 1h/24h/7d per user and per item), computed point-in-time; ratios such as user CTR smoothed with a prior.</p></li>
+<li><p><strong>Text and images</strong>: pre-trained embeddings are usually the strongest starting features.</p></li>
+</ul>
+</div>
+<h1 id="data-for-llms">Data for LLMs</h1>
+<figure class="tikz"><img src="figs/dsa/015d9d246dfe.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A typical pre-training data pipeline.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Quality filtering</strong>: heuristics (length, symbol ratios, repeated lines, stop-word presence) and model-based scoring (a classifier trained to recognize high-quality reference text, or an LLM-rated “educational value” score used to select subsets).</p></li>
+<li><p><strong>Deduplication</strong>: URL and exact-hash dedup, then MinHash/LSH fuzzy dedup, sometimes exact-substring dedup with suffix arrays (Chapter 14).</p></li>
+<li><p><strong>Decontamination</strong>: remove training documents that share long n-grams (e.g. 13-grams) with evaluation benchmarks, or report contamination analysis.</p></li>
+<li><p><strong>Data mixture</strong>: proportions of web, code, math, books, multilingual, and synthetic data are tuned with small proxy-model experiments; mixtures often change over training (higher-quality data later).</p></li>
+<li><p><strong>Post-training data</strong>: instruction–response pairs (SFT), preference pairs (chosen vs rejected) for DPO/RLHF, and verifiable tasks (math with answers, code with tests) for reinforcement learning. Quality and diversity beat volume.</p></li>
+<li><p><strong>Synthetic data</strong>: generated by stronger models, filtered by verifiers or judges. Risks: amplifying the generator’s errors and biases, low diversity, and degradation when models train recursively on their own outputs (“model collapse”); mitigate by mixing real data and filtering aggressively.</p></li>
+</ul>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Evaluation datasets for LLM applications</strong>: build a golden set from real user queries (sampled, de-identified, stratified by intent and difficulty), add adversarial and edge cases, label expected behaviors or rubrics, and keep it versioned. Split into a development set you iterate on and a held-out set you check rarely, so prompt tuning does not overfit. Track per-slice metrics (language, task type, length), since averages hide regressions. Public benchmarks saturate and leak; private, task-specific evals are what product decisions should rest on.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: “Our offline AUC is 0.97 but production performance is poor. Why?”</div>
+<p>Structure the answer as a checklist. (1) <strong>Leakage</strong>: features computed after the prediction time, target-encoded without out-of-fold, or a random split on temporal data; check feature importances for a suspicious top feature. (2) <strong>Split mismatch</strong>: users or duplicates shared across train and test; re-split by group and time. (3) <strong>Training–serving skew</strong>: compare logged online feature values to training values for the same entities; look for different defaults, units, or missing-value handling. (4) <strong>Distribution shift</strong>: PSI on features and predictions between the training period and now. (5) <strong>Metric mismatch</strong>: AUC rewards ranking, but production uses a threshold, or the business metric depends on calibration; check calibration and precision at the operating point. (6) <strong>Feedback loops</strong>: the deployed model changes which data gets labeled. Propose the fix for each and the experiment that distinguishes them.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Use CSR for sparse data and sharded, buffer-shuffled streams for large training sets.</p></li>
+<li><p>Split by group and time when the deployment does; hash group keys for stable splits.</p></li>
+<li><p>Leakage comes from the future, the label, shared entities, or preprocessing fit on everything.</p></li>
+<li><p>Point-in-time joins, out-of-fold encodings, and calibration correction after downsampling are must-know algorithms.</p></li>
+<li><p>LLM data quality comes from filtering, deduplication, decontamination, and careful mixtures.</p></li>
+</ul>
+</div>

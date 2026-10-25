@@ -1,0 +1,78 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Every model in this part is a stack of the blocks from Sessions 6–10: attention to mix tokens, an MLP to process each token, normalization, and residual connections. Architectures differ in four choices: (1) <strong>which tokens may attend to which</strong> (bidirectional, causal, or both), (2) <strong>the training objective</strong>, (3) <strong>how attention is made cheaper</strong> for long inputs, and (4) <strong>how parameters are spent</strong> (dense or mixture-of-experts).</p>
+</div>
+<h2 class="unnumbered" id="three-families">Three families</h2>
+<ul>
+<li><p><strong>Encoder-only</strong> (BERT, RoBERTa, ELECTRA): bidirectional attention, so every token sees every other. Great for understanding tasks such as classification and retrieval, but it can’t generate text left to right.</p></li>
+<li><p><strong>Encoder–decoder</strong> (T5, BART): a bidirectional encoder reads the input, and a causal decoder writes the output while cross-attending to the encoder.</p></li>
+<li><p><strong>Decoder-only</strong> (GPT, LLaMA, DeepSeek, Qwen, Kimi): causal attention and next-token prediction (Session 11). This family won: one objective, any task phrased as text, and scaling that keeps paying off.</p></li>
+</ul>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/cde3d58f562e.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Attention masks of the three families (6 tokens). Blue: query row may attend to key column. In the third, the first 3 tokens (red) are the input.</em></p>
+</div>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Year</th>
+<th style="text-align: left;">Models</th>
+<th style="text-align: left;">What changed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">2017</td>
+<td style="text-align: left;">Transformer</td>
+<td style="text-align: left;">attention replaces recurrence</td>
+</tr>
+<tr>
+<td style="text-align: left;">2018</td>
+<td style="text-align: left;">BERT, GPT-1</td>
+<td style="text-align: left;">pretrain then fine-tune; MLM vs next-token</td>
+</tr>
+<tr>
+<td style="text-align: left;">2019</td>
+<td style="text-align: left;">GPT-2, RoBERTa, T5</td>
+<td style="text-align: left;">bigger data, text-to-text framing</td>
+</tr>
+<tr>
+<td style="text-align: left;">2020</td>
+<td style="text-align: left;">GPT-3, ELECTRA</td>
+<td style="text-align: left;">in-context learning; scaling laws</td>
+</tr>
+<tr>
+<td style="text-align: left;">2022</td>
+<td style="text-align: left;">Chinchilla, PaLM</td>
+<td style="text-align: left;">compute-optimal data/model balance</td>
+</tr>
+<tr>
+<td style="text-align: left;">2023</td>
+<td style="text-align: left;">LLaMA 1/2, Mistral, Mixtral</td>
+<td style="text-align: left;">open RMSNorm+SwiGLU+RoPE recipe; GQA; sliding window; sparse MoE</td>
+</tr>
+<tr>
+<td style="text-align: left;">2024</td>
+<td style="text-align: left;">Llama 3, DeepSeek-V2/V3, Gemma 2</td>
+<td style="text-align: left;">multi-head latent attention; fine-grained MoE; FP8; softcapping</td>
+</tr>
+<tr>
+<td style="text-align: left;">2025</td>
+<td style="text-align: left;">Llama 4, Qwen3, gpt-oss, Kimi K2, DeepSeek-V3.2, Qwen3-Next</td>
+<td style="text-align: left;">NoPE layers, attention sinks, Muon, sparse attention, linear-attention hybrids</td>
+</tr>
+<tr>
+<td style="text-align: left;">2026</td>
+<td style="text-align: left;">DeepSeek-V4/V4.1, Gemma 4, Qwen3.8, Kimi K3</td>
+<td style="text-align: left;">compressed sparse attention, manifold-constrained hyper-connections, Kimi Delta Attention, attention residuals</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: what every block costs (the numbers the rest of this part tries to reduce)</div>
+<p><strong>Step 1.</strong> Parameters per dense block <span class="math inline">\(\approx12D^2\)</span> (Session 10): <span class="math inline">\(4D^2\)</span> attention, <span class="math inline">\(8D^2\)</span> MLP.</p>
+<p><strong>Step 2.</strong> Attention compute per layer, per sequence: <span class="math inline">\(QK^\top\)</span> and <span class="math inline">\(AV\)</span> each cost <span class="math inline">\(T^2D\)</span> multiply-adds, so <span class="math inline">\(O(T^2D)\)</span>. Quadratic in length.</p>
+<p><strong>Step 3.</strong> KV cache per token per layer: <span class="math inline">\(2\cdot n_{kv}\cdot d_h\)</span> numbers (keys and values, Session 23). With full multi-head attention, <span class="math inline">\(n_{kv}d_h=D\)</span>.</p>
+<p><strong>Step 4.</strong> The rest of this part attacks these one at a time: MoE cuts the <em>active</em> share of step 1, GQA/MLA/compression cut step 3, and sliding windows, sparse attention and linear attention cut step 2.</p>
+</div>

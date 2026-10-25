@@ -1,0 +1,507 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a forecast plus the forecaster’s track record</div>
+<p>A weather forecaster predicts each day, and you also know which days they got wrong and how often you checked. AIPW combines a prediction for every unit with an inverse-probability correction on the units you observed. Either a good forecast <em>or</em> correct checking probabilities is enough to stay on target.</p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does subtracting a pre-treatment CUPED baseline preserve the expected policy effect?</p></li>
+<li><p>Why can adjusting for response length or tool count introduce bias?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="predict-the-outcome-then-correct-the-prediction">2. Predict the outcome, then correct the prediction</h3>
+<p>Adaptive routing creates two problems:</p>
+<ul>
+<li><p>unequal assignment probabilities can bias raw arm means;</p></li>
+<li><p>noisy outcomes give inverse-propensity weighting high variance.</p></li>
+</ul>
+<p>Augmented inverse-propensity weighting—AIPW—combines a context-based outcome model with logged propensities.</p>
+<p>Let:</p>
+<p><span class="math display">\[e(x)=P(Z=1\mid x)\]</span></p>
+<p>and let <span class="math inline">\(m_1(x)\)</span> and <span class="math inline">\(m_0(x)\)</span> predict candidate and control outcomes. Define:</p>
+<p><span class="math display">\[\phi_{1,i}
+=
+m_1(x_i)
++
+\frac{Z_i}{e_i}
+\left[
+Y_i-m_1(x_i)
+\right]\]</span></p>
+<p><span class="math display">\[\phi_{0,i}
+=
+m_0(x_i)
++
+\frac{1-Z_i}{1-e_i}
+\left[
+Y_i-m_0(x_i)
+\right]\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\hat\tau_{\text{AIPW}}
+=
+\frac1N
+\sum_i
+\left(
+\phi_{1,i}-\phi_{0,i}
+\right)\]</span></p>
+<p>Each term has two parts:</p>
+<ol>
+<li><p>a prediction for every prompt;</p></li>
+<li><p>a propensity-weighted correction when that policy was actually observed.</p></li>
+</ol>
+<p>AIPW is doubly robust:</p>
+<ul>
+<li><p>correct propensities can correct an inaccurate outcome model;</p></li>
+<li><p>correct conditional outcome models can tolerate inaccurate propensities;</p></li>
+<li><p>if both are wrong, no guarantee remains.</p></li>
+</ul>
+<p>Adequate overlap is still necessary. A learned outcome model should produce held-out or cross-fitted predictions. Persist them detached—evaluation should not backpropagate into the model.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>contexts, assignments, rewards and propensities: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>candidate/control predictions: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>influence contributions: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>repeated effect estimates: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<p>For history-adaptive routing, the point estimate uses the actual conditional assignment probability. Uncertainty should additionally respect temporal dependence or use appropriate martingale methods.</p>
+<p>DPO may train the candidate from preferences, while AIPW estimates its causal effect on an online outcome. Preference margins are not <span class="math inline">\(m_1(x)\)</span>, unless they have been separately validated as conditional outcome predictions.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: AIPW</div>
+<p>For a binary routing decision <span class="math inline">\(A\in\{0,1\}\)</span> with propensity <span class="math inline">\(e(x)=P(A=1|x)\)</span> and outcome models <span class="math inline">\(\hat\mu_a(x)\)</span>: <span class="math display">\[\hat\tau=\frac1n\sum_i\Big[\hat\mu_1(x_i)-\hat\mu_0(x_i)+\frac{A_i(Y_i-\hat\mu_1(x_i))}{e(x_i)}-\frac{(1-A_i)(Y_i-\hat\mu_0(x_i))}{1-e(x_i)}\Big].\]</span> It’s consistent if <em>either</em> <span class="math inline">\(e\)</span> or <span class="math inline">\(\hat\mu\)</span> is correct, and efficient when both are. In practice, cross-fit <span class="math inline">\(\hat\mu\)</span> (Topic 86).</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>AIPW is “prediction plus correction.”</p></li>
+<li><p>Either trustworthy propensities or trustworthy outcome models protect consistency.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: one treated, one control unit</div>
+<p>Treated: <span class="math inline">\(\hat\mu_1=0.6\)</span>, <span class="math inline">\(\hat\mu_0=0.5\)</span>, <span class="math inline">\(Y=1\)</span>, <span class="math inline">\(e=0.5\)</span>: term <span class="math inline">\(=0.1+\frac{0.4}{0.5}=0.9\)</span>. Control: <span class="math inline">\(\hat\mu_1=0.6\)</span>, <span class="math inline">\(\hat\mu_0=0.5\)</span>, <span class="math inline">\(Y=0\)</span>, <span class="math inline">\(e=0.5\)</span>: term <span class="math inline">\(=0.1-\frac{0-0.5}{0.5}=0.1+1.0=1.1\)</span>. The control did <em>worse</em> than predicted, which counts as evidence that treatment helps. The average over these two units is <span class="math inline">\(1.0\)</span>. Single units are noisy, and the average over many is what matters.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Propensities near 0 or 1 without trimming or overlap checks.</p></li>
+<li><p>In-sample outcome models.</p></li>
+<li><p>Swapping the signs of the two correction terms.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-demonstrate-both-routes-to-consistency">3. PyTorch exercise — demonstrate both routes to consistency</h3>
+<p>The candidate improves both easy and hard prompts by <span style="background-color: codeinlinebg"><code> 0.05</code></span>, but receives mostly easy prompts.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 500
+episodes_per_repetition = 2_000
+
+# Context 0 is easy; context 1 is hard.
+contexts = torch.randint(
+    low=0,
+    high=2,
+    size=(
+        num_repetitions,
+        episodes_per_repetition,
+    ),
+)
+
+true_propensity_table = torch.tensor([
+    0.80, 0.20
+])
+
+true_propensities = (
+    true_propensity_table[contexts]
+)
+
+candidate_assigned = (
+    torch.rand_like(true_propensities)
+    &lt; true_propensities
+)
+
+assignment = candidate_assigned.to(
+    torch.float64
+)
+
+control_reward_means = torch.tensor([
+    0.80, 0.30
+])
+
+candidate_reward_means = torch.tensor([
+    0.85, 0.35
+])
+
+true_control_predictions = (
+    control_reward_means[contexts]
+)
+
+true_candidate_predictions = (
+    candidate_reward_means[contexts]
+)
+
+reward_probabilities = torch.where(
+    candidate_assigned,
+    true_candidate_predictions,
+    true_control_predictions,
+)
+
+rewards = (
+    torch.rand_like(
+        reward_probabilities
+    )
+    &lt; reward_probabilities
+).to(torch.float64)
+
+# Deliberately wrong models and propensities.
+wrong_propensities = torch.full_like(
+    true_propensities,
+    0.50,
+)
+
+wrong_candidate_predictions = (
+    torch.full_like(rewards, 0.50)
+)
+
+wrong_control_predictions = (
+    torch.full_like(rewards, 0.50)
+)
+
+# TODO 1: Naive difference in observed arm means.
+candidate_counts = ...
+control_counts = ...
+
+naive_candidate_values = ...
+naive_control_values = ...
+
+naive_effects = ...
+
+# TODO 2: Ordinary IPW using correct propensities.
+ipw_candidate_contributions = ...
+ipw_control_contributions = ...
+
+ipw_effects = ...
+
+
+# TODO 3: Implement the AIPW effect.
+def aipw_effect(
+    propensities,
+    candidate_predictions,
+    control_predictions,
+):
+    candidate_corrections = ...
+
+    control_corrections = ...
+
+    candidate_terms = ...
+
+    control_terms = ...
+
+    return ...
+
+
+# TODO 4: Evaluate four AIPW combinations.
+aipw_correct_both = ...
+
+aipw_correct_propensity = ...
+
+aipw_correct_outcomes = ...
+
+aipw_both_wrong = ...
+
+# TODO 5: Compare estimators and overlap.
+all_effects = torch.stack([
+    naive_effects,
+    ipw_effects,
+    aipw_correct_both,
+    aipw_correct_propensity,
+    aipw_correct_outcomes,
+    aipw_both_wrong,
+], dim=1)
+
+exact_effect = torch.tensor(0.05)
+
+mean_effects = ...
+biases = ...
+standard_deviations = ...
+rmses = ...
+
+candidate_weights = ...
+control_weights = ...
+
+candidate_ess = ...
+control_ess = ...
+
+candidate_ess_fraction = ...
+control_ess_fraction = ...
+
+names = [
+    &quot;Naive&quot;,
+    &quot;IPW: correct propensity&quot;,
+    &quot;AIPW: both correct&quot;,
+    &quot;AIPW: correct propensity only&quot;,
+    &quot;AIPW: correct outcomes only&quot;,
+    &quot;AIPW: both wrong&quot;,
+]
+
+for index, name in enumerate(names):
+    print(
+        name,
+        {
+            &quot;mean&quot;:
+                mean_effects[index].item(),
+            &quot;bias&quot;:
+                biases[index].item(),
+            &quot;std&quot;:
+                standard_deviations[
+                    index
+                ].item(),
+            &quot;rmse&quot;:
+                rmses[index].item(),
+        },
+    )
+
+print(
+    &quot;Mean candidate ESS fraction:&quot;,
+    candidate_ess_fraction.item(),
+)
+
+print(
+    &quot;Mean control ESS fraction:&quot;,
+    control_ess_fraction.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the naive estimate center near <span style="background-color: codeinlinebg"><code> 0.05</code></span> or <span style="background-color: codeinlinebg"><code> 0.35</code></span>?</p></li>
+<li><p>Which estimators should center near the exact <span style="background-color: codeinlinebg"><code> 0.05</code></span> effect?</p></li>
+<li><p>Which valid estimator should normally have the lowest variance?</p></li>
+<li><p>What happens when both the propensities and outcome models are wrong?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Arm means require masked sums divided by arm counts.</p></li>
+<li><p>IPW candidate contribution is <span style="background-color: codeinlinebg"><code> Z * reward / e</code></span>.</p></li>
+<li><p>An AIPW correction uses <span style="background-color: codeinlinebg"><code> reward - prediction</code></span>, not the reverse.</p></li>
+<li><p>Add each correction to the corresponding prediction.</p></li>
+<li><p>Average candidate terms minus control terms across episodes.</p></li>
+<li><p>Compute ESS separately for each repetition, then average the ESS fractions.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Reverse the residual to <span style="background-color: codeinlinebg"><code> prediction - reward</code></span>.</p></li>
+<li><p>Use the candidate outcome prediction for both policies.</p></li>
+<li><p>Recompute assignment propensities from an updated router.</p></li>
+<li><p>Train a flexible outcome model on the same evaluated outcomes without cross-fitting.</p></li>
+<li><p>Clip small propensities but report the result as the original population effect.</p></li>
+<li><p>Allow gradients through outcome predictions during evaluation.</p></li>
+<li><p>Use candidate-generated response features as though they were pre-treatment context.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does a correct propensity model repair an inaccurate outcome model?</p></li>
+<li><p>Why does a correct outcome model tolerate inaccurate propensities?</p></li>
+<li><p>Does double robustness repair missing overlap?</p></li>
+<li><p>What should accompany an AIPW estimate in production?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Naive estimator:</p>
+<pre class="code python"><code class="language-python">candidate_counts = assignment.sum(
+    dim=1
+)
+
+control_counts = (
+    1.0 - assignment
+).sum(dim=1)
+
+naive_candidate_values = (
+    assignment * rewards
+).sum(dim=1) / candidate_counts
+
+naive_control_values = (
+    (1.0 - assignment) * rewards
+).sum(dim=1) / control_counts
+
+naive_effects = (
+    naive_candidate_values
+    - naive_control_values
+)</code></pre>
+<p>Ordinary IPW:</p>
+<pre class="code python"><code class="language-python">ipw_candidate_contributions = (
+    assignment
+    * rewards
+    / true_propensities
+)
+
+ipw_control_contributions = (
+    (1.0 - assignment)
+    * rewards
+    / (1.0 - true_propensities)
+)
+
+ipw_effects = (
+    ipw_candidate_contributions
+    - ipw_control_contributions
+).mean(dim=1)</code></pre>
+<p>AIPW implementation:</p>
+<pre class="code python"><code class="language-python">def aipw_effect(
+    propensities,
+    candidate_predictions,
+    control_predictions,
+):
+    candidate_corrections = (
+        assignment
+        / propensities
+        * (
+            rewards
+            - candidate_predictions
+        )
+    )
+
+    control_corrections = (
+        (1.0 - assignment)
+        / (1.0 - propensities)
+        * (
+            rewards
+            - control_predictions
+        )
+    )
+
+    candidate_terms = (
+        candidate_predictions
+        + candidate_corrections
+    )
+
+    control_terms = (
+        control_predictions
+        + control_corrections
+    )
+
+    return (
+        candidate_terms
+        - control_terms
+    ).mean(dim=1)</code></pre>
+<p>Four robustness combinations:</p>
+<pre class="code python"><code class="language-python">aipw_correct_both = aipw_effect(
+    true_propensities,
+    true_candidate_predictions,
+    true_control_predictions,
+)
+
+aipw_correct_propensity = aipw_effect(
+    true_propensities,
+    wrong_candidate_predictions,
+    wrong_control_predictions,
+)
+
+aipw_correct_outcomes = aipw_effect(
+    wrong_propensities,
+    true_candidate_predictions,
+    true_control_predictions,
+)
+
+aipw_both_wrong = aipw_effect(
+    wrong_propensities,
+    wrong_candidate_predictions,
+    wrong_control_predictions,
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">mean_effects = all_effects.mean(
+    dim=0
+)
+
+biases = (
+    mean_effects - exact_effect
+)
+
+standard_deviations = (
+    all_effects.std(
+        dim=0,
+        correction=1,
+    )
+)
+
+rmses = (
+    (
+        all_effects - exact_effect
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)
+
+candidate_weights = (
+    assignment / true_propensities
+)
+
+control_weights = (
+    (1.0 - assignment)
+    / (1.0 - true_propensities)
+)
+
+candidate_ess = (
+    candidate_weights.sum(
+        dim=1
+    ).square()
+    / candidate_weights
+    .square()
+    .sum(dim=1)
+)
+
+control_ess = (
+    control_weights.sum(
+        dim=1
+    ).square()
+    / control_weights
+    .square()
+    .sum(dim=1)
+)
+
+candidate_ess_fraction = (
+    candidate_ess
+    / episodes_per_repetition
+).mean()
+
+control_ess_fraction = (
+    control_ess
+    / episodes_per_repetition
+).mean()</code></pre>
+<p>The population values are:</p>
+<p><span class="math display">\[J_1
+=
+\frac12(0.85+0.35)
+=
+0.60\]</span></p>
+<p><span class="math display">\[J_0
+=
+\frac12(0.80+0.30)
+=
+0.55\]</span></p>
+<p>so the exact effect is:</p>
+<p><span class="math display">\[\tau=0.05\]</span></p>
+<p>Because the candidate receives approximately 80% easy prompts while control receives approximately 80% hard prompts, the naive estimate approaches:</p>
+<p><span class="math display">\[0.8(0.85)+0.2(0.35)
+-
+\left[
+0.2(0.80)+0.8(0.30)
+\right]
+=
+0.35\]</span></p>
+<p>Expected results:</p>
+<ul>
+<li><p>naive: biased near <span style="background-color: codeinlinebg"><code> 0.35</code></span>;</p></li>
+<li><p>correct-propensity IPW: centered near <span style="background-color: codeinlinebg"><code> 0.05</code></span>, with relatively high variance;</p></li>
+<li><p>AIPW with both components correct: centered near <span style="background-color: codeinlinebg"><code> 0.05</code></span>, usually lowest variance;</p></li>
+<li><p>correct propensity plus wrong outcomes: centered near <span style="background-color: codeinlinebg"><code> 0.05</code></span>;</p></li>
+<li><p>wrong propensity plus correct outcomes: centered near <span style="background-color: codeinlinebg"><code> 0.05</code></span>;</p></li>
+<li><p>both components wrong: biased near <span style="background-color: codeinlinebg"><code> 0.35</code></span>.</p></li>
+</ul>
+<p>With correct outcome models, AIPW importance-weights only Bernoulli residual noise rather than full reward levels. This is the same variance-reduction pattern as a useful critic or policy-gradient baseline.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>With correct <span class="math inline">\(e(x)\)</span>, inverse weighting transforms observed residual corrections into their population expectations, correcting systematic errors in <span class="math inline">\(m_1\)</span> and <span class="math inline">\(m_0\)</span>.</p></li>
+<li><p>If <span class="math inline">\(m_a(x)=E[Y\mid X=x,Z=a]\)</span>, its observed residual has conditional mean zero. Multiplying that residual by an imperfect finite propensity does not change its zero expectation.</p></li>
+<li><p>No. If a policy has zero probability in some context, neither residual correction nor double robustness supplies the missing counterfactual outcome.</p></li>
+<li><p>Report the estimate and interval, overlap and ESS, propensity ranges, weight quantiles, outcome-model held-out calibration, cross-fitting scheme, subgroup effects, clipping sensitivity, policy versions and randomization unit.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A pre-treatment baseline is balanced between randomized arms in expectation, so its subtraction removes noise without systematically changing their difference.</p></li>
+<li><p>Post-treatment features can be caused by the policy. Conditioning on them can remove genuine policy effects or create collider bias.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> AIPW is “prediction plus correction.” Either trustworthy routing probabilities or trustworthy conditional outcome predictions can protect consistency; having both usually gives the most stable estimate.</p>

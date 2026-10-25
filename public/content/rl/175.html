@@ -1,0 +1,86 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: learning which ingredient ruined the dish</div>
+<p>You only ever hear “good meal” or “bad meal,” never which ingredient was wrong. But after many meals you notice that every bad one had the same spice. You’ve learned a per-ingredient score from per-meal verdicts. PRIME trains a model that gives every <em>token</em> a reward, using only right/wrong labels for whole answers.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What does a process reward model (PRM) score? (Topic 26)</p></li>
+<li><p>In DPO, what plays the role of the reward? (Topic 56)</p></li>
+</ol>
+<h3 class="unnumbered" id="the-idea-cui-et-al.-2025-prime">2. The idea (Cui et al., 2025, PRIME)</h3>
+<p>Parameterize the reward as a log-ratio, like DPO’s implicit reward: <span class="math display">\[r_\phi(y_t)=\beta\log\frac{\pi_\phi(y_t|y_{&lt;t})}{\pi_{\text{ref}}(y_t|y_{&lt;t})},\qquad r_\phi(y)=\sum_tr_\phi(y_t).\]</span> Train <span class="math inline">\(\pi_\phi\)</span> as an <em>outcome</em> reward model with cross-entropy on whether the full answer was correct: <span class="math inline">\(\mathcal L=\operatorname{BCE}\big(\sigma(r_\phi(y)),\ \text{correct}(y)\big)\)</span>. Because the sequence score is a sum of token terms, the per-token <span class="math inline">\(r_\phi(y_t)\)</span> becomes a process reward for free. <strong>Online:</strong> the PRM is updated during RL on fresh policy rollouts with their outcome labels, so it keeps up with the policy, which makes it harder to hack than a frozen PRM. Process and outcome rewards are then combined in the advantage (the paper uses RLOO-style estimates).</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>A log-ratio reward model trained on outcome labels yields dense per-token rewards.</p></li>
+<li><p>Update it online, so it isn’t a fixed target to exploit.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: reading the learned rewards</div>
+<p>In this topic’s toy, an answer is correct iff it never contains token 3. After training on outcome labels only, the per-token rewards are about <span class="math inline">\((+0.28,+0.34,+0.24,-5.66)\)</span>: the model has found the “bad step” with no step labels.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Freezing the implicit PRM (the policy learns to exploit it).</p></li>
+<li><p>Training the PRM on the same responses you then score (leakage).</p></li>
+<li><p>Adding process rewards so strongly that they outweigh the verified outcome.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-learn-per-token-rewards-from-outcomes">3. PyTorch exercise — learn per-token rewards from outcomes</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+V, T, N = 4, 3, 512
+seqs = torch.randint(0, V, (N, T))
+label = (seqs != 3).all(1).float()
+phi = torch.zeros(V, requires_grad=True)
+ref_logp = torch.full((V,), -torch.log(torch.tensor(float(V))))
+opt = torch.optim.Adam([phi], lr=0.05)
+for _ in range(300):
+    # TODO 1: per-token implicit reward beta * (log pi_phi - log pi_ref), beta = 1
+    token_reward = ...
+    # TODO 2: sequence score = sum over the sequence&#x27;s tokens; BCE with the outcome label
+    loss = ...
+    opt.zero_grad()
+    loss.backward()
+    opt.step()</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does summing token rewards into the outcome score make them process rewards?</p></li>
+<li><p>Why does PRIME update the PRM online?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+V, T, N = 4, 3, 512          # vocab, length, number of sequences; token 3 is the &quot;bad step&quot;
+seqs = torch.randint(0, V, (N, T))
+label = (seqs != 3).all(1).float()               # outcome only: correct iff no bad token
+
+phi = torch.zeros(V, requires_grad=True)         # implicit PRM (context-free for the toy)
+ref_logp = torch.full((V,), -torch.log(torch.tensor(float(V))))   # uniform reference
+beta = 1.0
+opt = torch.optim.Adam([phi], lr=0.05)
+for _ in range(300):
+    token_reward = beta * (phi.log_softmax(-1) - ref_logp)        # r_t = beta log pi_phi / pi_ref
+    seq_score = token_reward[seqs].sum(1)                         # outcome = sum of process rewards
+    loss = F.binary_cross_entropy_with_logits(seq_score, label)   # trained on outcome labels only
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+
+with torch.no_grad():
+    r = beta * (phi.log_softmax(-1) - ref_logp)
+print(&quot;per-token implicit rewards:&quot;, [round(x, 2) for x in r.tolist()])</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">per-token implicit rewards: [0.28, 0.34, 0.24, -5.66]</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>The only way to fit the outcome labels is to assign blame to the tokens that predict failure, so the per-token terms carry that blame.</p></li>
+<li><p>A fixed reward model is a fixed target the policy can hack (Topic 33). Updating it on the policy’s own new outputs keeps it calibrated where the policy actually is.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) Each intermediate step. (2) <span class="math inline">\(\beta\log\frac{\pi_\theta}{\pi_{\text{ref}}}\)</span>.</p>
+<p><strong>Takeaway:</strong> dense credit doesn’t require dense labels. Shape the reward model so outcome training produces step-level scores.</p>
+<p><em>Next: the DPO family, which removes the RL loop entirely.</em></p>

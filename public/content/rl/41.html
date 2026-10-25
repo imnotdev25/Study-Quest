@@ -1,0 +1,327 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: comparing yourself to an average that includes you</div>
+<p>If you’re judged against the class average and you’re in the class, then your own score pulls the average toward you. The better you do, the higher the bar rises, partly cancelling your success. In a class of 4, that’s a big distortion. Leave-one-out compares you only with everyone <em>else</em>.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/1de0b929d986.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Rewards <span class="math inline">\((1,0,0,0)\)</span>. Including yourself in the baseline shrinks every advantage by the factor <span class="math inline">\((G-1)/G=3/4\)</span>.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can an action-independent baseline reduce variance without changing the expected policy gradient?</p></li>
+<li><p>What three gradient estimates did we compare in the previous session?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-subtle-small-group-bias">2. A subtle small-group bias</h3>
+<p>REINFORCE uses:</p>
+<p><span class="math display">\[\hat g
+=
+\frac1B\sum_i
+(R_i-b_i)
+\nabla_\theta\log\pi_\theta(A_i)\]</span></p>
+<p>For the baseline to leave the expected gradient unchanged, it must not depend on the current sampled action <span class="math inline">\(A_i\)</span>.</p>
+<p>A common implementation subtracts the group mean:</p>
+<p><span class="math display">\[\bar R
+=
+\frac1G\sum_{j=1}^G R_j\]</span></p>
+<p><span class="math display">\[\hat A_i=R_i-\bar R\]</span></p>
+<p>But <span class="math inline">\(\bar R\)</span> contains <span class="math inline">\(R_i\)</span>, so the sample partly baselines itself. Without standard-deviation normalization, the expected estimator becomes:</p>
+<p><span class="math display">\[\mathbb E[\hat g_{\text{group mean}}]
+=
+\left(1-\frac1G\right)
+\nabla_\theta J\]</span></p>
+<p>For group size <span class="math inline">\(G=2\)</span>, the expected gradient is scaled by one-half. Its direction remains correct, but its magnitude is biased.</p>
+<h3 class="unnumbered" id="leave-one-out-baseline">Leave-one-out baseline</h3>
+<p>Exclude the current response:</p>
+<p><span class="math display">\[b_i^{\text{LOO}}
+=
+\frac1{G-1}
+\sum_{j\ne i}R_j\]</span></p>
+<p><span class="math display">\[\hat A_i^{\text{LOO}}
+=
+R_i-b_i^{\text{LOO}}\]</span></p>
+<p>Other samples were generated independently from the current action, so this restores the usual unbiased-baseline argument.</p>
+<p>For <span class="math inline">\(G=2\)</span>:</p>
+<p><span class="math display">\[\hat A_1=R_1-R_2,\qquad
+\hat A_2=R_2-R_1\]</span></p>
+<p>Practical limits:</p>
+<ul>
+<li><p>LOO requires <span class="math inline">\(G&gt;1\)</span>.</p></li>
+<li><p>It does not guarantee lower variance for every problem.</p></li>
+<li><p>Small groups still produce noisy baselines.</p></li>
+<li><p>GRPO often also divides by the group standard deviation and uses PPO ratios, so its estimator is not simply vanilla REINFORCE with an unbiased baseline.</p></li>
+<li><p>Group-relative normalization can still be useful even though it changes gradient scale and sometimes the effective objective.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions and rewards: <span style="background-color: codeinlinebg"><code> [groups, G]</code></span></p></li>
+<li><p>group means and LOO baselines: <span style="background-color: codeinlinebg"><code> [groups, G]</code></span> after broadcasting</p></li>
+<li><p>policy logits and gradients: <span style="background-color: codeinlinebg"><code> [actions]</code></span></p></li>
+</ul>
+<p>DPO does not estimate sampled reward baselines; it differentiates a fixed chosen-versus-rejected preference loss.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the exact relationship</div>
+<p>Leave-one-out mean: <span class="math inline">\(\bar r_{-i}=\frac{1}{G-1}\sum_{j\ne i}r_j\)</span>. Group mean: <span class="math inline">\(\bar r=\frac1G\big(r_i+(G-1)\bar r_{-i}\big)\)</span>. Then <span class="math display">\[r_i-\bar r=r_i-\tfrac1Gr_i-\tfrac{G-1}{G}\bar r_{-i}=\frac{G-1}{G}\big(r_i-\bar r_{-i}\big).\]</span> So the mean baseline is just a scaled-down LOO advantage. <span class="math inline">\(\bar r_{-i}\)</span> doesn’t depend on action <span class="math inline">\(i\)</span>, which makes it a valid baseline. <span class="math inline">\(\bar r\)</span> contains <span class="math inline">\(r_i\)</span>, so it’s slightly correlated with action <span class="math inline">\(i\)</span>, and the expected gradient is shrunk by <span class="math inline">\((G-1)/G\)</span>. This is the RLOO estimator. The gap matters most for small groups.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Don’t use a sample as its own baseline.</p></li>
+<li><p>Mean-baseline advantage <span class="math inline">\(=\frac{G-1}{G}\times\)</span> LOO advantage.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: mean baseline vs LOO</div>
+<p><span class="math inline">\(r=(1,0,0,0)\)</span>, <span class="math inline">\(G=4\)</span>. Mean baseline: <span class="math inline">\((0.75,-0.25,-0.25,-0.25)\)</span>. LOO: <span class="math inline">\((1,-\tfrac13,-\tfrac13,-\tfrac13)\)</span>. Ratio <span class="math inline">\(0.75/1=3/4=(G-1)/G\)</span>. (checks out)</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>LOO with <span class="math inline">\(G=1\)</span> (division by zero, so you need <span class="math inline">\(G\ge2\)</span>).</p></li>
+<li><p>Mixing LOO and std-normalization without noting the scale change.</p></li>
+<li><p>Computing the baseline over the whole batch instead of per prompt.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Leave-one-out (RLOO) advantages</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(G\ge2\)</span> rewards <span class="math inline">\(r_1,\dots,r_G\)</span> for the same prompt</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(S\gets\sum_jr_j\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i=1,\dots,G\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(b_i\gets(S-r_i)/(G-1)\)</span> <em>▷ everyone else’s mean</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(A_i\gets r_i-b_i\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(A_1,\dots,A_G\)</span> for the policy-gradient update</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-expose-the-self-inclusion-factor">3. PyTorch exercise — expose the self-inclusion factor</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+base_logits = torch.tensor([
+    0.4, -0.2, 0.1
+])
+
+action_rewards = torch.tensor([
+    0.0, 1.0, 3.0
+])
+
+num_groups = 100_000
+group_size = 2
+
+# Exact policy gradient.
+probabilities = base_logits.softmax(dim=-1)
+
+expected_reward = (
+    probabilities * action_rewards
+).sum()
+
+exact_ascent_gradient = (
+    probabilities
+    * (
+        action_rewards
+        - expected_reward
+    )
+)
+
+# Generate fixed on-policy samples: [groups, group].
+with torch.no_grad():
+    rollout_policy = Categorical(
+        logits=base_logits
+    )
+
+    actions = rollout_policy.sample((
+        num_groups,
+        group_size,
+    ))
+
+    rewards = action_rewards[actions]
+
+# TODO 1: Advantages with no baseline.
+no_baseline_advantages = ...
+
+# TODO 2: Baseline that includes the current reward.
+group_means = ...
+self_including_advantages = ...
+
+# TODO 3: Leave-one-out baseline.
+group_reward_sums = ...
+leave_one_out_baselines = ...
+leave_one_out_advantages = ...
+
+def estimate_ascent_gradient(advantages):
+    logits = torch.nn.Parameter(
+        base_logits.clone()
+    )
+
+    policy = Categorical(
+        logits=logits
+    )
+
+    log_probs = policy.log_prob(
+        actions
+    )
+
+    loss = -(
+        log_probs
+        * advantages.detach()
+    ).mean()
+
+    loss.backward()
+
+    return -logits.grad.detach().clone()
+
+# TODO 4: Estimate the three gradients.
+no_baseline_gradient = ...
+self_including_gradient = ...
+leave_one_out_gradient = ...
+
+# Expected self-inclusion scale.
+expected_scale = (
+    1.0 - 1.0 / group_size
+)
+
+# TODO 5: Observed projection onto the exact gradient.
+observed_scale = ...
+
+print(&quot;Exact gradient:&quot;, exact_ascent_gradient)
+print(&quot;No baseline:&quot;, no_baseline_gradient)
+print(&quot;Self-including:&quot;, self_including_gradient)
+print(&quot;Leave one out:&quot;, leave_one_out_gradient)
+
+print(&quot;Expected self-including scale:&quot;, expected_scale)
+print(&quot;Observed self-including scale:&quot;, observed_scale.item())
+
+print(
+    &quot;LOO maximum error:&quot;,
+    (
+        leave_one_out_gradient
+        - exact_ascent_gradient
+    ).abs().max().item(),
+)
+
+print(
+    &quot;Gradient sums:&quot;,
+    exact_ascent_gradient.sum().item(),
+    no_baseline_gradient.sum().item(),
+    self_including_gradient.sum().item(),
+    leave_one_out_gradient.sum().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which estimators should approach the exact gradient?</p></li>
+<li><p>For group size <span style="background-color: codeinlinebg"><code> 2</code></span>, approximately how large should the self-including gradient be?</p></li>
+<li><p>Does the self-including estimator point in the wrong direction?</p></li>
+<li><p>What happens to its scaling bias as group size grows?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>No-baseline advantage is simply the sampled reward.</p></li>
+<li><p>Preserve the group dimension using <span style="background-color: codeinlinebg"><code> keepdim=True</code></span>.</p></li>
+<li><p>For LOO, subtract the current reward from the group sum and divide by <span style="background-color: codeinlinebg"><code> G - 1</code></span>.</p></li>
+<li><p>Call <span style="background-color: codeinlinebg"><code> estimate_ascent_gradient</code></span> once per advantage tensor.</p></li>
+<li><p>Project one gradient onto another with a dot product:</p></li>
+</ul>
+<p><span class="math display">\[\text{scale}
+=
+\frac{g_{\text{observed}}^\top g_{\text{exact}}}
+{g_{\text{exact}}^\top g_{\text{exact}}}\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Use:</p>
+<pre class="code python"><code class="language-python">group_size = 1</code></pre>
+<p>The self-including advantage becomes exactly zero:</p>
+<p><span class="math display">\[R_i-\bar R=R_i-R_i=0\]</span></p>
+<p>LOO is undefined because there are no other samples.</p>
+<p>Next, omit <span style="background-color: codeinlinebg"><code> .detach()</code></span> when advantages come from a learned critic. The actor loss can then update the critic through the policy term, mixing two intended optimization paths.</p>
+<p>Finally, normalize by a nearly zero group standard deviation without epsilon. Identical group rewards will produce <span style="background-color: codeinlinebg"><code> nan</code></span> or <span style="background-color: codeinlinebg"><code> inf</code></span>; zero-variance groups need explicit numerical handling.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is the group mean not action-independent for an included sample?</p></li>
+<li><p>Does multiplying an unbiased gradient by a constant necessarily reverse learning?</p></li>
+<li><p>Why might LOO still be noisy for sparse verifier rewards?</p></li>
+<li><p>Why should gradient norm comparisons account for group size and normalization convention?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Advantages:</p>
+<pre class="code python"><code class="language-python">no_baseline_advantages = rewards</code></pre>
+<pre class="code python"><code class="language-python">group_means = rewards.mean(
+    dim=1,
+    keepdim=True,
+)
+
+self_including_advantages = (
+    rewards - group_means
+)</code></pre>
+<p>Leave-one-out baseline:</p>
+<pre class="code python"><code class="language-python">group_reward_sums = rewards.sum(
+    dim=1,
+    keepdim=True,
+)
+
+leave_one_out_baselines = (
+    group_reward_sums - rewards
+) / (
+    group_size - 1
+)
+
+leave_one_out_advantages = (
+    rewards
+    - leave_one_out_baselines
+)</code></pre>
+<p>Estimated gradients:</p>
+<pre class="code python"><code class="language-python">no_baseline_gradient = (
+    estimate_ascent_gradient(
+        no_baseline_advantages
+    )
+)
+
+self_including_gradient = (
+    estimate_ascent_gradient(
+        self_including_advantages
+    )
+)
+
+leave_one_out_gradient = (
+    estimate_ascent_gradient(
+        leave_one_out_advantages
+    )
+)</code></pre>
+<p>Observed scale:</p>
+<pre class="code python"><code class="language-python">observed_scale = (
+    self_including_gradient
+    @ exact_ascent_gradient
+) / (
+    exact_ascent_gradient
+    @ exact_ascent_gradient
+)</code></pre>
+<p>Both the no-baseline and leave-one-out estimates should approach:</p>
+<p><span class="math display">\[\nabla J\]</span></p>
+<p>The self-including estimator should approach:</p>
+<p><span class="math display">\[\left(1-\frac1G\right)\nabla J\]</span></p>
+<p>With <span class="math inline">\(G=2\)</span>:</p>
+<p><span class="math display">\[\mathbb E[\hat g_{\text{self}}]
+=
+0.5\nabla J\]</span></p>
+<p>It normally points in the correct direction, but its magnitude is approximately halved. As <span class="math inline">\(G\)</span> grows, the factor approaches one:</p>
+<p><span class="math display">\[1-\frac1G\rightarrow1\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Its value contains the current reward, which depends directly on the current sampled action.</p></li>
+<li><p>No. A positive constant preserves direction, although it changes the effective learning rate and interacts with clipping, Adam and other loss terms.</p></li>
+<li><p>Most groups may contain identical failures, while the few groups containing a success produce large relative signals.</p></li>
+<li><p>Otherwise, an apparent optimization change may come entirely from deterministic rescaling rather than improved credit assignment.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>For an action-independent baseline <span class="math inline">\(b\)</span>:</p></li>
+</ol>
+<p><span class="math display">\[\mathbb E[
+b\nabla\log\pi(A)
+]
+=
+b\nabla\sum_a\pi(a)
+=
+0\]</span></p>
+<ol>
+<li><p>Exact differentiation, central finite differences and sampled REINFORCE.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> a group mean that contains the current reward partially cancels that sample’s own policy-gradient signal. Leave-one-out baselines restore action independence, which matters most for small response groups.</p>

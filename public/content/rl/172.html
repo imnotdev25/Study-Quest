@@ -1,0 +1,90 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: turning down the volume vs muting</div>
+<p>If one person in a meeting gets too loud, you can turn their volume down, or mute them. PPO’s clip <em>mutes</em> a token whose ratio moved too far: its gradient becomes zero. CISPO turns the volume down: the token still contributes, with a capped weight.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>In PPO-clip, which tokens get zero gradient? (Topic 20)</p></li>
+<li><p>What does <code>.detach()</code> do to a factor in the loss?</p></li>
+</ol>
+<h3 class="unnumbered" id="the-objective-minimax-m1-2025">2. The objective (MiniMax-M1, 2025)</h3>
+<p><span class="math display">\[\mathcal J_{\text{CISPO}}=\mathbb E\Big[\frac{1}{\sum_i|o_i|}\sum_i\sum_t\operatorname{sg}\big(\hat r_{i,t}\big)\,\hat A_{i,t}\,\log\pi_\theta(o_{i,t}|\cdot)\Big],\qquad\hat r_{i,t}=\operatorname{clip}\big(r_{i,t},1-\epsilon^{\text{IS}}_{\text{low}},1+\epsilon^{\text{IS}}_{\text{high}}\big).\]</span> Group-relative advantages, token-level normalization, no KL term. The paper sets no effective lower bound (<span class="math inline">\(\epsilon^{\text{IS}}_{\text{low}}\)</span> large) and tunes only the upper one.</p>
+<p><strong>Why:</strong> in MiniMax’s runs, rare reflective tokens such as “However,” “Wait,” “Recheck” and “Aha” act as forks in the reasoning. They start with low probability, so after one update their ratio is high, and PPO/GRPO clipping cut them out of every later off-policy update. CISPO keeps their gradient, with a bounded weight, which the paper credits for more stable entropy and faster training. They found DAPO’s clip-higher less effective in their setup of 16 off-policy updates per batch.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: bias for variance</div>
+<p>Without clipping, <span class="math inline">\(\operatorname{sg}(r)\,A\nabla\log\pi=A\,\nabla r\)</span> (since <span class="math inline">\(r\nabla\log\pi=\nabla r\)</span>), which is the ordinary importance-weighted policy gradient. Clipping the weight caps the variance from large ratios, at the cost of a small bias. PPO instead drops those terms entirely.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>PPO zeroes the gradient of over-moved tokens, while CISPO keeps it with a capped, detached weight.</p></li>
+<li><p>This protects rare high-value tokens across many off-policy updates.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the “Wait” token</div>
+<p>Ratio <span class="math inline">\(1.5\)</span>, <span class="math inline">\(A=+1\)</span>. PPO with <span class="math inline">\(\epsilon=0.2\)</span>: <span class="math inline">\(\min(1.5,1.2)=1.2\)</span> (constant), so the gradient is 0. CISPO with <span class="math inline">\(\epsilon_{\text{high}}=0.28\)</span>: weight <span class="math inline">\(\min(1.5,1.28)=1.28\)</span> (detached), so the gradient with respect to <span class="math inline">\(\log\pi\)</span> is <span class="math inline">\(-1.28\)</span> in the loss, and the token keeps being reinforced.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Forgetting <code>.detach()</code> (the weight’s own gradient changes the estimator).</p></li>
+<li><p>Clipping <span class="math inline">\(\rho A\)</span> instead of <span class="math inline">\(\rho\)</span>.</p></li>
+<li><p>No cap at all: the variance explodes on stale batches.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-ppo-vs-cispo-on-one-token">3. PyTorch exercise — PPO vs CISPO on one token</h3>
+<pre class="code python"><code class="language-python">import torch
+
+
+def cispo_loss(logp_new, logp_old, adv, mask, eps_high=0.28):
+    ratio = (logp_new - logp_old).exp()
+    # TODO 1: cap the ratio from above and stop its gradient
+    weight = ...
+    # TODO 2: weighted log-prob loss, token-level normalization
+    return ...
+
+
+logp_old = torch.tensor([-4.0])
+logp_new = (logp_old + torch.log(torch.tensor(1.5))).requires_grad_()
+# TODO 3: compare logp_new.grad under a PPO token loss and under cispo_loss</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why are low-probability tokens the ones PPO tends to clip?</p></li>
+<li><p>What does CISPO give up compared to the unclipped policy gradient?</p></li>
+<li><p>Why does this matter more with many off-policy updates per batch?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+
+
+def ppo_token_loss(logp_new, logp_old, adv, eps=0.2):
+    ratio = (logp_new - logp_old).exp()
+    return -torch.min(ratio * adv, ratio.clamp(1 - eps, 1 + eps) * adv).mean()
+
+
+def cispo_loss(logp_new, logp_old, adv, mask, eps_high=0.28):
+    ratio = (logp_new - logp_old).exp()
+    weight = ratio.clamp(max=1 + eps_high).detach()       # clip the IS weight, then stop gradient
+    return -(weight * adv * logp_new * mask).sum() / mask.sum()
+
+
+# A rare reflective token (&quot;Wait&quot;) whose probability rose 50% after the first update. A &gt; 0.
+logp_old = torch.tensor([-4.0])
+logp_new = (logp_old + torch.log(torch.tensor(1.5))).requires_grad_()
+adv, mask = torch.tensor([1.0]), torch.tensor([1.0])
+
+ppo_token_loss(logp_new, logp_old, adv).backward()
+print(f&quot;PPO/GRPO grad on &#x27;Wait&#x27;: {logp_new.grad.item():.3f}&quot;)
+logp_new.grad = None
+cispo_loss(logp_new, logp_old, adv, mask).backward()
+print(f&quot;CISPO    grad on &#x27;Wait&#x27;: {logp_new.grad.item():.3f}&quot;)</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">PPO/GRPO grad on &#x27;Wait&#x27;: 0.000
+CISPO    grad on &#x27;Wait&#x27;: -1.280</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>Ratios are relative: a small absolute increase on a tiny probability is a big ratio.</p></li>
+<li><p>Unbiasedness: the capped weight undercounts large-ratio tokens (in exchange for lower variance).</p></li>
+<li><p>Each extra update moves ratios further from 1, so more tokens cross the clip and get muted under PPO.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) <span class="math inline">\(A&gt;0\)</span> with <span class="math inline">\(\rho&gt;1+\epsilon\)</span>, and <span class="math inline">\(A&lt;0\)</span> with <span class="math inline">\(\rho&lt;1-\epsilon\)</span>. (2) It turns the factor into a constant: no gradient flows through it.</p>
+<p><strong>Takeaway:</strong> clipping the <em>weight</em> instead of the <em>update</em> keeps rare, important tokens learning while still bounding variance.</p>
+<p><em>Next: entropy collapse, the failure mode that DAPO and CISPO were both fighting.</em></p>

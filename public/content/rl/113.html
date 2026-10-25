@@ -1,0 +1,435 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>At a timeout, which masks should GAE use for bootstrapping and trace recursion?</p></li>
+<li><p>Why should actor loss use detached advantages?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-loss-mean-silently-decides-who-gets-influence">2. A loss mean silently decides who gets influence</h3>
+<p>For variable-length LLM responses, a token-average PPO objective is:</p>
+<p><span class="math display">\[J_{\text{token}}
+=
+\frac{
+\sum_{b,t}m_{b,t}
+\min(
+\rho_{b,t}A_{b,t},
+\operatorname{clip}(\rho_{b,t})A_{b,t}
+)
+}{
+\sum_{b,t}m_{b,t}
+}\]</span></p>
+<p>Every generated token receives equal weight. A response with 100 tokens contributes about ten times as many terms as one with 10.</p>
+<p>A prompt-balanced objective first averages within each response:</p>
+<p><span class="math display">\[J_{\text{prompt}}
+=
+\frac1B
+\sum_b
+\frac{
+\sum_t m_{b,t}S_{b,t}
+}{
+\sum_t m_{b,t}
+}\]</span></p>
+<p>where <span class="math inline">\(S_{b,t}\)</span> is the PPO surrogate.</p>
+<p>These answer different questions:</p>
+<ul>
+<li><p>token mean: improvement for a randomly selected generated token;</p></li>
+<li><p>prompt mean: improvement for a randomly selected prompt or response.</p></li>
+</ul>
+<p>PPO clipping limits policy-ratio changes:</p>
+<p><span class="math display">\[\rho_{b,t}
+=
+\exp(
+\log\pi_\theta-\log\pi_{\text{old}}
+)\]</span></p>
+<p>It does not correct unintended length weighting.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>log-probabilities, advantages and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>response lengths: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>response objectives: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<p>Advantages must be detached so the actor objective does not update the critic through the GAE graph. Prompt tokens, padding and post-EOS positions must be masked.</p>
+<p>DPO usually averages losses across preference pairs, while each sequence log-ratio is a sum over response tokens. Replacing that sum with a token mean also changes its objective. DPO remains fixed-data preference optimization, not online policy evaluation.</p>
+<h3 class="unnumbered" id="pytorch-exercise-the-update-direction-reverses">3. PyTorch exercise — the update direction reverses</h3>
+<p>The short response has negative advantage, while the long response has smaller positive advantage. Token averaging lets the long response dominate.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.set_default_dtype(torch.float64)
+
+batch_size = 2
+maximum_length = 8
+clip_epsilon = 0.20
+
+# Short response: 2 tokens, advantage -2 each.
+# Long response: 8 tokens, advantage +1 each.
+lengths = torch.tensor([2, 8])
+
+advantage_levels = torch.tensor([
+    -2.0,
+    1.0,
+])
+
+
+# TODO 1: Construct the response-token mask.
+token_positions = ...
+
+response_mask = ...
+
+dense_advantages = ...
+
+padded_advantages = ...
+
+# Avoid NaN * 0.
+safe_advantages = ...
+
+
+# TODO 2: Implement one PPO objective and
+# return its policy-ascent gradient.
+def ppo_objective_and_gradient(reduction):
+    theta = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    old_theta = torch.tensor(0.0)
+
+    old_log_probability = ...
+
+    new_log_probability = ...
+
+    old_log_probabilities = ...
+    new_log_probabilities = ...
+
+    probability_ratios = ...
+
+    detached_advantages = ...
+
+    unclipped_surrogate = ...
+
+    clipped_surrogate = ...
+
+    surrogate = ...
+
+    float_mask = response_mask.to(
+        torch.float64
+    )
+
+    if reduction == &quot;token&quot;:
+        # TODO 3: Equal weight per valid token.
+        objective = ...
+
+    elif reduction == &quot;prompt&quot;:
+        # TODO 4: Equal weight per response.
+        valid_counts = ...
+
+        response_objectives = ...
+
+        objective = ...
+
+    elif reduction == &quot;padded&quot;:
+        # Incorrect: padded slots enter denominator.
+        objective = ...
+
+    else:
+        raise ValueError(reduction)
+
+    loss = -objective
+    loss.backward()
+
+    ascent_gradient = ...
+
+    return (
+        objective.detach(),
+        ascent_gradient,
+    )
+
+
+token_objective, token_gradient = (
+    ppo_objective_and_gradient(&quot;token&quot;)
+)
+
+prompt_objective, prompt_gradient = (
+    ppo_objective_and_gradient(&quot;prompt&quot;)
+)
+
+padded_objective, padded_gradient = (
+    ppo_objective_and_gradient(&quot;padded&quot;)
+)
+
+
+# TODO 5: Explicit contribution weights.
+token_reduction_weights = ...
+
+prompt_reduction_weights = ...
+
+
+print(&quot;Response mask:&quot;)
+print(response_mask)
+
+print(&quot;\nSafe advantages:&quot;)
+print(safe_advantages)
+
+print(
+    &quot;\nObjectives: token, prompt, padded&quot;
+)
+print(
+    token_objective.item(),
+    prompt_objective.item(),
+    padded_objective.item(),
+)
+
+print(
+    &quot;Ascent gradients: token, prompt, padded&quot;
+)
+print(
+    token_gradient.item(),
+    prompt_gradient.item(),
+    padded_gradient.item(),
+)
+
+print(
+    &quot;Response weights under token reduction:&quot;,
+    token_reduction_weights,
+)
+
+print(
+    &quot;Response weights under prompt reduction:&quot;,
+    prompt_reduction_weights,
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What fraction of token loss comes from the long response?</p></li>
+<li><p>Is the token-average advantage positive or negative?</p></li>
+<li><p>Is the prompt-average advantage positive or negative?</p></li>
+<li><p>Will PPO clipping prevent the gradient-direction reversal?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Build the mask with:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">token_positions &lt; lengths[:, None]</code></pre>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span>, because <span style="background-color: codeinlinebg"><code> NaN * 0</code></span> remains <span style="background-color: codeinlinebg"><code> NaN</code></span>.</p></li>
+<li><p>At <span style="background-color: codeinlinebg"><code> theta = old_theta = 0</code></span>, every probability ratio equals <span style="background-color: codeinlinebg"><code> 1</code></span>.</p></li>
+<li><p>Token reduction divides by the total valid-token count.</p></li>
+<li><p>Prompt reduction divides each response sum by its own length before averaging responses.</p></li>
+<li><p>Return <span style="background-color: codeinlinebg"><code> -theta.grad</code></span> because PyTorch differentiated <span style="background-color: codeinlinebg"><code> loss = -objective</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Replace the masked denominator with <span style="background-color: codeinlinebg"><code> B * T</code></span>.</p></li>
+<li><p>Include prompt tokens in <span style="background-color: codeinlinebg"><code> response_mask</code></span>.</p></li>
+<li><p>Average worker-local token means when workers have different valid-token counts.</p></li>
+<li><p>Normalize advantages using padded zeros.</p></li>
+<li><p>Allow empty responses to create division by zero.</p></li>
+<li><p>Compare runs without logging response-length contribution shares.</p></li>
+<li><p>Scale rewards while keeping learning rate and gradient clipping unchanged.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Which reduction matches a randomly selected deployment prompt?</p></li>
+<li><p>Does prompt averaging make long-response tokens irrelevant?</p></li>
+<li><p>Why should distributed training all-reduce both numerator and denominator?</p></li>
+<li><p>Can token and prompt reductions legitimately have opposite gradients?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Masks and advantages:</p>
+<pre class="code python"><code class="language-python">token_positions = torch.arange(
+    maximum_length
+)[None, :]
+
+response_mask = (
+    token_positions
+    &lt; lengths[:, None]
+)
+
+dense_advantages = (
+    advantage_levels[:, None]
+    .expand(
+        batch_size,
+        maximum_length,
+    )
+)
+
+padded_advantages = torch.where(
+    response_mask,
+    dense_advantages,
+    torch.tensor(float(&quot;nan&quot;)),
+)
+
+safe_advantages = torch.where(
+    response_mask,
+    padded_advantages,
+    torch.zeros_like(
+        padded_advantages
+    ),
+)</code></pre>
+<p>PPO quantities:</p>
+<pre class="code python"><code class="language-python">def ppo_objective_and_gradient(reduction):
+    theta = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    old_theta = torch.tensor(0.0)
+
+    old_log_probability = (
+        F.logsigmoid(old_theta)
+    )
+
+    new_log_probability = (
+        F.logsigmoid(theta)
+    )
+
+    old_log_probabilities = (
+        old_log_probability.expand_as(
+            safe_advantages
+        )
+    )
+
+    new_log_probabilities = (
+        new_log_probability.expand_as(
+            safe_advantages
+        )
+    )
+
+    probability_ratios = torch.exp(
+        new_log_probabilities
+        - old_log_probabilities
+    )
+
+    detached_advantages = (
+        safe_advantages.detach()
+    )
+
+    unclipped_surrogate = (
+        probability_ratios
+        * detached_advantages
+    )
+
+    clipped_surrogate = (
+        probability_ratios.clamp(
+            1.0 - clip_epsilon,
+            1.0 + clip_epsilon,
+        )
+        * detached_advantages
+    )
+
+    surrogate = torch.minimum(
+        unclipped_surrogate,
+        clipped_surrogate,
+    )
+
+    float_mask = response_mask.to(
+        torch.float64
+    )
+
+    if reduction == &quot;token&quot;:
+        objective = (
+            surrogate * float_mask
+        ).sum() / float_mask.sum()
+
+    elif reduction == &quot;prompt&quot;:
+        valid_counts = (
+            float_mask.sum(dim=1)
+            .clamp_min(1.0)
+        )
+
+        response_objectives = (
+            (
+                surrogate
+                * float_mask
+            ).sum(dim=1)
+            / valid_counts
+        )
+
+        objective = (
+            response_objectives.mean()
+        )
+
+    elif reduction == &quot;padded&quot;:
+        objective = (
+            surrogate
+            * float_mask
+        ).mean()
+
+    else:
+        raise ValueError(reduction)
+
+    loss = -objective
+    loss.backward()
+
+    ascent_gradient = (
+        -theta.grad.detach()
+    )
+
+    return (
+        objective.detach(),
+        ascent_gradient,
+    )</code></pre>
+<p>Contribution weights:</p>
+<pre class="code python"><code class="language-python">token_reduction_weights = (
+    lengths.to(torch.float64)
+    / lengths.sum()
+)
+
+prompt_reduction_weights = torch.full(
+    (batch_size,),
+    1.0 / batch_size,
+)</code></pre>
+<p>The long response contains:</p>
+<p><span class="math display">\[\frac8{2+8}=0.8\]</span></p>
+<p>of the valid tokens.</p>
+<p>The token-average advantage is:</p>
+<p><span class="math display">\[\bar A_{\text{token}}
+=
+\frac{2(-2)+8(1)}{10}
+=
+0.4\]</span></p>
+<p>so its update increases the sampled-action logit.</p>
+<p>The prompt-average advantage is:</p>
+<p><span class="math display">\[\bar A_{\text{prompt}}
+=
+\frac{-2+1}{2}
+=
+-0.5\]</span></p>
+<p>so its update decreases that logit.</p>
+<p>At <span class="math inline">\(\theta=0\)</span>:</p>
+<p><span class="math display">\[\frac{\partial\log\sigma(\theta)}
+{\partial\theta}
+=
+0.5\]</span></p>
+<p>Therefore, expected ascent gradients are:</p>
+<p><span class="math display">\[g_{\text{token}}
+=
+0.5(0.4)
+=
+0.20\]</span></p>
+<p><span class="math display">\[g_{\text{prompt}}
+=
+0.5(-0.5)
+=
+-0.25\]</span></p>
+<p>The padded calculation divides the token sum by all 16 tensor positions:</p>
+<p><span class="math display">\[J_{\text{padded}}
+=
+\frac4{16}
+=
+0.25\]</span></p>
+<p>giving gradient approximately <span style="background-color: codeinlinebg"><code> 0.125</code></span>. It preserves the token objective’s sign here but silently changes its scale according to padding.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Prompt reduction, assuming prompts are sampled from the target deployment distribution.</p></li>
+<li><p>No. Tokens determine each response’s mean, but every response receives the same total outer weight.</p></li>
+<li><p>The correct global token mean is the ratio of global sums. Averaging worker means overweights workers with fewer valid tokens.</p></li>
+<li><p>Yes. They represent different weighting schemes, and response length can correlate with advantage.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Bootstrap with <span style="background-color: codeinlinebg"><code> ~terminated</code></span>; stop GAE recursion with <span style="background-color: codeinlinebg"><code> ~(terminated | truncated)</code></span> when the next row belongs to a reset episode.</p></li>
+<li><p>The actor should treat advantages as fixed credit signals. Without detachment, actor loss can unintentionally update the critic or reward-processing graph.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> PPO’s final <span style="background-color: codeinlinebg"><code> .mean()</code></span> is part of the objective. Decide whether deployment cares about the average token or the average prompt, then make masks, distributed aggregation and diagnostics match that choice.</p>

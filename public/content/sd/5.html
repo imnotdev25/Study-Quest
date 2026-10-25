@@ -1,0 +1,321 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Choosing a database, how indexes work, replication topologies, sharding and rebalancing, distributed SQL, object storage, search, and vector databases.</p>
+</div>
+<h1 id="choosing-a-database">Choosing a Database</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A database is a filing cabinet. Relational (SQL) databases are cabinets with strict labeled folders and cross-references; they keep everything tidy and correct. NoSQL databases are cabinets built for a specific job: very fast lookups by label, huge write volumes, or flexible documents.</p>
+</div>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Strengths</th>
+<th style="text-align: left;">Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Relational (OLTP)</td>
+<td style="text-align: left;">ACID transactions, joins, constraints, mature</td>
+<td style="text-align: left;">PostgreSQL, MySQL, SQL Server</td>
+</tr>
+<tr>
+<td style="text-align: left;">Distributed SQL</td>
+<td style="text-align: left;">SQL + ACID with horizontal scale</td>
+<td style="text-align: left;">Spanner, CockroachDB, YugabyteDB, TiDB, Aurora DSQL</td>
+</tr>
+<tr>
+<td style="text-align: left;">Key-value</td>
+<td style="text-align: left;">Very fast lookup by key</td>
+<td style="text-align: left;">DynamoDB, Redis, RocksDB</td>
+</tr>
+<tr>
+<td style="text-align: left;">Wide-column</td>
+<td style="text-align: left;">Massive write throughput, time-ordered data</td>
+<td style="text-align: left;">Cassandra, ScyllaDB, Bigtable, HBase</td>
+</tr>
+<tr>
+<td style="text-align: left;">Document</td>
+<td style="text-align: left;">Flexible JSON schema</td>
+<td style="text-align: left;">MongoDB, Couchbase, Firestore</td>
+</tr>
+<tr>
+<td style="text-align: left;">Graph</td>
+<td style="text-align: left;">Relationship traversal</td>
+<td style="text-align: left;">Neo4j, Neptune</td>
+</tr>
+<tr>
+<td style="text-align: left;">Time series</td>
+<td style="text-align: left;">Metrics, retention, downsampling</td>
+<td style="text-align: left;">TimescaleDB, InfluxDB, Prometheus</td>
+</tr>
+<tr>
+<td style="text-align: left;">Search</td>
+<td style="text-align: left;">Full-text, relevance ranking</td>
+<td style="text-align: left;">Elasticsearch, OpenSearch</td>
+</tr>
+<tr>
+<td style="text-align: left;">Vector</td>
+<td style="text-align: left;">Similarity search on embeddings</td>
+<td style="text-align: left;">pgvector, Pinecone, Milvus, Qdrant, Weaviate</td>
+</tr>
+<tr>
+<td style="text-align: left;">Analytical (OLAP)</td>
+<td style="text-align: left;">Columnar scans, aggregations</td>
+<td style="text-align: left;">Snowflake, BigQuery, ClickHouse, DuckDB</td>
+</tr>
+<tr>
+<td style="text-align: left;">Object store</td>
+<td style="text-align: left;">Cheap, durable blobs</td>
+<td style="text-align: left;">S3, GCS, Azure Blob</td>
+</tr>
+</tbody>
+</table>
+<p><em>Database families</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Start with PostgreSQL unless you have a specific reason not to. With extensions it covers relational, JSON documents (<code>jsonb</code>), full-text search, geospatial (PostGIS), time series (Timescale), and vectors (pgvector). Move to a specialized store when measurement shows Postgres is the bottleneck or the access pattern clearly fits something else.</p>
+</div>
+<h1 id="indexes-and-storage-engines">Indexes and Storage Engines</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>An index is a sorted structure that turns a full table scan (<span class="math inline">\(O(n)\)</span>) into a lookup (<span class="math inline">\(O(\log n)\)</span>). Two dominant storage engines:</p>
+<ul>
+<li><p><strong>B-tree / B+tree</strong> (Postgres, MySQL InnoDB): in-place updates, fast reads, good range scans.</p></li>
+<li><p><strong>LSM tree</strong> (RocksDB, Cassandra, ScyllaDB): writes go to an in-memory memtable and are flushed to immutable sorted files (SSTables), merged by compaction. Very fast writes; reads may check several files, helped by Bloom filters.</p></li>
+</ul>
+<p>Composite index order matters: an index on <code>(tenant_id, created_at)</code> serves <code>WHERE tenant_id=? ORDER BY created_at</code> but not a query on <code>created_at</code> alone.</p>
+</div>
+<h1 id="replication">Replication</h1>
+<figure class="tikz"><img src="figs/sd/b4b7c87c0be5.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Leader-follower replication</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Leader-follower</strong>: one writer, many readers. Simple; reads from followers may be stale (replication lag).</p></li>
+<li><p><strong>Multi-leader</strong>: writers in several regions; needs conflict resolution.</p></li>
+<li><p><strong>Leaderless</strong>: client writes to <span class="math inline">\(W\)</span> of <span class="math inline">\(N\)</span> replicas and reads <span class="math inline">\(R\)</span> (Dynamo, Cassandra).</p></li>
+</ul>
+<p><strong>Synchronous</strong> replication waits for followers (no data loss, higher latency). <strong>Asynchronous</strong> returns immediately (fast, may lose recent writes on failover). <strong>Semi-synchronous</strong> waits for at least one follower.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Replication lag anomalies:</strong> a user updates their profile then reloads and sees the old one (read from a lagging follower). Fixes: read-your-writes by routing a user’s reads to the leader for a few seconds after a write, or by tracking the write’s log position and waiting for a follower to reach it. <strong>Failover</strong> is dangerous: split brain (two leaders) corrupts data. Use consensus-based leader election (Patroni with etcd, Raft-based systems) and fencing tokens so a deposed leader’s writes are rejected. <strong>Conflict resolution</strong> for multi-leader: last-write-wins (lossy), application merge, or <strong>CRDTs</strong> (conflict-free replicated data types: counters, sets, and sequences that merge automatically, used in collaborative editors and local-first apps).</p>
+</div>
+<h1 id="sharding-partitioning">Sharding (Partitioning)</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>When one filing cabinet is full, buy more cabinets and split folders by the first letter of the customer’s name: A–F in cabinet 1, G–M in cabinet 2. That is sharding. The trick is picking a split that keeps cabinets equally busy.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/d6815713d079.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Hash-based sharding</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Range sharding</strong>: by key range (dates, IDs). Great for range scans; risk of hot spots (all new writes hit the latest range).</p></li>
+<li><p><strong>Hash sharding</strong>: by hash of key. Even distribution; range scans span all shards.</p></li>
+<li><p><strong>Directory sharding</strong>: a lookup table maps key to shard. Flexible; the directory is a dependency.</p></li>
+<li><p><strong>Geo sharding</strong>: by region. Locality and data residency.</p></li>
+</ul>
+<p>Choose a shard key with high cardinality that matches your main access pattern (e.g. <code>tenant_id</code> for SaaS, so one tenant’s queries hit one shard).</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Sharding costs: cross-shard joins and transactions, global secondary indexes, uneven tenants (one tenant larger than a shard), and resharding. Pre-split into many logical shards (e.g. 4<span>,</span>096) mapped onto fewer physical nodes so rebalancing moves whole logical shards. Tools: Vitess (MySQL, used by YouTube, Slack), Citus (Postgres), or adopt distributed SQL, which shards and rebalances automatically using range partitions replicated by Raft groups.</p>
+</div>
+<h1 id="specialized-storage">Specialized Storage</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Object storage</strong> (S3) is the backbone of modern data: images, video, backups, logs, and data lakes. Open table formats (<strong>Apache Iceberg</strong>, Delta Lake, Hudi) add ACID tables on top of object storage, forming the <em>lakehouse</em>. A newer trend is systems that use S3 as their primary storage layer (“diskless” Kafka variants, S3-backed databases, S3 Tables, S3 Vectors) to trade some latency for much lower cost.</p>
+<p><strong>Search engines</strong> use inverted indexes (term <span class="math inline">\(\to\)</span> list of documents) with BM25 scoring. <strong>Vector databases</strong> index embeddings with approximate nearest-neighbor structures:</p>
+<ul>
+<li><p><strong>HNSW</strong>: multi-layer navigable graph; fast, high recall, memory heavy.</p></li>
+<li><p><strong>IVF</strong>: cluster vectors, search nearest clusters only.</p></li>
+<li><p><strong>PQ / scalar / binary quantization</strong>: compress vectors 4–32<span class="math inline">\(\times\)</span>.</p></li>
+<li><p><strong>DiskANN</strong>: SSD-resident graph index for billions of vectors.</p></li>
+</ul>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Multi-tenant SaaS</div>
+<p>Postgres sharded by <code>tenant_id</code> with Citus. Small tenants share shards; the three largest tenants get dedicated shards. Every table includes <code>tenant_id</code> and row-level security enforces isolation.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: IoT telemetry at 1M writes/s</div>
+<p>Devices write to Kafka; consumers write to ScyllaDB partitioned by <code>(device_id, day)</code> with a clustering key on timestamp. Old data is compacted into Parquet on S3 and queried with an OLAP engine.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Global user accounts</div>
+<p>CockroachDB or Spanner with rows homed in the user’s region (regional-by-row). Logins are local-latency; global uniqueness of email is still enforced.</p>
+</div>
+<h1 id="deep-dive-transactions-isolation-and-mvcc">Deep Dive: Transactions, Isolation, and MVCC</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Two people edit the same spreadsheet cell at once. Isolation decides what each of them sees while the other is mid-edit, and whose change survives. Stronger isolation means fewer surprises but more waiting.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Isolation levels are defined by which <em>anomalies</em> they allow:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Level</th>
+<th style="text-align: left;">Default in</th>
+<th style="text-align: left;">Dirty</th>
+<th style="text-align: left;">Non-repeat.</th>
+<th style="text-align: left;">Phantom</th>
+<th style="text-align: left;">Skew</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Read uncommitted</td>
+<td style="text-align: left;">rarely used</td>
+<td style="text-align: left;">possible</td>
+<td style="text-align: left;">possible</td>
+<td style="text-align: left;">possible</td>
+<td style="text-align: left;">possible</td>
+</tr>
+<tr>
+<td style="text-align: left;">Read committed</td>
+<td style="text-align: left;">Postgres, Oracle, SQL Server</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">possible</td>
+<td style="text-align: left;">possible</td>
+<td style="text-align: left;">possible</td>
+</tr>
+<tr>
+<td style="text-align: left;">Repeatable read / snapshot</td>
+<td style="text-align: left;">MySQL InnoDB</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">mostly no</td>
+<td style="text-align: left;">possible</td>
+</tr>
+<tr>
+<td style="text-align: left;">Serializable</td>
+<td style="text-align: left;">CockroachDB, Spanner</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">no</td>
+<td style="text-align: left;">no</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><p><strong>Dirty read</strong>: you see another transaction’s uncommitted write.</p></li>
+<li><p><strong>Non-repeatable read</strong>: reading the same row twice gives different values.</p></li>
+<li><p><strong>Phantom</strong>: re-running a range query returns new rows.</p></li>
+<li><p><strong>Lost update</strong>: two read-modify-write cycles overwrite each other (two clerks both read stock = 5, both write 4).</p></li>
+<li><p><strong>Write skew</strong>: two transactions each check a condition, then write different rows, breaking a rule together. Classic example: a hospital requires at least one doctor on call; two doctors both see “2 on call” and both go off call.</p></li>
+</ul>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>MVCC (multi-version concurrency control)</strong> is how Postgres, MySQL InnoDB, and most modern databases implement isolation without readers blocking writers. An update never overwrites a row in place; it writes a new <em>version</em> tagged with the transaction ID that created it. A reader gets a <em>snapshot</em>: the set of transactions committed when it started, and it ignores versions created after. Old versions are cleaned up later (Postgres <code>VACUUM</code>, InnoDB purge). This is why the Notion and Figma cases in Part (cases) were driven by vacuum problems: massive tables produce dead versions faster than cleanup can reclaim them.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Fixing lost updates and write skew in practice:</strong></p>
+<ul>
+<li><p>Atomic updates: <code>UPDATE stock SET qty = qty - 1 WHERE id = ? AND qty &gt; 0</code>. The check and write happen in one statement; check the affected row count.</p></li>
+<li><p>Explicit locks: <code>SELECT … FOR UPDATE</code> locks the rows you read. For write skew, lock the rows the <em>condition</em> depends on.</p></li>
+<li><p>Optimistic concurrency: a <code>version</code> column; <code>UPDATE … WHERE id=? AND version=7</code>; zero rows updated means someone else won, so retry.</p></li>
+<li><p>Serializable isolation: Postgres’s Serializable Snapshot Isolation detects dangerous read/write patterns and aborts one transaction. The app must retry on serialization failures (SQLSTATE <code>40001</code>).</p></li>
+</ul>
+<p><strong>Write and read amplification.</strong> A B-tree update rewrites a whole page (often 8–16 KB) for a small row change, plus the write-ahead log: write amplification of 10<span class="math inline">\(\times\)</span> or more for small random writes, but reads touch <span class="math inline">\(O(\log n)\)</span> pages. An LSM tree writes sequentially and compacts later; total write amplification across compaction levels can be 10–30<span class="math inline">\(\times\)</span>, but it is sequential I/O. Reads may check several levels, helped by Bloom filters (a few bits per key give a 1% false-positive rate). Pick B-trees for read-heavy OLTP and range scans, LSM trees for write-heavy ingestion (Discord, IoT, metrics).</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Selling the last concert ticket twice</div>
+<p>Two buyers load a seat and both click buy. Naive code reads <code>status = 'available'</code>, then writes <code>'sold'</code>: both succeed under read committed. The fix is a conditional write: <code>UPDATE seats SET status='sold', buyer=? WHERE id=? AND status='available'</code>; exactly one gets <code>1 row</code>. Ticketmaster-scale systems add short-lived holds with TTLs before payment (Part (cases)).</p>
+</div>
+<h1 id="deep-dive-inside-a-relational-database">Deep Dive: Inside a Relational Database</h1>
+<h2 id="query-planning">Query Planning</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>SQL says <em>what</em> you want; the <strong>query planner</strong> decides <em>how</em>. It parses the query, considers alternative plans (which index to use, sequential vs index scan, join order, join algorithm: nested loop for small inputs with an index, hash join for large unsorted inputs, merge join for sorted inputs), estimates each plan’s cost from table <strong>statistics</strong> (row counts, value distributions, histograms), and picks the cheapest. <code>EXPLAIN ANALYZE</code> shows the chosen plan with real row counts and timings; the usual problems are a <em>sequential scan</em> where an index was expected, estimated rows far from actual rows (stale statistics: run <code>ANALYZE</code>), or a function on an indexed column (<code>WHERE lower(email) = ?</code> cannot use an index on <code>email</code>; create an expression index). A plan that changes after a deploy or data growth is a classic latency incident.</p>
+</div>
+<h2 id="write-ahead-log-and-recovery">Write-Ahead Log and Recovery</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Databases change pages in memory and write them to disk later. To survive crashes, every change is first appended to the <strong>write-ahead log (WAL)</strong> and the log is fsynced at commit; the data pages can be written lazily. On restart, <strong>recovery</strong> replays the WAL from the last <strong>checkpoint</strong> (a point where all earlier changes were flushed to data files), redoing committed changes and discarding uncommitted ones (the ARIES family of algorithms adds undo for steal policies). The same log feeds replication (followers replay it) and change data capture, and point-in-time recovery restores a base backup and replays archived WAL up to any moment. Settings like Postgres <code>synchronous_commit=off</code> trade a small window of possible data loss for faster commits.</p>
+</div>
+<h2 id="a-key-value-store-on-sql">A Key-Value Store on SQL</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><code>CREATE TABLE kv (k TEXT PRIMARY KEY, v BYTEA, version BIGINT, expires_at TIMESTAMPTZ)</code> gives a durable, transactional key-value store on infrastructure you already run: <code>get</code> is a primary-key lookup, <code>put</code> is an upsert (<code>INSERT … ON CONFLICT (k) DO UPDATE</code>), compare-and-set uses <code>WHERE version = ?</code>, TTL is a filter plus a periodic cleanup job. It handles thousands to tens of thousands of operations per second per instance and is a good choice before adding Redis or DynamoDB. Uber’s Schemaless and Facebook’s use of MySQL under TAO (Part (cases)) are large-scale versions of this idea.</p>
+</div>
+<h2 id="ids-ticket-servers-uuids-objectid-snowflake">IDs: Ticket Servers, UUIDs, ObjectId, Snowflake</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Scheme</th>
+<th style="text-align: left;">How</th>
+<th style="text-align: left;">Pros</th>
+<th style="text-align: left;">Cons</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">DB auto-increment</td>
+<td style="text-align: left;">one sequence</td>
+<td style="text-align: left;">compact, ordered</td>
+<td style="text-align: left;">single writer; reveals volume</td>
+</tr>
+<tr>
+<td style="text-align: left;">Ticket server (Flickr)</td>
+<td style="text-align: left;">dedicated DB(s) hand out IDs; two servers with odd/even sequences</td>
+<td style="text-align: left;">simple, ordered-ish</td>
+<td style="text-align: left;">extra hop and dependency</td>
+</tr>
+<tr>
+<td style="text-align: left;">UUIDv4</td>
+<td style="text-align: left;">122 random bits</td>
+<td style="text-align: left;">no coordination</td>
+<td style="text-align: left;">16 bytes; random inserts fragment B-tree indexes</td>
+</tr>
+<tr>
+<td style="text-align: left;">UUIDv7 / ULID</td>
+<td style="text-align: left;">48-bit ms timestamp + random</td>
+<td style="text-align: left;">no coordination, time-ordered</td>
+<td style="text-align: left;">16 bytes</td>
+</tr>
+<tr>
+<td style="text-align: left;">MongoDB ObjectId</td>
+<td style="text-align: left;">12 bytes: 4 timestamp (s), 5 random per process, 3 counter</td>
+<td style="text-align: left;">ordered by second, no coordination</td>
+<td style="text-align: left;">12 bytes, coarse ordering</td>
+</tr>
+<tr>
+<td style="text-align: left;">Snowflake</td>
+<td style="text-align: left;">64 bits: 41 time (ms) + 10 machine + 12 sequence</td>
+<td style="text-align: left;">8 bytes, time-ordered</td>
+<td style="text-align: left;">needs machine IDs and sane clocks</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Ticket servers</strong>: Flickr ran two MySQL servers, one returning odd and one even IDs (<code>auto_increment_increment=2</code>), using <code>REPLACE INTO</code> on a one-row table to draw the next ID; either server could fail. Batching (lease 1<span>,</span>000 IDs at a time) removes the per-insert hop, at the cost of gaps.</p>
+<p><strong>Clock skew and ID ordering</strong>: time-based IDs are only as ordered as the clocks that generate them. If a machine’s clock jumps backward (NTP correction, VM migration), Snowflake could generate duplicates or out-of-order IDs. Implementations refuse to generate IDs (or wait) until the clock passes the last timestamp used, and alert on large skew. Across machines, IDs are only <em>roughly</em> ordered (within clock skew, typically milliseconds), so never rely on ID order for correctness across machines; use a single sequencer, logical clocks (Chapter (dtx)), or TrueTime-style bounds when you need strict order.</p>
+</div>
+<h2 id="keyset-pagination">Keyset Pagination</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><code>OFFSET 100000 LIMIT 20</code> makes the database read and discard 100<span>,</span>000 rows, getting slower with every page, and items shift between pages when rows are inserted. <strong>Keyset (cursor) pagination</strong> remembers the last row’s sort key: <code>WHERE (created_at, id) &lt; (?, ?) ORDER BY created_at DESC, id DESC LIMIT 20</code>, served by an index on <code>(created_at, id)</code>. Every page costs the same, and results are stable. Include a unique tie-breaker (the ID) in the sort key. Return an opaque cursor (base64 of the key) so clients cannot depend on its contents. The trade-off: no “jump to page 57.”</p>
+</div>
+<h2 id="online-indexing-and-schema-evolution">Online Indexing and Schema Evolution</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Adding an index to a large table</strong> with a plain <code>CREATE INDEX</code> locks writes for the whole build. Use online methods: Postgres <code>CREATE INDEX CONCURRENTLY</code> (slower, two table scans, does not block writes; if it fails it leaves an invalid index to drop), MySQL InnoDB online DDL, or tools such as gh-ost and pt-online-schema-change that build a shadow table, copy rows in chunks, apply ongoing changes from the binlog or triggers, and swap atomically. Throttle the copy based on replication lag.</p>
+<p><strong>Schema evolution</strong> without downtime follows <strong>expand and contract</strong> (Chapter (cicd)): add new columns as nullable or with cheap defaults, deploy code that writes both, backfill in batches, switch reads, stop writing the old column, then drop it. Never rename a column in one step; never add a <code>NOT NULL</code> column with a volatile default to a huge table on older engines. For event and API schemas, only make backward- compatible changes (add optional fields) and version breaking ones.</p>
+</div>
+<h2 id="soft-delete">Soft Delete</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Instead of <code>DELETE</code>, set <code>deleted_at = now()</code>. Benefits: undo, audit, referential integrity for historical records, safer bulk mistakes. Costs: every query must filter <code>WHERE deleted_at IS NULL</code> (enforce with views, row-level security, or the repository layer, or someone will forget); unique constraints must exclude deleted rows (a partial unique index: <code>UNIQUE (email) WHERE deleted_at IS NULL</code>); tables grow forever. Soft delete is <em>not</em> deletion for privacy purposes: personal data must still be purged on schedule or on request (Chapter (obs)). A common hybrid: soft delete for 30 days, then a background job hard-deletes or anonymizes, or move deleted rows to an archive table.</p>
+</div>
+<h2 id="hot-and-cold-storage-and-archival">Hot and Cold Storage and Archival</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Most data is read rarely after a few weeks. Keep recent, frequently accessed data in the primary database and caches (hot); move older data to cheaper storage (warm: a separate partition, cheaper instance, or columnar store; cold: Parquet files in object storage, archive storage classes). Techniques: time-based table partitioning (detach and archive old partitions instead of deleting rows), TTLs in key-value stores, object storage lifecycle rules (move to infrequent-access after 30 days, archive after 180). Keep the archive queryable (Athena, BigQuery, Trino over Parquet) and document restore times: archive tiers can take hours to retrieve.</p>
+</div>
+<h2 id="graph-databases">Graph Databases</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Graph databases (Neo4j, Amazon Neptune, TigerGraph) store nodes and edges with <em>index-free adjacency</em>: each node points to its neighbors, so traversals of several hops are fast regardless of total graph size, queried with Cypher or Gremlin. Good fits: fraud rings (accounts sharing devices and cards), knowledge graphs, network topology, permissions graphs, recommendation over multi-hop relationships. Poor fits: simple one-hop social queries at huge scale, where sharded adjacency lists in SQL or key-value stores (TAO, FlockDB) are simpler and faster, and analytics over the whole graph, which is better done in batch graph processing (Spark GraphX, Pregel-style systems).</p>
+</div>
+<h1 id="deep-dive-sizing-a-database">Deep Dive: Sizing a Database</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A worked example for an order system: 50M orders/day, each 1 KB with indexes, kept 2 years hot.</p>
+<ul>
+<li><p>Writes: <span class="math inline">\(50\text{M}/10^5 = 500\)</span>/s average, 2<span>,</span>000/s at peak. One well-tuned Postgres primary handles this.</p></li>
+<li><p>Storage: <span class="math inline">\(50\text{M}\times 1\,\text{KB}\times 730 \approx 36\)</span> TB. Too big to keep comfortably in one instance (backups, vacuum, restore time).</p></li>
+<li><p>Working set: if 95% of reads hit the last 30 days, that is <span class="math inline">\(50\text{M}\times 30\times 1\,\text{KB} = 1.5\)</span> TB; memory for that is expensive but feasible across a few shards.</p></li>
+<li><p>Decision: shard by <code>customer_id</code> (most queries are “my orders”) into 8 physical shards with 256 logical shards; move orders older than 90 days to columnar storage on S3 for analytics.</p></li>
+</ul>
+<p>The forcing function is not QPS here, it is <em>data size and its operational cost</em> (backup/restore time, vacuum, index rebuilds). That is common.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Default to Postgres; specialize when you measure a real need.</p></li>
+<li><p>Replication scales reads and survives failures; sharding scales writes.</p></li>
+<li><p>Pick the shard key around your dominant query.</p></li>
+<li><p>Object storage plus open table formats is the modern data foundation.</p></li>
+</ul>
+</div>

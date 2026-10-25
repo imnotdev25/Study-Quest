@@ -1,0 +1,279 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Advantage normalization</strong> rescales advantages to mean 0 and variance 1 so the policy gradient has a predictable size. It is an <em>affine</em> transform: it preserves the order of advantages but can flip the sign of some. The statistics must come from every valid token of the rollout, not from a minibatch or from padding.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>What does a negative cosine between actor and critic gradients imply?</p></li>
+<li><p>Why can the critic dominate a shared backbone even when its loss value is numerically small?</p></li>
+</ol>
+<p>Given masked rollout advantages:</p>
+<p><span class="math display">\[A,M\in\mathbb{R}^{B\times T},
+\qquad M_{bt}\in\{0,1\}\]</span></p>
+<p>compute statistics over all <span class="math inline">\(N\)</span> valid rollout tokens:</p>
+<p><span class="math display">\[N=\sum_{b,t}M_{bt}\]</span></p>
+<p><span class="math display">\[\mu_A=
+\frac{1}{N}\sum_{b,t}M_{bt}A_{bt}\]</span></p>
+<p><span class="math display">\[\sigma_A^2=
+\frac{1}{N}
+\sum_{b,t}M_{bt}(A_{bt}-\mu_A)^2\]</span></p>
+<p>Then normalize:</p>
+<p><span class="math display">\[\tilde A_{bt}
+=
+\frac{A_{bt}-\mu_A}
+{\sqrt{\sigma_A^2}+\epsilon}\]</span></p>
+<p>This makes the valid advantages approximately zero-mean and unit-variance, stabilizing the actor-gradient scale.</p>
+<p>Important distinctions:</p>
+<ul>
+<li><p>Normalization can change individual advantage signs because it subtracts the rollout mean.</p></li>
+<li><p>Compute statistics once over the rollout, then reuse them for every PPO minibatch and epoch.</p></li>
+<li><p>Per-minibatch normalization makes the update depend on how samples were partitioned.</p></li>
+<li><p>A one-element minibatch produces a centered advantage of zero—and therefore no policy gradient.</p></li>
+<li><p>Do not identically normalize critic returns; the value model must predict the return’s actual scale.</p></li>
+</ul>
+<p>Distributed workers need global <code>count</code>, <code>sum</code>, and <code>sum of squares</code>. For large or low-precision values, accumulate statistics in FP32/FP64 or use a stable variance algorithm.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: what normalization does, and the minibatch trap</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\tilde A=\frac{A-\mu}{\sigma+\epsilon}\)</span> with masked <span class="math inline">\(\mu=\frac{\sum MA}{\sum M}\)</span>, <span class="math inline">\(\sigma^2=\frac{\sum M(A-\mu)^2}{\sum M}\)</span>. Then <span class="math inline">\(\sum M\tilde A\approx0\)</span> and <span class="math inline">\(\frac{\sum M\tilde A^2}{\sum M}\approx1\)</span>.</p>
+<p><strong>Step 2.</strong> Policy gradient scales linearly with <span class="math inline">\(A\)</span>, so dividing by <span class="math inline">\(\sigma\)</span> is like dividing the learning rate by <span class="math inline">\(\sigma\)</span>: a stable step size whatever the reward scale.</p>
+<p><strong>Step 3.</strong> Subtracting <span class="math inline">\(\mu\)</span> is a constant baseline over the batch (Session 28), which doesn’t bias the gradient in expectation.</p>
+<p><strong>Step 4.</strong> <strong>Per-minibatch statistics</strong> use a different <span class="math inline">\(\mu\)</span> in each minibatch, so the same raw advantage can be positive in one and negative in another.</p>
+<p><strong>Step 5.</strong> <strong>Extreme case:</strong> a one-element minibatch gives <span class="math inline">\(\tilde A=0\)</span> always: no learning signal.</p>
+<p><strong>Step 6.</strong> <strong>Padding included:</strong> padded zeros drag <span class="math inline">\(\mu\)</span> toward 0 and shrink <span class="math inline">\(\sigma\)</span>, distorting every real advantage.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: rollout-level advantage normalization</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> advantages <span class="math inline">\(A\)</span> and mask <span class="math inline">\(M\)</span> for the entire rollout (all ranks)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(N\gets\sum M\)</span>; <span class="math inline">\(\mu\gets\sum MA/N\)</span>; <span class="math inline">\(\sigma\gets\sqrt{\sum M(A-\mu)^2/N}\)</span> <em>▷ all-reduce sums</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\tilde A\gets M\odot(A-\mu)/(\sigma+10^{-8})\)</span>, detached</div>
+<div class="algo-line" style="--d:0">only then split into minibatches; reuse <span class="math inline">\(\tilde A\)</span> for every epoch</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Compare global normalization against two different minibatch partitions.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(261)
+
+advantages = torch.tensor([
+    [8.0, 7.0, 6.0, 0.0],
+    [-2.0, -1.0, 0.0, 0.0],
+    [1.0, 2.0, 3.0, 4.0],
+])                                                  # [B,T]
+
+valid_mask = torch.tensor([
+    [1, 1, 1, 0],
+    [1, 1, 1, 0],
+    [1, 1, 1, 1],
+], dtype=torch.bool)
+
+
+def normalize_advantages(advantages, mask):
+    valid = ...                                     # TODO 1: [N]
+
+    mean = ...                                      # TODO 2
+    variance = ...                                  # TODO 3: population variance
+    std = ...                                       # TODO 4
+
+    normalized = ...                                # TODO 5: zeros [B,T]
+    normalized[mask] = ...                          # TODO 6
+
+    return normalized, mean, std
+
+
+global_advantages, global_mean, global_std = (
+    normalize_advantages(
+        advantages,
+        valid_mask,
+    )
+)
+
+print(&quot;global mean:&quot;, global_mean.item())
+print(&quot;global std:&quot;, global_std.item())
+print(&quot;globally normalized:\n&quot;, global_advantages)
+
+assert torch.allclose(
+    global_advantages[valid_mask].mean(),
+    torch.tensor(0.0),
+    atol=1e-6,
+)
+
+assert torch.allclose(
+    global_advantages[valid_mask].var(unbiased=False),
+    torch.tensor(1.0),
+    atol=1e-5,
+)</code></pre>
+<p>Now normalize independently under two different partitions:</p>
+<pre class="code python"><code class="language-python">def normalize_by_partitions(row_partitions):
+    result = torch.zeros_like(advantages)
+
+    for start, end in row_partitions:
+        local, _, _ = normalize_advantages(
+            advantages[start:end],
+            valid_mask[start:end],
+        )
+
+        result[start:end] = local
+
+    return result
+
+
+partition_a = ...                                   # TODO 7
+# First minibatch: row 0
+# Second minibatch: rows 1–2
+
+partition_b = ...                                   # TODO 8
+# First minibatch: rows 0–1
+# Second minibatch: row 2
+
+local_a = normalize_by_partitions(partition_a)
+local_b = normalize_by_partitions(partition_b)
+
+print(&quot;\nlocal normalization A:\n&quot;, local_a)
+print(&quot;\nlocal normalization B:\n&quot;, local_b)
+
+print(
+    &quot;\nnormalization changes after repartitioning:&quot;,
+    not torch.allclose(local_a, local_b),
+)</code></pre>
+<p>Before running, predict whether the positive raw advantages <span><code>[</code></span><code>8, 7, 6</code><span><code>]</code></span> will all remain positive after row 0 is normalized independently.</p>
+<p>Finally, compare the resulting policy gradients. At the beginning of a PPO epoch, let the old and new selected-action log-probabilities match, so every ratio starts at one.</p>
+<pre class="code python"><code class="language-python">old_logp = torch.zeros_like(advantages)
+
+
+def policy_gradient(normalized_advantages):
+    new_logp = torch.zeros_like(
+        advantages,
+        requires_grad=True,
+    )
+
+    ratio = ...                                     # TODO 9
+
+    loss = -(                                      # TODO 10
+        ratio * normalized_advantages
+    )[valid_mask].mean()
+
+    gradient = torch.autograd.grad(
+        loss,
+        new_logp,
+    )[0]
+
+    return gradient
+
+
+global_gradient = policy_gradient(global_advantages)
+gradient_a = policy_gradient(local_a)
+gradient_b = policy_gradient(local_b)
+
+print(&quot;\nglobal-normalized gradient:\n&quot;, global_gradient)
+
+print(
+    &quot;max gradient difference after repartitioning:&quot;,
+    (gradient_a - gradient_b).abs().max().item(),
+)
+
+assert not torch.allclose(gradient_a, gradient_b)</code></pre>
+<p>Explain why changing only the minibatch boundaries should not change the intended rollout objective.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Select valid values with boolean indexing.</p></li>
+<li><p>Use population variance: <code>.var(unbiased=False)</code>.</p></li>
+<li><p>Add a small epsilon to the standard deviation.</p></li>
+<li><p>The partitions are lists of <code>(start, end)</code> tuples.</p></li>
+<li><p>Importance ratios are <code>exp(new_logp - old_logp)</code>.</p></li>
+<li><p>Invalid positions should remain zero.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Over which elements should advantage-normalization statistics be computed?</p></li>
+<li><p>Prediction: what normalized advantage results from a minibatch containing one valid element?</p></li>
+<li><p>Why can centering change the sign of an originally positive advantage?</p></li>
+<li><p>Debugging: training changes significantly when only minibatch size or worker count changes. What normalization mistake should you inspect?</p></li>
+<li><p>Why should normalized advantages be detached before entering the PPO objective?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def normalize_advantages(advantages, mask):
+    valid = advantages[mask]
+
+    mean = valid.mean()
+    variance = valid.var(unbiased=False)
+    std = variance.sqrt()
+
+    normalized = torch.zeros_like(advantages)
+
+    normalized[mask] = (
+        valid - mean
+    ) / (std + 1e-8)
+
+    return normalized, mean, std</code></pre>
+<p>Partitions:</p>
+<pre class="code python"><code class="language-python">partition_a = [
+    (0, 1),
+    (1, 3),
+]
+
+partition_b = [
+    (0, 2),
+    (2, 3),
+]
+
+local_a = normalize_by_partitions(partition_a)
+local_b = normalize_by_partitions(partition_b)</code></pre>
+<p>Policy gradient:</p>
+<pre class="code python"><code class="language-python">def policy_gradient(normalized_advantages):
+    new_logp = torch.zeros_like(
+        advantages,
+        requires_grad=True,
+    )
+
+    ratio = torch.exp(
+        new_logp - old_logp
+    )
+
+    loss = -(
+        ratio * normalized_advantages.detach()
+    )[valid_mask].mean()
+
+    gradient = torch.autograd.grad(
+        loss,
+        new_logp,
+    )[0]
+
+    return gradient</code></pre>
+<p>When <span><code>[</code></span><code>8,7,6</code><span><code>]</code></span> is normalized by itself, its mean is <span class="math inline">\(7\)</span>. The centered values are:</p>
+<p><span class="math display">\[[1,0,-1]\]</span></p>
+<p>so the raw positive advantage <code>6</code> becomes negative after local centering. It is below its minibatch’s average even though it remains above zero in absolute terms.</p>
+<p>At ratio one:</p>
+<p><span class="math display">\[L=-\frac{1}{N}\sum_t r_t\tilde A_t\]</span></p>
+<p>and:</p>
+<p><span class="math display">\[\frac{\partial r_t}{\partial\ell_{\text{new},t}}
+=r_t=1\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[\frac{\partial L}
+{\partial\ell_{\text{new},t}}
+=
+-\frac{\tilde A_t}{N}\]</span></p>
+<p>Different locally normalized advantages directly produce different policy gradients. Global normalization avoids making the objective depend on arbitrary minibatch boundaries.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Over every valid action token in the intended normalization population—normally the complete rollout batch, aggregated across workers.</p></li>
+<li><p>Zero: <span class="math display">\[\frac{A-A}{\sqrt0+\epsilon}=0\]</span> so that minibatch contributes no actor gradient.</p></li>
+<li><p>Centering measures advantage relative to the population mean. A positive value below that mean becomes negative after subtraction.</p></li>
+<li><p>Check whether each worker or minibatch is independently computing its own advantage mean and variance.</p></li>
+<li><p>Advantages are fixed rollout estimates. Allowing gradients through their value or reward computations introduces unintended optimization paths.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Negative cosine means the two gradients locally oppose one another.</p></li>
+<li><p>Gradient influence depends on the weighted gradient norm <span class="math inline">\(c_V\lVert g_V\rVert\)</span>, not on the scalar loss value alone.</p></li>
+</ul>

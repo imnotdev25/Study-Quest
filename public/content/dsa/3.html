@@ -1,0 +1,154 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Pointer manipulation on linked lists, the fast/slow pointer technique and its proof, stacks for nesting and expression evaluation, the monotonic stack and monotonic deque, and the LRU cache that combines a list with a hash map.</p>
+</div>
+<h1 id="linked-lists">Linked Lists</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A singly linked list is a chain of nodes, each holding a value and a pointer to the next. Insert or delete after a known node is <span class="math inline">\(O(1)\)</span>; finding the <span class="math inline">\(k\)</span>-th node is <span class="math inline">\(O(k)\)</span>. A <strong>dummy (sentinel) head</strong> node removes special cases for the first element. Most list problems are about careful pointer order: save <code>next</code> before overwriting it.</p>
+</div>
+<p><em>Reverse a linked list in place</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(prev \gets\)</span> null; <span class="math inline">\(cur \gets head\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(cur \ne\)</span> null <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(nxt \gets cur.next\)</span> <em>▷ save before breaking the link</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(cur.next \gets prev\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(prev \gets cur\)</span>; <span class="math inline">\(cur \gets nxt\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(prev\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Invariant: <code>prev</code> is the head of the already-reversed prefix and <code>cur</code> the head of the untouched suffix. Each step moves one node from suffix to prefix. When <code>cur</code> is null, <code>prev</code> heads the fully reversed list. <strong>Time:</strong> <span class="math inline">\(O(n)\)</span> <strong>Space:</strong> <span class="math inline">\(O(1)\)</span>.</p>
+</div>
+<h2 id="fast-and-slow-pointers">Fast and Slow Pointers</h2>
+<p><em>Floyd’s cycle detection and cycle start</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(slow \gets head\)</span>; <span class="math inline">\(fast \gets head\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(fast \ne\)</span> null <strong>and</strong> <span class="math inline">\(fast.next \ne\)</span> null <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(slow \gets slow.next\)</span>; <span class="math inline">\(fast \gets fast.next.next\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(slow = fast\)</span> <strong>then</strong> <em>▷ they met inside the cycle</em></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(p \gets head\)</span></div>
+<div class="algo-line" style="--d:2"><strong>while</strong> <span class="math inline">\(p \ne slow\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(p \gets p.next\)</span>; <span class="math inline">\(slow \gets slow.next\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> <span class="math inline">\(p\)</span> <em>▷ start of the cycle</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> null <em>▷ no cycle</em></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>They meet:</strong> once both are in the cycle, the gap shrinks by one each step, so they meet within one lap. <strong>The start:</strong> let <span class="math inline">\(a\)</span> = distance from head to cycle start, <span class="math inline">\(b\)</span> = distance from start to the meeting point, <span class="math inline">\(c\)</span> = cycle length. Slow walked <span class="math inline">\(a+b\)</span>, fast walked <span class="math inline">\(2(a+b)\)</span>, and fast’s extra distance is whole laps: <span class="math inline">\(a + b = k c\)</span>. So <span class="math inline">\(a = kc - b\)</span>: walking <span class="math inline">\(a\)</span> steps from the meeting point lands on the cycle start, exactly where a pointer from the head arrives after <span class="math inline">\(a\)</span> steps. The same algorithm finds a duplicate in an array of <span class="math inline">\(n+1\)</span> values in <span class="math inline">\([1,n]\)</span> by treating <span class="math inline">\(i \to A[i]\)</span> as a linked list.</p>
+</div>
+<div class="box box-signals" data-kind="signals"><div class="box-title">📡 Interview signals</div>
+<p>Middle of a list (fast moves 2, slow 1), cycle detection, <span class="math inline">\(k\)</span>-th from end (lead pointer <span class="math inline">\(k\)</span> ahead), palindrome list (find middle, reverse second half, compare), intersection of two lists (switch heads when reaching the end; both walk <span class="math inline">\(a+b+c\)</span>), merge <span class="math inline">\(k\)</span> sorted lists (heap, Chapter 6).</p>
+</div>
+<h1 id="stacks">Stacks</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A stack is a pile of plates: you only add or remove from the top. It is perfect for anything nested, like brackets, function calls, or undo history, because the most recent unfinished thing is always the next one to finish.</p>
+</div>
+<p><em>Valid parentheses</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(S \gets\)</span> empty stack; <span class="math inline">\(match \gets \{\texttt{)}{:}\texttt{(},\ \texttt{]}{:}\texttt{[},\ \texttt{\}}{:}\texttt{\{}\}\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each character <span class="math inline">\(c\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(c\)</span> is an opening bracket <strong>then</strong></div>
+<div class="algo-line" style="--d:2">push <span class="math inline">\(c\)</span></div>
+<div class="algo-line" style="--d:1"><strong>else if</strong> <span class="math inline">\(S\)</span> is empty <strong>or</strong> pop<span class="math inline">\((S) \ne match[c]\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>return</strong> false</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(S\)</span> is empty</div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Expression evaluation.</strong> For <code>3 + 4 * 2</code>, keep a stack of numbers and the last operator: on <code>+</code>/<code>-</code> push the (signed) number; on <code>*</code>/<code>/</code> pop, combine, and push; sum the stack at the end. Parentheses push the current state and start fresh. The general method is Dijkstra’s <strong>shunting-yard</strong> algorithm: an operator stack converts infix to postfix by precedence, and postfix is evaluated with one number stack. <strong>Min stack</strong>: store <code>(value, min so far)</code> pairs, so <code>getMin</code> is <span class="math inline">\(O(1)\)</span>. <strong>Queue from two stacks</strong>: push to <code>in</code>; pop from <code>out</code>, refilling <code>out</code> from <code>in</code> only when empty (amortized <span class="math inline">\(O(1)\)</span>, each element moves once).</p>
+</div>
+<h1 id="monotonic-stack">Monotonic Stack</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>People stand in a line facing right. Each wants to know the first taller person in front of them. Walk the line and keep a stack of people still waiting. When a taller person appears, everyone shorter at the top of the stack has found their answer and leaves.</p>
+</div>
+<p><em>Next greater element for every index</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(ans[0..n-1] \gets -1\)</span>; <span class="math inline">\(S \gets\)</span> empty stack of indices <em>▷ values decreasing bottom to top</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i \gets 0\)</span> <strong>to</strong> <span class="math inline">\(n-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(S\)</span> not empty <strong>and</strong> <span class="math inline">\(A[\text{top}(S)] &lt; A[i]\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(ans[\text{pop}(S)] \gets A[i]\)</span> <em>▷ <span class="math inline">\(A[i]\)</span> is the first greater for it</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">push <span class="math inline">\(i\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(ans\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Correctness:</strong> an index stays on the stack exactly until the first larger element appears, because everything above it on the stack is smaller than it (the stack is decreasing), so they cannot block it. <strong>Complexity:</strong> each index is pushed once and popped at most once, so total work is <span class="math inline">\(O(n)\)</span> despite the nested loop (an aggregate amortized argument).</p>
+</div>
+<figure class="tikz"><img src="figs/dsa/13f9d9a525da.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Largest rectangle in histogram <code>[2,1,5,6,2,3]</code>.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Largest rectangle in a histogram:</strong> keep an increasing stack of indices. When bar <span class="math inline">\(i\)</span> is shorter than the top, pop the top bar <span class="math inline">\(h\)</span>; its rectangle extends from just after the new top to <span class="math inline">\(i-1\)</span>, width <span class="math inline">\(= i - \text{newtop} - 1\)</span>. Push a sentinel bar of height 0 at the end to flush the stack. <span class="math inline">\(O(n)\)</span>. This is the building block for “maximal rectangle of 1s in a matrix” (run it per row on column heights). Other uses: daily temperatures, stock span, trapping rain water, sum of subarray minimums (each element’s contribution <span class="math inline">\(=\)</span> value <span class="math inline">\(\times\)</span> number of subarrays where it is the minimum, from previous/next smaller indices), and “remove <span class="math inline">\(k\)</span> digits to make the smallest number.”</p>
+</div>
+<h1 id="queues-deques-and-the-monotonic-deque">Queues, Deques, and the Monotonic Deque</h1>
+<p><em>Sliding window maximum with a monotonic deque</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> array <span class="math inline">\(A\)</span>, window size <span class="math inline">\(k\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(D \gets\)</span> empty deque of indices <em>▷ values decreasing front to back</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i \gets 0\)</span> <strong>to</strong> <span class="math inline">\(n-1\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(D\)</span> not empty <strong>and</strong> <span class="math inline">\(\text{front}(D) \le i - k\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">pop front <em>▷ left the window</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> <span class="math inline">\(D\)</span> not empty <strong>and</strong> <span class="math inline">\(A[\text{back}(D)] \le A[i]\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2">pop back <em>▷ can never be a max again</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">push <span class="math inline">\(i\)</span> to back</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(i \ge k-1\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">output <span class="math inline">\(A[\text{front}(D)]\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>An element smaller than a newer element can never be the maximum of any future window (the newer one stays longer and is larger), so it is safe to discard. The deque thus holds the candidates in decreasing order and the front is the maximum. Each index enters and leaves once: <strong>Time:</strong> <span class="math inline">\(O(n)\)</span> <strong>Space:</strong> <span class="math inline">\(O(k)\)</span>. A heap would give <span class="math inline">\(O(n\log k)\)</span>. The same deque speeds up DP transitions of the form <span class="math inline">\(dp[i] = \max_{i-k \le j &lt; i} dp[j] + c_i\)</span> from <span class="math inline">\(O(nk)\)</span> to <span class="math inline">\(O(n)\)</span>.</p>
+</div>
+<h1 id="lru-cache-combining-structures">LRU Cache: Combining Structures</h1>
+<figure class="tikz"><img src="figs/dsa/f4dae59b41aa.svg" alt="diagram" loading="lazy"></figure>
+<p><em>LRU cache = hash map for <span class="math inline">\(O(1)\)</span> lookup + doubly linked list for <span class="math inline">\(O(1)\)</span> reordering.</em></p>
+<p><em>LRU cache operations</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>function</strong> Get(<span class="math inline">\(key\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(key \notin map\)</span> <strong>then</strong> <strong>return</strong> miss</div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">move <span class="math inline">\(map[key]\)</span> to the front of the list <em>▷ <span class="math inline">\(O(1)\)</span>: unlink and relink</em></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(map[key].value\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>function</strong> Put(<span class="math inline">\(key, value\)</span>)</div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(key \in map\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2">update value; move node to front; <strong>return</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> size <span class="math inline">\(=\)</span> capacity <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(old \gets\)</span> node before tail; unlink it; delete <span class="math inline">\(map[old.key]\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">create node at front; <span class="math inline">\(map[key] \gets\)</span> node</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<ul>
+<li><p>The node must store its key, so eviction can delete the map entry.</p></li>
+<li><p><strong>LFU</strong> (least frequently used) in <span class="math inline">\(O(1)\)</span>: a map from key to node, and a map from frequency to a doubly linked list of nodes with that frequency, plus the current minimum frequency.</p></li>
+<li><p><strong>Thread safety</strong>: a single lock around both structures is simplest; sharded caches (lock per segment) scale better; reads also mutate order, so a read-write lock does not help directly. Production caches (Caffeine) buffer access events and apply them in batches.</p></li>
+<li><p>Real LRU is often approximated (Redis samples a few keys and evicts the oldest) because exact LRU bookkeeping is expensive.</p></li>
+</ul>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<ul>
+<li><p><strong>KV cache block management</strong> in LLM serving (PagedAttention) keeps free lists of blocks and evicts cached prefixes with LRU-like policies.</p></li>
+<li><p><strong>Embedding caches</strong> and feature caches in online serving use LRU/LFU.</p></li>
+<li><p><strong>Monotonic deques</strong> compute rolling max/min features in streaming pipelines in <span class="math inline">\(O(1)\)</span> amortized per event.</p></li>
+<li><p><strong>Autograd</strong> uses a stack-like structure (the tape) to replay operations in reverse during backpropagation (Chapter 18).</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Daily temperatures</div>
+<p>“For each day, how many days until a warmer one?” Brute force scans forward from each day, <span class="math inline">\(O(n^2)\)</span>. Observation: a day is waiting for the first larger value to its right, the next-greater pattern. Keep a stack of indices with decreasing temperatures; when today is warmer than the top, pop it and set its answer to <code>today - index</code>. Each index is pushed and popped once, <span class="math inline">\(O(n)\)</span> time, <span class="math inline">\(O(n)\)</span> space. Trace <code>[73,74,75,71,69,72,76]</code>: answers <code>[1,1,4,2,1,1,0]</code>. Follow-up: “days until a temperature at least 5 degrees warmer” breaks the simple stack because the condition is not just “greater than”; discuss a segment tree over temperature values or a reverse scan with a lookup by value.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Lists: use a dummy head, save <code>next</code> before relinking, and know fast/slow pointers.</p></li>
+<li><p>Stacks handle nesting; monotonic stacks answer “next greater/smaller” in <span class="math inline">\(O(n)\)</span>.</p></li>
+<li><p>Monotonic deques give sliding-window max/min and speed up windowed DP.</p></li>
+<li><p>LRU = hash map + doubly linked list; know eviction, LFU, and concurrency follow-ups.</p></li>
+</ul>
+</div>

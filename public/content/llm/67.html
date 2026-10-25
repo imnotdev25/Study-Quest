@@ -1,0 +1,314 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Entropy</strong> <span class="math inline">\(H(p)=-\sum_ap_a\log p_a\)</span> measures how spread out a distribution is: <span class="math inline">\(\log A\)</span> for uniform over <span class="math inline">\(A\)</span> actions, 0 for a certain one. Adding <span class="math inline">\(-c_HH\)</span> to the loss (so minimizing the loss <em>increases</em> entropy) keeps the policy from becoming certain too early.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why must PPO critic targets use stored rollout values rather than current trainable values?</p></li>
+<li><p>When does clipped value loss produce a flat critic gradient?</p></li>
+</ol>
+<p>For policy logits:</p>
+<p><span class="math display">\[Z\in\mathbb{R}^{B\times T\times A}\]</span></p>
+<p>the categorical probabilities and token-level entropy are:</p>
+<p><span class="math display">\[P=\operatorname{softmax}(Z)\]</span></p>
+<p><span class="math display">\[H_{bt}
+=
+-\sum_{a=1}^{A}P_{bta}\log P_{bta}
+\in\mathbb{R}^{B\times T}\]</span></p>
+<p>Entropy is largest for a uniform policy:</p>
+<p><span class="math display">\[H_{\max}=\log A\]</span></p>
+<p>and zero for an exactly deterministic policy.</p>
+<p>A simplified PPO loss is:</p>
+<p><span class="math display">\[L_{\text{total}}
+=
+L_{\text{policy}}
++c_VL_{\text{value}}
+-c_H\bar H\]</span></p>
+<p>The negative sign is essential because optimizers minimize: minimizing <span class="math inline">\(-H\)</span> encourages higher entropy.</p>
+<p>When the policy and value head share a backbone, their gradients add:</p>
+<p><span class="math display">\[\nabla_\theta L_{\text{total}}
+=
+\nabla_\theta L_{\text{policy}}
++c_V\nabla_\theta L_{\text{value}}
+-c_H\nabla_\theta\bar H\]</span></p>
+<p>An excessive entropy coefficient can oppose reward learning. Too little entropy pressure can cause premature policy collapse.</p>
+<p>For language models, exact entropy requires summing across the full vocabulary:</p>
+<p><span class="math display">\[H\in\mathbb{R}^{B\times T},
+\qquad
+P,\log P\in\mathbb{R}^{B\times T\times V}\]</span></p>
+<p>This can be expensive at large <span class="math inline">\(V\)</span>, and approximate entropy estimators should be treated as potentially biased metrics.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the entropy gradient</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(H=-\sum_ap_a\log p_a\)</span>, <span class="math inline">\(p=\operatorname{softmax}(z)\)</span>. Then <span class="math inline">\(\frac{\partial}{\partial p_a}(-p_a\log p_a)=-(\log p_a+1)\)</span>.</p>
+<p><strong>Step 2.</strong> Chain through softmax: <span class="math inline">\(\frac{\partial H}{\partial z_c}=-\sum_ap_a(\delta_{ac}-p_c)(\log p_a+1)\)</span>.</p>
+<p><strong>Step 3.</strong> Expand: <span class="math inline">\(=-\big[p_c(\log p_c+1)-p_c\sum_ap_a(\log p_a+1)\big]=-\big[p_c\log p_c+p_c-p_c(-H+1)\big]\)</span>.</p>
+<p><strong>Step 4.</strong> Simplify: <span class="math inline">\(\boxed{\frac{\partial H}{\partial z_c}=-p_c\big(\log p_c+H\big)}\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Reading it:</strong> for an action more likely than average in log terms (<span class="math inline">\(\log p_c&gt;-H\)</span>), the gradient is negative, so increasing <span class="math inline">\(H\)</span> lowers that logit. Entropy pushes the most-confident actions down.</p>
+<p><strong>Step 6.</strong> <strong>Competition:</strong> the total gradient on <span class="math inline">\(z\)</span> is <span class="math inline">\(\nabla L_\pi-c_H\nabla H\)</span>. When the policy gradient is small (advantages near 0), the entropy term dominates, and too large a <span class="math inline">\(c_H\)</span> can stop the policy from ever committing.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: PPO loss with entropy bonus</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logits <span class="math inline">\(Z\)</span>, mask <span class="math inline">\(M\)</span>, coefficients <span class="math inline">\(c_V,c_H\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\log P\gets\operatorname{log\_softmax}(Z)\)</span>; <span class="math inline">\(H_{bt}\gets-\sum_aP_{bta}\log P_{bta}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\bar H\gets\sum MH/\sum M\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets L_{\text{policy}}+c_VL_{\text{value}}-c_H\bar H\)</span> <em>▷ minus sign: minimizing <span class="math inline">\(L\)</span> raises entropy</em></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement masked entropy regularization and verify that loss-branch gradients add.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(241)
+
+B, T, A = 2, 3, 4
+epsilon = 0.2
+entropy_coef = 0.05
+
+logits = torch.randn(
+    B, T, A,
+    requires_grad=True,
+)                                                   # [B,T,A]
+
+actions = torch.tensor([
+    [0, 2, 1],
+    [3, 1, 0],
+])                                                  # [B,T]
+
+advantages = torch.tensor([
+    [1.5, -0.5, 2.0],
+    [-1.0, 0.7, 4.0],
+])                                                  # [B,T]
+
+valid_mask = torch.tensor([
+    [1, 1, 1],
+    [1, 1, 0],
+], dtype=torch.bool)
+
+
+# Treat these as log-probabilities stored during rollout.
+with torch.no_grad():
+    old_log_probs = F.log_softmax(logits, dim=-1)
+
+    old_selected_logp = ...                         # TODO 1: [B,T]
+
+
+# PPO policy loss
+log_probs = ...                                     # TODO 2: [B,T,A]
+probs = ...                                         # TODO 3
+
+selected_logp = ...                                 # TODO 4: [B,T]
+ratio = ...                                         # TODO 5: [B,T]
+
+unclipped = ...                                     # TODO 6
+clipped = ...                                       # TODO 7
+
+policy_loss = -torch.minimum(
+    unclipped,
+    clipped,
+)[valid_mask].mean()
+
+
+# Entropy bonus
+token_entropy = ...                                 # TODO 8: [B,T]
+mean_entropy = ...                                  # TODO 9: masked mean
+entropy_loss = ...                                  # TODO 10: encourage entropy
+
+
+policy_gradient = torch.autograd.grad(
+    policy_loss,
+    logits,
+    retain_graph=True,
+)[0]
+
+entropy_gradient = torch.autograd.grad(
+    entropy_loss,
+    logits,
+    retain_graph=True,
+)[0]
+
+total_loss = ...                                    # TODO 11
+
+total_gradient = torch.autograd.grad(
+    total_loss,
+    logits,
+)[0]
+
+print(&quot;policy loss:&quot;, policy_loss.item())
+print(&quot;mean entropy:&quot;, mean_entropy.item())
+print(&quot;entropy loss:&quot;, entropy_loss.item())
+
+print(
+    &quot;gradient branches add:&quot;,
+    torch.allclose(
+        total_gradient,
+        policy_gradient + entropy_gradient,
+        atol=1e-7,
+    ),
+)
+
+print(
+    &quot;policy gradient norm:&quot;,
+    policy_gradient.norm().item(),
+)
+
+print(
+    &quot;entropy gradient norm:&quot;,
+    entropy_gradient.norm().item(),
+)
+
+assert torch.allclose(
+    total_gradient,
+    policy_gradient + entropy_gradient,
+    atol=1e-7,
+)
+
+assert torch.allclose(
+    total_gradient[~valid_mask],
+    torch.zeros_like(total_gradient[~valid_mask]),
+)</code></pre>
+<p>Before running, predict whether the entropy gradient at each valid position sums to zero across actions.</p>
+<p>Now isolate the entropy update:</p>
+<pre class="code python"><code class="language-python">def masked_mean_entropy(candidate_logits):
+    candidate_logp = F.log_softmax(
+        candidate_logits,
+        dim=-1,
+    )
+    candidate_probs = candidate_logp.exp()
+
+    entropy = -(
+        candidate_probs * candidate_logp
+    ).sum(dim=-1)
+
+    return entropy[valid_mask].mean()
+
+
+learning_rate = 0.5
+
+higher_entropy_logits = (
+    logits.detach()
+    - learning_rate * entropy_gradient
+)
+
+wrong_sign_logits = (
+    logits.detach()
+    + learning_rate * entropy_gradient
+)
+
+print(
+    &quot;\noriginal entropy:&quot;,
+    masked_mean_entropy(logits.detach()).item(),
+)
+
+print(
+    &quot;after correct entropy update:&quot;,
+    masked_mean_entropy(higher_entropy_logits).item(),
+)
+
+print(
+    &quot;after wrong-sign update:&quot;,
+    masked_mean_entropy(wrong_sign_logits).item(),
+)</code></pre>
+<p>Explain why adding <code>+entropy_coef * mean_entropy</code> to a minimized loss tends to sharpen the policy instead of encouraging exploration.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Gather action log-probabilities using <code>actions.unsqueeze(-1)</code>.</p></li>
+<li><p>The importance ratio is <code>exp(new - old)</code>.</p></li>
+<li><p>PPO’s clipped branch uses <code>clamp(ratio) * advantages</code>.</p></li>
+<li><p>Entropy sums over the action dimension.</p></li>
+<li><p>Use only valid positions in every mean.</p></li>
+<li><p>The entropy loss is <code>-entropy_coef * mean_entropy</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>What is the maximum entropy of a categorical policy with <span class="math inline">\(A\)</span> actions?</p></li>
+<li><p>Why does every entropy-gradient row sum approximately to zero across logits?</p></li>
+<li><p>Prediction: what is the entropy gradient at an exactly uniform distribution?</p></li>
+<li><p>Debugging: entropy rises steadily, but reward and policy loss barely improve. Which coefficient may be dominating?</p></li>
+<li><p>Why can forgetting the response mask distort entropy regularization during LLM post-training?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    old_log_probs = F.log_softmax(logits, dim=-1)
+
+    old_selected_logp = old_log_probs.gather(
+        dim=-1,
+        index=actions.unsqueeze(-1),
+    ).squeeze(-1)
+
+
+log_probs = F.log_softmax(logits, dim=-1)
+probs = log_probs.exp()
+
+selected_logp = log_probs.gather(
+    dim=-1,
+    index=actions.unsqueeze(-1),
+).squeeze(-1)
+
+ratio = torch.exp(
+    selected_logp - old_selected_logp
+)
+
+unclipped = ratio * advantages
+
+clipped = (
+    torch.clamp(
+        ratio,
+        1 - epsilon,
+        1 + epsilon,
+    )
+    * advantages
+)
+
+policy_loss = -torch.minimum(
+    unclipped,
+    clipped,
+)[valid_mask].mean()
+
+
+token_entropy = -(
+    probs * log_probs
+).sum(dim=-1)
+
+mean_entropy = token_entropy[valid_mask].mean()
+
+entropy_loss = -entropy_coef * mean_entropy
+
+total_loss = policy_loss + entropy_loss</code></pre>
+<p>At each position, adding the same constant to every logit leaves the categorical distribution—and therefore its entropy—unchanged. Consequently:</p>
+<p><span class="math display">\[\sum_a
+\frac{\partial H}{\partial Z_a}
+=0\]</span></p>
+<p>Gradient descent on:</p>
+<p><span class="math display">\[L_H=-c_HH\]</span></p>
+<p>moves the distribution toward greater entropy. Reversing the sign gives:</p>
+<p><span class="math display">\[L_{\text{wrong}}=+c_HH\]</span></p>
+<p>so minimization reduces entropy and sharpens the distribution.</p>
+<p>At a uniform distribution, entropy is already maximal. Its gradient with respect to logits is therefore zero:</p>
+<p><span class="math display">\[P_a=\frac1A
+\quad\Longrightarrow\quad
+\nabla_ZH=0\]</span></p>
+<p>This does not mean entropy regularization is useless: once policy-gradient updates break uniformity, the entropy term supplies an opposing gradient.</p>
+<p>Check answers:</p>
+<ol>
+<li><p><span class="math inline">\(\log A\)</span>, achieved by assigning probability <span class="math inline">\(1/A\)</span> to every action.</p></li>
+<li><p>Softmax is invariant to a common logit shift, so entropy has no gradient component in the all-ones direction.</p></li>
+<li><p>Zero, because uniform probability is the entropy maximum.</p></li>
+<li><p>The entropy coefficient may be too large relative to the policy-gradient scale.</p></li>
+<li><p>Prompt and padding positions are not sampled response decisions. Including them changes the weighting, consumes gradient budget, and can reward uncertainty on irrelevant tokens.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Valid targets use: <span class="math display">\[\hat R=A+V_{\text{old}}\]</span> with rollout quantities detached.</p></li>
+<li><p>Value clipping becomes flat when the prediction moves farther than <span class="math inline">\(\epsilon_V\)</span> in a beneficial direction and the clipped-error branch is selected.</p></li>
+</ul>

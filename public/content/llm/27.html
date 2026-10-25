@@ -1,0 +1,184 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>LayerNorm</strong> rescales each example’s feature vector to mean 0 and variance 1, then applies a learned scale <span class="math inline">\(\gamma\)</span> and shift <span class="math inline">\(\beta\)</span>: <span class="math inline">\(\operatorname{LN}(x)=\gamma\odot\hat x+\beta\)</span> with <span class="math inline">\(\hat x=(x-\mu)/s\)</span> and <span class="math inline">\(s=\sqrt{\sigma^2+\epsilon}\)</span>. <strong>A residual connection</strong> adds the input back: <span class="math inline">\(Y=X+F(X)\)</span>. The “+X” gives gradients a path that skips <span class="math inline">\(F\)</span>.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>When a tensor feeds two downstream branches, how are their gradient contributions combined?</p></li>
+<li><p>What weight variance approximately preserves signal scale through a ReLU layer?</p></li>
+</ol>
+<p>For <span class="math inline">\(X\in\mathbb{R}^{B\times D}\)</span>, LayerNorm normalizes each example across its <span class="math inline">\(D\)</span> features:</p>
+<p><span class="math display">\[\mu_i=\frac{1}{D}\sum_{j=1}^{D}X_{ij}\]</span></p>
+<p><span class="math display">\[\sigma_i^2=\frac{1}{D}\sum_{j=1}^{D}(X_{ij}-\mu_i)^2\]</span></p>
+<p><span class="math display">\[\hat X_{ij}
+=
+\frac{X_{ij}-\mu_i}{\sqrt{\sigma_i^2+\epsilon}}\]</span></p>
+<p>Thus <span class="math inline">\(\mu,\sigma^2\in\mathbb{R}^{B\times1}\)</span> and <span class="math inline">\(\hat X\in\mathbb{R}^{B\times D}\)</span>.</p>
+<p>A pre-norm residual MLP block computes:</p>
+<p><span class="math display">\[Y=X+F(\operatorname{LN}(X))\]</span></p>
+<p>The backward pass contains two paths:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial X}
+=
+\underbrace{\frac{\partial L}{\partial Y}}_{\text{identity path}}
++
+\underbrace{
+\frac{\partial L}{\partial Y}
+\frac{\partial F(\operatorname{LN}(X))}{\partial X}
+}_{\text{learned branch}}\]</span></p>
+<p>The identity path lets gradients bypass the nonlinear sublayer. This is a central reason residual networks—and later pre-norm Transformers—can train at substantial depth.</p>
+<p>Research-engineering concern: <span class="math inline">\(\epsilon\)</span> prevents division by zero when feature variance is tiny. Its value and computation precision matter in mixed-precision training.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the LayerNorm backward formula</div>
+<p>Let <span class="math inline">\(g=\partial L/\partial\hat x\)</span> for one example (<span class="math inline">\(D\)</span> features).</p>
+<p><strong>Step 1.</strong> <span class="math inline">\(\hat x_j=(x_j-\mu)/s\)</span>, and both <span class="math inline">\(\mu\)</span> and <span class="math inline">\(s\)</span> depend on every <span class="math inline">\(x_k\)</span>: <span class="math inline">\(\frac{\partial\mu}{\partial x_k}=\frac1D\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\sigma^2=\frac1D\sum_j(x_j-\mu)^2\Rightarrow\frac{\partial\sigma^2}{\partial x_k}=\frac2D(x_k-\mu)\)</span> (the <span class="math inline">\(\mu\)</span> terms cancel because <span class="math inline">\(\sum_j(x_j-\mu)=0\)</span>). So <span class="math inline">\(\frac{\partial s}{\partial x_k}=\frac{1}{2s}\cdot\frac2D(x_k-\mu)=\frac{\hat x_k}{D}\)</span>.</p>
+<p><strong>Step 3.</strong> Quotient rule: <span class="math inline">\(\frac{\partial\hat x_j}{\partial x_k}=\frac{\delta_{jk}-\frac1D}{s}-\frac{x_j-\mu}{s^2}\cdot\frac{\hat x_k}{D}=\frac1s\Big(\delta_{jk}-\frac1D-\frac{\hat x_j\hat x_k}{D}\Big)\)</span>.</p>
+<p><strong>Step 4.</strong> VJP: <span class="math inline">\(\frac{\partial L}{\partial x_k}=\sum_jg_j\frac{\partial\hat x_j}{\partial x_k}=\boxed{\frac1s\Big(g_k-\overline{g}-\hat x_k\,\overline{g\odot\hat x}\Big)}\)</span>, where the bars mean averages over the <span class="math inline">\(D\)</span> features.</p>
+<p><strong>Step 5.</strong> <strong>Reading it:</strong> LN removes the part of the gradient that would only shift the mean or change the scale, since those don’t affect <span class="math inline">\(\hat x\)</span>. Then divides by <span class="math inline">\(s\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Residual:</strong> <span class="math inline">\(Y=X+F(\operatorname{LN}(X))\Rightarrow\frac{\partial L}{\partial X}=\frac{\partial L}{\partial Y}+J_F^\top\frac{\partial L}{\partial Y}\)</span>. The first term is the identity path: even if <span class="math inline">\(J_F\)</span> is tiny, the gradient reaches earlier layers undiminished.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: LayerNorm forward and backward (one row)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(x\in\mathbb R^D\)</span>, <span class="math inline">\(\gamma,\beta\)</span>, upstream <span class="math inline">\(\bar y=\partial L/\partial y\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\mu\gets\overline{x}\)</span>; <span class="math inline">\(s\gets\sqrt{\overline{(x-\mu)^2}+\epsilon}\)</span>; <span class="math inline">\(\hat x\gets(x-\mu)/s\)</span>; <span class="math inline">\(y\gets\gamma\odot\hat x+\beta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\bar\gamma\gets\bar y\odot\hat x\)</span>; <span class="math inline">\(\bar\beta\gets\bar y\)</span> <em>▷ summed over the batch</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(g\gets\bar y\odot\gamma\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\bar x\gets\big(g-\overline g-\hat x\cdot\overline{g\odot\hat x}\big)/s\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement a pre-norm residual MLP block and explicitly verify that the input gradient is the sum of the skip-path and branch gradients.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(31)
+
+B, D, H = 4, 8, 16
+eps = 1e-5
+
+X = torch.randn(B, D, requires_grad=True)  # [B, D]
+W1 = torch.randn(D, H) * (2 / D) ** 0.5    # [D, H]
+b1 = torch.zeros(H)                         # [H]
+W2 = torch.randn(H, D) * (2 / H) ** 0.5    # [H, D]
+b2 = torch.zeros(D)                         # [D]
+
+# Manual LayerNorm without learnable affine parameters
+mean = ...                                  # TODO 1: [B, 1]
+var = ...                                   # TODO 2: [B, 1]
+X_norm = ...                                # TODO 3: [B, D]
+
+# MLP branch
+hidden = ...                                # TODO 4: [B, H]
+branch = ...                                # TODO 5: [B, D]
+
+# Residual merge
+Y = ...                                     # TODO 6: [B, D]
+loss = Y.square().mean()
+
+# dL/dY: also the direct identity-path contribution to dL/dX
+upstream = ...                              # TODO 7: [B, D]
+
+# Contribution reaching X through LayerNorm + MLP
+branch_dx = torch.autograd.grad(
+    outputs=branch,
+    inputs=X,
+    grad_outputs=upstream,
+    retain_graph=True,
+)[0]
+
+manual_dx = ...                             # TODO 8: combine paths
+autograd_dx = torch.autograd.grad(loss, X)[0]
+
+print(&quot;gradient match:&quot;,
+      torch.allclose(manual_dx, autograd_dx, atol=1e-6))
+print(&quot;skip norm:  &quot;, upstream.norm().item())
+print(&quot;branch norm:&quot;, branch_dx.norm().item())
+print(&quot;total norm: &quot;, autograd_dx.norm().item())
+
+assert torch.allclose(manual_dx, autograd_dx, atol=1e-6)</code></pre>
+<p>Debugging extension: introduce this subtle bug:</p>
+<pre class="code python"><code class="language-python">Y_bug = X.detach() + branch
+loss_bug = Y_bug.square().mean()
+bug_dx = torch.autograd.grad(loss_bug, X)[0]
+
+print(&quot;correct:&quot;, autograd_dx.norm().item())
+print(&quot;buggy:  &quot;, bug_dx.norm().item())</code></pre>
+<p>Predict which gradient contribution disappears.</p>
+<p>Then test numerical stability:</p>
+<pre class="code python"><code class="language-python">X_constant = torch.ones(B, D)
+
+mean = X_constant.mean(dim=-1, keepdim=True)
+var = X_constant.var(dim=-1, keepdim=True, unbiased=False)
+
+print((X_constant - mean) / torch.sqrt(var + 1e-5))
+print((X_constant - mean) / torch.sqrt(var))</code></pre>
+<p>Predict the second output before running it.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Reduce LayerNorm statistics over <code>dim=-1</code>.</p></li>
+<li><p>Use <code>unbiased=False</code>.</p></li>
+<li><p>The MLP is <code>GELU(X_norm @ W1 + b1) @ W2 + b2</code>.</p></li>
+<li><p>For <code>loss = Y.square().mean()</code>:</p></li>
+</ul>
+<p><span class="math display">\[\frac{\partial L}{\partial Y}=\frac{2Y}{Y.\text{numel()}}\]</span></p>
+<ul>
+<li><p>Residual-path contributions are added.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>For Transformer activations <span><code>[</code></span><code>B, T, D</code><span><code>]</code></span>, over which dimension does standard LayerNorm normalize?</p></li>
+<li><p>Why does the residual identity path contribute exactly <span class="math inline">\(\partial L/\partial Y\)</span> to <span class="math inline">\(\partial L/\partial X\)</span>?</p></li>
+<li><p>Prediction: what happens to <code>branch_dx</code> if both MLP weight matrices are zero?</p></li>
+<li><p>Debugging: a deep pre-norm network suddenly has much smaller early-layer gradients after a refactor. Name one operation that could have broken the identity path.</p></li>
+<li><p>Why does LayerNorm use <code>unbiased=False</code> for its variance rather than the sample-variance correction?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">mean = X.mean(dim=-1, keepdim=True)
+var = X.var(dim=-1, keepdim=True, unbiased=False)
+X_norm = (X - mean) / torch.sqrt(var + eps)
+
+hidden = F.gelu(X_norm @ W1 + b1)
+branch = hidden @ W2 + b2
+
+Y = X + branch
+loss = Y.square().mean()
+
+upstream = 2 * Y / Y.numel()
+
+branch_dx = torch.autograd.grad(
+    outputs=branch,
+    inputs=X,
+    grad_outputs=upstream,
+    retain_graph=True,
+)[0]
+
+manual_dx = upstream + branch_dx
+autograd_dx = torch.autograd.grad(loss, X)[0]</code></pre>
+<p>With:</p>
+<pre class="code python"><code class="language-python">Y_bug = X.detach() + branch</code></pre>
+<p>the skip-path gradient disappears because <code>detach()</code> treats that copy of <span class="math inline">\(X\)</span> as a constant. Gradients can reach <span class="math inline">\(X\)</span> only through the MLP branch.</p>
+<p>For constant input, the variance is zero. With <span class="math inline">\(\epsilon&gt;0\)</span>, the normalized result is finite zeros. Without <span class="math inline">\(\epsilon\)</span>, the expression becomes <span class="math inline">\(0/0\)</span>, producing <code>nan</code>.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>LayerNorm normalizes across the final feature dimension <span class="math inline">\(D\)</span>, independently for each batch item and token.</p></li>
+<li><p>Since <span class="math inline">\(Y=X+\text{branch}\)</span>, the local Jacobian of the skip path is the identity matrix.</p></li>
+<li><p>The branch no longer depends on <span class="math inline">\(X\)</span>, so <code>branch_dx</code> is zero; the identity-path gradient remains.</p></li>
+<li><p>Examples include <code>detach()</code>, conversion through NumPy, an accidental <code>no_grad()</code> region, replacing addition with only the branch output, or copying through a non-differentiable operation.</p></li>
+<li><p>LayerNorm needs the population variance of the current feature vector, not an unbiased estimate of variance from sampled observations.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Gradients from downstream branches are added.</p></li>
+<li><p>For ReLU, Kaiming initialization uses approximately:</p></li>
+</ul>
+<p><span class="math display">\[\operatorname{Var}(W)=\frac{2}{\text{fan-in}}\]</span></p>

@@ -1,0 +1,226 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Rank:</strong> a matrix <span class="math inline">\(BA\)</span> with <span class="math inline">\(B\in\mathbb R^{d_{\text{out}}\times r}\)</span>, <span class="math inline">\(A\in\mathbb R^{r\times d_{\text{in}}}\)</span> has rank at most <span class="math inline">\(r\)</span>: it maps everything through an <span class="math inline">\(r\)</span>-dimensional bottleneck. <strong>LoRA</strong> assumes fine-tuning changes a weight matrix by a low-rank amount, <span class="math inline">\(\Delta W=\frac{\alpha}{r}BA\)</span>, and trains only <span class="math inline">\(A,B\)</span> while <span class="math inline">\(W\)</span> stays frozen.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="concept-refresh-5-minutes">1. Concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>If the response begins at token <span class="math inline">\(s\)</span>, which logit predicts its first token?</p></li>
+<li><p>Why can prompt embeddings receive gradients when prompt labels are ignored?</p></li>
+</ol>
+<p>A full linear layer uses:</p>
+<p><span class="math display">\[y=xW^\top\]</span></p>
+<p>with:</p>
+<p><span class="math display">\[x\in\mathbb{R}^{B\times d_{\text{in}}},
+\qquad
+W\in\mathbb{R}^{d_{\text{out}}\times d_{\text{in}}}\]</span></p>
+<p>LoRA freezes <span class="math inline">\(W\)</span> and learns a low-rank update:</p>
+<p><span class="math display">\[W&#39;=W+\frac{\alpha}{r}BA\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[A\in\mathbb{R}^{r\times d_{\text{in}}},
+\qquad
+B\in\mathbb{R}^{d_{\text{out}}\times r}\]</span></p>
+<p>The forward pass becomes:</p>
+<p><span class="math display">\[y=xW^\top+\frac{\alpha}{r}xA^\top B^\top\]</span></p>
+<p>Instead of training <span class="math inline">\(d_{\text{out}}d_{\text{in}}\)</span> parameters, LoRA trains:</p>
+<p><span class="math display">\[r(d_{\text{in}}+d_{\text{out}})\]</span></p>
+<p>Typically, <span class="math inline">\(A\)</span> starts small and random while <span class="math inline">\(B=0\)</span>. Therefore, the adapter initially changes nothing:</p>
+<p><span class="math display">\[BA=0\]</span></p>
+<p>This preserves the pretrained model’s initial outputs. A subtle consequence is that <span class="math inline">\(A\)</span>’s first-step gradient is zero because the backward path passes through the zero-initialized <span class="math inline">\(B\)</span>.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: LoRA gradients and why <span class="math inline">\(B\)</span> starts at zero</div>
+<p>Forward: <span class="math inline">\(y=xW^\top+\frac{\alpha}{r}\,(xA^\top)B^\top\)</span>, with upstream <span class="math inline">\(G=\partial L/\partial y\in\mathbb R^{N\times d_{\text{out}}}\)</span>. Let <span class="math inline">\(u=xA^\top\in\mathbb R^{N\times r}\)</span>.</p>
+<p><strong>Step 1.</strong> <span class="math inline">\(y\)</span> is linear in <span class="math inline">\(B^\top\)</span> with input <span class="math inline">\(u\)</span>: <span class="math inline">\(\frac{\partial L}{\partial B}=\frac{\alpha}{r}G^\top u\in\mathbb R^{d_{\text{out}}\times r}\)</span>.</p>
+<p><strong>Step 2.</strong> Gradient flowing to <span class="math inline">\(u\)</span>: <span class="math inline">\(\frac{\partial L}{\partial u}=\frac{\alpha}{r}GB\in\mathbb R^{N\times r}\)</span>.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(u=xA^\top\)</span>: <span class="math inline">\(\frac{\partial L}{\partial A}=\big(\tfrac{\partial L}{\partial u}\big)^\top x=\frac{\alpha}{r}(GB)^\top x\in\mathbb R^{r\times d_{\text{in}}}\)</span>.</p>
+<p><strong>Step 4.</strong> <strong>Init:</strong> <span class="math inline">\(A\)</span> random, <span class="math inline">\(B=0\)</span>. Then <span class="math inline">\(\Delta W=0\)</span>, so the model starts exactly at the pretrained weights. At step 0, <span class="math inline">\(\partial L/\partial A=0\)</span> (it contains <span class="math inline">\(B\)</span>) but <span class="math inline">\(\partial L/\partial B=\frac{\alpha}{r}G^\top xA^\top\ne0\)</span>, so <span class="math inline">\(B\)</span> moves first and then <span class="math inline">\(A\)</span> starts learning.</p>
+<p><strong>Step 5.</strong> <strong>Parameter count:</strong> <span class="math inline">\(r(d_{\text{in}}+d_{\text{out}})\)</span> instead of <span class="math inline">\(d_{\text{in}}d_{\text{out}}\)</span>. For <span class="math inline">\(d=4096\)</span>, <span class="math inline">\(r=8\)</span>: 65<span>,</span>536 vs 16.8M, which is 0.39%.</p>
+<p><strong>Step 6.</strong> <strong>Why <span class="math inline">\(\alpha/r\)</span>:</strong> with <span class="math inline">\(A\)</span> entries of fixed scale, <span class="math inline">\(BA\)</span> sums <span class="math inline">\(r\)</span> terms, so dividing by <span class="math inline">\(r\)</span> keeps the update’s size roughly independent of the rank you choose.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: LoRA linear layer</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> frozen <span class="math inline">\(W\)</span>, rank <span class="math inline">\(r\)</span>, scale <span class="math inline">\(\alpha\)</span></div>
+<div class="algo-line" style="--d:0">init <span class="math inline">\(A\sim\)</span> Kaiming-uniform <span class="math inline">\((r\times d_{\text{in}})\)</span>, <span class="math inline">\(B\gets0\)</span> <span class="math inline">\((d_{\text{out}}\times r)\)</span>; only <span class="math inline">\(A,B\)</span> require gradients</div>
+<div class="algo-line" style="--d:0">forward: <span class="math inline">\(y\gets xW^\top+\frac{\alpha}{r}(xA^\top)B^\top\)</span></div>
+<div class="algo-line" style="--d:0">after training, merge for inference: <span class="math inline">\(W\gets W+\frac{\alpha}{r}BA\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement LoRA, verify gradient flow, and merge it into the base weight.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(101)
+
+
+class LoRALinear(nn.Module):
+    def __init__(self, in_features, out_features, rank=2, alpha=4):
+        super().__init__()
+
+        self.rank = rank
+        self.scale = ...                       # TODO 1: alpha / rank
+
+        self.base = nn.Linear(
+            in_features,
+            out_features,
+            bias=False,
+        )
+
+        # Freeze pretrained/base weights
+        ...                                    # TODO 2
+
+        self.A = nn.Parameter(
+            torch.randn(rank, in_features) * 0.02
+        )                                      # [r, in]
+
+        self.B = nn.Parameter(
+            ...                                # TODO 3: zeros [out, r]
+        )
+
+    def forward(self, x):
+        base_output = ...                      # TODO 4: [B, out]
+        low_rank = ...                         # TODO 5: [B, r]
+        adapter_output = ...                   # TODO 6: [B, out]
+
+        return ...                             # TODO 7
+
+
+B, d_in, d_out = 8, 16, 12
+
+layer = LoRALinear(
+    in_features=d_in,
+    out_features=d_out,
+    rank=2,
+    alpha=4,
+)
+
+x = torch.randn(B, d_in)
+target = torch.randn(B, d_out)
+
+output = layer(x)
+loss = F.mse_loss(output, target)
+loss.backward()
+
+print(&quot;base gradient:&quot;, layer.base.weight.grad)
+print(&quot;A grad norm:&quot;, layer.A.grad.norm().item())
+print(&quot;B grad norm:&quot;, layer.B.grad.norm().item())</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Is the base-weight gradient <code>None</code>?</p></li>
+<li><p>Which adapter matrix has zero gradient on the first step?</p></li>
+<li><p>Which adapter matrix can update immediately?</p></li>
+</ul>
+<p>Now perform one manual adapter update:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    layer.A -= 0.1 * layer.A.grad
+    layer.B -= 0.1 * layer.B.grad
+
+layer.A.grad = None
+layer.B.grad = None
+
+loss = F.mse_loss(layer(x), target)
+loss.backward()
+
+print(&quot;second-step A grad:&quot;, layer.A.grad.norm().item())
+print(&quot;second-step B grad:&quot;, layer.B.grad.norm().item())</code></pre>
+<p>Finally, verify weight merging:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    merged_weight = ...                       # TODO 8: [out, in]
+    merged_output = F.linear(x, merged_weight)
+
+print(
+    &quot;merge error:&quot;,
+    (layer(x) - merged_output).abs().max().item(),
+)
+
+assert torch.allclose(
+    layer(x),
+    merged_output,
+    atol=1e-6,
+)</code></pre>
+<p>Hints:</p>
+<ul>
+<li><p>Freeze with <code>requires_grad_(False)</code>.</p></li>
+<li><p>The low-rank path is <code>(x @ A.T) @ B.T</code>.</p></li>
+<li><p>The update matrix is <code>B @ A</code>.</p></li>
+<li><p>The base layer’s weight layout is <span><code>[</code></span><code>out_features, in_features</code><span><code>]</code></span>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>For <span class="math inline">\(d_{\text{in}}=d_{\text{out}}=4096\)</span> and <span class="math inline">\(r=8\)</span>, how many LoRA parameters replace a full <span class="math inline">\(4096^2\)</span> update?</p></li>
+<li><p>Why does zero-initializing <span class="math inline">\(B\)</span> preserve the base model’s initial behavior?</p></li>
+<li><p>Prediction: why is <span class="math inline">\(A\)</span>’s gradient zero on the first backward pass but usually nonzero on the second?</p></li>
+<li><p>Debugging: both adapter gradients remain zero after several steps. Name two likely causes.</p></li>
+<li><p>Which memory costs does LoRA reduce, and which training costs can remain substantial?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">class LoRALinear(nn.Module):
+    def __init__(self, in_features, out_features, rank=2, alpha=4):
+        super().__init__()
+
+        self.rank = rank
+        self.scale = alpha / rank
+
+        self.base = nn.Linear(
+            in_features,
+            out_features,
+            bias=False,
+        )
+        self.base.weight.requires_grad_(False)
+
+        self.A = nn.Parameter(
+            torch.randn(rank, in_features) * 0.02
+        )
+
+        self.B = nn.Parameter(
+            torch.zeros(out_features, rank)
+        )
+
+    def forward(self, x):
+        base_output = self.base(x)
+        low_rank = x @ self.A.T
+        adapter_output = low_rank @ self.B.T
+
+        return base_output + self.scale * adapter_output</code></pre>
+<p>Weight merging:</p>
+<pre class="code python"><code class="language-python">with torch.no_grad():
+    merged_weight = (
+        layer.base.weight
+        + layer.scale * (layer.B @ layer.A)
+    )
+
+    merged_output = F.linear(x, merged_weight)</code></pre>
+<p>Initially <span class="math inline">\(B=0\)</span>. For the adapter path:</p>
+<p><span class="math display">\[y_{\text{adapter}}=xA^\top B^\top\]</span></p>
+<p>The gradient into <span class="math inline">\(A\)</span> contains <span class="math inline">\(B\)</span>, so:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial A}=0\]</span></p>
+<p>on the first step. The gradient into <span class="math inline">\(B\)</span> depends on <span class="math inline">\(xA^\top\)</span>, which is generally nonzero. Once <span class="math inline">\(B\)</span> updates, gradients can reach <span class="math inline">\(A\)</span>.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>LoRA trains:</p></li>
+</ol>
+<p><span class="math display">\[8(4096+4096)=65{,}536\]</span></p>
+<p>parameters instead of:</p>
+<p><span class="math display">\[4096^2=16{,}777{,}216\]</span></p>
+<p>This is about <span class="math inline">\(256\times\)</span> fewer parameters for that matrix.</p>
+<ol>
+<li><p>Since <span class="math inline">\(B=0\)</span>, <span class="math inline">\(BA=0\)</span>, so the adapter initially adds exactly zero.</p></li>
+<li><p>The first update makes <span class="math inline">\(B\)</span> nonzero, opening a gradient path into <span class="math inline">\(A\)</span>.</p></li>
+<li><p>Possible causes include detaching the adapter output, excluding adapters from the optimizer, running under <code>no_grad()</code>, setting the LoRA scale to zero, or both factors being zero-initialized.</p></li>
+<li><p>LoRA reduces trainable-parameter gradients, optimizer state, and checkpoint size. Activation memory and backpropagation through the frozen model can remain substantial.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Logit position <span class="math inline">\(s-1\)</span> predicts the first response token at position <span class="math inline">\(s\)</span>.</p></li>
+<li><p>Response loss propagates through causal attention into the prompt representations, even when prompt tokens have no direct loss.</p></li>
+</ul>

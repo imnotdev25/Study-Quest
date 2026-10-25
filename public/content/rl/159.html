@@ -1,0 +1,397 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why is broadcasting one detached sequence advantage across tokens valid, while emitting the sequence reward at every token is wrong?</p></li>
+<li><p>Why can dividing every sequence log-probability by its own length change the policy-gradient direction?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="reward-scale-changes-the-optimization-problem">2. Reward scale changes the optimization problem</h3>
+<p>An LLM PPO rollout may combine task reward with reference-KL cost:</p>
+<p><span class="math display">\[R_i^{\text{shaped}}
+=
+\underbrace{R_i^{\text{task}}}_{\text{reward model or verifier}}
+-
+\underbrace{\beta K_i}_{\text{reference-drift penalty}}\]</span></p>
+<p>If task rewards are multiplied by <span class="math inline">\(c\)</span>, but <span class="math inline">\(\beta\)</span> is unchanged:</p>
+<p><span class="math display">\[cR_i^{\text{task}}-\beta K_i
+=
+c\left(
+R_i^{\text{task}}
+-
+\underbrace{\frac{\beta}{c}}_{\text{weaker effective KL price}}
+K_i
+\right)\]</span></p>
+<p>Thus reward scaling is not harmless: multiplying rewards by ten makes the KL penalty ten times weaker relative to task reward.</p>
+<p>To preserve the trade-off, scale both:</p>
+<p><span class="math display">\[\underbrace{
+cR_i^{\text{task}}-c\beta K_i
+}_{\text{scaled task and KL}}
+=
+c
+\underbrace{
+\left(R_i^{\text{task}}-\beta K_i\right)
+}_{\text{same preference ordering}}\]</span></p>
+<p>The critic produces an advantage:</p>
+<p><span class="math display">\[A_i
+=
+\underbrace{
+R_i^{\text{shaped}}-V_\phi(x_i)
+}_{\text{return above expected return}}\]</span></p>
+<p>PPO commonly normalizes advantages:</p>
+<p><span class="math display">\[\widehat A_i
+=
+\underbrace{
+\frac{A_i-\mu_A}
+{\sqrt{\sigma_A^2+\epsilon}}
+}_{\text{approximately zero mean and unit variance}}\]</span></p>
+<p>This improves optimizer conditioning and prevents one reward outlier from setting the entire gradient scale. But it also makes learning batch-relative. It does not repair a miscalibrated or exploitable reward model.</p>
+<p>Keep these quantities distinct:</p>
+<ul>
+<li><p>critic targets remain in the raw shaped-return scale;</p></li>
+<li><p>actor advantages may be normalized;</p></li>
+<li><p>safety dual updates use raw costs;</p></li>
+<li><p>logged rewards should include both raw and normalized statistics.</p></li>
+</ul>
+<p>For binary verifiable rewards, a batch containing all successes or all failures has zero reward variance. Whitening then produces no relative learning signal. Always monitor success diversity and <span style="background-color: codeinlinebg"><code> std</code></span>.</p>
+<p>DPO does not consume scalar rewards to whiten. Its preference margin and <span class="math inline">\(\beta_{\text{DPO}}\)</span> determine the loss scale; DPO remains offline preference optimization.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>task rewards, KL costs, returns and advantages: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>token log-probabilities and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>logits: <span style="background-color: codeinlinebg"><code> [B, T, V]</code></span></p></li>
+<li><p>reward mean, standard deviation and <span class="math inline">\(\beta\)</span>: scalar <span style="background-color: codeinlinebg"><code> []</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-an-outlier-controls-the-raw-gradient">3. PyTorch exercise — an outlier controls the raw gradient</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+batch_size = 8
+max_tokens = 5
+vocabulary_size = 3
+
+lengths = torch.tensor([
+    2, 5, 3, 4, 2, 5, 4, 3,
+])
+
+valid_mask = (
+    torch.arange(max_tokens)[None, :]
+    &lt; lengths[:, None]
+).to(torch.float64)
+
+actions = torch.randint(
+    vocabulary_size,
+    (batch_size, max_tokens),
+)
+
+task_rewards = torch.tensor([
+    0.20, 0.40, 0.60, 0.80,
+    1.00, 1.20, 1.40, 8.00,
+])
+
+reference_kl_costs = torch.tensor([
+    0.10, 0.15, 0.12, 0.20,
+    0.18, 0.22, 0.25, 0.30,
+])
+
+critic_values = torch.tensor([
+    0.30, 0.35, 0.55, 0.75,
+    0.85, 1.00, 1.10, 1.20,
+])
+
+kl_coefficient = torch.tensor(0.50)
+reward_scale = torch.tensor(10.0)
+epsilon = 1e-8
+
+logits = torch.nn.Parameter(
+    0.20 * torch.randn(
+        batch_size,
+        max_tokens,
+        vocabulary_size,
+    )
+)
+
+# TODO 1: Construct the ordinary shaped return.
+shaped_returns = ...
+
+# Scale only task reward: relative KL strength changes.
+task_only_scaled_returns = ...
+
+# Scale reward and KL coefficient together.
+co_scaled_returns = ...
+
+co_scaling_identity_error = ...
+
+# TODO 2: Compute raw and normalized advantages.
+raw_advantages = ...
+
+advantage_mean = ...
+advantage_variance = ...
+advantage_std = ...
+
+normalized_advantages = ...
+
+# Critic regression stays in the original return scale.
+critic_targets = ...
+
+distribution = torch.distributions.Categorical(
+    logits=logits
+)
+
+chosen_log_probabilities = (
+    distribution.log_prob(actions)
+)
+
+sequence_log_probabilities = (
+    chosen_log_probabilities
+    * valid_mask
+).sum(dim=1)
+
+
+def actor_loss(advantages):
+    # TODO 3
+    return ...
+
+
+raw_actor_loss = actor_loss(
+    raw_advantages
+)
+
+normalized_actor_loss = actor_loss(
+    normalized_advantages
+)
+
+scaled_actor_loss = actor_loss(
+    reward_scale * raw_advantages
+)
+
+# TODO 4: Compare gradient scales.
+raw_gradient = torch.autograd.grad(
+    raw_actor_loss,
+    logits,
+    retain_graph=True,
+)[0]
+
+normalized_gradient = torch.autograd.grad(
+    normalized_actor_loss,
+    logits,
+    retain_graph=True,
+)[0]
+
+scaled_gradient = torch.autograd.grad(
+    scaled_actor_loss,
+    logits,
+)[0]
+
+gradient_scaling_error = ...
+
+raw_gradient_norms = ...
+normalized_gradient_norms = ...
+
+raw_outlier_share = ...
+normalized_outlier_share = ...
+
+# TODO 5: All-identical advantages contain no
+# within-batch ranking signal.
+constant_advantages = torch.ones(batch_size)
+
+constant_normalized = ...
+
+print(&quot;Shaped returns:&quot;, shaped_returns)
+print(
+    &quot;Task-only scaled returns:&quot;,
+    task_only_scaled_returns,
+)
+print(&quot;Co-scaled returns:&quot;, co_scaled_returns)
+
+print(
+    &quot;Co-scaling identity error:&quot;,
+    co_scaling_identity_error.item(),
+)
+
+print(&quot;Raw advantages:&quot;, raw_advantages)
+print(&quot;Normalized advantages:&quot;, normalized_advantages)
+print(
+    &quot;Normalized mean/std:&quot;,
+    normalized_advantages.mean().item(),
+    normalized_advantages.std(
+        unbiased=False
+    ).item(),
+)
+
+print(&quot;Raw gradient norms:&quot;, raw_gradient_norms)
+print(
+    &quot;Normalized gradient norms:&quot;,
+    normalized_gradient_norms,
+)
+
+print(
+    &quot;Outlier gradient share: raw, normalized&quot;,
+    raw_outlier_share.item(),
+    normalized_outlier_share.item(),
+)
+
+print(
+    &quot;Gradient scaling error:&quot;,
+    gradient_scaling_error.item(),
+)
+print(
+    &quot;Largest normalized constant advantage:&quot;,
+    constant_normalized.abs().max().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>If task rewards are multiplied by ten while <span class="math inline">\(\beta\)</span> stays fixed, does KL become relatively stronger or weaker?</p></li>
+<li><p>Should co-scaling reward and <span class="math inline">\(\beta\)</span> preserve the shaped objective up to a factor of ten?</p></li>
+<li><p>Which response should dominate the raw gradient?</p></li>
+<li><p>What will whitening produce when every advantage is identical?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Shaped return: <span style="background-color: codeinlinebg"><code> task_reward - beta * kl_cost</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> variance = mean((x - mean) ** 2)</code></span>.</p></li>
+<li><p>Detach actor advantages and critic targets.</p></li>
+<li><p>Actor loss is negative advantage times sequence log-probability.</p></li>
+<li><p>Per-sequence gradient norm: <span style="background-color: codeinlinebg"><code> gradient.flatten(1).norm(dim=1)</code></span>.</p></li>
+<li><p>Outlier share is its norm divided by the sum of all sequence norms.</p></li>
+<li><p>Normalize constants with the same mean/variance formula and <span style="background-color: codeinlinebg"><code> epsilon</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Normalize rewards but train the critic against normalized targets without intending to change its scale.</p></li>
+<li><p>Rescale reward-model output while leaving KL and cost coefficients unchanged.</p></li>
+<li><p>Divide by standard deviation without an epsilon or finite-value check.</p></li>
+<li><p>Hide reward collapse by logging only normalized advantages.</p></li>
+<li><p>Update a safety multiplier from whitened costs.</p></li>
+<li><p>Treat advantage whitening as protection against reward hacking.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does multiplying all task rewards change their trade-off with KL?</p></li>
+<li><p>Does subtracting a baseline change which sampled actions receive positive versus negative credit?</p></li>
+<li><p>Why should critic targets normally remain in raw shaped-return units?</p></li>
+<li><p>Why can a zero-variance verifier batch provide no relative learning signal?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Reward construction:</p>
+<pre class="code python"><code class="language-python">shaped_returns = (
+    task_rewards
+    - kl_coefficient
+    * reference_kl_costs
+)
+
+task_only_scaled_returns = (
+    reward_scale * task_rewards
+    - kl_coefficient
+    * reference_kl_costs
+)
+
+co_scaled_returns = (
+    reward_scale * task_rewards
+    - reward_scale
+    * kl_coefficient
+    * reference_kl_costs
+)
+
+co_scaling_identity_error = (
+    co_scaled_returns
+    - reward_scale * shaped_returns
+).abs().max()</code></pre>
+<p>Advantages:</p>
+<pre class="code python"><code class="language-python">raw_advantages = (
+    shaped_returns
+    - critic_values
+).detach()
+
+advantage_mean = raw_advantages.mean()
+
+advantage_variance = (
+    raw_advantages
+    - advantage_mean
+).square().mean()
+
+advantage_std = torch.sqrt(
+    advantage_variance + epsilon
+)
+
+normalized_advantages = (
+    (
+        raw_advantages
+        - advantage_mean
+    )
+    / advantage_std
+).detach()
+
+critic_targets = shaped_returns.detach()</code></pre>
+<p>Actor loss:</p>
+<pre class="code python"><code class="language-python">def actor_loss(advantages):
+    return -(
+        advantages.detach()
+        * sequence_log_probabilities
+    ).mean()</code></pre>
+<p>Gradient diagnostics:</p>
+<pre class="code python"><code class="language-python">gradient_scaling_error = (
+    scaled_gradient
+    - reward_scale * raw_gradient
+).abs().max()
+
+raw_gradient_norms = (
+    raw_gradient.flatten(1).norm(dim=1)
+)
+
+normalized_gradient_norms = (
+    normalized_gradient
+    .flatten(1)
+    .norm(dim=1)
+)
+
+raw_outlier_share = (
+    raw_gradient_norms[-1]
+    / raw_gradient_norms.sum()
+)
+
+normalized_outlier_share = (
+    normalized_gradient_norms[-1]
+    / normalized_gradient_norms.sum()
+)</code></pre>
+<p>Constant-advantage diagnostic:</p>
+<pre class="code python"><code class="language-python">constant_mean = constant_advantages.mean()
+
+constant_variance = (
+    constant_advantages
+    - constant_mean
+).square().mean()
+
+constant_normalized = (
+    constant_advantages
+    - constant_mean
+) / torch.sqrt(
+    constant_variance + epsilon
+)</code></pre>
+<p>The co-scaling identity error and gradient-scaling error should both be near floating-point zero:</p>
+<p><span class="math display">\[\underbrace{
+10R-10\beta K
+}_{\text{co-scaled objective}}
+=
+10
+\underbrace{
+(R-\beta K)
+}_{\text{original objective}}\]</span></p>
+<p>Multiplying detached advantages by ten similarly multiplies the policy gradient by ten. This changes optimizer step size unless learning rate, clipping and other loss coefficients are adjusted.</p>
+<p>Whitening substantially reduces the extreme response’s control over gradient magnitude, but it also changes the batch’s absolute reward interpretation.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Reward becomes larger relative to KL, so the effective KL coefficient becomes <span class="math inline">\(\beta/c\)</span>.</p></li>
+<li><p>A baseline shifts the credit threshold. Samples above it become positive; samples below it become negative. A valid action-independent baseline preserves the expected policy gradient while reducing variance.</p></li>
+<li><p>The critic must predict the deployed return scale. Moving normalization statistics can otherwise make its target nonstationary and diagnostics difficult to interpret.</p></li>
+<li><p>The batch contains no information about which completion is better. After centering, every relative advantage is zero.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Broadcasting uses one outcome as credit for all actions that preceded it. Repeating the reward changes the return and counts the outcome multiple times.</p></li>
+<li><p>Length normalization applies a different <span class="math inline">\(1/L_i\)</span> weight to each sequence, altering their relative gradient contributions.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> reward units are part of the algorithm. Normalize detached actor advantages for conditioning when useful, but retain raw returns for critics and diagnostics—and rescale KL or safety prices whenever the reward scale changes.</p>

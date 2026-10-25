@@ -1,0 +1,444 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why must the multiplier update use raw episode cost rather than centered cost advantages?</p></li>
+<li><p>Why should the sampled augmented advantage be detached in the actor loss?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="two-critics-forecast-two-different-futures">2. Two critics forecast two different futures</h3>
+<p>In sequential RL, immediate reward and cost do not describe everything an action causes. Maintain two critics:</p>
+<p><span class="math display">\[\underbrace{V_R(s_t)}_{\text{future reward forecast}},
+\qquad
+\underbrace{V_C(s_t)}_{\text{future cost forecast}}\]</span></p>
+<p>Their one-step TD targets are:</p>
+<p><span class="math display">\[y_t^R
+=
+\underbrace{r_t}_{\text{immediate reward}}
++
+\underbrace{\gamma(1-d_t)V_R(s_{t+1})}_{\text{bootstrapped future reward}}\]</span></p>
+<p><span class="math display">\[y_t^C
+=
+\underbrace{c_t}_{\text{immediate cost}}
++
+\underbrace{\gamma(1-d_t)V_C(s_{t+1})}_{\text{bootstrapped future cost}}\]</span></p>
+<p>The TD errors estimate separate advantages:</p>
+<p><span class="math display">\[\delta_t^R
+=
+\underbrace{y_t^R-V_R(s_t)}_{\text{better or worse reward than expected}}\]</span></p>
+<p><span class="math display">\[\delta_t^C
+=
+\underbrace{y_t^C-V_C(s_t)}_{\text{more or less costly than expected}}\]</span></p>
+<p>Combine them only for the actor:</p>
+<p><span class="math display">\[A_t^{\text{aug}}
+=
+\underbrace{\delta_t^R}_{\text{reward advantage}}
+-
+\underbrace{\lambda\delta_t^C}_{\text{priced cost advantage}}\]</span></p>
+<p>For a finite-horizon starting-state objective:</p>
+<p><span class="math display">\[L_\pi
+=
+-\frac1{BT}\sum_{i,t}
+\underbrace{\gamma^t}_{\text{time weight}}
+\underbrace{\log\pi_\theta(a_{i,t}\mid s_t)}_{\text{credit path}}
+\underbrace{\operatorname{stopgrad}(A_{i,t}^{\text{aug}})}_{\text{actor direction}}
+-\beta H\]</span></p>
+<p>The critics minimize:</p>
+<p><span class="math display">\[L_V
+=
+\frac12E\!\left[
+\underbrace{(V_R-y_R^{\text{detach}})^2}_{\text{reward-critic error}}
++
+\underbrace{(V_C-y_C^{\text{detach}})^2}_{\text{cost-critic error}}
+\right]\]</span></p>
+<p>Detaching targets gives the usual TD semi-gradient: update the current prediction toward a fixed target.</p>
+<p>The multiplier still uses the discounted episode cost:</p>
+<p><span class="math display">\[C_i
+=
+\underbrace{\sum_t\gamma^t c_{i,t}}_{\text{same cost definition as the constraint}}\]</span></p>
+<p><span class="math display">\[\lambda
+\leftarrow
+\left[
+\lambda+\eta_\lambda
+\underbrace{(\bar C-d)}_{\text{raw violation}}
+\right]_+\]</span></p>
+<p>Never update <span class="math inline">\(\lambda\)</span> from cost TD errors: a correct cost critic makes their mean approximately zero, even when the policy violates the budget.</p>
+<p>Two masks have different jobs:</p>
+<ul>
+<li><p>continuation mask: prevents bootstrapping after termination;</p></li>
+<li><p>valid-token mask: removes padding or nonexistent timesteps from every loss.</p></li>
+</ul>
+<p>For LLM RL, EOS affects continuation, while prompt and padding masks determine which generated tokens contribute to policy and value losses.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>policy logits and both critics: <span style="background-color: codeinlinebg"><code> [T]</code></span></p></li>
+<li><p>actions, rewards, costs and TD errors: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>continuation mask and discount weights: <span style="background-color: codeinlinebg"><code> [T]</code></span></p></li>
+<li><p>multiplier and cost limit: scalar <span style="background-color: codeinlinebg"><code> []</code></span></p></li>
+</ul>
+<p>DPO has no online reward critic, cost critic or dual update. It can learn from safety preferences, but that is not equivalent to enforcing an environment-cost budget.</p>
+<h3 class="unnumbered" id="pytorch-exercise-a-four-step-constrained-actorcritic">3. PyTorch exercise — a four-step constrained actor–critic</h3>
+<p>Each timestep offers the same safe or risky action. The constraint allows an average risky probability of approximately <span class="math inline">\(2/7\)</span>.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+horizon = 4
+batch_size = 256
+num_updates = 5_000
+
+gamma = 0.95
+entropy_coefficient = 0.10
+
+actor_lr = 0.03
+critic_lr = 0.05
+dual_lr = 0.005
+
+reward_by_action = torch.tensor([0.3, 1.0])
+cost_by_action = torch.tensor([0.1, 0.8])
+
+discounts = gamma ** torch.arange(horizon)
+
+# Equivalent to expected cost 0.30 per step.
+cost_limit = 0.30 * discounts.sum()
+
+# The last transition has no next state.
+continuation_mask = torch.ones(horizon)
+continuation_mask[-1] = 0.0
+
+policy_logits = torch.nn.Parameter(
+    torch.zeros(horizon)
+)
+reward_values = torch.nn.Parameter(
+    torch.zeros(horizon)
+)
+cost_values = torch.nn.Parameter(
+    torch.zeros(horizon)
+)
+
+actor_optimizer = torch.optim.Adam(
+    [policy_logits],
+    lr=actor_lr,
+)
+critic_optimizer = torch.optim.Adam(
+    [reward_values, cost_values],
+    lr=critic_lr,
+)
+
+multiplier = torch.tensor(0.0)
+tail_metrics = []
+
+for update in range(num_updates):
+    # TODO 1: Sample [B, T] actions.
+    distribution = ...
+
+    actions = ...
+    action_ids = ...
+
+    rewards = ...
+    costs = ...
+
+    # torch.roll intentionally wraps the final value
+    # to index 0; the terminal mask must remove it.
+    next_reward_values = ...
+    next_cost_values = ...
+
+    # TODO 2: Construct detached TD targets.
+    reward_targets = ...
+    cost_targets = ...
+
+    reward_td_errors = ...
+    cost_td_errors = ...
+
+    # TODO 3: Construct actor and critic losses.
+    augmented_td_errors = ...
+
+    actor_loss = ...
+
+    critic_loss = ...
+
+    # TODO 4: Update actor and critics.
+    actor_optimizer.zero_grad()
+    critic_optimizer.zero_grad()
+
+    ...
+
+    torch.nn.utils.clip_grad_norm_(
+        [
+            policy_logits,
+            reward_values,
+            cost_values,
+        ],
+        max_norm=1.0,
+    )
+
+    ...
+    ...
+
+    # Dual update uses complete raw episode costs.
+    with torch.no_grad():
+        discounted_episode_costs = ...
+
+        multiplier = ...
+
+        if update &gt;= num_updates - 500:
+            risky_probabilities = torch.sigmoid(
+                policy_logits
+            )
+
+            expected_rewards = (
+                reward_by_action[0]
+                + risky_probabilities
+                * (
+                    reward_by_action[1]
+                    - reward_by_action[0]
+                )
+            )
+
+            expected_costs = (
+                cost_by_action[0]
+                + risky_probabilities
+                * (
+                    cost_by_action[1]
+                    - cost_by_action[0]
+                )
+            )
+
+            tail_metrics.append(torch.stack([
+                risky_probabilities.mean(),
+                (discounts * expected_rewards).sum(),
+                (discounts * expected_costs).sum(),
+                multiplier,
+            ]))
+
+tail_metrics = torch.stack(tail_metrics)
+
+print(
+    &quot;Final-window means:\n&quot;
+    &quot;p(risky), discounted reward, &quot;
+    &quot;discounted cost, lambda&quot;
+)
+print(tail_metrics.mean(dim=0))
+
+print(&quot;Cost limit:&quot;, cost_limit.item())
+print(
+    &quot;Risky probabilities by timestep:&quot;,
+    torch.sigmoid(policy_logits.detach()),
+)
+
+# TODO 5: Compare critics with exact on-policy values.
+@torch.no_grad()
+def backward_values(step_expectations):
+    values = torch.zeros(horizon)
+    running_value = torch.tensor(0.0)
+
+    for t in reversed(range(horizon)):
+        running_value = ...
+        values[t] = ...
+
+    return values
+
+with torch.no_grad():
+    risky_probabilities = torch.sigmoid(
+        policy_logits
+    )
+
+    expected_step_rewards = (
+        reward_by_action[0]
+        + risky_probabilities
+        * (
+            reward_by_action[1]
+            - reward_by_action[0]
+        )
+    )
+
+    expected_step_costs = (
+        cost_by_action[0]
+        + risky_probabilities
+        * (
+            cost_by_action[1]
+            - cost_by_action[0]
+        )
+    )
+
+exact_reward_values = backward_values(
+    expected_step_rewards
+)
+exact_cost_values = backward_values(
+    expected_step_costs
+)
+
+print(
+    &quot;Reward critic: learned, exact\n&quot;,
+    torch.stack([
+        reward_values.detach(),
+        exact_reward_values,
+    ], dim=1),
+)
+
+print(
+    &quot;Cost critic: learned, exact\n&quot;,
+    torch.stack([
+        cost_values.detach(),
+        exact_cost_values,
+    ], dim=1),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Why should the four risky probabilities become similar?</p></li>
+<li><p>What happens if the terminal continuation mask remains <span style="background-color: codeinlinebg"><code> 1</code></span>?</p></li>
+<li><p>Should the mean discounted cost converge near, below or far above the budget?</p></li>
+<li><p>What happens if the dual learning rate is much faster than both critics?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Expand policy logits from <span style="background-color: codeinlinebg"><code> [T]</code></span> to <span style="background-color: codeinlinebg"><code> [B, T]</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> Bernoulli(logits=...)</code></span>.</p></li>
+<li><p>TD targets need <span style="background-color: codeinlinebg"><code> next_values.detach()</code></span>.</p></li>
+<li><p>Actor advantage: <span style="background-color: codeinlinebg"><code> reward_td - lambda * cost_td</code></span>, then detach it.</p></li>
+<li><p>Weight actor terms by <span style="background-color: codeinlinebg"><code> discounts[None, :]</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> costs * discounts[None, :]</code></span> for episode cost.</p></li>
+<li><p>Backward value recursion is <span class="math inline">\(V_t=x_t+\gamma V_{t+1}\)</span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-checks">Debugging checks</h3>
+<ul>
+<li><p>Remove the terminal mask: <span style="background-color: codeinlinebg"><code> torch.roll</code></span> makes the last state bootstrap from the first.</p></li>
+<li><p>Update the multiplier from <span style="background-color: codeinlinebg"><code> cost_td_errors.mean()</code></span>: violations become invisible.</p></li>
+<li><p>Forget target detachment: gradients modify both sides of each TD target.</p></li>
+<li><p>Mask padding in the actor loss but not the critic loss.</p></li>
+<li><p>Use discounted actor costs but an undiscounted dual budget.</p></li>
+<li><p>Standardize cost advantages without tracking the corresponding change in multiplier scale.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why are two critics preferable to one critic for <span class="math inline">\(R-\lambda C\)</span>?</p></li>
+<li><p>Why can cost TD errors average near zero while the policy remains unsafe?</p></li>
+<li><p>What distinct errors do continuation and valid-token masks prevent?</p></li>
+<li><p>If the cost critic underestimates risk, what mechanism can still raise the multiplier?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Rollout:</p>
+<pre class="code python"><code class="language-python">distribution = torch.distributions.Bernoulli(
+    logits=policy_logits[None, :].expand(
+        batch_size,
+        horizon,
+    )
+)
+
+actions = distribution.sample()
+action_ids = actions.to(torch.long)
+
+rewards = reward_by_action[action_ids]
+costs = cost_by_action[action_ids]
+
+next_reward_values = torch.roll(
+    reward_values,
+    shifts=-1,
+)
+next_cost_values = torch.roll(
+    cost_values,
+    shifts=-1,
+)</code></pre>
+<p>TD targets:</p>
+<pre class="code python"><code class="language-python">reward_targets = (
+    rewards
+    + gamma
+    * continuation_mask[None, :]
+    * next_reward_values.detach()[None, :]
+)
+
+cost_targets = (
+    costs
+    + gamma
+    * continuation_mask[None, :]
+    * next_cost_values.detach()[None, :]
+)
+
+reward_td_errors = (
+    reward_targets
+    - reward_values[None, :]
+)
+
+cost_td_errors = (
+    cost_targets
+    - cost_values[None, :]
+)</code></pre>
+<p>Losses:</p>
+<pre class="code python"><code class="language-python">augmented_td_errors = (
+    reward_td_errors
+    - multiplier.detach()
+    * cost_td_errors
+).detach()
+
+time_weights = discounts[None, :]
+
+actor_loss = -(
+    time_weights
+    * distribution.log_prob(actions)
+    * augmented_td_errors
+).mean() - (
+    entropy_coefficient
+    * (
+        time_weights
+        * distribution.entropy()
+    ).mean()
+)
+
+critic_loss = 0.5 * (
+    reward_td_errors.square().mean()
+    + cost_td_errors.square().mean()
+)</code></pre>
+<p>Parameter and dual updates:</p>
+<pre class="code python"><code class="language-python">(actor_loss + critic_loss).backward()
+
+actor_optimizer.step()
+critic_optimizer.step()
+
+with torch.no_grad():
+    discounted_episode_costs = (
+        costs * discounts[None, :]
+    ).sum(dim=1)
+
+    multiplier = torch.clamp(
+        multiplier
+        + dual_lr
+        * (
+            discounted_episode_costs.mean()
+            - cost_limit
+        ),
+        min=0.0,
+    )</code></pre>
+<p>Exact value recursion:</p>
+<pre class="code python"><code class="language-python">for t in reversed(range(horizon)):
+    running_value = (
+        step_expectations[t]
+        + gamma * running_value
+    )
+    values[t] = running_value</code></pre>
+<p>Typical final-window results are:</p>
+<p><span class="math display">\[\bar p_{\text{risky}}
+\approx
+\underbrace{0.285}_{\text{active constraint}}\]</span></p>
+<p><span class="math display">\[J_R\approx1.85,
+\qquad
+J_C\approx1.11,
+\qquad
+d\approx1.113,
+\qquad
+\lambda\approx1.13\]</span></p>
+<p>Small differences between learned and exact critic values are expected because critics continually track a changing, sampled policy.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Separate critics remain interpretable and reusable while <span class="math inline">\(\lambda\)</span> changes. A single scalarized critic’s target changes whenever the multiplier changes.</p></li>
+<li><p>TD errors measure prediction surprise, not absolute cost. An accurate critic can predict a consistently excessive cost with zero-mean TD errors.</p></li>
+<li><p>Continuation masks stop terminal bootstrapping; valid-token masks prevent prompt, padding or nonexistent steps from entering losses.</p></li>
+<li><p>The multiplier uses raw sampled episode cost, so observed budget violations can still increase it despite critic error.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Centering removes the mean cost—the exact quantity needed to detect constraint violation.</p></li>
+<li><p>Detachment prevents actor gradients from flowing into return construction, critics or the multiplier; critics receive their own regression loss.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> let reward and cost critics answer different questions. Combine their TD advantages only when updating the policy, while the multiplier reacts independently to raw episode-level constraint violations.</p>

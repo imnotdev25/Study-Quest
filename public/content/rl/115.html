@@ -1,0 +1,414 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Which part of advantage whitening can change advantage signs?</p></li>
+<li><p>Which advantage statistics should remain fixed across PPO epochs?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="your-own-score-should-not-grade-your-baseline">2. Your own score should not grade your baseline</h3>
+<p>Suppose <span class="math inline">\(K\)</span> completions are sampled independently for one prompt. A group-relative advantage is often:</p>
+<p><span class="math display">\[A_i
+=
+R_i-\bar R,
+\qquad
+\bar R=\frac1K\sum_{j=1}^K R_j\]</span></p>
+<p>This removes prompt difficulty without training a critic. However, <span class="math inline">\(\bar R\)</span> includes <span class="math inline">\(R_i\)</span>, so the baseline depends partly on the same sampled action whose gradient it weights.</p>
+<p>Without standard-deviation normalization:</p>
+<p><span class="math display">\[E[\hat g_{\text{inclusive}}]
+=
+\left(1-\frac1K\right)\nabla_\theta J\]</span></p>
+<p>Thus, group size <span style="background-color: codeinlinebg"><code> 2</code></span> halves the expected gradient; group size <span style="background-color: codeinlinebg"><code> 8</code></span> retains seven-eighths.</p>
+<p>A leave-one-out baseline avoids this:</p>
+<p><span class="math display">\[b_{-i}
+=
+\frac1{K-1}
+\sum_{j\ne i}R_j\]</span></p>
+<p><span class="math display">\[A_i^{\text{LOO}}
+=
+R_i-b_{-i}\]</span></p>
+<p>Conditional on the prompt, <span class="math inline">\(b_{-i}\)</span> is independent of completion <span class="math inline">\(i\)</span>’s action, so:</p>
+<p><span class="math display">\[E[
+\nabla\log\pi(a_i)A_i^{\text{LOO}}
+]
+=
+\nabla J\]</span></p>
+<p>This is the key idea behind REINFORCE leave-one-out methods.</p>
+<p>GRPO commonly standardizes within each group:</p>
+<p><span class="math display">\[A_i^{\text{GRPO}}
+=
+\frac{R_i-\bar R}
+{\sigma_R+\epsilon}\]</span></p>
+<p>That changes gradient scale nonlinearly. Groups with identical rewards have zero relative signal, whether every completion is excellent or every completion fails.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions, rewards and advantages: <span style="background-color: codeinlinebg"><code> [G, K]</code></span></p></li>
+<li><p>group means and standard deviations: <span style="background-color: codeinlinebg"><code> [G, 1]</code></span></p></li>
+<li><p>policy-gradient estimates: scalars</p></li>
+</ul>
+<p>DPO instead trains from fixed preferred/rejected pairs. It does not sample an online reward group or construct a leave-one-out baseline, so it remains preference optimization rather than online RL.</p>
+<h3 class="unnumbered" id="pytorch-exercise-group-size-2-halves-the-centered-gradient">3. PyTorch exercise — group size <span style="background-color: codeinlinebg"><code> 2</code></span> halves the centered gradient</h3>
+<p>Use a Bernoulli policy:</p>
+<p><span class="math display">\[P(a=1)=\sigma(\theta)\]</span></p>
+<p>with reward <span class="math inline">\(R=a\)</span>. Therefore:</p>
+<p><span class="math display">\[J(\theta)=\sigma(\theta)\]</span></p>
+<p>and at <span class="math inline">\(\theta=0\)</span>:</p>
+<p><span class="math display">\[\nabla_\theta J
+=
+0.5(1-0.5)
+=
+0.25\]</span></p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_groups = 50_000
+group_sizes = [2, 4, 8, 16]
+epsilon = 1e-8
+
+
+# TODO 1: Calculate the exact policy gradient
+# using autograd.
+theta = torch.tensor(
+    0.0,
+    requires_grad=True,
+)
+
+policy_probability = ...
+
+exact_objective = ...
+
+...
+
+exact_gradient = ...
+
+sampling_probability = ...
+
+
+def simulate_group_estimator(group_size):
+    # TODO 2: Sample G groups of K completions.
+    actions = ...
+
+    rewards = ...
+
+    # For Bernoulli:
+    # d log pi(a) / d theta = a - p
+    score_gradients = ...
+
+
+    # TODO 3: Raw REINFORCE and inclusive
+    # group-mean baseline.
+    raw_gradient = ...
+
+    group_mean_rewards = ...
+
+    inclusive_advantages = ...
+
+    inclusive_gradient = ...
+
+
+    # TODO 4: Leave-one-out baseline.
+    group_reward_sums = ...
+
+    leave_one_out_baselines = ...
+
+    leave_one_out_advantages = ...
+
+    leave_one_out_gradient = ...
+
+
+    # TODO 5: GRPO-style standardization
+    # and zero-variance diagnostics.
+    group_variances = ...
+
+    group_standard_deviations = ...
+
+    standardized_advantages = ...
+
+    standardized_gradient = ...
+
+    zero_variance_fraction = ...
+
+    theoretical_inclusive_gradient = ...
+
+    theoretical_zero_variance_fraction = ...
+
+    return torch.stack([
+        torch.tensor(
+            float(group_size)
+        ),
+        raw_gradient,
+        inclusive_gradient,
+        leave_one_out_gradient,
+        standardized_gradient,
+        theoretical_inclusive_gradient,
+        zero_variance_fraction,
+        theoretical_zero_variance_fraction,
+    ])
+
+
+results = torch.stack([
+    simulate_group_estimator(group_size)
+    for group_size in group_sizes
+])
+
+torch.set_printoptions(
+    precision=5,
+    sci_mode=False,
+)
+
+print(&quot;Exact gradient:&quot;, exact_gradient.item())
+
+print(
+    &quot;\nColumns: K, raw, inclusive mean, &quot;
+    &quot;leave-one-out, standardized, &quot;
+    &quot;theoretical inclusive, &quot;
+    &quot;observed zero-var fraction, &quot;
+    &quot;theoretical zero-var fraction&quot;
+)
+print(results)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>For <span class="math inline">\(K=2\)</span>, should the inclusive-baseline gradient approach <span style="background-color: codeinlinebg"><code> 0.125</code></span> or <span style="background-color: codeinlinebg"><code> 0.25</code></span>?</p></li>
+<li><p>Which estimator should remain near <span style="background-color: codeinlinebg"><code> 0.25</code></span> for every group size?</p></li>
+<li><p>At <span class="math inline">\(p=0.5\)</span>, what fraction of size-2 groups have identical rewards?</p></li>
+<li><p>Does dividing by group standard deviation restore an unbiased gradient?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample actions with:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">torch.rand(G, K) &lt; probability</code></pre>
+<ul>
+<li><p>For a Bernoulli policy:</p></li>
+</ul>
+<p><span class="math display">\[\nabla_\theta\log\pi(a)=a-p\]</span></p>
+<ul>
+<li><p>Leave-one-out mean:</p></li>
+</ul>
+<p><span class="math display">\[\frac{\sum_jR_j-R_i}{K-1}\]</span></p>
+<ul>
+<li><p>Use population group variance:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">advantages.square().mean(dim=1, keepdim=True)</code></pre>
+<ul>
+<li><p>At <span class="math inline">\(p=0.5\)</span>, a group has zero variance when all actions are zero or all are one:</p></li>
+</ul>
+<p><span class="math display">\[P(\sigma_R=0)
+=
+2(0.5)^K\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Split completions from one prompt across workers before calculating group statistics.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> K=1</code></span>, for which leave-one-out is undefined.</p></li>
+<li><p>Divide by zero when all rewards tie.</p></li>
+<li><p>Replace failed generations with reward zero without defining failure as zero utility.</p></li>
+<li><p>Backpropagate through judge rewards or baseline statistics.</p></li>
+<li><p>Compare runs with different group sizes while assuming normalized gradients have equal scale.</p></li>
+<li><p>Report only mean reward without the fraction of zero-variance groups.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does the inclusive group mean shrink the expected unnormalized gradient?</p></li>
+<li><p>Why is the leave-one-out baseline valid?</p></li>
+<li><p>What information does GRPO lose when every completion receives the same reward?</p></li>
+<li><p>What must happen if one prompt’s group spans distributed workers?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Exact gradient:</p>
+<pre class="code python"><code class="language-python">policy_probability = torch.sigmoid(
+    theta
+)
+
+exact_objective = policy_probability
+
+exact_objective.backward()
+
+exact_gradient = theta.grad.detach()
+
+sampling_probability = (
+    policy_probability.detach()
+)</code></pre>
+<p>Sampling:</p>
+<pre class="code python"><code class="language-python">actions = (
+    torch.rand(
+        num_groups,
+        group_size,
+    )
+    &lt; sampling_probability
+).to(torch.float64)
+
+rewards = actions.clone()
+
+score_gradients = (
+    actions - sampling_probability
+)</code></pre>
+<p>Raw and inclusive estimators:</p>
+<pre class="code python"><code class="language-python">raw_gradient = (
+    score_gradients
+    * rewards
+).mean()
+
+group_mean_rewards = (
+    rewards.mean(
+        dim=1,
+        keepdim=True,
+    )
+)
+
+inclusive_advantages = (
+    rewards - group_mean_rewards
+)
+
+inclusive_gradient = (
+    score_gradients
+    * inclusive_advantages.detach()
+).mean()</code></pre>
+<p>Leave-one-out estimator:</p>
+<pre class="code python"><code class="language-python">group_reward_sums = (
+    rewards.sum(
+        dim=1,
+        keepdim=True,
+    )
+)
+
+leave_one_out_baselines = (
+    group_reward_sums - rewards
+) / (group_size - 1)
+
+leave_one_out_advantages = (
+    rewards
+    - leave_one_out_baselines
+)
+
+leave_one_out_gradient = (
+    score_gradients
+    * leave_one_out_advantages.detach()
+).mean()</code></pre>
+<p>Standardization and diagnostics:</p>
+<pre class="code python"><code class="language-python">group_variances = (
+    inclusive_advantages
+    .square()
+    .mean(
+        dim=1,
+        keepdim=True,
+    )
+)
+
+group_standard_deviations = (
+    group_variances.sqrt()
+)
+
+standardized_advantages = (
+    inclusive_advantages
+    / (
+        group_standard_deviations
+        + epsilon
+    )
+).detach()
+
+standardized_gradient = (
+    score_gradients
+    * standardized_advantages
+).mean()
+
+zero_variance_fraction = (
+    group_standard_deviations
+    .squeeze(1)
+    .le(epsilon)
+    .to(torch.float64)
+    .mean()
+)
+
+theoretical_inclusive_gradient = (
+    (1.0 - 1.0 / group_size)
+    * exact_gradient
+)
+
+theoretical_zero_variance_fraction = (
+    sampling_probability.pow(
+        group_size
+    )
+    + (
+        1.0
+        - sampling_probability
+    ).pow(group_size)
+)</code></pre>
+<p>For the inclusive baseline:</p>
+<p><span class="math display">\[R_i-\bar R
+=
+\left(1-\frac1K\right)R_i
+-
+\frac1K\sum_{j\ne i}R_j\]</span></p>
+<p>The cross-completion terms vanish in expectation because completion <span class="math inline">\(j\)</span>’s reward is independent of completion <span class="math inline">\(i\)</span>’s score gradient. Therefore:</p>
+<p><span class="math display">\[E[\hat g_{\text{inclusive}}]
+=
+\left(1-\frac1K\right)g\]</span></p>
+<p>Expected results are approximately:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong><span class="math inline">\(K\)</span></strong></th>
+<th style="text-align: left;"><strong>Raw</strong></th>
+<th style="text-align: left;"><strong>Inclusive</strong></th>
+<th style="text-align: left;"><strong>Leave-one-out</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong><span class="math inline">\(K\)</span></strong></td>
+<td style="text-align: left;"><strong>Raw</strong></td>
+<td style="text-align: left;"><strong>Inclusive</strong></td>
+<td style="text-align: left;"><strong>Leave-one-out</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">2</td>
+<td style="text-align: left;">0.25</td>
+<td style="text-align: left;">0.125</td>
+<td style="text-align: left;">0.25</td>
+</tr>
+<tr>
+<td style="text-align: left;">4</td>
+<td style="text-align: left;">0.25</td>
+<td style="text-align: left;">0.1875</td>
+<td style="text-align: left;">0.25</td>
+</tr>
+<tr>
+<td style="text-align: left;">8</td>
+<td style="text-align: left;">0.25</td>
+<td style="text-align: left;">0.21875</td>
+<td style="text-align: left;">0.25</td>
+</tr>
+<tr>
+<td style="text-align: left;">16</td>
+<td style="text-align: left;">0.25</td>
+<td style="text-align: left;">0.23438</td>
+<td style="text-align: left;">0.25</td>
+</tr>
+</tbody>
+</table>
+<p>At <span class="math inline">\(p=0.5\)</span>, zero-variance group probabilities are:</p>
+<p><span class="math display">\[P_0(K)=2^{1-K}\]</span></p>
+<p>So they are:</p>
+<ul>
+<li><p><span class="math display">\[K=2:\ 0.5\]</span></p></li>
+<li><p><span class="math display">\[K=4:\ 0.125\]</span></p></li>
+<li><p><span class="math display">\[K=8:\ 0.0078125\]</span></p></li>
+<li><p><span class="math display">\[K=16:\ 0.0000305\]</span></p></li>
+</ul>
+<p>Standardization does not simply undo the inclusive shrinkage. It applies a reward- and group-dependent scale, while zero-variance groups remain unable to express any relative preference.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Its baseline contains <span class="math inline">\(R_i/K\)</span>, reducing the coefficient on the sample’s own reward to <span class="math inline">\(1-1/K\)</span>.</p></li>
+<li><p>It depends only on other independently sampled completions, so it is action-independent for completion <span class="math inline">\(i\)</span>, conditional on the prompt.</p></li>
+<li><p>It cannot distinguish “all excellent” from “all terrible”; both yield zero relative advantages.</p></li>
+<li><p>Gather or all-reduce the complete group’s reward statistics before constructing advantages. Never normalize partial groups independently.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Mean subtraction can change signs; division by a positive standard deviation only changes scale.</p></li>
+<li><p>Compute detached rollout-level statistics once, synchronize them across workers and reuse them throughout the rollout’s PPO epochs.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> group-relative baselines remove prompt difficulty, but the exact baseline matters. Inclusive means shrink small-group gradients; leave-one-out preserves the expected REINFORCE gradient; standardization introduces its own group-size-dependent scale and loses all signal on tied groups.</p>

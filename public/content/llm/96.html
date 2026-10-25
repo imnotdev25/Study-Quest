@@ -1,0 +1,26 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Why plain PyTorch breaks.</strong> <code>model.generate</code> serves one batch at a time, pads every sequence to the longest, reserves KV memory for the maximum length, and can’t add a request until the batch ends. A serving engine fixes all four.</p>
+</div>
+<h2 class="unnumbered" id="iteration-level-scheduling-orca">Iteration-level scheduling (Orca)</h2>
+<p>Orca’s idea: schedule at the granularity of one model step, not one request. Each step, the scheduler builds a batch of <em>tokens</em>: one decode token for each running sequence plus chunks of prompts from new ones, up to a token budget. Finished sequences leave immediately and their slots are reused on the next step.</p>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: One engine step (vLLM-style scheduler)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> running list <span class="math inline">\(R\)</span> (oldest first), waiting queue <span class="math inline">\(W\)</span>, token budget <span class="math inline">\(\beta\)</span>, KV block pool</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each <span class="math inline">\(s\in R\)</span> <strong>do</strong> <em>▷ decode and unfinished prefills first</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(n\gets\min(\text{uncomputed}(s),\beta)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>while</strong> not enough free blocks for <span class="math inline">\(n\)</span> tokens <strong>do</strong></div>
+<div class="algo-line" style="--d:2">preempt the newest sequence in <span class="math inline">\(R\)</span>: free its blocks, push it to the front of <span class="math inline">\(W\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">schedule <span class="math inline">\((s,n)\)</span>; <span class="math inline">\(\beta\gets\beta-n\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(W\ne\emptyset\)</span>, <span class="math inline">\(\beta&gt;0\)</span>, <span class="math inline">\(|R|&lt;\)</span> max sequences <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(s\gets W.\text{front}\)</span>; reuse cached prefix blocks; <span class="math inline">\(n\gets\min(\text{uncomputed}(s),\beta)\)</span></div>
+<div class="algo-line" style="--d:1">if blocks are available: move <span class="math inline">\(s\)</span> to <span class="math inline">\(R\)</span>, schedule <span class="math inline">\((s,n)\)</span>, <span class="math inline">\(\beta\gets\beta-n\)</span>; else stop</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">run one forward pass over all scheduled tokens; sample for sequences that caught up</div>
+</div>
+</div>
+<p>A sequence’s “uncomputed” tokens are its prompt at the start (prefill, maybe chunked over several steps) and exactly one token afterwards (decode). That unifies prefill and decode in one budget. The <strong>token budget</strong> trades TTFT for ITL: a bigger budget finishes prompts sooner but makes each step slower for everyone decoding. <strong>Fairness</strong> comes from the order: running sequences first, waiting ones in FIFO order, and preemption of the newest arrival.</p>
+<h2 class="unnumbered" id="reading-engine-metrics">Reading engine metrics</h2>
+<p>vLLM exposes Prometheus metrics at <code>/metrics</code>: running and waiting request counts, KV cache usage, prefix cache hit rate, and histograms of TTFT, ITL and E2E. Waiting rising while KV usage sits near 100% means memory-bound admission; waiting rising with low KV usage means the token budget or max-sequences limit is too low.</p>

@@ -1,0 +1,88 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>A hypothesis test asks: if there were no real difference (the null hypothesis), how surprising would data at least this extreme be? That probability is the <em>p-value</em>. It is not the probability that the null is true. This chapter is the one you need most for reading ML papers and leaderboards.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Paired comparison on one eval set</div>
+<p><strong>Step 1.</strong> Models A and B answer the same <span class="math inline">\(n\)</span> questions: correctness <span class="math inline">\(a_i,b_i\in\{0,1\}\)</span>. Let <span class="math inline">\(d_i=a_i-b_i\)</span>.</p>
+<p><strong>Step 2.</strong> <span class="math inline">\(\operatorname{Var}(\bar a-\bar b)=\frac1n\big(\operatorname{Var}a+\operatorname{Var}b-2\operatorname{Cov}(a,b)\big)\)</span>. Questions that are easy for one model tend to be easy for the other, so <span class="math inline">\(\operatorname{Cov}&gt;0\)</span>.</p>
+<p><strong>Step 3.</strong> The unpaired standard error ignores the covariance and overstates the noise. The paired one, <span class="math inline">\(\operatorname{sd}(d)/\sqrt n\)</span>, uses it. In the output the same data gives <span class="math inline">\(p=0.052\)</span> unpaired and <span class="math inline">\(p=0.037\)</span> paired.</p>
+<p><strong>Step 4.</strong> A <strong>permutation test</strong> needs no normal approximation: under the null, A and B are interchangeable on each question, so flip the sign of each <span class="math inline">\(d_i\)</span> at random many times and see how often the mean is as extreme as observed.</p>
+</div>
+<h2 class="unnumbered" id="multiple-comparisons">Multiple comparisons</h2>
+<p>Test 20 benchmarks where nothing differs, each at the 5% level, and the chance that at least one comes out “significant” is <span class="math inline">\(1-0.95^{20}=64\%\)</span>. Bonferroni (test each at <span class="math inline">\(\alpha/m\)</span>) brings it back to 5%, at the cost of power. Report every comparison you ran, not just the ones that crossed the line.</p>
+<h2 class="unnumbered" id="concentration-hoeffdings-inequality">Concentration: Hoeffding’s inequality</h2>
+<p>For <span class="math inline">\(n\)</span> independent variables in <span class="math inline">\([0,1]\)</span>, <span class="math inline">\(P(|\bar X-\mu|\ge\epsilon)\le2e^{-2n\epsilon^2}\)</span>, with no other assumptions. Setting the right side to <span class="math inline">\(\delta\)</span>: <span class="math inline">\(n\ge\frac{\ln(2/\delta)}{2\epsilon^2}\)</span>, 4<span>,</span>612 questions for <span class="math inline">\(\pm2\)</span> points at 95%. The normal approximation needs 2<span>,</span>401 because it uses the actual variance. Hoeffding-type bounds are what PAC learning and bandit algorithms (UCB in the RL book) are built on.</p>
+<h2 class="unnumbered" id="monte-carlo-and-importance-sampling">Monte Carlo and importance sampling</h2>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Importance sampling, and why PPO clips</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\mathbb E_p[f(X)]=\int f\,p=\int f\,\frac pq\,q=\mathbb E_q\big[f(X)w(X)\big]\)</span> with <span class="math inline">\(w=p/q\)</span>. Sample from <span class="math inline">\(q\)</span>, reweight by <span class="math inline">\(w\)</span>.</p>
+<p><strong>Step 2.</strong> Good <span class="math inline">\(q\)</span> puts samples where <span class="math inline">\(f\,p\)</span> is large. For <span class="math inline">\(P(Z&gt;4)=3.2\times10^{-5}\)</span>, naive sampling sees about 3 hits in 100<span>,</span>000; sampling from <span class="math inline">\(N(4,1)\)</span> and reweighting gets the answer to 0.5%.</p>
+<p><strong>Step 3.</strong> Bad <span class="math inline">\(q\)</span>: the weights’ variance explodes when <span class="math inline">\(p\)</span> and <span class="math inline">\(q\)</span> drift apart. The <em>effective sample size</em> <span class="math inline">\((\sum w)^2/\sum w^2\)</span> for Gaussians shifted by <span class="math inline">\(\Delta\)</span> is about <span class="math inline">\(Ne^{-\Delta^2}\)</span>: 37% of the samples at <span class="math inline">\(\Delta=1\)</span>, under 2% at <span class="math inline">\(\Delta=2\)</span>. (At <span class="math inline">\(\Delta=2\)</span> and 3 the measured ESS exceeds the theory: the weights are so heavy-tailed that 10<span>,</span>000 samples rarely contain the largest ones, so the estimate itself becomes unreliable. That is the failure mode.)</p>
+<p><strong>Step 4.</strong> Off-policy RL is importance sampling with <span class="math inline">\(w=\pi_\theta/\pi_{\text{old}}\)</span>. PPO’s clip, GSPO’s sequence ratio and the truncated weights of IMPALA and asynchronous RL all exist to keep <span class="math inline">\(w\)</span> near 1 so the effective sample size doesn’t collapse.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference: comparing two models on one eval set, multiple comparisons, Hoeffding, importance sampling.&quot;&quot;&quot;
+import math
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+Phi = lambda z: 0.5 * math.erfc(-z / math.sqrt(2))
+
+# 1. Two models on the same 500 questions. Their correctness is correlated (shared easy/hard items).
+n = 500
+difficulty = rng.normal(size=n)
+a = rng.random(n) &lt; 1 / (1 + np.exp(-(difficulty + 0.75)))
+b = rng.random(n) &lt; 1 / (1 + np.exp(-(difficulty + 0.45)))
+diff = a.astype(float) - b
+se_unpaired = math.sqrt(a.var(ddof=1) / n + b.var(ddof=1) / n)
+se_paired = diff.std(ddof=1) / math.sqrt(n)
+z_u, z_p = diff.mean() / se_unpaired, diff.mean() / se_paired
+print(f&quot;[ab] accuracy A {a.mean():.3f}  B {b.mean():.3f}  gap {diff.mean():+.3f}&quot;)
+print(f&quot;[ab] unpaired SE {se_unpaired:.4f}  z {z_u:.2f}  p {2 * (1 - Phi(abs(z_u))):.4f}&quot;)
+print(f&quot;[ab] paired   SE {se_paired:.4f}  z {z_p:.2f}  p {2 * (1 - Phi(abs(z_p))):.4f}   (same data, smaller SE)&quot;)
+
+# Permutation test: under H0 the A/B labels are exchangeable within each question, so flip signs.
+flips = rng.choice([-1, 1], size=(20_000, n))
+null = (flips * diff).mean(1)
+print(f&quot;[perm] paired sign-flip permutation p-value {np.mean(np.abs(null) &gt;= abs(diff.mean())):.4f}&quot;)
+
+# 2. Multiple comparisons: 20 benchmarks, no real difference anywhere.
+trials = 5_000
+pvals = rng.random((trials, 20))                              # p-values are uniform under H0
+print(f&quot;[multi] P(at least one p &lt; 0.05 among 20 null tests) = {np.mean((pvals &lt; 0.05).any(1)):.3f} &quot;
+      f&quot;(theory {1 - 0.95**20:.3f});  with Bonferroni (p &lt; 0.0025): {np.mean((pvals &lt; 0.05 / 20).any(1)):.3f}&quot;)
+
+# 3. Hoeffding: P(|mean - mu| &gt;= eps) &lt;= 2 exp(-2 n eps^2). Questions needed for +-2 points at 95%.
+eps, delta = 0.02, 0.05
+print(f&quot;[hoeffding] n &gt;= ln(2/delta) / (2 eps^2) = {math.ceil(math.log(2 / delta) / (2 * eps**2)):,} questions &quot;
+      f&quot;(no assumptions); normal approximation at p=0.5: {math.ceil(1.96**2 * 0.25 / eps**2):,}&quot;)
+
+# 4. Importance sampling: P(Z &gt; 4) for Z ~ N(0,1) = 3.17e-5.
+exact = 1 - Phi(4)
+z = rng.normal(size=100_000)
+w_samples = rng.normal(4, 1, 100_000)                         # proposal q = N(4, 1)
+w = np.exp(-w_samples**2 / 2) / np.exp(-(w_samples - 4) ** 2 / 2)   # p/q
+is_est = np.mean((w_samples &gt; 4) * w)
+print(f&quot;[is] exact {exact:.3e}   naive MC (100k) {np.mean(z &gt; 4):.3e}   importance sampling (100k) {is_est:.3e}&quot;)
+for shift in (0.5, 1.0, 2.0, 3.0):                            # policy drift -&gt; effective sample size collapses
+    s = rng.normal(0, 1, 10_000)
+    ww = np.exp(-(s - shift) ** 2 / 2 + s**2 / 2)             # target N(shift,1), samples from N(0,1)
+    print(f&quot;[ess] target shifted by {shift}: ESS = (sum w)^2 / sum w^2 = {ww.sum()**2 / (ww**2).sum():7.0f} of 10,000&quot;
+          f&quot;   (theory {10_000 * math.exp(-shift**2):.0f})&quot;)</code></pre>
+<pre class="code output"><code class="output">[ab] accuracy A 0.634  B 0.574  gap +0.060
+[ab] unpaired SE 0.0309  z 1.94  p 0.0522
+[ab] paired   SE 0.0287  z 2.09  p 0.0369   (same data, smaller SE)
+[perm] paired sign-flip permutation p-value 0.0448
+[multi] P(at least one p &lt; 0.05 among 20 null tests) = 0.645 (theory 0.642);  with Bonferroni (p &lt; 0.0025): 0.047
+[hoeffding] n &gt;= ln(2/delta) / (2 eps^2) = 4,612 questions (no assumptions); normal approximation at p=0.5: 2,401
+[is] exact 3.167e-05   naive MC (100k) 5.000e-05   importance sampling (100k) 3.152e-05
+[ess] target shifted by 0.5: ESS = (sum w)^2 / sum w^2 =    7794 of 10,000   (theory 7788)
+[ess] target shifted by 1.0: ESS = (sum w)^2 / sum w^2 =    3723 of 10,000   (theory 3679)
+[ess] target shifted by 2.0: ESS = (sum w)^2 / sum w^2 =     369 of 10,000   (theory 183)
+[ess] target shifted by 3.0: ESS = (sum w)^2 / sum w^2 =      18 of 10,000   (theory 1)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>On a shared eval set, always compare models with a paired test.</p></li>
+<li><p>A 2-point gap on 500 questions is usually inside the noise; quote intervals, not single numbers.</p></li>
+<li><p>Importance weights are the mathematical link between statistics and off-policy RL: watch the effective sample size.</p></li>
+</ul>
+</div>

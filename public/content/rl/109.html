@@ -1,0 +1,350 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can 2,000 episodes provide much less than 2,000 independent observations?</p></li>
+<li><p>What unit should a cluster bootstrap resample?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="the-denominator-defines-the-question">2. The denominator defines the question</h3>
+<p>Suppose user <span class="math inline">\(u\)</span> contributes <span class="math inline">\(n_u\)</span> episodes, with mean policy effect <span class="math inline">\(\bar D_u\)</span>.</p>
+<p>The episode-average effect is:</p>
+<p><span class="math display">\[\hat\tau_{\text{episode}}
+=
+\frac{
+\sum_u n_u\bar D_u
+}{
+\sum_u n_u
+}\]</span></p>
+<p>It answers:</p>
+<blockquote>
+<p>For a randomly selected episode, what is the candidate’s effect?</p>
+</blockquote>
+<p>The user-average effect is:</p>
+<p><span class="math display">\[\hat\tau_{\text{user}}
+=
+\frac1U\sum_u\bar D_u\]</span></p>
+<p>It answers:</p>
+<blockquote>
+<p>For a randomly selected user, what is the candidate’s average effect?</p>
+</blockquote>
+<p>When every user contributes equally, these agree. Otherwise, the episode estimand gives prolific users more influence.</p>
+<p>The user-average can also be written using episode weights:</p>
+<p><span class="math display">\[\hat\tau_{\text{user}}
+=
+\sum_{u,t}
+\frac{1}{U n_u}D_{u,t}\]</span></p>
+<p>Neither estimand is automatically correct. Choose based on the deployment decision:</p>
+<ul>
+<li><p>infrastructure load or request quality: episode average may fit;</p></li>
+<li><p>user experience or user-level fairness: user average may fit.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>user effects and episode counts: <span style="background-color: codeinlinebg"><code> [U]</code></span></p></li>
+<li><p>padded outcomes and validity masks: <span style="background-color: codeinlinebg"><code> [U, T_max]</code></span></p></li>
+<li><p>per-episode weights: <span style="background-color: codeinlinebg"><code> [U, T_max]</code></span></p></li>
+</ul>
+<p>If a policy changes conversation length, tool calls or retry counts, those denominators are policy-induced. A per-turn improvement can coexist with worse per-user task completion.</p>
+<p>DPO typically averages over preference pairs. If a few prompt families contribute most pairs, that objective and its raw accuracy are pair-weighted—not automatically user- or deployment-weighted. It remains fixed-data preference optimization.</p>
+<h3 class="unnumbered" id="pytorch-exercise-the-conclusion-reverses">3. PyTorch exercise — the conclusion reverses</h3>
+<p>Twenty heavy users generate 100 episodes each and regress under the candidate. Eighty light users generate five episodes each and improve.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_users = 100
+num_heavy_users = 20
+maximum_episodes = 100
+
+heavy_episode_count = 100
+light_episode_count = 5
+
+heavy_user_effect = -0.20
+light_user_effect = 0.20
+
+episode_noise_sd = 0.50
+
+
+# TODO 1: Define users, counts and true effects.
+heavy_users = ...
+
+episode_counts = ...
+
+true_user_effects = ...
+
+
+# TODO 2: Construct padded episodes and their mask.
+episode_positions = ...
+
+valid_mask = ...
+
+unmasked_differences = ...
+
+padded_differences = ...
+
+safe_differences = ...
+
+
+# TODO 3: Estimate each user&#x27;s mean effect.
+observed_counts = ...
+
+user_sums = ...
+
+estimated_user_effects = ...
+
+
+# TODO 4: Calculate both estimands.
+estimated_episode_average = ...
+
+estimated_user_average = ...
+
+oracle_episode_average = ...
+
+oracle_user_average = ...
+
+
+# TODO 5: Reproduce the user average using
+# per-episode inverse-frequency weights.
+user_balanced_weights = ...
+
+weighted_user_average = ...
+
+weight_sum = ...
+
+# A common padding bug: zero-filled slots enter denominator.
+incorrect_padded_zero_average = ...
+
+heavy_user_fraction = ...
+
+heavy_episode_fraction = ...
+
+
+print(
+    &quot;Oracle effects: episode, user&quot;
+)
+print(
+    oracle_episode_average.item(),
+    oracle_user_average.item(),
+)
+
+print(
+    &quot;Estimated effects: episode, user&quot;
+)
+print(
+    estimated_episode_average.item(),
+    estimated_user_average.item(),
+)
+
+print(
+    &quot;Weighted user-average identity:&quot;,
+    weighted_user_average.item(),
+)
+print(&quot;Weight sum:&quot;, weight_sum.item())
+
+print(
+    &quot;Incorrect padded-zero average:&quot;,
+    incorrect_padded_zero_average.item(),
+)
+
+print(
+    &quot;Heavy-user fraction:&quot;,
+    heavy_user_fraction.item(),
+)
+print(
+    &quot;Heavy-episode fraction:&quot;,
+    heavy_episode_fraction.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the exact user-average effect positive or negative?</p></li>
+<li><p>Is the exact episode-average effect positive or negative?</p></li>
+<li><p>Which users dominate the raw episode mean?</p></li>
+<li><p>Does averaging a zero-padded <span style="background-color: codeinlinebg"><code> [U, T_max]</code></span> tensor estimate either target?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Heavy users are the first 20 indices.</p></li>
+<li><p>Construct the mask with:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">episode_positions &lt; episode_counts[:, None]</code></pre>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where(mask, values, 0)</code></span> before summing; <span style="background-color: codeinlinebg"><code> NaN * 0</code></span> remains <span style="background-color: codeinlinebg"><code> NaN</code></span>.</p></li>
+<li><p>Divide every user sum by that user’s valid count.</p></li>
+<li><p>A valid episode from user <span class="math inline">\(u\)</span> gets user-balanced weight:</p></li>
+</ul>
+<p><span class="math display">\[\frac{1}{U n_u}\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Average zero-padded tensors without a mask.</p></li>
+<li><p>Report a row mean as “average user experience.”</p></li>
+<li><p>Delete low-activity users because their individual estimates are noisy.</p></li>
+<li><p>Weight users by conversation length when the policy itself changes length.</p></li>
+<li><p>Count retries or tool steps as independent users.</p></li>
+<li><p>Apply reward scaling but forget to rescale thresholds and uncertainty.</p></li>
+<li><p>Join episode counts to the wrong user IDs.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can the two estimands have opposite signs?</p></li>
+<li><p>Which estimand describes a random request?</p></li>
+<li><p>Which estimand gives every user equal influence?</p></li>
+<li><p>What additional decision is needed when users have unequal business importance?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Users and effects:</p>
+<pre class="code python"><code class="language-python">heavy_users = (
+    torch.arange(num_users)
+    &lt; num_heavy_users
+)
+
+episode_counts = torch.where(
+    heavy_users,
+    torch.tensor(heavy_episode_count),
+    torch.tensor(light_episode_count),
+)
+
+true_user_effects = torch.where(
+    heavy_users,
+    torch.tensor(heavy_user_effect),
+    torch.tensor(light_user_effect),
+)</code></pre>
+<p>Padded episodes:</p>
+<pre class="code python"><code class="language-python">episode_positions = torch.arange(
+    maximum_episodes
+)[None, :]
+
+valid_mask = (
+    episode_positions
+    &lt; episode_counts[:, None]
+)
+
+unmasked_differences = (
+    true_user_effects[:, None]
+    + episode_noise_sd
+    * torch.randn(
+        num_users,
+        maximum_episodes,
+    )
+)
+
+padded_differences = torch.where(
+    valid_mask,
+    unmasked_differences,
+    torch.tensor(float(&quot;nan&quot;)),
+)
+
+safe_differences = torch.where(
+    valid_mask,
+    padded_differences,
+    torch.zeros_like(
+        padded_differences
+    ),
+)</code></pre>
+<p>User summaries:</p>
+<pre class="code python"><code class="language-python">observed_counts = (
+    valid_mask.sum(dim=1)
+    .to(torch.float64)
+)
+
+user_sums = safe_differences.sum(
+    dim=1
+)
+
+estimated_user_effects = (
+    user_sums / observed_counts
+)</code></pre>
+<p>Two estimands:</p>
+<pre class="code python"><code class="language-python">estimated_episode_average = (
+    safe_differences.sum()
+    / observed_counts.sum()
+)
+
+estimated_user_average = (
+    estimated_user_effects.mean()
+)
+
+oracle_episode_average = (
+    true_user_effects
+    * episode_counts
+).sum() / episode_counts.sum()
+
+oracle_user_average = (
+    true_user_effects.mean()
+)</code></pre>
+<p>User-balanced episode weights:</p>
+<pre class="code python"><code class="language-python">user_balanced_weights = torch.where(
+    valid_mask,
+    (
+        1.0
+        / observed_counts[:, None]
+        / num_users
+    ),
+    torch.zeros_like(
+        safe_differences
+    ),
+)
+
+weighted_user_average = (
+    safe_differences
+    * user_balanced_weights
+).sum()
+
+weight_sum = (
+    user_balanced_weights.sum()
+)
+
+incorrect_padded_zero_average = (
+    safe_differences.mean()
+)
+
+heavy_user_fraction = (
+    heavy_users
+    .to(torch.float64)
+    .mean()
+)
+
+heavy_episode_fraction = (
+    episode_counts[heavy_users].sum()
+    / episode_counts.sum()
+)</code></pre>
+<p>The user-average effect is:</p>
+<p><span class="math display">\[\tau_{\text{user}}
+=
+0.2(-0.20)+0.8(0.20)
+=
+0.12\]</span></p>
+<p>Most users improve.</p>
+<p>But heavy users generate:</p>
+<p><span class="math display">\[20(100)=2000\]</span></p>
+<p>of the total:</p>
+<p><span class="math display">\[2000+80(5)=2400\]</span></p>
+<p>episodes. Therefore:</p>
+<p><span class="math display">\[\tau_{\text{episode}}
+=
+\frac{
+2000(-0.20)+400(0.20)
+}{
+2400
+}
+\approx-0.133\]</span></p>
+<p>The candidate helps the average user but hurts the average episode because the regressing heavy users generate approximately:</p>
+<p><span class="math display">\[\frac{2000}{2400}
+\approx83.3\%\]</span></p>
+<p>of all traffic.</p>
+<p>The zero-padded mean divides by <span class="math inline">\(100\times100\)</span> slots rather than 2,400 valid episodes or 100 users. It estimates neither intended quantity.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Usage frequency correlates with policy effect, so episode weighting changes the population mixture.</p></li>
+<li><p>The episode-average effect, provided the sampled episode distribution matches deployment traffic.</p></li>
+<li><p>The user-average effect, or equivalently episode weights <span class="math inline">\(1/(Un_u)\)</span>.</p></li>
+<li><p>Define explicit target user weights—such as deployment share, contractual importance or fairness weights—before inspecting outcomes.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Episodes from one user share persistent user-level effects; repeated episodes do not average away that shared component.</p></li>
+<li><p>Resample complete independent clusters, such as users or source tasks.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> before computing a mean, name the random unit it represents. “Average reward” is incomplete unless you specify whether users, conversations, episodes, turns or tokens receive equal weight.</p>

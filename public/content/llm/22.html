@@ -1,0 +1,133 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Neuron:</strong> <span class="math inline">\(z_i=w^\top x_i+b\)</span>, a real number (the <em>logit</em>). <strong>Probability:</strong> <span class="math inline">\(p_i=\sigma(z_i)=1/(1+e^{-z_i})\in(0,1)\)</span> is the model’s belief that <span class="math inline">\(y_i=1\)</span>. <strong>Loss:</strong> the Bernoulli negative log-likelihood (Part 0), averaged over the batch: <span class="math inline">\(L=\frac1B\sum_i\big[\softplus(z_i)-y_iz_i\big]\)</span>. It’s 0 when the model puts all its probability on the right label, and grows without bound when it’s confidently wrong.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="concept-refresh-4-minutes">1. Concept refresh — 4 minutes</h2>
+<p>For a batch of <span class="math inline">\(B\)</span> examples with <span class="math inline">\(D\)</span> features:</p>
+<p><span class="math display">\[X\in\mathbb{R}^{B\times D},\quad w\in\mathbb{R}^{D},\quad b\in\mathbb{R}\]</span></p>
+<p>A binary-classification neuron computes:</p>
+<p><span class="math display">\[z=Xw+b,\qquad z\in\mathbb{R}^{B}\]</span></p>
+<p>Using binary cross-entropy with logits:</p>
+<p><span class="math display">\[L=\frac{1}{B}\sum_{i=1}^{B}
+\left[\operatorname{softplus}(z_i)-y_i z_i\right]\]</span></p>
+<p>The backward pass is:</p>
+<p><span class="math display">\[\delta=\frac{\partial L}{\partial z}
+=\frac{\sigma(z)-y}{B}\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial w}=X^\top\delta
+\qquad
+\frac{\partial L}{\partial b}=\sum_i\delta_i\]</span></p>
+<p>Think of backpropagation as:</p>
+<ol>
+<li><p>Compute the local error at the logits: <span class="math inline">\(\delta\)</span>.</p></li>
+<li><p>Send that error backward through each operation.</p></li>
+<li><p>Sum contributions whenever one value influences multiple downstream paths.</p></li>
+</ol>
+<p>Research-engineering connection: <code>binary_cross_entropy_with_logits</code> combines sigmoid and BCE using a numerically stable formulation. Explicitly calculating <code>log(sigmoid(z))</code> can overflow or produce <code>-inf</code> for large logits.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: every gradient of one neuron</div>
+<p><strong>Step 1.</strong> Per-example loss <span class="math inline">\(\ell_i=\softplus(z_i)-y_iz_i\)</span>. Since <span class="math inline">\(\softplus&#39;(z)=\frac{e^z}{1+e^z}=\sigma(z)\)</span>: <span class="math inline">\(\ \frac{\partial\ell_i}{\partial z_i}=\sigma(z_i)-y_i\)</span>.</p>
+<p><strong>Step 2.</strong> Mean reduction: <span class="math inline">\(L=\frac1B\sum_i\ell_i\)</span>, and <span class="math inline">\(z_i\)</span> only appears in <span class="math inline">\(\ell_i\)</span>, so <span class="math inline">\(\delta_i=\frac{\partial L}{\partial z_i}=\frac{\sigma(z_i)-y_i}{B}\)</span>.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(z_i=\sum_dX_{id}w_d+b\)</span>, so <span class="math inline">\(\frac{\partial z_i}{\partial w_d}=X_{id}\)</span> and <span class="math inline">\(\frac{\partial z_i}{\partial b}=1\)</span>.</p>
+<p><strong>Step 4.</strong> Chain rule, summing over every example each parameter touches: <span class="math inline">\(\frac{\partial L}{\partial w_d}=\sum_i\delta_iX_{id}=(X^\top\delta)_d\)</span>, and <span class="math inline">\(\frac{\partial L}{\partial b}=\sum_i\delta_i\)</span>.</p>
+<p><strong>Step 5.</strong> <strong>Shape check:</strong> <span class="math inline">\(X^\top\in\mathbb R^{D\times B}\)</span>, <span class="math inline">\(\delta\in\mathbb R^B\)</span>, so <span class="math inline">\(X^\top\delta\in\mathbb R^D\)</span>, matching <span class="math inline">\(w\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Sanity check:</strong> if every prediction is perfect (<span class="math inline">\(\sigma(z_i)=y_i\)</span>), then <span class="math inline">\(\delta=0\)</span> and nothing changes. The gradient is “error times input,” summed.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: logistic neuron, one gradient step</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(X\in\mathbb R^{B\times D}\)</span>, <span class="math inline">\(y\in\{0,1\}^B\)</span>, <span class="math inline">\(w,b\)</span>, learning rate <span class="math inline">\(\eta\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(z\gets Xw+b\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets\frac1B\sum_i\softplus(z_i)-y_iz_i\)</span> <em>▷ stable form, never <span class="math inline">\(\log\sigma\)</span></em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\delta\gets(\sigma(z)-y)/B\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\nabla_w\gets X^\top\delta\)</span>; <span class="math inline">\(\nabla_b\gets\sum_i\delta_i\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(w\gets w-\eta\nabla_w\)</span>; <span class="math inline">\(b\gets b-\eta\nabla_b\)</span>; clear gradients</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Complete the four TODOs, then verify your manual gradients against autograd.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+
+X = torch.tensor([
+    [ 1.0,  2.0, -1.0],
+    [ 0.0, -1.0,  2.0],
+    [ 2.0,  1.0,  0.5],
+    [-1.0,  0.5,  1.0],
+])                                      # [B=4, D=3]
+
+y = torch.tensor([1.0, 0.0, 1.0, 0.0])  # [B]
+
+w = torch.randn(3, requires_grad=True)   # [D]
+b = torch.zeros((), requires_grad=True)  # scalar
+
+# Forward
+z = ...                                  # TODO 1: [B]
+loss = F.binary_cross_entropy_with_logits(z, y)
+
+# Manual backward
+delta = ...                              # TODO 2: dL/dz, [B]
+manual_dw = ...                          # TODO 3: [D]
+manual_db = ...                          # TODO 4: scalar
+
+# Autograd backward
+loss.backward()
+
+print(&quot;loss:&quot;, loss.item())
+print(&quot;manual dw:&quot;, manual_dw)
+print(&quot;autograd dw:&quot;, w.grad)
+print(&quot;manual db:&quot;, manual_db)
+print(&quot;autograd db:&quot;, b.grad)
+
+assert torch.allclose(manual_dw, w.grad, atol=1e-6)
+assert torch.allclose(manual_db, b.grad, atol=1e-6)</code></pre>
+<p>Then run this intentionally suspicious code:</p>
+<pre class="code python"><code class="language-python">loss.backward()</code></pre>
+<p>Predict what happens before running it. Next, recompute the forward pass and call <code>backward()</code> again. Inspect <code>w.grad</code>.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Matrix-vector multiplication: <code>X @ w</code></p></li>
+<li><p>The loss uses mean reduction.</p></li>
+<li><p>Parameter gradients accumulate unless explicitly cleared.</p></li>
+<li><p>PyTorch normally frees the computation graph after <code>backward()</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does the factor <span class="math inline">\(1/B\)</span> appear in <code>delta</code>?</p></li>
+<li><p>If every training example is duplicated and the loss still uses mean reduction, what happens to the gradient?</p></li>
+<li><p>Suppose <code>z</code> contains <span><code>[</code></span><code>1000, -1000</code><span><code>]</code></span>. Why is <code>sigmoid(z)</code> followed by manual logarithms risky?</p></li>
+<li><p>Debugging: the loss decreases, but <code>w.grad</code> is always <code>None</code>. Name two likely causes.</p></li>
+<li><p>If <span class="math inline">\(w\)</span> changes from shape <span><code>[</code></span><code>D</code><span><code>]</code></span> to <span><code>[</code></span><code>D, 1</code><span><code>]</code></span>, what are the resulting shapes of <code>z</code> and <code>delta</code>?</p></li>
+</ol>
+<p>Spend the final minute explaining aloud:</p>
+<blockquote>
+<p>Why is <span class="math inline">\(X^\top\delta\)</span> the weight gradient?</p>
+</blockquote>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">z = X @ w + b
+
+delta = (torch.sigmoid(z) - y) / X.shape[0]
+manual_dw = X.T @ delta
+manual_db = delta.sum()</code></pre>
+<p>The first repeated <code>loss.backward()</code> raises an error because the saved graph was freed. After recomputing the forward pass, another backward call succeeds—but adds the new gradient to the existing <code>w.grad</code>.</p>
+<p>Clear gradients before the next step:</p>
+<pre class="code python"><code class="language-python">w.grad = None
+b.grad = None</code></pre>
+<p>Check answers:</p>
+<ol>
+<li><p>BCE uses mean reduction, so each example contributes <span class="math inline">\(1/B\)</span> of the batch gradient.</p></li>
+<li><p>The gradient remains unchanged because both the summed gradient and batch size double.</p></li>
+<li><p>Sigmoid can round to exactly 0 or 1, making subsequent logarithms produce infinities.</p></li>
+<li><p>Common causes include <code>requires_grad=False</code>, executing under <code>torch.no_grad()</code>, detaching the tensor, or checking a non-leaf tensor whose gradient was not retained.</p></li>
+<li><p><code>z</code> and <code>delta</code> become <span><code>[</code></span><code>B, 1</code><span><code>]</code></span>.</p></li>
+<li><p>Each weight affects every logit through its corresponding input feature. Multiplying <span class="math inline">\(X^\top\)</span> by each example’s logit error sums those per-example contributions for every feature.</p></li>
+</ol>

@@ -1,0 +1,110 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a restaurant regular who stops trying new dishes</div>
+<p>After a few great meals you order the same dish every time. That’s efficient, until the menu changes or a better dish exists that you’ll never discover. A reasoning model under RL does the same: it quickly concentrates probability on the patterns that paid off early, entropy collapses, and accuracy plateaus because nothing new gets tried.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/e9f67e6d9469.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Stylized <span class="math inline">\(R=-a\,e^{H}+b\)</span> (Cui et al., 2025). Performance is bought with entropy, so once entropy is gone, so is further progress.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>What does the entropy bonus in PPO’s loss do? (Topic 20)</p></li>
+<li><p>Why does clip-higher help rare tokens? (Topic 170)</p></li>
+</ol>
+<h3 class="unnumbered" id="the-mechanism-cui-et-al.-2025-the-entropy-mechanism-of-rl-for-reasoning-lms">2. The mechanism (Cui et al., 2025, “The Entropy Mechanism of RL for Reasoning LMs”)</h3>
+<p><strong>Empirical law:</strong> without intervention, entropy drops sharply early and performance follows <span class="math inline">\(R\approx-a\,e^{H}+b\)</span>, so <span class="math inline">\(H\to0\)</span> implies a predictable ceiling <span class="math inline">\(b-a\)</span>.</p>
+<p><strong>What drives it:</strong> for a softmax policy, the change in entropy after one policy-gradient step is approximately <span class="math display">\[H_{k+1}-H_k\approx-\eta\,\operatorname{Cov}_{a\sim\pi}\big(\log\pi(a|s),\ A(s,a)\big)\]</span> (the natural-gradient form; vanilla PG has a similar covariance with <span class="math inline">\(\pi(a)A\)</span>). If the actions the policy already likes also get positive advantages, which is the usual case, the covariance is positive and entropy falls.</p>
+<p><strong>Fixes from the paper:</strong> find the tokens with the highest covariance <span class="math inline">\((\log\pi-\overline{\log\pi})(A-\bar A)\)</span>, which are a small fraction, and either</p>
+<ul>
+<li><p><strong>Clip-Cov:</strong> detach them from the gradient, or</p></li>
+<li><p><strong>KL-Cov:</strong> add a KL penalty only on them.</p></li>
+</ul>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Entropy falls because confident tokens keep getting positive advantages.</p></li>
+<li><p>Restrict updates on the highest-covariance tokens to keep exploring.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: which tokens are high-covariance?</div>
+<p>Four tokens with <span class="math inline">\((\log\pi,A)\)</span>: <span class="math inline">\((-0.1,+1)\)</span>, <span class="math inline">\((-3.0,+1)\)</span>, <span class="math inline">\((-0.2,-1)\)</span>, <span class="math inline">\((-2.5,-1)\)</span>. Means: <span class="math inline">\(\overline{\log\pi}=-1.45\)</span>, <span class="math inline">\(\bar A=0\)</span>. Covariance terms: <span class="math inline">\((1.35)(1)=1.35\)</span>, <span class="math inline">\((-1.55)(1)=-1.55\)</span>, <span class="math inline">\((1.25)(-1)=-1.25\)</span>, <span class="math inline">\((-1.05)(-1)=1.05\)</span>. The top term is the confident token being rewarded, exactly the update that sharpens the policy. The rare token being rewarded has <em>negative</em> covariance: it increases entropy, so keep it.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>A global entropy bonus large enough to make outputs random.</p></li>
+<li><p>Detaching a large fraction (you lose most of the signal).</p></li>
+<li><p>Reading low entropy as “converged” when accuracy has plateaued.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-clip-cov-on-a-10-arm-bandit">3. PyTorch exercise — Clip-Cov on a 10-arm bandit</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(0)
+k = 10
+true_reward = torch.linspace(0.0, 1.0, k)
+logits = torch.zeros(k, requires_grad=True)
+opt = torch.optim.SGD([logits], lr=0.5)
+for _ in range(150):
+    probs = logits.softmax(-1)
+    a = torch.multinomial(probs.detach(), 64, replacement=True)
+    r = (torch.rand(64) &lt; true_reward[a]).float()
+    adv = (r - r.mean()) / (r.std() + 1e-6)
+    logp = logits.log_softmax(-1)[a]
+    # TODO 1: per-sample covariance term (detached)
+    cov = ...
+    # TODO 2: zero the update for the top 20% covariance samples
+    keep = ...
+    loss = -(keep * adv * logp).sum() / keep.sum()
+    opt.zero_grad()
+    loss.backward()
+    opt.step()</code></pre>
+<p>Compare final entropy and expected reward with and without Clip-Cov, averaged over 5 seeds.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does a positive covariance between <span class="math inline">\(\log\pi\)</span> and <span class="math inline">\(A\)</span> lower entropy?</p></li>
+<li><p>In the bandit, Clip-Cov gets <em>lower</em> reward. Why is that expected here, and why can it still help on reasoning tasks?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+
+
+def run(clip_cov, steps=150, seed=0):
+    torch.manual_seed(seed)
+    k = 10
+    true_reward = torch.linspace(0.0, 1.0, k)          # arm 9 is best
+    logits = torch.zeros(k, requires_grad=True)
+    opt = torch.optim.SGD([logits], lr=0.5)
+    for _ in range(steps):
+        probs = logits.softmax(-1)
+        a = torch.multinomial(probs.detach(), 64, replacement=True)
+        r = (torch.rand(64) &lt; true_reward[a]).float()   # Bernoulli reward
+        adv = (r - r.mean()) / (r.std() + 1e-6)
+        logp = logits.log_softmax(-1)[a]
+        keep = torch.ones(64)
+        if clip_cov:
+            cov = (logp.detach() - logp.detach().mean()) * (adv - adv.mean())
+            top = cov.topk(int(0.2 * 64)).indices       # highest-covariance 20%
+            keep[top] = 0.0                             # detach them from the update
+        loss = -(keep * adv * logp).sum() / keep.sum()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    p = logits.softmax(-1).detach()
+    entropy = -(p * p.log()).sum().item()
+    return entropy, (p * true_reward).sum().item()
+
+
+for clip_cov in (False, True):
+    ent, rew = zip(*(run(clip_cov, seed=s) for s in range(5)))
+    print(f&quot;clip_cov={clip_cov!s:5}: entropy {sum(ent)/5:.3f}  expected reward {sum(rew)/5:.3f}&quot;)</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">clip_cov=False: entropy 0.053  expected reward 0.998
+clip_cov=True : entropy 0.792  expected reward 0.935</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>Probability flows toward actions that are already likely, which sharpens the distribution.</p></li>
+<li><p>A bandit has nothing left to discover once the best arm is found, so exploration is pure cost. In reasoning, a collapsed policy stops finding new solution paths, and keeping entropy is what lets accuracy keep rising.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) Rewards spread-out policies, slowing collapse. (2) Rare tokens hit a symmetric clip almost immediately.</p>
+<p><strong>Takeaway:</strong> track entropy alongside reward. When it collapses, progress stalls, and the culprits are a small set of confident, rewarded tokens.</p>
+<p><em>Next: the critic-free family: RLOO, ReMax and REINFORCE++.</em></p>

@@ -1,0 +1,243 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>What system design is, how to measure a system (latency, throughput, availability), how systems scale, the CAP and PACELC theorems, consistency models, and back-of-the-envelope estimation.</p>
+</div>
+<h1 id="what-is-system-design">What Is System Design?</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Imagine opening a small restaurant. On day one, one cook takes orders, cooks, and serves. When 500 people show up, you need more cooks (scaling), a waiter to hand out orders (load balancer), pre-made sauces (cache), a ticket rail for orders (queue), and a backup generator (redundancy). <strong>System design is planning the restaurant before the crowd arrives.</strong></p>
+</div>
+<p>Every design starts from two kinds of requirements:</p>
+<ul>
+<li><p><strong>Functional requirements</strong>: what the system does (“users can post a photo”).</p></li>
+<li><p><strong>Non-functional requirements</strong>: how well it does it: latency, availability, durability, consistency, cost, security, compliance.</p></li>
+</ul>
+<p>Non-functional requirements drive almost every architectural decision.</p>
+<h1 id="measuring-a-system">Measuring a System</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Latency</strong>: time for one request. Always report percentiles (p50, p95, p99, p99.9), never just averages.</p></li>
+<li><p><strong>Throughput</strong>: work per unit time (QPS, tokens/s, MB/s).</p></li>
+<li><p><strong>Availability</strong>: fraction of time the system serves correctly.</p></li>
+<li><p><strong>Durability</strong>: probability data is never lost (S3: 11 nines).</p></li>
+<li><p><strong>SLI / SLO / SLA</strong>: the <em>indicator</em> you measure (p99 latency), the internal <em>objective</em> (p99 <span class="math inline">\(&lt;\)</span> 200 ms for 99.9% of minutes), and the external <em>agreement</em> with penalties.</p></li>
+</ul>
+</div>
+<p><em>The “nines” of availability</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Availability</th>
+<th style="text-align: left;">Downtime / year</th>
+<th style="text-align: left;">Downtime / month</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">99% (two nines)</td>
+<td style="text-align: left;">3.65 days</td>
+<td style="text-align: left;">7.3 hours</td>
+</tr>
+<tr>
+<td style="text-align: left;">99.9% (three nines)</td>
+<td style="text-align: left;">8.77 hours</td>
+<td style="text-align: left;">43.8 min</td>
+</tr>
+<tr>
+<td style="text-align: left;">99.99% (four nines)</td>
+<td style="text-align: left;">52.6 min</td>
+<td style="text-align: left;">4.4 min</td>
+</tr>
+<tr>
+<td style="text-align: left;">99.999% (five nines)</td>
+<td style="text-align: left;">5.26 min</td>
+<td style="text-align: left;">26 s</td>
+</tr>
+</tbody>
+</table>
+<p><em>Latency numbers every engineer should know (approximate)</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Operation</th>
+<th style="text-align: right;">Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">L1 cache reference</td>
+<td style="text-align: right;">1 ns</td>
+</tr>
+<tr>
+<td style="text-align: left;">Main memory reference</td>
+<td style="text-align: right;">100 ns</td>
+</tr>
+<tr>
+<td style="text-align: left;">Compress 1 KB (Zstd/Snappy)</td>
+<td style="text-align: right;">2 <span class="math inline">\(\mu\)</span>s</td>
+</tr>
+<tr>
+<td style="text-align: left;">Read 1 MB sequentially from memory</td>
+<td style="text-align: right;">3 <span class="math inline">\(\mu\)</span>s</td>
+</tr>
+<tr>
+<td style="text-align: left;">NVMe SSD random read</td>
+<td style="text-align: right;">20–100 <span class="math inline">\(\mu\)</span>s</td>
+</tr>
+<tr>
+<td style="text-align: left;">Round trip within a datacenter</td>
+<td style="text-align: right;">0.5 ms</td>
+</tr>
+<tr>
+<td style="text-align: left;">Read 1 MB sequentially from SSD</td>
+<td style="text-align: right;">0.2–1 ms</td>
+</tr>
+<tr>
+<td style="text-align: left;">Redis GET over network</td>
+<td style="text-align: right;">0.2–1 ms</td>
+</tr>
+<tr>
+<td style="text-align: left;">Round trip US East <span class="math inline">\(\leftrightarrow\)</span> US West</td>
+<td style="text-align: right;">60–70 ms</td>
+</tr>
+<tr>
+<td style="text-align: left;">Round trip US <span class="math inline">\(\leftrightarrow\)</span> Europe</td>
+<td style="text-align: right;">80–150 ms</td>
+</tr>
+<tr>
+<td style="text-align: left;">LLM time-to-first-token (hosted API)</td>
+<td style="text-align: right;">200 ms – 2 s</td>
+</tr>
+</tbody>
+</table>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Availability composes.</strong> Components in series multiply: two 99.9% services in a chain give <span class="math inline">\(0.999^2 \approx 99.8\%\)</span>. Redundant components in parallel give <span class="math inline">\(1-(1-a)^n\)</span>: two 99% replicas give 99.99%. This is why every critical dependency needs redundancy, and why deep call chains quietly erode your SLO.</p>
+<p><strong>Tail latency amplifies with fan-out.</strong> If one backend has a 1% chance of being slow and a request fans out to 100 backends, the chance at least one is slow is <span class="math inline">\(1-0.99^{100}\approx 63\%\)</span>. Mitigations: hedged requests (send a duplicate after the p95 deadline), tied requests, and reducing fan-out.</p>
+<p><strong>Little’s Law:</strong> <span class="math inline">\(L = \lambda W\)</span>. Concurrency equals arrival rate times latency. 2<span>,</span>000 QPS at 250 ms needs <span class="math inline">\(\approx 500\)</span> requests in flight, which sizes thread pools, connection pools, and GPU batch slots.</p>
+</div>
+<h1 id="scaling-vertical-vs-horizontal">Scaling: Vertical vs Horizontal</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p><strong>Vertical scaling</strong> is buying a bigger oven. <strong>Horizontal scaling</strong> is buying more ovens. Bigger ovens are simple but have a size limit and are a single point of failure. More ovens scale further but need coordination.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/d88f0242e241.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Classic horizontally scaled web tier. State lives in the cache and database, so app servers are interchangeable.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>The key to horizontal scaling is <strong>statelessness</strong>: any server can handle any request because session state lives in a shared store (Redis, DB, or a signed token). Then the scaling playbook is:</p>
+<ol>
+<li><p>Separate app and database; add a load balancer and multiple app servers.</p></li>
+<li><p>Add caching (CDN for static, Redis for hot data).</p></li>
+<li><p>Add read replicas for read-heavy workloads.</p></li>
+<li><p>Move slow work to async queues.</p></li>
+<li><p>Shard (partition) the database when writes outgrow one node.</p></li>
+<li><p>Split into services along team and domain boundaries when needed.</p></li>
+<li><p>Go multi-region for latency and disaster recovery.</p></li>
+</ol>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Startup growth from 1K to 10M users</div>
+<p><strong>1K users:</strong> one VM running app plus Postgres. <strong>100K:</strong> managed Postgres, two app instances behind a load balancer, CDN for images. <strong>1M:</strong> Redis cache, read replicas, background workers on a queue. <strong>10M:</strong> sharded data or a distributed SQL database, separate services for search and notifications, multi-region read paths. Each step is taken only when measurements show the current bottleneck.</p>
+</div>
+<h1 id="cap-pacelc-and-consistency">CAP, PACELC, and Consistency</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Two bank branches share one ledger over a phone line. The line goes dead. A customer wants to withdraw money. Either branch can (a) refuse until the line is back (<strong>consistent</strong>, not available), or (b) allow it and reconcile later (<strong>available</strong>, maybe inconsistent). You cannot have both while the line is cut. That is CAP.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/87305cf563c6.svg" alt="diagram" loading="lazy"></figure>
+<p><em>CAP theorem. In a distributed system partitions will happen, so the real choice is C or A during a partition.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>PACELC</strong> extends CAP: <em>if Partition, choose Availability or Consistency; Else, choose Latency or Consistency.</em> Even with no failures, strong consistency costs latency because replicas must coordinate.</p>
+<p>Consistency models from strongest to weakest:</p>
+<ul>
+<li><p><strong>Linearizable</strong>: every read sees the latest write, as if one copy.</p></li>
+<li><p><strong>Sequential</strong>: all nodes see operations in the same order.</p></li>
+<li><p><strong>Causal</strong>: cause-effect order preserved (reply after comment).</p></li>
+<li><p><strong>Read-your-writes</strong>: you always see your own updates.</p></li>
+<li><p><strong>Eventual</strong>: replicas converge if writes stop.</p></li>
+</ul>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Quorum systems tune the trade-off per request. With <span class="math inline">\(N\)</span> replicas, write quorum <span class="math inline">\(W\)</span> and read quorum <span class="math inline">\(R\)</span>, choosing <span class="math inline">\(R+W&gt;N\)</span> guarantees read and write sets overlap. <span class="math inline">\(N{=}3,W{=}2,R{=}2\)</span> is the classic balance. <span class="math inline">\(W{=}1,R{=}1\)</span> is fast and eventually consistent. Note that quorum overlap alone is not linearizability: sloppy quorums, hinted handoff, and concurrent writes with last-write-wins can still produce anomalies. Real systems add vector clocks, CRDTs, or consensus (Raft/Paxos) where correctness matters. Spanner achieves external consistency using TrueTime (GPS plus atomic clocks) with bounded clock uncertainty and commit-wait.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Choosing CP vs AP</div>
+<p><strong>Bank balance / inventory count (CP):</strong> better to reject a purchase than sell the same seat twice. Use a strongly consistent DB or consensus. <strong>Social media like count (AP):</strong> showing 1<span>,</span>203 instead of 1<span>,</span>204 for a second is fine; availability matters more. <strong>Shopping cart (AP with merge):</strong> Amazon’s Dynamo paper let carts accept writes during partitions and merge them later, accepting a resurrected item over a lost sale.</p>
+</div>
+<h1 id="back-of-the-envelope-estimation">Back-of-the-Envelope Estimation</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Useful constants: 1 day <span class="math inline">\(\approx 10^5\)</span> seconds (86<span>,</span>400). 1M requests/day <span class="math inline">\(\approx\)</span> 12 QPS. Peak is typically 2–5<span class="math inline">\(\times\)</span> average.</p>
+<p><strong>Example: a photo app with 100M daily active users.</strong></p>
+<ul>
+<li><p>Each user views 50 photos and uploads 0.1 per day.</p></li>
+<li><p>Read QPS <span class="math inline">\(= 100\text{M}\times 50 / 10^5 = 50{,}000\)</span> avg, <span class="math inline">\(\sim\)</span>150K peak.</p></li>
+<li><p>Write QPS <span class="math inline">\(= 100\text{M}\times 0.1 / 10^5 = 100\)</span> avg.</p></li>
+<li><p>Storage <span class="math inline">\(= 10\text{M photos/day} \times 2\text{ MB} = 20\)</span> TB/day, <span class="math inline">\(\approx 7.3\)</span> PB/year before replication.</p></li>
+<li><p>Read:write ratio of 500:1 means caching and a CDN dominate the design.</p></li>
+</ul>
+</div>
+<h1 id="how-a-server-handles-many-requests">How a Server Handles Many Requests</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A restaurant can hire one waiter per table (simple, but expensive when there are thousands of tables), or a few waiters who never stand still: they take an order, move on while the kitchen cooks, and come back when the food is ready. Servers make the same choice.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Process or thread per request</strong> (classic Apache, many Java servlet containers): simple blocking code; each thread costs memory (often 0.5–1 MB of stack) and context switches, so thousands of slow connections exhaust the server.</p></li>
+<li><p><strong>Thread pool + queue</strong>: a fixed number of workers take requests from a bounded queue. Little’s Law sizes the pool: concurrency = throughput <span class="math inline">\(\times\)</span> latency. When the queue is full, reject quickly (Chapter (resilience)).</p></li>
+<li><p><strong>Event loop + non-blocking I/O</strong> (Nginx, Node.js, Netty, Python asyncio): one thread per core waits on many sockets with <code>epoll</code>/<code>kqueue</code> and runs a callback when one is ready. Handles tens of thousands of mostly idle connections (the “C10K problem”). One slow CPU-bound handler blocks everyone, so CPU work goes to a separate pool.</p></li>
+<li><p><strong>Lightweight threads / coroutines</strong> (Go goroutines, Java virtual threads, Erlang processes): blocking-style code scheduled by the runtime onto a few OS threads, combining simple code with event-loop efficiency.</p></li>
+</ul>
+<p>Where the time goes in a typical request: accepting the connection (keep-alive avoids repeating TCP and TLS handshakes), parsing, waiting on the database and other services (usually the largest part), serialization. Most servers are I/O-bound, which is why connection pools to databases and downstream services matter so much: opening a new database connection per request can cost more than the query.</p>
+</div>
+<h1 id="architecture-hygiene">Architecture Hygiene</h1>
+<h2 id="the-repository-pattern">The Repository Pattern</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Put all data access for an entity behind one interface (<code>OrderRepository.get(id)</code>, <code>.save(order)</code>, <code>.find_by_customer(c, cursor)</code>). Business logic never writes SQL or cache calls directly. Benefits: one place to add caching, sharding, read-replica routing, or a migration to a new store; tests use an in-memory fake; queries are visible and reviewable. Discord’s data services and Figma’s DBProxy (Part (cases)) are this idea at infrastructure scale. Avoid making the interface a leaky copy of the ORM; expose the queries the domain needs.</p>
+</div>
+<h2 id="extensible-data-modeling">Extensible Data Modeling</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Requirements change, so design schemas that can grow without painful migrations:</p>
+<ul>
+<li><p>Stable, opaque IDs (never meaningful values like emails) as primary keys.</p></li>
+<li><p>Enumerations stored as strings or lookup tables, not hard-coded integers whose meaning lives in code.</p></li>
+<li><p>A JSON column (<code>jsonb</code>) for genuinely variable attributes (product attributes per category), with indexes on the few fields you query.</p></li>
+<li><p><code>created_at</code>, <code>updated_at</code>, and a <code>version</code> column on every table: they cost little and enable incremental sync, auditing, and optimistic locking.</p></li>
+<li><p>Model relationships explicitly (join tables) even when they are one-to-one today.</p></li>
+<li><p>Plan for multi-tenancy and soft delete early (Chapter (data)).</p></li>
+</ul>
+<p>Avoid the opposite failure: a fully generic “entity–attribute–value” schema for everything, which makes every query slow and every constraint impossible to enforce.</p>
+</div>
+<h2 id="cost-aware-architecture">Cost-Aware Architecture</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Cost is a non-functional requirement. Estimate it in the design, just like QPS:</p>
+<ul>
+<li><p><strong>Know the big lines</strong>: compute (instances, GPUs), storage (per GB-month and per request), and <strong>data transfer</strong> (egress to the internet and cross-zone or cross-region traffic, often a surprise; DoorDash and Kafka “diskless” designs were driven partly by cross-zone transfer costs).</p></li>
+<li><p><strong>Match the pricing model to the load</strong>: reserved or committed capacity for steady load, autoscaling and spot instances for variable or interruptible work, serverless for spiky low-volume work (and its per-request costs at high volume; see the Prime Video case in Part (cases)).</p></li>
+<li><p><strong>Storage tiers</strong>: hot data on SSD or in memory, warm data in object storage, cold data in archive classes; lifecycle rules move it automatically.</p></li>
+<li><p><strong>Cost per unit</strong> (per request, per user, per 1M tokens) is the number to track; it shows whether growth makes the business better or worse.</p></li>
+</ul>
+</div>
+<h2 id="when-not-to-add-infrastructure">When Not to Add Infrastructure</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Every new component (a cache, a queue, a second database, a service) adds latency paths, failure modes, monitoring, upgrades, and on-call load. Add one only when a measured limit requires it. Questions to ask first: Is the current component actually the bottleneck (profile it)? Can an index, a query fix, a bigger instance, or a read replica solve it? Will the team operate it well at 3 a.m.? Stack Overflow and WhatsApp (Part (cases)) served enormous traffic with very few components. In an interview, it is a strong signal to say “we don’t need X yet; we would add it when Y.”</p>
+</div>
+<h1 id="a-framework-for-any-design">A Framework for Any Design</h1>
+<figure class="tikz"><img src="figs/sd/b20e08411886.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A six-step framework used throughout this book.</em></p>
+<h1 id="what-interviewers-probe-now">What Interviewers Probe Now</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Patterns from public 2025–2026 interview guides and candidate reports (summarized without names):</p>
+<ul>
+<li><p><strong>Internals, not just boxes</strong>: interviewers follow up on why you chose a component, for example how consistent hashing rebalances or why a B-tree index rather than an LSM tree (Chapters (lb), (data), (storage)).</p></li>
+<li><p><strong>A timed shape</strong>: about 5 minutes on requirements, 5 on estimates, 5 on the API, then 15 or more on two or three deep dives, with estimates used to justify choices.</p></li>
+<li><p><strong>Two families of prompts</strong>: product designs (social networks, ride sharing, e-commerce, ticketing) and infrastructure designs (caches, key-value stores, crawlers, rate limiters, schedulers).</p></li>
+<li><p><strong>Newer prompts</strong>: “design ChatGPT” (GPU scheduling, KV cache, streaming tokens, where conversation state lives: Chapters (genai) and (inference)), live chat for a streaming site (hierarchical fan-out, deliberately lossy delivery: Chapter (socialgeo)), and serverless functions (container pools, pre-warming).</p></li>
+<li><p><strong>Common failure</strong>: adding a queue or cache because it “feels right” and then being unable to defend it. Name the requirement each component serves.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview</div>
+<p>Spend the first five minutes on requirements and estimates. Interviewers judge whether you ask about scale, read/write ratio, and consistency needs before you draw boxes. Always say the trade-off out loud: “I’m choosing X, which costs Y, because requirement Z matters more.”</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Non-functional requirements drive architecture.</p></li>
+<li><p>Use percentiles. Tail latency and availability compound across dependencies.</p></li>
+<li><p>Stateless services scale horizontally; state is the hard part.</p></li>
+<li><p>During a partition you choose consistency or availability. Otherwise, latency or consistency.</p></li>
+<li><p>Estimate before designing; ratios tell you where the pressure is.</p></li>
+</ul>
+</div>

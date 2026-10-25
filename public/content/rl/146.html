@@ -1,0 +1,541 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why must SNIS uncertainty include numerator–denominator covariance?</p></li>
+<li><p>Can a calibrated standard error repair estimator bias or missing support?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="use-each-logged-episode-to-score-both-policies">2. Use each logged episode to score both policies</h3>
+<p>A doubly robust pseudo-outcome for policy <span class="math inline">\(\pi\)</span> is:</p>
+<p><span class="math display">\[\psi_i^\pi
+=
+\underbrace{
+\sum_a \pi(a)\hat q(a)
+}_{\text{modelled policy value}}
++
+\underbrace{
+\frac{\pi(A_i)}{\mu(A_i)}
+\left(R_i-\hat q(A_i)\right)
+}_{\text{weighted correction from episode }i}\]</span></p>
+<p>Its value estimate is:</p>
+<p><span class="math display">\[\hat V^\pi
+=
+\underbrace{
+\frac1N\sum_i\psi_i^\pi
+}_{\text{mean DR pseudo-outcome}}\]</span></p>
+<p>For candidate <span class="math inline">\(\pi_1\)</span> and control <span class="math inline">\(\pi_0\)</span>, calculate the episode-wise difference:</p>
+<p><span class="math display">\[d_i
+=
+\underbrace{\psi_i^{\pi_1}-\psi_i^{\pi_0}}
+_{\text{paired evidence about improvement}}\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[\hat\Delta
+=
+\underbrace{
+\hat V^{\pi_1}-\hat V^{\pi_0}
+}_{\text{estimated improvement}}
+=
+\frac1N\sum_i d_i\]</span></p>
+<p>The paired standard error is:</p>
+<p><span class="math display">\[\widehat{SE}_{\mathrm{paired}}
+=
+\underbrace{
+\frac{\operatorname{SD}(d_1,\ldots,d_N)}
+{\sqrt N}
+}_{\text{uncertainty of the policy difference}}\]</span></p>
+<p>Equivalently:</p>
+<p><span class="math display">\[\operatorname{Var}(\hat\Delta)
+=
+\frac{
+\overbrace{\operatorname{Var}(\psi^{\pi_1})}^{\text{candidate variance}}
++
+\overbrace{\operatorname{Var}(\psi^{\pi_0})}^{\text{control variance}}
+-
+\overbrace{2\operatorname{Cov}(\psi^{\pi_1},\psi^{\pi_0})}^{\text{shared episode noise cancels}}
+}{N}\]</span></p>
+<p>When the scores move together, ignoring covariance produces an unnecessarily wide interval.</p>
+<p>A one-sided promotion rule is:</p>
+<p><span class="math display">\[LCB
+=
+\underbrace{
+\hat\Delta-z_{1-\alpha}\widehat{SE}_{\mathrm{paired}}
+}_{\text{conservative improvement estimate}}
+&gt;0\]</span></p>
+<p>Pair only genuine shared sampling units. For agent evaluation, that is usually an episode, task or user—not individual correlated tokens. Nuisance predictions should be out-of-fold, detached, and computed without candidate-selection leakage.</p>
+<p>DPO can optimize a policy from preference pairs, but it does not supply logging propensities or convert this calculation into online RL. A DPO checkpoint may still be evaluated with paired tasks, provided the evaluator is valid.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>actions, rewards and policy scores: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>paired differences: <span style="background-color: codeinlinebg"><code> [R, N]</code></span></p></li>
+<li><p>estimates and standard errors: <span style="background-color: codeinlinebg"><code> [R]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-covariance-turns-a-weak-comparison-into-a-precise-one">3. PyTorch exercise — covariance turns a weak comparison into a precise one</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 3_000
+episodes_per_repetition = 400
+
+behavior_policy = torch.tensor([
+    0.50,
+    0.50,
+])
+
+true_action_values = torch.tensor([
+    0.40,
+    0.60,
+])
+
+# Slightly imperfect but fixed outcome model.
+q_model = torch.tensor([
+    0.45,
+    0.55,
+])
+
+control_policy = torch.tensor([
+    0.55,
+    0.45,
+])
+
+candidate_policy = torch.tensor([
+    0.45,
+    0.55,
+])
+
+one_sided_z = 1.645
+
+
+def sample_logged_data():
+    # TODO 1: Sample actions and Bernoulli rewards.
+    actions = ...
+
+    reward_probabilities = ...
+
+    rewards = ...
+
+    return actions, rewards
+
+
+def dr_scores(policy, actions, rewards):
+    # TODO 2: One DR pseudo-outcome per episode.
+    model_baseline = ...
+
+    importance_weights = ...
+
+    logged_predictions = ...
+
+    scores = ...
+
+    return scores
+
+
+# TODO 3: Score both policies on the same episodes.
+paired_actions, paired_rewards = ...
+
+paired_control_scores = ...
+paired_candidate_scores = ...
+
+paired_differences = ...
+
+paired_effect_estimates = ...
+
+paired_standard_errors = ...
+
+# Incorrect: treats two scores from the same episode
+# as independent.
+wrong_unpaired_standard_errors = ...
+
+
+# TODO 4: A genuinely independent-data comparison.
+control_actions, control_rewards = ...
+candidate_actions, candidate_rewards = ...
+
+independent_control_scores = ...
+independent_candidate_scores = ...
+
+independent_effect_estimates = ...
+
+independent_standard_errors = ...
+
+
+# TODO 5: Promotion decisions and diagnostics.
+paired_lower_bounds = ...
+
+wrong_unpaired_lower_bounds = ...
+
+independent_lower_bounds = ...
+
+paired_detection_rate = ...
+wrong_unpaired_detection_rate = ...
+independent_detection_rate = ...
+
+score_correlation = ...
+
+centered_influence_scores = ...
+
+maximum_influence_mean_error = ...
+
+paired_empirical_sd = ...
+independent_empirical_sd = ...
+
+exact_control_value = ...
+exact_candidate_value = ...
+exact_effect = ...
+
+print(&quot;Exact control/candidate/effect:&quot;)
+print(
+    exact_control_value.item(),
+    exact_candidate_value.item(),
+    exact_effect.item(),
+)
+
+print(&quot;Candidate/control score correlation:&quot;)
+print(score_correlation.item())
+
+print(&quot;Empirical effect SD: paired, independent&quot;)
+print(
+    paired_empirical_sd.item(),
+    independent_empirical_sd.item(),
+)
+
+print(&quot;Mean SE: paired, wrong-unpaired, independent&quot;)
+print(
+    paired_standard_errors.mean().item(),
+    wrong_unpaired_standard_errors.mean().item(),
+    independent_standard_errors.mean().item(),
+)
+
+print(&quot;Detection rates: paired, wrong-unpaired, independent&quot;)
+print(
+    paired_detection_rate.item(),
+    wrong_unpaired_detection_rate.item(),
+    independent_detection_rate.item(),
+)
+
+print(
+    &quot;Maximum centered-influence mean error:&quot;,
+    maximum_influence_mean_error.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the exact candidate improvement?</p></li>
+<li><p>Should candidate and control DR scores be positively or negatively correlated?</p></li>
+<li><p>Which standard error should be smallest?</p></li>
+<li><p>What happens if candidate rows are shuffled before subtraction?</p></li>
+<li><p>Why can independent datasets have much less power despite twice as many distinct logs?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sample action <span style="background-color: codeinlinebg"><code> 1</code></span> with probability <span style="background-color: codeinlinebg"><code> behavior_policy[1]</code></span>.</p></li>
+<li><p>The model baseline is <span style="background-color: codeinlinebg"><code> (policy * q_model).sum()</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> policy[actions] / behavior_policy[actions]</code></span>.</p></li>
+<li><p>A mean estimator’s influence value is its pseudo-outcome minus its sample mean.</p></li>
+<li><p>The incorrect unpaired variance adds the two score variances without subtracting covariance.</p></li>
+<li><p>Promotion occurs when the one-sided lower bound exceeds zero.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Shuffle candidate episodes before forming differences.</p></li>
+<li><p>Pair rows merely because they share a batch position.</p></li>
+<li><p>Estimate uncertainty from tokens while episodes are the independent units.</p></li>
+<li><p>Fit <span style="background-color: codeinlinebg"><code> q_model</code></span> on each episode’s own outcome without cross-fitting.</p></li>
+<li><p>Reuse this evaluation set to select the candidate and then claim confirmatory significance.</p></li>
+<li><p>Allow evaluation losses to backpropagate into the policy or reward model.</p></li>
+<li><p>Report a narrow interval without overlap and propensity diagnostics.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Logged data:</p>
+<pre class="code python"><code class="language-python">def sample_logged_data():
+    actions = (
+        torch.rand(
+            num_repetitions,
+            episodes_per_repetition,
+        )
+        &lt; behavior_policy[1]
+    ).to(torch.long)
+
+    reward_probabilities = (
+        true_action_values[actions]
+    )
+
+    rewards = (
+        torch.rand_like(reward_probabilities)
+        &lt; reward_probabilities
+    ).to(torch.float64)
+
+    return actions, rewards</code></pre>
+<p>DR scores:</p>
+<pre class="code python"><code class="language-python">def dr_scores(policy, actions, rewards):
+    model_baseline = (
+        policy * q_model
+    ).sum()
+
+    importance_weights = (
+        policy[actions]
+        / behavior_policy[actions]
+    )
+
+    logged_predictions = (
+        q_model[actions]
+    )
+
+    scores = (
+        model_baseline
+        + importance_weights
+        * (
+            rewards
+            - logged_predictions
+        )
+    )
+
+    return scores</code></pre>
+<p>Paired comparison:</p>
+<pre class="code python"><code class="language-python">paired_actions, paired_rewards = (
+    sample_logged_data()
+)
+
+paired_control_scores = dr_scores(
+    control_policy,
+    paired_actions,
+    paired_rewards,
+)
+
+paired_candidate_scores = dr_scores(
+    candidate_policy,
+    paired_actions,
+    paired_rewards,
+)
+
+paired_differences = (
+    paired_candidate_scores
+    - paired_control_scores
+)
+
+paired_effect_estimates = (
+    paired_differences.mean(dim=1)
+)
+
+paired_standard_errors = (
+    paired_differences.std(
+        dim=1,
+        correction=1,
+    )
+    / math.sqrt(episodes_per_repetition)
+)
+
+wrong_unpaired_standard_errors = torch.sqrt(
+    paired_candidate_scores.var(
+        dim=1,
+        correction=1,
+    ) / episodes_per_repetition
+    +
+    paired_control_scores.var(
+        dim=1,
+        correction=1,
+    ) / episodes_per_repetition
+)</code></pre>
+<p>Independent comparison:</p>
+<pre class="code python"><code class="language-python">control_actions, control_rewards = (
+    sample_logged_data()
+)
+
+candidate_actions, candidate_rewards = (
+    sample_logged_data()
+)
+
+independent_control_scores = dr_scores(
+    control_policy,
+    control_actions,
+    control_rewards,
+)
+
+independent_candidate_scores = dr_scores(
+    candidate_policy,
+    candidate_actions,
+    candidate_rewards,
+)
+
+independent_effect_estimates = (
+    independent_candidate_scores.mean(dim=1)
+    - independent_control_scores.mean(dim=1)
+)
+
+independent_standard_errors = torch.sqrt(
+    independent_candidate_scores.var(
+        dim=1,
+        correction=1,
+    ) / episodes_per_repetition
+    +
+    independent_control_scores.var(
+        dim=1,
+        correction=1,
+    ) / episodes_per_repetition
+)</code></pre>
+<p>Promotion and diagnostics:</p>
+<pre class="code python"><code class="language-python">paired_lower_bounds = (
+    paired_effect_estimates
+    - one_sided_z
+    * paired_standard_errors
+)
+
+wrong_unpaired_lower_bounds = (
+    paired_effect_estimates
+    - one_sided_z
+    * wrong_unpaired_standard_errors
+)
+
+independent_lower_bounds = (
+    independent_effect_estimates
+    - one_sided_z
+    * independent_standard_errors
+)
+
+paired_detection_rate = (
+    (paired_lower_bounds &gt; 0.0)
+    .to(torch.float64)
+    .mean()
+)
+
+wrong_unpaired_detection_rate = (
+    (wrong_unpaired_lower_bounds &gt; 0.0)
+    .to(torch.float64)
+    .mean()
+)
+
+independent_detection_rate = (
+    (independent_lower_bounds &gt; 0.0)
+    .to(torch.float64)
+    .mean()
+)
+
+score_correlation = torch.corrcoef(
+    torch.stack([
+        paired_candidate_scores.flatten(),
+        paired_control_scores.flatten(),
+    ])
+)[0, 1]
+
+centered_influence_scores = (
+    paired_differences
+    - paired_effect_estimates[:, None]
+)
+
+maximum_influence_mean_error = (
+    centered_influence_scores.mean(dim=1)
+    .abs()
+    .max()
+)
+
+paired_empirical_sd = (
+    paired_effect_estimates.std(correction=1)
+)
+
+independent_empirical_sd = (
+    independent_effect_estimates.std(
+        correction=1
+    )
+)
+
+exact_control_value = (
+    control_policy * true_action_values
+).sum()
+
+exact_candidate_value = (
+    candidate_policy * true_action_values
+).sum()
+
+exact_effect = (
+    exact_candidate_value
+    - exact_control_value
+)</code></pre>
+<p>The exact values are:</p>
+<p><span class="math display">\[V^{\pi_0}
+=
+\underbrace{0.55(0.40)+0.45(0.60)}_{\text{control mixture}}
+=
+0.49\]</span></p>
+<p><span class="math display">\[V^{\pi_1}
+=
+\underbrace{0.45(0.40)+0.55(0.60)}_{\text{candidate mixture}}
+=
+0.51\]</span></p>
+<p><span class="math display">\[\Delta
+=
+\underbrace{0.51-0.49}_{\text{true improvement}}
+=
+0.02\]</span></p>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Diagnostic</strong></th>
+<th style="text-align: left;"><strong>Approximate value</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Diagnostic</strong></td>
+<td style="text-align: left;"><strong>Approximate value</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Score correlation</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.98</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Paired effect SD</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.0049</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Mean paired SE</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.0049</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Wrong unpaired SE</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.035</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Independent effect SD/SE</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.035</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Paired detection rate</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.99</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Wrong-unpaired detection rate</td>
+<td style="text-align: left;">near <span style="background-color: codeinlinebg"><code> 0</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Independent detection rate</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.14</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The large gain comes from:</p>
+<p><span class="math display">\[\operatorname{Cov}
+\left(
+\psi^{\pi_1},
+\psi^{\pi_0}
+\right)
+\approx
+\underbrace{0.2401}_{\text{shared reward and action noise}}\]</span></p>
+<p>which nearly cancels the two individual score variances.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p><span style="background-color: codeinlinebg"><code> 0.02</code></span>.</p></li>
+<li><p>Strongly positive: both scores respond to the same logged action and reward.</p></li>
+<li><p>The paired SE, because shared episode noise is subtracted.</p></li>
+<li><p>The covariance benefit disappears; the estimated effect remains roughly centered but becomes much noisier.</p></li>
+<li><p>Independent logs cannot cancel episode-level randomness. More rows do not necessarily mean more information about a contrast.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>The numerator and denominator are computed from the same weighted episodes and therefore move together; their covariance contributes to ratio uncertainty.</p></li>
+<li><p>No. Standard errors quantify sampling variation, not estimator bias, unsupported actions or invalid nuisance models.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> when two policies can be evaluated on the same logged episodes, estimate the episode-wise score difference and its standard error directly. Policy improvement is a paired estimand—not two unrelated value estimates.</p>

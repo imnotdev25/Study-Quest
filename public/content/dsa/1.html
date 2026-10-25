@@ -1,0 +1,194 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>A repeatable method for solving unseen problems, how to analyze time and space (including amortized analysis and the master theorem), how to read constraints to guess the target complexity, and how to argue an algorithm is correct with invariants.</p>
+</div>
+<h1 id="a-method-for-unseen-problems">A Method for Unseen Problems</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Strong candidates do not “see” answers instantly. They follow a routine: make sure they understand the question, try small examples by hand, find a slow but correct idea, then ask “what work am I repeating?” to make it fast. The routine is what you practice.</p>
+</div>
+<figure class="tikz"><img src="figs/dsa/afe5f5cf6d40.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The problem-solving loop used throughout this book.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Questions to ask in step 1:</strong> How large can the input be? Can values be negative, zero, or duplicated? Is the input sorted? What should happen on empty input? Is there always a valid answer? Do we need one answer or all answers? Can I modify the input? Is the data streaming or all available?</p>
+<p><strong>Step 4 is where the pattern library pays off.</strong> Brute force is usually “try every pair / every subarray / every subset.” Ask:</p>
+<ul>
+<li><p>Am I recomputing a range? <span class="math inline">\(\to\)</span> prefix sums or a sliding window.</p></li>
+<li><p>Am I searching for a complement? <span class="math inline">\(\to\)</span> hash map.</p></li>
+<li><p>Is the data sorted or can I sort it? <span class="math inline">\(\to\)</span> two pointers or binary search.</p></li>
+<li><p>Do I need the best few items repeatedly? <span class="math inline">\(\to\)</span> heap.</p></li>
+<li><p>Do subproblems overlap? <span class="math inline">\(\to\)</span> dynamic programming.</p></li>
+<li><p>Is it about connections or dependencies? <span class="math inline">\(\to\)</span> graph traversal.</p></li>
+<li><p>Is the answer monotonic in some parameter? <span class="math inline">\(\to\)</span> binary search on the answer.</p></li>
+</ul>
+</div>
+<h1 id="asymptotic-analysis">Asymptotic Analysis</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Big-O describes how cost grows with input size <span class="math inline">\(n\)</span>, ignoring constants. <span class="math inline">\(f(n) = O(g(n))\)</span> means <span class="math inline">\(f\)</span> grows no faster than <span class="math inline">\(g\)</span> (an upper bound); <span class="math inline">\(\Omega\)</span> is a lower bound; <span class="math inline">\(\Theta\)</span> is a tight bound. Interviews use “Big-O” loosely to mean the tight bound for the worst case.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Complexity</th>
+<th style="text-align: left;">Name</th>
+<th style="text-align: left;">Typical source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(O(1)\)</span></td>
+<td style="text-align: left;">constant</td>
+<td style="text-align: left;">hash lookup, array index</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span></td>
+<td style="text-align: left;">logarithmic</td>
+<td style="text-align: left;">binary search, balanced tree, heap operation</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(O(n)\)</span></td>
+<td style="text-align: left;">linear</td>
+<td style="text-align: left;">single pass, BFS/DFS on <span class="math inline">\(n\)</span> nodes and edges</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(O(n\log n)\)</span></td>
+<td style="text-align: left;">linearithmic</td>
+<td style="text-align: left;">sorting, <span class="math inline">\(n\)</span> heap operations</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(O(n^2)\)</span></td>
+<td style="text-align: left;">quadratic</td>
+<td style="text-align: left;">all pairs, 2D DP</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(O(n^3)\)</span></td>
+<td style="text-align: left;">cubic</td>
+<td style="text-align: left;">Floyd–Warshall, matrix multiply, interval DP</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(O(2^n)\)</span></td>
+<td style="text-align: left;">exponential</td>
+<td style="text-align: left;">all subsets, bitmask DP</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(O(n!)\)</span></td>
+<td style="text-align: left;">factorial</td>
+<td style="text-align: left;">all permutations</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="reading-constraints">Reading Constraints</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Input size <span class="math inline">\(n\)</span></th>
+<th style="text-align: left;">Likely target complexity (about <span class="math inline">\(10^8\)</span> simple operations per second)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(n \le 10\)</span>–<span class="math inline">\(12\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(n!)\)</span> or <span class="math inline">\(O(n\cdot 2^n)\)</span>: permutations, brute force</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(n \le 20\)</span>–<span class="math inline">\(25\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(2^n)\)</span> or <span class="math inline">\(O(n^2 2^n)\)</span>: subsets, bitmask DP, meet in the middle</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(n \le 500\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(n^3)\)</span>: interval DP, Floyd–Warshall</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(n \le 5{,}000\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(n^2)\)</span>: 2D DP, all pairs</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(n \le 10^5\)</span>–<span class="math inline">\(10^6\)</span></td>
+<td style="text-align: left;"><span class="math inline">\(O(n\log n)\)</span> or <span class="math inline">\(O(n)\)</span>: sort, heap, two pointers, hashing</td>
+</tr>
+<tr>
+<td style="text-align: left;"><span class="math inline">\(n \ge 10^9\)</span> or value range</td>
+<td style="text-align: left;"><span class="math inline">\(O(\log n)\)</span> or <span class="math inline">\(O(1)\)</span>: binary search on answer, math</td>
+</tr>
+</tbody>
+</table>
+<p><em>Constraints reveal the intended solution.</em></p>
+<h2 id="amortized-analysis">Amortized Analysis</h2>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A dynamic array doubles its capacity when full. Copying is expensive, but it happens rarely. Spread the cost of copies over all the cheap appends and each append costs a constant amount on average. That “average over a sequence” is amortized cost.</p>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Aggregate method for array doubling.</strong> Appending <span class="math inline">\(n\)</span> items triggers copies of sizes <span class="math inline">\(1, 2, 4, \dots, n/2\)</span>, totaling less than <span class="math inline">\(n\)</span>. Plus <span class="math inline">\(n\)</span> writes, the total is under <span class="math inline">\(3n\)</span>, so each append is amortized <span class="math inline">\(O(1)\)</span>.</p>
+<p><strong>Potential method.</strong> Define potential <span class="math inline">\(\Phi = 2\cdot\text{size} -
+\text{capacity}\)</span>. A cheap append raises <span class="math inline">\(\Phi\)</span> by 2 (amortized cost 3). A resizing append costs <span class="math inline">\(\text{size}\)</span> to copy, but <span class="math inline">\(\Phi\)</span> drops by about <span class="math inline">\(\text{size}\)</span>, so amortized cost stays constant. The same idea proves the monotonic stack (each element pushed and popped once) and union-find bounds.</p>
+<p><strong>Why growth factor matters.</strong> Growing by a constant amount (e.g. <span class="math inline">\(+10\)</span>) gives <span class="math inline">\(O(n^2)\)</span> total copying. Any constant <em>factor</em> greater than 1 gives <span class="math inline">\(O(1)\)</span> amortized. Many libraries use 1.5 or 2.</p>
+</div>
+<h2 id="recurrences-and-the-master-theorem">Recurrences and the Master Theorem</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Divide-and-conquer algorithms have recurrences <span class="math inline">\(T(n) = a\,T(n/b) + f(n)\)</span>: split into <span class="math inline">\(a\)</span> subproblems of size <span class="math inline">\(n/b\)</span> with <span class="math inline">\(f(n)\)</span> extra work. Compare <span class="math inline">\(f(n)\)</span> to <span class="math inline">\(n^{\log_b a}\)</span> (the work at the leaves):</p>
+<ul>
+<li><p><span class="math inline">\(f(n)\)</span> smaller: leaves dominate, <span class="math inline">\(T(n) = \Theta(n^{\log_b a})\)</span>.</p></li>
+<li><p>Equal: every level costs the same, <span class="math inline">\(T(n) = \Theta(n^{\log_b a}\log n)\)</span>.</p></li>
+<li><p><span class="math inline">\(f(n)\)</span> larger (and regular): root dominates, <span class="math inline">\(T(n) = \Theta(f(n))\)</span>.</p></li>
+</ul>
+<p><strong>Examples:</strong> merge sort <span class="math inline">\(T = 2T(n/2) + n \Rightarrow \Theta(n\log n)\)</span>; binary search <span class="math inline">\(T = T(n/2)+1 \Rightarrow \Theta(\log n)\)</span>; Karatsuba <span class="math inline">\(T = 3T(n/2)+n
+\Rightarrow \Theta(n^{\log_2 3}) \approx n^{1.585}\)</span>; Strassen <span class="math inline">\(7T(n/2)+n^2 \Rightarrow
+n^{2.81}\)</span>; a tree traversal <span class="math inline">\(T = 2T(n/2) + 1 \Rightarrow \Theta(n)\)</span>.</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Not every recurrence fits: <span class="math inline">\(T(n) = T(n-1) + n\)</span> is <span class="math inline">\(\Theta(n^2)\)</span> (unbalanced quicksort); <span class="math inline">\(T(n) = 2T(n-1) + 1\)</span> is <span class="math inline">\(\Theta(2^n)\)</span> (naive Fibonacci-style recursion); <span class="math inline">\(T(n) = T(n/3) + T(2n/3) + n\)</span> is <span class="math inline">\(\Theta(n\log n)\)</span> (recursion tree: each level costs <span class="math inline">\(n\)</span>, depth <span class="math inline">\(\log_{3/2} n\)</span>). Use the recursion-tree method when splits are uneven. For recursive DP, total cost = number of states <span class="math inline">\(\times\)</span> work per state, which is usually simpler than solving a recurrence.</p>
+</div>
+<h1 id="lower-bounds">Lower Bounds</h1>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Comparison sorting needs <span class="math inline">\(\Omega(n\log n)\)</span> comparisons.</strong> A comparison sort is a binary decision tree; it must distinguish all <span class="math inline">\(n!\)</span> orderings, so it needs at least <span class="math inline">\(n!\)</span> leaves and height <span class="math inline">\(\log_2(n!) = \Theta(n\log n)\)</span> (Stirling). Counting and radix sort beat this only by <em>not</em> comparing (they use the values’ digits). <strong>Element distinctness</strong> also needs <span class="math inline">\(\Omega(n\log n)\)</span> in the comparison model, which is why a hash set (<span class="math inline">\(O(n)\)</span> expected) is the fastest practical approach. Knowing a lower bound tells you when to stop optimizing and say so in the interview.</p>
+</div>
+<h1 id="proving-correctness-with-invariants">Proving Correctness with Invariants</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>An invariant is a promise that is true before every step of a loop. If it is true at the start, each step keeps it true, and at the end it implies the answer, then the algorithm is correct. It is the same as induction.</p>
+</div>
+<p><em>Binary search for the first index with <span class="math inline">\(A[i] \ge x\)</span> (lower bound)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> sorted array <span class="math inline">\(A[0..n-1]\)</span>, target <span class="math inline">\(x\)</span></div>
+<div class="algo-line" style="--d:0"><strong>Output:</strong> smallest <span class="math inline">\(i\)</span> with <span class="math inline">\(A[i]\ge x\)</span>, or <span class="math inline">\(n\)</span> if none</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(lo \gets 0\)</span>, <span class="math inline">\(hi \gets n\)</span> <em>▷ answer is always in <span class="math inline">\([lo, hi]\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(lo &lt; hi\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(mid \gets lo + \lfloor (hi - lo)/2 \rfloor\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(A[mid] &lt; x\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(lo \gets mid + 1\)</span> <em>▷ <span class="math inline">\(mid\)</span> and everything left of it are too small</em></div>
+<div class="algo-line" style="--d:1"><strong>else</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(hi \gets mid\)</span> <em>▷ <span class="math inline">\(mid\)</span> is a candidate; the answer is <span class="math inline">\(\le mid\)</span></em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(lo\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Invariant:</strong> every index <span class="math inline">\(&lt; lo\)</span> has <span class="math inline">\(A[i] &lt; x\)</span>, and every index <span class="math inline">\(\ge hi\)</span> has <span class="math inline">\(A[i] \ge x\)</span> (or is <span class="math inline">\(n\)</span>). Initially true (empty ranges). Each branch keeps it true by the comments above. The interval <span class="math inline">\([lo, hi)\)</span> shrinks every iteration, so the loop ends with <span class="math inline">\(lo = hi\)</span>, which is exactly the first index with <span class="math inline">\(A[i] \ge x\)</span>. Writing the invariant first is how you avoid off-by-one errors in binary search.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Other proof tools you will use:</strong></p>
+<ul>
+<li><p><strong>Induction</strong> for recursion: assume the call works on smaller inputs, show it works on this one.</p></li>
+<li><p><strong>Exchange argument</strong> for greedy: any optimal solution can be transformed into the greedy one without getting worse (Chapter 13).</p></li>
+<li><p><strong>Cut and paste</strong> for DP: an optimal solution contains optimal solutions to subproblems (Chapter 12).</p></li>
+<li><p><strong>Potential functions</strong> for amortized bounds.</p></li>
+</ul>
+</div>
+<h1 id="space-recursion-and-the-machine">Space, Recursion, and the Machine</h1>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<ul>
+<li><p><strong>Recursion uses stack space</strong> equal to its depth. DFS on a <span class="math inline">\(10^6\)</span>-node path recurses <span class="math inline">\(10^6\)</span> deep and overflows default stacks (Python’s default limit is 1<span>,</span>000); convert to an explicit stack.</p></li>
+<li><p><strong>Memory hierarchy</strong>: an <span class="math inline">\(O(n)\)</span> scan over contiguous memory can be 10–100<span class="math inline">\(\times\)</span> faster than an <span class="math inline">\(O(n)\)</span> walk over a linked list, because of cache lines and prefetching. This is why arrays beat linked lists in practice, and why ML frameworks care about contiguous tensors and memory layout.</p></li>
+<li><p><strong>Hidden costs</strong>: string concatenation in a loop (<span class="math inline">\(O(n^2)\)</span> total in many languages), slicing (copies), <code>in</code> on a list (<span class="math inline">\(O(n)\)</span>), sorting inside a loop.</p></li>
+<li><p><strong>Expected vs worst case</strong>: hash tables are <span class="math inline">\(O(1)\)</span> expected, <span class="math inline">\(O(n)\)</span> worst case; quicksort <span class="math inline">\(O(n\log n)\)</span> expected, <span class="math inline">\(O(n^2)\)</span> worst. Say which one you mean.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Communicating your solution</div>
+<p>“I’ll restate the problem: given an array of up to <span class="math inline">\(10^5\)</span> integers, return the length of the longest subarray with sum <span class="math inline">\(k\)</span>, values can be negative. Negative values rule out a sliding window, because shrinking the window does not monotonically reduce the sum. Brute force over all subarrays with prefix sums is <span class="math inline">\(O(n^2)\)</span>, which is too slow for <span class="math inline">\(10^5\)</span>. If I store the first index at which each prefix sum appears, then for each position I look up whether <span class="math inline">\(\text{prefix}-k\)</span> appeared earlier. That is <span class="math inline">\(O(n)\)</span> time and <span class="math inline">\(O(n)\)</span> space. Edge cases: a subarray starting at index 0, so I seed the map with prefix <span class="math inline">\(0\)</span> at index <span class="math inline">\(-1\)</span>; and I store only the first occurrence to maximize length. Let me code it, then trace <code>[1,-1,5,-2,3]</code>, <span class="math inline">\(k=3\)</span>.”</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Follow the same loop every time: understand, examples, brute force, remove repeated work, plan, code, test.</p></li>
+<li><p>Use constraints to infer the intended complexity.</p></li>
+<li><p>Amortized analysis and the master theorem cover most complexity questions.</p></li>
+<li><p>State invariants; they prevent off-by-one errors and prove correctness.</p></li>
+</ul>
+</div>

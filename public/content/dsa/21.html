@@ -1,0 +1,553 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Several hundred questions and problems of the kinds commonly reported in ML Engineer, AI Engineer, Applied Scientist, Research Engineer, and Research Scientist interviews, grouped by round. Conceptual and scenario questions come with short answer sketches that point to the chapter with the full explanation. Problem lists name the pattern so you can practice recognizing it.</p>
+</div>
+<h4 id="how-to-use-this-chapter.">How to use this chapter.</h4>
+<p>Cover the answer sketch and answer out loud first, as you would in a round. A good answer states the core idea in one or two sentences, then gives the trade-off, a failure case, and an example. Sketches here are deliberately short; if yours is much shorter or misses the trade-off, reread the referenced chapter. These are representative question <em>types</em>, not a claim that a particular company asks a particular question; loops change, so check recent reports for your target company.</p>
+<h1 id="ml-fundamentals-breadth-round">ML Fundamentals (Breadth Round)</h1>
+<ol>
+<li><p><strong>Explain the bias–variance trade-off. How do you tell which one you have?</strong></p>
+<p><span><em>Answer sketch:</em> Error = bias<span class="math inline">\(^2\)</span> + variance + noise. High training error means bias; a large train–validation gap means variance. Learning curves show whether more data helps (Ch. 17).</span></p></li>
+<li><p><strong>L1 vs L2 regularization: what does each do, and why does L1 give sparse weights?</strong></p>
+<p><span><em>Answer sketch:</em> L2 shrinks all weights (Gaussian prior); L1 pushes some exactly to zero (Laplace prior) because its penalty has a corner at zero, so the optimum often lands on an axis.</span></p></li>
+<li><p><strong>Why is logistic regression trained with cross-entropy instead of MSE?</strong></p>
+<p><span><em>Answer sketch:</em> Cross-entropy is the Bernoulli negative log-likelihood and is convex in the weights; MSE through a sigmoid is non-convex and gives vanishing gradients when predictions are confidently wrong.</span></p></li>
+<li><p><strong>Derive the gradient of softmax cross-entropy with respect to the logits.</strong></p>
+<p><span><em>Answer sketch:</em> <span class="math inline">\(p - y\)</span> (one-hot). Mention computing it stably with log-sum-exp (Ch. 17).</span></p></li>
+<li><p><strong>Random forest vs gradient boosting: when would you pick each?</strong></p>
+<p><span><em>Answer sketch:</em> RF averages deep, decorrelated trees (reduces variance, robust, parallel, little tuning). GBDT adds shallow trees sequentially on residuals (reduces bias, usually more accurate on tabular data, needs tuning and early stopping).</span></p></li>
+<li><p><strong>How does a decision tree choose a split? What is the complexity?</strong></p>
+<p><span><em>Answer sketch:</em> Maximize impurity reduction (Gini/entropy/variance) over features and thresholds; sorted sweep per feature, <span class="math inline">\(O(d\,n\log n)\)</span> per node, or histograms for <span class="math inline">\(O(dn)\)</span>.</span></p></li>
+<li><p><strong>What does k-means optimize, does it converge, and to what?</strong></p>
+<p><span><em>Answer sketch:</em> Within-cluster squared distance; alternating minimization never increases it, so it converges in finitely many steps to a local minimum. Use k-means++ and restarts.</span></p></li>
+<li><p><strong>Explain PCA. When would it hurt?</strong></p>
+<p><span><em>Answer sketch:</em> Projects onto top eigenvectors of the covariance (max variance). Hurts when the predictive signal lies in low-variance directions, with unscaled features, or on non-linear structure.</span></p></li>
+<li><p><strong>What is the curse of dimensionality?</strong></p>
+<p><span><em>Answer sketch:</em> Volume grows exponentially; distances concentrate, so nearest neighbors stop being meaningful and data needed for coverage explodes. Learned low-dimensional embeddings help.</span></p></li>
+<li><p><strong>Precision vs recall: give a product where each matters more.</strong></p>
+<p><span><em>Answer sketch:</em> Precision: auto-removing content, spam to junk. Recall: cancer screening, fraud flagging for review. Choose the threshold from the cost of each error.</span></p></li>
+<li><p><strong>When is ROC-AUC misleading? What do you use instead?</strong></p>
+<p><span><em>Answer sketch:</em> With heavy class imbalance AUC looks high even when precision at useful thresholds is poor. Use PR-AUC, precision at fixed recall, or cost-weighted metrics.</span></p></li>
+<li><p><strong>What is calibration and how do you fix a miscalibrated model?</strong></p>
+<p><span><em>Answer sketch:</em> Predicted probabilities match observed frequencies. Diagnose with a reliability diagram or ECE; fix with Platt scaling, isotonic regression, or temperature scaling on held-out data.</span></p></li>
+<li><p><strong>How do you handle class imbalance?</strong></p>
+<p><span><em>Answer sketch:</em> Right metrics, class weights or focal loss, resampling, threshold tuning; correct probabilities after negative downsampling (Ch. 16).</span></p></li>
+<li><p><strong>Generative vs discriminative models?</strong></p>
+<p><span><em>Answer sketch:</em> Generative models <span class="math inline">\(p(x, y)\)</span> (Naive Bayes, GMM); discriminative models <span class="math inline">\(p(y|x)\)</span> directly (logistic regression). Generative can work with less data and handle missing inputs; discriminative usually wins with enough data.</span></p></li>
+<li><p><strong>Explain the kernel trick.</strong></p>
+<p><span><em>Answer sketch:</em> Replace inner products with a kernel <span class="math inline">\(k(x,x&#39;)\)</span>, which is an inner product in an implicit feature space, so linear methods (SVMs) learn non-linear boundaries without computing the features.</span></p></li>
+<li><p><strong>How does Naive Bayes work and why is it badly calibrated?</strong></p>
+<p><span><em>Answer sketch:</em> Bayes’ rule with conditional independence of features; counting-based. Correlated features are double-counted, pushing probabilities toward 0 and 1.</span></p></li>
+<li><p><strong>Bagging vs boosting vs stacking?</strong></p>
+<p><span><em>Answer sketch:</em> Bagging: parallel models on bootstrap samples, averaged. Boosting: sequential models correcting predecessors. Stacking: a meta-model learns to combine base models’ out-of-fold predictions.</span></p></li>
+<li><p><strong>How do you choose <span class="math inline">\(k\)</span> in kNN or k-means?</strong></p>
+<p><span><em>Answer sketch:</em> kNN: validation curve over <span class="math inline">\(k\)</span>. k-means: elbow, silhouette, or a downstream metric.</span></p></li>
+<li><p><strong>What is cross-validation and when must you not shuffle?</strong></p>
+<p><span><em>Answer sketch:</em> Rotate validation folds to estimate generalization. Do not shuffle across time (use walk-forward) or across groups (use group k-fold).</span></p></li>
+<li><p><strong>Explain EM in one minute.</strong></p>
+<p><span><em>Answer sketch:</em> Alternate computing the expected latent assignments given parameters (E) and maximizing parameters given those expectations (M); likelihood never decreases.</span></p></li>
+<li><p><strong>What is the difference between parametric and non-parametric models?</strong></p>
+<p><span><em>Answer sketch:</em> Fixed parameter count regardless of data (linear models) vs complexity that grows with data (kNN, trees, kernel methods with all support vectors).</span></p></li>
+<li><p><strong>How does matrix factorization recommend items? Implicit vs explicit feedback?</strong></p>
+<p><span><em>Answer sketch:</em> Learn user and item vectors whose dot product predicts the interaction. Implicit feedback has no negatives, so weight observed entries by confidence and sample or down-weight missing ones.</span></p></li>
+<li><p><strong>What is feature hashing and what does it cost?</strong></p>
+<p><span><em>Answer sketch:</em> Map features to indices by hashing into a fixed-size vector; no vocabulary to store, handles new values, but collisions mix features and the model becomes harder to interpret.</span></p></li>
+<li><p><strong>How would you explain a model’s prediction?</strong></p>
+<p><span><em>Answer sketch:</em> Global: feature importance, partial dependence. Local: SHAP values, LIME, counterfactuals; for deep models, attribution methods such as integrated gradients. Note correlated features distort importances.</span></p></li>
+</ol>
+<h1 id="deep-learning-and-training">Deep Learning and Training</h1>
+<ol>
+<li><p><strong>Walk through backpropagation for a two-layer MLP.</strong></p>
+<p><span><em>Answer sketch:</em> Forward: <span class="math inline">\(h = \text{ReLU}(XW_1)\)</span>, <span class="math inline">\(\hat y = hW_2\)</span>. Backward: <span class="math inline">\(G_2 = \partial L/\partial\hat y\)</span>; <span class="math inline">\(\nabla W_2 = h^\top G_2\)</span>; <span class="math inline">\(G_h = G_2W_2^\top \odot 1[h&gt;0]\)</span>; <span class="math inline">\(\nabla W_1 = X^\top G_h\)</span> (Ch. 18).</span></p></li>
+<li><p><strong>Why do deep networks suffer vanishing or exploding gradients, and what fixes it?</strong></p>
+<p><span><em>Answer sketch:</em> Repeated multiplication by Jacobians with norms below/above 1. Fixes: ReLU-family activations, careful initialization, residual connections, normalization, gradient clipping.</span></p></li>
+<li><p><strong>BatchNorm vs LayerNorm: why do transformers use LayerNorm (or RMSNorm)?</strong></p>
+<p><span><em>Answer sketch:</em> BatchNorm depends on batch statistics, which is awkward for variable-length sequences and small batches and differs between training and inference. LayerNorm normalizes per token.</span></p></li>
+<li><p><strong>Explain Adam, and why AdamW decouples weight decay.</strong></p>
+<p><span><em>Answer sketch:</em> Per-parameter steps from bias-corrected first and second moments. Plain L2 inside Adam is rescaled by <span class="math inline">\(1/\sqrt v\)</span>, weakening regularization for parameters with large gradients; AdamW applies decay directly.</span></p></li>
+<li><p><strong>Why use learning rate warmup?</strong></p>
+<p><span><em>Answer sketch:</em> Early Adam second-moment estimates are noisy and parameters are far from good values; small initial steps prevent divergence, especially with large batches and transformers.</span></p></li>
+<li><p><strong>What happens to optimal learning rate when you increase the batch size?</strong></p>
+<p><span><em>Answer sketch:</em> Gradient noise falls; roughly linear scaling of LR works for SGD up to a critical batch size, beyond which returns diminish. Adam often scales closer to square root.</span></p></li>
+<li><p><strong>How does dropout work, and why does it act as regularization?</strong></p>
+<p><span><em>Answer sketch:</em> Randomly zeroes activations (scaling survivors by <span class="math inline">\(1/(1-p)\)</span>); prevents co-adaptation and approximates averaging an ensemble of subnetworks.</span></p></li>
+<li><p><strong>Why do residual connections help?</strong></p>
+<p><span><em>Answer sketch:</em> They give an identity path for gradients and let each block learn a small correction, making very deep networks trainable.</span></p></li>
+<li><p><strong>What is the receptive field of a CNN and how do you increase it?</strong></p>
+<p><span><em>Answer sketch:</em> The input region influencing an output. Increase with depth, stride, pooling, dilation, or larger kernels.</span></p></li>
+<li><p><strong>What is mixed precision training, and why is BF16 easier than FP16?</strong></p>
+<p><span><em>Answer sketch:</em> Compute in 16-bit, keep FP32 master weights. BF16 keeps FP32’s exponent range, so gradients do not underflow and loss scaling is unnecessary.</span></p></li>
+<li><p><strong>Explain data, tensor, pipeline parallelism, and ZeRO/FSDP.</strong></p>
+<p><span><em>Answer sketch:</em> Split the batch / split layers’ matrices / split layers into stages / shard optimizer states, gradients, and parameters across data-parallel ranks (Ch. 18).</span></p></li>
+<li><p><strong>What is activation checkpointing?</strong></p>
+<p><span><em>Answer sketch:</em> Store only some activations and recompute the rest during backward: about 30% more compute for much less memory.</span></p></li>
+<li><p><strong>How does knowledge distillation work?</strong></p>
+<p><span><em>Answer sketch:</em> Train a student to match the teacher’s temperature-softened output distribution (KL loss), often combined with the true-label loss; soft targets carry similarity information between classes.</span></p></li>
+<li><p><strong>How do you know whether your model is underfitting or the optimizer is broken?</strong></p>
+<p><span><em>Answer sketch:</em> Overfit a tiny batch first: a correct model and loop must reach near-zero loss. If it cannot, suspect bugs (labels, loss, LR, frozen weights) before capacity.</span></p></li>
+</ol>
+<h1 id="llms-and-generative-ai">LLMs and Generative AI</h1>
+<ol>
+<li><p><strong>Explain self-attention and why scores are divided by <span class="math inline">\(\sqrt{d_k}\)</span>.</strong></p>
+<p><span><em>Answer sketch:</em> Weighted mix of values by query–key similarity; dot products have variance <span class="math inline">\(d_k\)</span>, so scaling keeps softmax from saturating (Ch. 18).</span></p></li>
+<li><p><strong>What is the computational bottleneck of attention for long contexts, and how is it addressed?</strong></p>
+<p><span><em>Answer sketch:</em> <span class="math inline">\(O(n^2)\)</span> compute and memory. FlashAttention removes the memory traffic (exact); sliding-window, sparse, linear attention, and state-space models reduce compute (approximate or different architectures).</span></p></li>
+<li><p><strong>How does RoPE encode position, and how is context length extended?</strong></p>
+<p><span><em>Answer sketch:</em> Rotates query/key dimension pairs by position-dependent angles so scores depend on relative offset; extension rescales the angles (position interpolation, NTK, YaRN) plus fine-tuning on long data.</span></p></li>
+<li><p><strong>What is a KV cache and why does it limit throughput?</strong></p>
+<p><span><em>Answer sketch:</em> Stored keys and values of past tokens so each step processes one new token; its memory grows with batch <span class="math inline">\(\times\)</span> length and caps concurrent sequences.</span></p></li>
+<li><p><strong>MHA vs MQA vs GQA?</strong></p>
+<p><span><em>Answer sketch:</em> Separate K/V per head vs one shared K/V head vs groups of query heads sharing K/V: trades a little quality for a much smaller KV cache.</span></p></li>
+<li><p><strong>Explain temperature, top-<span class="math inline">\(k\)</span>, and top-<span class="math inline">\(p\)</span>. When would you use beam search?</strong></p>
+<p><span><em>Answer sketch:</em> Temperature reshapes the distribution; top-<span class="math inline">\(k\)</span>/top-<span class="math inline">\(p\)</span> truncate the tail. Beam search for tasks with a single correct output (translation, constrained generation), not open-ended chat.</span></p></li>
+<li><p><strong>How does speculative decoding keep the target distribution exact?</strong></p>
+<p><span><em>Answer sketch:</em> Accept draft tokens with probability <span class="math inline">\(\min(1, p/q)\)</span>, resample rejections from the residual <span class="math inline">\(\max(0, p-q)\)</span>: a rejection-sampling argument (Ch. 18).</span></p></li>
+<li><p><strong>Pre-training vs SFT vs RLHF/DPO: what does each stage contribute?</strong></p>
+<p><span><em>Answer sketch:</em> Pre-training: knowledge and language from next-token prediction. SFT: instruction following and format. Preference optimization: aligning outputs with preferences (helpfulness, safety, style).</span></p></li>
+<li><p><strong>Derive or explain the DPO loss. What does <span class="math inline">\(\beta\)</span> do?</strong></p>
+<p><span><em>Answer sketch:</em> Logistic loss on the difference of policy-vs-reference log-ratio for chosen and rejected responses; <span class="math inline">\(\beta\)</span> sets how far the policy may move from the reference.</span></p></li>
+<li><p><strong>What is reward hacking? Give an example and a mitigation.</strong></p>
+<p><span><em>Answer sketch:</em> The policy exploits flaws in the reward (longer answers rated higher, test-case special-casing). Mitigate with KL penalties, better or ensemble reward models, verifiable rewards, held-out audits.</span></p></li>
+<li><p><strong>How are reasoning models trained with RL on verifiable rewards?</strong></p>
+<p><span><em>Answer sketch:</em> Sample several solutions per problem, reward correct final answers or passing tests, and update with a policy gradient method such as GRPO using group-normalized advantages.</span></p></li>
+<li><p><strong>What is LoRA, and why does it work?</strong></p>
+<p><span><em>Answer sketch:</em> Learn a low-rank update <span class="math inline">\(BA\)</span> to frozen weights; fine-tuning updates appear to have low intrinsic rank, so few parameters capture most of the adaptation.</span></p></li>
+<li><p><strong>How does quantization affect quality and speed? Weight-only vs weight+activation?</strong></p>
+<p><span><em>Answer sketch:</em> Fewer bytes per weight speeds memory-bound decoding and fits bigger models; outliers hurt accuracy (use per-group scales, AWQ/GPTQ). Activation quantization also speeds compute-bound prefill but is harder.</span></p></li>
+<li><p><strong>RAG vs fine-tuning vs long context: how do you choose?</strong></p>
+<p><span><em>Answer sketch:</em> RAG for private, changing, citeable knowledge; fine-tuning for format, style, and narrow skills; long context for small, stable corpora where retrieval misses are costly.</span></p></li>
+<li><p><strong>Why might a RAG system answer wrongly even when the document is in the index?</strong></p>
+<p><span><em>Answer sketch:</em> Retrieval miss (chunking, vocabulary mismatch, embedding domain shift), reranker error, document lost in a long context, ACL filter, or the model ignoring context. Measure retrieval and generation separately.</span></p></li>
+<li><p><strong>How do you evaluate an LLM application?</strong></p>
+<p><span><em>Answer sketch:</em> Golden set from real traffic; task metrics (exact match, tests, rubric scores); LLM-as-judge calibrated against human labels; slices; online feedback; regression gates.</span></p></li>
+<li><p><strong>What are failure modes of LLM-as-judge?</strong></p>
+<p><span><em>Answer sketch:</em> Position bias, verbosity bias, self-preference, inconsistent scales, sensitivity to prompt wording. Mitigate with pairwise comparison, swapped order, rubrics, and human calibration.</span></p></li>
+<li><p><strong>What is prompt injection, and how do you defend an agent against it?</strong></p>
+<p><span><em>Answer sketch:</em> Instructions hidden in untrusted content. Defend with least privilege, separating untrusted data, validating tool arguments in code, human approval for risky actions, and blocking exfiltration paths.</span></p></li>
+<li><p><strong>Why do LLMs hallucinate, and how do you reduce it in a product?</strong></p>
+<p><span><em>Answer sketch:</em> Next-token training rewards plausible text, not verified truth. Reduce with grounding (RAG with citations), abstention options, verification steps, constrained output, and evals targeting factuality.</span></p></li>
+<li><p><strong>Explain contrastive learning (CLIP / InfoNCE).</strong></p>
+<p><span><em>Answer sketch:</em> Pull matched pairs together and push other in-batch pairs apart with softmax over similarities; larger batches give more negatives; temperature sets sharpness.</span></p></li>
+<li><p><strong>What is perplexity and when is it not comparable?</strong></p>
+<p><span><em>Answer sketch:</em> <span class="math inline">\(\exp\)</span> of mean token cross-entropy; not comparable across tokenizers or datasets.</span></p></li>
+<li><p><strong>What is benchmark contamination and how do you check for it?</strong></p>
+<p><span><em>Answer sketch:</em> Test items in training data inflate scores. Check n-gram overlap, perturbed or rewritten versions of benchmarks, and performance on fresh held-out sets.</span></p></li>
+<li><p><strong>How does a diffusion model generate an image?</strong></p>
+<p><span><em>Answer sketch:</em> Learn to predict noise added at each step; generate by iteratively denoising random noise; classifier-free guidance mixes conditional and unconditional predictions to strengthen the prompt.</span></p></li>
+</ol>
+<h1 id="probability-statistics-and-math">Probability, Statistics, and Math</h1>
+<ol>
+<li><p><strong>A test is 99% sensitive and 99% specific for a condition with 0.1% prevalence. If positive, what is the chance of having it?</strong></p>
+<p><span><em>Answer sketch:</em> Bayes: <span class="math inline">\(\frac{0.99\cdot 0.001}{0.99\cdot 0.001 + 0.01\cdot 0.999} \approx 9\%\)</span>. Base rates dominate.</span></p></li>
+<li><p><strong>Expected number of coin flips to get two heads in a row?</strong></p>
+<p><span><em>Answer sketch:</em> 6, by setting up states (no progress, one head) and solving linear equations.</span></p></li>
+<li><p><strong>How many people for a 50% chance two share a birthday? Why does it matter for hashing?</strong></p>
+<p><span><em>Answer sketch:</em> 23. Collisions appear around <span class="math inline">\(\sqrt{m}\)</span> items, which sizes ID spaces and hash tables.</span></p></li>
+<li><p><strong>What is a p-value? What is it not?</strong></p>
+<p><span><em>Answer sketch:</em> Probability of data at least this extreme if the null hypothesis is true. Not the probability the null is true, and not the effect size.</span></p></li>
+<li><p><strong>Explain statistical power and how sample size is chosen for an A/B test.</strong></p>
+<p><span><em>Answer sketch:</em> Probability of detecting a true effect of a given size. Choose <span class="math inline">\(n\)</span> from baseline rate, minimum detectable effect, <span class="math inline">\(\alpha\)</span>, and power (<span class="math inline">\(\approx 16p(1-p)/\delta^2\)</span> per arm).</span></p></li>
+<li><p><strong>Why is peeking at A/B results a problem?</strong></p>
+<p><span><em>Answer sketch:</em> Repeated testing inflates false positives; use a fixed horizon or sequential testing methods.</span></p></li>
+<li><p><strong>What is Simpson’s paradox? Give an ML example.</strong></p>
+<p><span><em>Answer sketch:</em> A trend reverses when groups are combined. A model better on every segment can look worse overall if the segment mix differs between evaluations.</span></p></li>
+<li><p><strong>MLE vs MAP?</strong></p>
+<p><span><em>Answer sketch:</em> MLE maximizes the likelihood; MAP multiplies by a prior and maximizes the posterior; L2 regularization is MAP with a Gaussian prior.</span></p></li>
+<li><p><strong>What are eigenvalues and why do they matter for optimization?</strong></p>
+<p><span><em>Answer sketch:</em> The Hessian’s eigenvalues describe curvature; a large ratio (ill-conditioning) makes gradient descent zig-zag, which momentum, Adam, and normalization mitigate.</span></p></li>
+<li><p><strong>KL divergence: is it symmetric, and what does each direction favor?</strong></p>
+<p><span><em>Answer sketch:</em> No. Forward KL<span class="math inline">\((p\Vert q)\)</span> is mass-covering; reverse KL<span class="math inline">\((q\Vert p)\)</span> is mode-seeking (relevant to variational inference and RLHF penalties).</span></p></li>
+<li><p><strong>Sample uniformly from a circle (disc).</strong></p>
+<p><span><em>Answer sketch:</em> Radius <span class="math inline">\(= R\sqrt{u}\)</span>, angle uniform; or rejection sampling from the bounding square.</span></p></li>
+<li><p><strong>Generate rand10() from rand7().</strong></p>
+<p><span><em>Answer sketch:</em> Two calls give 49 outcomes; reject above 40; return value mod 10 + 1 (Ch. 13).</span></p></li>
+</ol>
+<h1 id="scenario-and-debugging-questions">Scenario and Debugging Questions</h1>
+<ol>
+<li><p><strong>Your training loss becomes NaN after a few thousand steps. What do you check?</strong></p>
+<p><span><em>Answer sketch:</em> Learning rate too high or no warmup; missing gradient clipping; FP16 overflow (loss scaling, or switch to BF16); <span class="math inline">\(\log 0\)</span> or division by zero in the loss (compute from logits); bad inputs (NaN/inf in data); exploding activations. Log the gradient norm and find the first bad step.</span></p></li>
+<li><p><strong>Training loss decreases but validation loss rises from epoch 2.</strong></p>
+<p><span><em>Answer sketch:</em> Overfitting: early stopping, regularization, augmentation, more data, smaller model. Also check validation preprocessing matches training and that there is no distribution difference.</span></p></li>
+<li><p><strong>Validation accuracy is higher than training accuracy. Is that a bug?</strong></p>
+<p><span><em>Answer sketch:</em> Often fine: dropout and augmentation are active only during training, and training accuracy is averaged over an epoch while the model improved. Also check for leakage or an easier validation set.</span></p></li>
+<li><p><strong>Offline metrics improved but the A/B test is flat or negative.</strong></p>
+<p><span><em>Answer sketch:</em> Offline metric does not reflect the online goal; training–serving skew; latency increase; distribution shift since the offline data; novelty or position effects; the test is underpowered. Check guardrails and slices (Ch. 16).</span></p></li>
+<li><p><strong>A fraud model’s precision dropped sharply this week.</strong></p>
+<p><span><em>Answer sketch:</em> Drift (new attack pattern, product change), a broken upstream feature (nulls, unit change), label delay changes, or a seasonal shift. Check feature PSI, prediction distribution, and pipeline health.</span></p></li>
+<li><p><strong>A recommendation model keeps showing the same popular items.</strong></p>
+<p><span><em>Answer sketch:</em> Popularity bias and feedback loops. Use log-Q correction, exploration traffic, diversity re-ranking, calibration of training negatives, and metrics beyond clicks.</span></p></li>
+<li><p><strong>Your LLM feature’s cost doubled overnight with no traffic change.</strong></p>
+<p><span><em>Answer sketch:</em> Longer prompts (retrieval returning more chunks, growing conversation history), a model change, prompt cache misses after a prompt edit, retries or agent loops. Track tokens per request by component.</span></p></li>
+<li><p><strong>Users report the chatbot “forgets” earlier parts of long conversations.</strong></p>
+<p><span><em>Answer sketch:</em> History truncation or summarization dropping details; context limit; important details buried mid-context. Use structured memory, better summarization, and retrieval over history.</span></p></li>
+<li><p><strong>GPU utilization is 35% during training.</strong></p>
+<p><span><em>Answer sketch:</em> Data loading bottleneck (more workers, prefetching, faster formats), small batches, CPU-side preprocessing, synchronization or logging every step, communication overhead. Profile first.</span></p></li>
+<li><p><strong>A model performs well overall but badly for one country or language.</strong></p>
+<p><span><em>Answer sketch:</em> Under-representation in training data, label quality differences, tokenizer issues for that language, feature availability. Evaluate by slice, collect or reweight data, and add slice-level gates.</span></p></li>
+<li><p><strong>You have one week and 500 labeled examples to ship a text classifier.</strong></p>
+<p><span><em>Answer sketch:</em> Strong baseline (embeddings + logistic regression, or a prompted LLM), few-shot or LLM-assisted labeling with human checks, active learning for the next batch, clear metrics and error analysis.</span></p></li>
+<li><p><strong>Your retrieval system returns relevant chunks, but answers cite the wrong document.</strong></p>
+<p><span><em>Answer sketch:</em> Citation mapping errors, chunk IDs lost in prompt assembly, or the model mixing sources. Use explicit chunk IDs in the prompt, ask for quoted evidence, and verify citations post hoc.</span></p></li>
+<li><p><strong>A newly deployed model’s predictions differ from offline predictions on the same inputs.</strong></p>
+<p><span><em>Answer sketch:</em> Training–serving skew: different preprocessing code, feature defaults, version mismatch, float precision, or stale feature values. Log online features and replay them offline.</span></p></li>
+</ol>
+<h1 id="research-role-questions">Research Role Questions</h1>
+<ol>
+<li><p><strong>Walk me through the most important project you did. What was your contribution?</strong></p>
+<p><span><em>Answer sketch:</em> Problem and why it mattered; baseline; key idea; what failed; final results with error bars; your part vs the team’s; limitations; next steps (Ch. 20).</span></p></li>
+<li><p><strong>How do you know your improvement is real and not noise?</strong></p>
+<p><span><em>Answer sketch:</em> Multiple seeds, confidence intervals, matched compute and tuning budgets for baselines, ablations, held-out test sets touched once, significance tests where appropriate.</span></p></li>
+<li><p><strong>Design an experiment to test whether method A beats B for LLM fine-tuning.</strong></p>
+<p><span><em>Answer sketch:</em> Fix data, compute, and evaluation; tune both equally; several seeds; report on in-domain and out-of-domain evals; ablate the components that differ; check for contamination.</span></p></li>
+<li><p><strong>Pick a recent paper you like. What is its key assumption, and how would you break it?</strong></p>
+<p><span><em>Answer sketch:</em> Summarize in two minutes; name the assumption (data scale, evaluation proxy, compute budget); propose a test where it fails.</span></p></li>
+<li><p><strong>What are scaling laws, and how would you use them to plan a training run?</strong></p>
+<p><span><em>Answer sketch:</em> Loss falls predictably as a power law in parameters, data, and compute; fit small runs and extrapolate to choose model size and token count for a compute budget.</span></p></li>
+<li><p><strong>Your ablation shows removing a component does not change results. What do you conclude?</strong></p>
+<p><span><em>Answer sketch:</em> The component may be redundant, the evaluation insensitive, or another component compensating. Test on harder slices and in combination before removing it.</span></p></li>
+<li><p><strong>How would you evaluate a model’s reasoning ability without contamination?</strong></p>
+<p><span><em>Answer sketch:</em> Fresh, procedurally generated or private problems; perturbations of known problems; process checks (step correctness); measuring robustness to paraphrase.</span></p></li>
+<li><p><strong>How would you investigate why a model fails on a class of inputs?</strong></p>
+<p><span><em>Answer sketch:</em> Collect failures, cluster them, form hypotheses, test with controlled synthetic examples, use interpretability tools (probing, attribution), then try targeted data or training fixes.</span></p></li>
+<li><p><strong>What would you work on in your first six months here?</strong></p>
+<p><span><em>Answer sketch:</em> Show you know the team’s area; propose one concrete, testable direction and one infrastructure or evaluation improvement; explain how you would measure success.</span></p></li>
+<li><p><strong>Implement a small transformer block / training loop and explain each line.</strong></p>
+<p><span><em>Answer sketch:</em> Pre-norm attention and MLP with residuals, causal mask, cross-entropy, AdamW, LR schedule, gradient clipping; sanity check by overfitting a small batch.</span></p></li>
+</ol>
+<h1 id="ml-coding-problems">ML Coding Problems</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Problem</th>
+<th style="text-align: left;">Level</th>
+<th style="text-align: left;">Key points</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Stable softmax + cross-entropy and its gradient</td>
+<td style="text-align: left;">Easy</td>
+<td style="text-align: left;">max shift, log-sum-exp, <span class="math inline">\(p - y\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Linear regression with gradient descent / closed form</td>
+<td style="text-align: left;">Easy</td>
+<td style="text-align: left;">vectorized gradient, solve not invert</td>
+</tr>
+<tr>
+<td style="text-align: left;">Logistic regression with L2, from scratch</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">stable sigmoid, convergence check</td>
+</tr>
+<tr>
+<td style="text-align: left;">k-means with k-means++</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">distance trick, empty clusters</td>
+</tr>
+<tr>
+<td style="text-align: left;">kNN classifier, vectorized</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;"><span class="math inline">\(\lVert a\rVert^2 + \lVert b\rVert^2 - 2ab^\top\)</span>, argpartition</td>
+</tr>
+<tr>
+<td style="text-align: left;">Decision tree split selection (Gini)</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">sorted sweep, ties</td>
+</tr>
+<tr>
+<td style="text-align: left;">PCA via SVD</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">centering, explained variance</td>
+</tr>
+<tr>
+<td style="text-align: left;">ROC-AUC, precision/recall, F1, confusion matrix</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">ranks with ties</td>
+</tr>
+<tr>
+<td style="text-align: left;">NDCG@k and MRR</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">ideal ordering, gains</td>
+</tr>
+<tr>
+<td style="text-align: left;">Naive Bayes text classifier</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">Laplace smoothing, log space</td>
+</tr>
+<tr>
+<td style="text-align: left;">2D convolution (stride, padding)</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">output size formula</td>
+</tr>
+<tr>
+<td style="text-align: left;">IoU and non-max suppression</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">per class, vectorized IoU</td>
+</tr>
+<tr>
+<td style="text-align: left;">Reservoir / weighted / stratified sampling</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">proofs of uniformity</td>
+</tr>
+<tr>
+<td style="text-align: left;">Leakage-free split and scaler fit on train only</td>
+<td style="text-align: left;">Easy</td>
+<td style="text-align: left;">group/time split</td>
+</tr>
+<tr>
+<td style="text-align: left;">Target encoding out-of-fold</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">smoothing, folds</td>
+</tr>
+<tr>
+<td style="text-align: left;">MLP forward and backward pass</td>
+<td style="text-align: left;">Hard</td>
+<td style="text-align: left;">shapes, gradient check</td>
+</tr>
+<tr>
+<td style="text-align: left;">Matrix factorization with SGD or ALS</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">only observed entries</td>
+</tr>
+<tr>
+<td style="text-align: left;">One gradient boosting step</td>
+<td style="text-align: left;">Hard</td>
+<td style="text-align: left;">pseudo-residuals, leaf values</td>
+</tr>
+<tr>
+<td style="text-align: left;">Scaled dot-product attention with causal and padding masks</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">mask before softmax</td>
+</tr>
+<tr>
+<td style="text-align: left;">Multi-head attention module</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">reshape and transpose</td>
+</tr>
+<tr>
+<td style="text-align: left;">Sinusoidal positional encoding / RoPE</td>
+<td style="text-align: left;">Easy–Medium</td>
+<td style="text-align: left;">pairs of dimensions</td>
+</tr>
+<tr>
+<td style="text-align: left;">BPE training and encoding</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">pair counts, merge order</td>
+</tr>
+<tr>
+<td style="text-align: left;">Temperature, top-<span class="math inline">\(k\)</span>, top-<span class="math inline">\(p\)</span> sampling</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">cumulative sum, keep <span class="math inline">\(\ge 1\)</span> token</td>
+</tr>
+<tr>
+<td style="text-align: left;">Append-only KV cache for generation</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">equality with full recompute</td>
+</tr>
+<tr>
+<td style="text-align: left;">Beam search with length normalization</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">heap of beams</td>
+</tr>
+<tr>
+<td style="text-align: left;">InfoNCE / CLIP loss</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">symmetric cross-entropy</td>
+</tr>
+<tr>
+<td style="text-align: left;">DPO loss from log-probabilities</td>
+<td style="text-align: left;">Hard</td>
+<td style="text-align: left;">sum token log-probs, <span class="math inline">\(\beta\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">LoRA linear layer</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;"><span class="math inline">\(B = 0\)</span> init, scaling <span class="math inline">\(\alpha/r\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Cosine top-<span class="math inline">\(k\)</span> retrieval for RAG</td>
+<td style="text-align: left;">Medium</td>
+<td style="text-align: left;">normalize, partial sort</td>
+</tr>
+<tr>
+<td style="text-align: left;">Online softmax / streaming attention for one query</td>
+<td style="text-align: left;">Hard</td>
+<td style="text-align: left;">rescaling by <span class="math inline">\(e^{m - m&#39;}\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Tiny autograd engine (scalar)</td>
+<td style="text-align: left;">Hard</td>
+<td style="text-align: left;">topological order, accumulate grads</td>
+</tr>
+<tr>
+<td style="text-align: left;">Agent loop with tool validation, budget, and retries</td>
+<td style="text-align: left;">Hard</td>
+<td style="text-align: left;">termination, idempotency</td>
+</tr>
+</tbody>
+</table>
+<h1 id="dsa-problems-by-pattern">DSA Problems by Pattern</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Pattern</th>
+<th style="text-align: left;">Representative problems</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Hashing</td>
+<td style="text-align: left;">two sum; group anagrams; longest consecutive sequence; top <span class="math inline">\(k\)</span> frequent elements; valid sudoku</td>
+</tr>
+<tr>
+<td style="text-align: left;">Prefix sums</td>
+<td style="text-align: left;">subarray sum equals <span class="math inline">\(k\)</span>; continuous subarray sum; product of array except self; range sum query 2D</td>
+</tr>
+<tr>
+<td style="text-align: left;">Two pointers</td>
+<td style="text-align: left;">3sum; container with most water; trapping rain water; sort colors; remove duplicates</td>
+</tr>
+<tr>
+<td style="text-align: left;">Sliding window</td>
+<td style="text-align: left;">longest substring without repeats; minimum window substring; permutation in string; longest repeating character replacement; sliding window maximum</td>
+</tr>
+<tr>
+<td style="text-align: left;">Stack / monotonic</td>
+<td style="text-align: left;">valid parentheses; basic calculator; daily temperatures; largest rectangle in histogram; asteroid collision</td>
+</tr>
+<tr>
+<td style="text-align: left;">Linked lists</td>
+<td style="text-align: left;">reverse list; merge two / <span class="math inline">\(k\)</span> sorted lists; linked list cycle II; reorder list; LRU cache; copy list with random pointer</td>
+</tr>
+<tr>
+<td style="text-align: left;">Binary search</td>
+<td style="text-align: left;">search in rotated array; find minimum in rotated array; median of two sorted arrays; Koko eating bananas; split array largest sum</td>
+</tr>
+<tr>
+<td style="text-align: left;">Trees</td>
+<td style="text-align: left;">max depth; diameter; lowest common ancestor; validate BST; serialize/deserialize; binary tree max path sum; right side view</td>
+</tr>
+<tr>
+<td style="text-align: left;">Heaps</td>
+<td style="text-align: left;"><span class="math inline">\(k\)</span>-th largest; <span class="math inline">\(k\)</span> closest points; find median from data stream; task scheduler; meeting rooms II</td>
+</tr>
+<tr>
+<td style="text-align: left;">Tries</td>
+<td style="text-align: left;">implement trie; word search II; design add-and-search words; autocomplete system</td>
+</tr>
+<tr>
+<td style="text-align: left;">Graphs (BFS/DFS)</td>
+<td style="text-align: left;">number of islands; rotting oranges; clone graph; word ladder; Pacific Atlantic water flow</td>
+</tr>
+<tr>
+<td style="text-align: left;">Topological sort</td>
+<td style="text-align: left;">course schedule I/II; alien dictionary; parallel courses; minimum height trees</td>
+</tr>
+<tr>
+<td style="text-align: left;">Union-find</td>
+<td style="text-align: left;">redundant connection; accounts merge; number of provinces; number of islands II</td>
+</tr>
+<tr>
+<td style="text-align: left;">Shortest paths / MST</td>
+<td style="text-align: left;">network delay time; cheapest flights within <span class="math inline">\(k\)</span> stops; path with minimum effort; min cost to connect all points</td>
+</tr>
+<tr>
+<td style="text-align: left;">Backtracking</td>
+<td style="text-align: left;">subsets I/II; permutations I/II; combination sum; N-queens; word search; palindrome partitioning</td>
+</tr>
+<tr>
+<td style="text-align: left;">1D DP</td>
+<td style="text-align: left;">climbing stairs; house robber I/II; coin change; word break; decode ways; LIS</td>
+</tr>
+<tr>
+<td style="text-align: left;">2D / sequence DP</td>
+<td style="text-align: left;">edit distance; LCS; unique paths; maximal square; regular expression matching; distinct subsequences</td>
+</tr>
+<tr>
+<td style="text-align: left;">Interval / tree / bitmask DP</td>
+<td style="text-align: left;">burst balloons; house robber III; partition to <span class="math inline">\(k\)</span> equal subsets; shortest path visiting all nodes</td>
+</tr>
+<tr>
+<td style="text-align: left;">Greedy / intervals</td>
+<td style="text-align: left;">merge intervals; non-overlapping intervals; jump game I/II; gas station; partition labels</td>
+</tr>
+<tr>
+<td style="text-align: left;">Strings</td>
+<td style="text-align: left;">implement strStr (KMP); longest palindromic substring; repeated DNA sequences; longest duplicate substring</td>
+</tr>
+<tr>
+<td style="text-align: left;">Range structures</td>
+<td style="text-align: left;">range sum query mutable; count of smaller numbers after self; reverse pairs; my calendar</td>
+</tr>
+<tr>
+<td style="text-align: left;">Randomized / design</td>
+<td style="text-align: left;">insert-delete-getRandom <span class="math inline">\(O(1)\)</span>; random pick with weight; linked list random node; shuffle an array</td>
+</tr>
+</tbody>
+</table>
+<h1 id="ml-and-genai-system-design-prompts">ML and GenAI System Design Prompts</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>For each, practice the nine steps of Chapter 20 in 40 minutes.</p>
+<ol>
+<li><p>Design a video or short-form feed recommendation system.</p></li>
+<li><p>Design a people-you-may-know (friend suggestion) system.</p></li>
+<li><p>Design ads click-through-rate prediction and calibration for bidding.</p></li>
+<li><p>Design product search ranking for an e-commerce site.</p></li>
+<li><p>Design a query autocomplete system.</p></li>
+<li><p>Design harmful content / spam detection for a social network.</p></li>
+<li><p>Design payment fraud detection with delayed labels.</p></li>
+<li><p>Design delivery-time (ETA) prediction for a food delivery app.</p></li>
+<li><p>Design a visual search (search by image) system.</p></li>
+<li><p>Design a notification ranking system that avoids over-notifying users.</p></li>
+<li><p>Design a RAG assistant over internal documents with access control.</p></li>
+<li><p>Design a customer support agent that can issue refunds safely.</p></li>
+<li><p>Design a coding assistant (autocomplete and agent mode).</p></li>
+<li><p>Design an LLM evaluation platform for many product teams.</p></li>
+<li><p>Design an LLM gateway with routing, caching, quotas, and failover.</p></li>
+<li><p>Design a pipeline to build a deduplicated, decontaminated pre-training corpus.</p></li>
+<li><p>Design an online serving system for a 70B model with strict latency SLOs.</p></li>
+<li><p>Design a semantic search engine over 1 billion documents.</p></li>
+<li><p>Design a meeting summarization product at scale.</p></li>
+<li><p>Design a system to detect and reduce hallucinations in a deployed assistant.</p></li>
+</ol>
+</div>
+<h1 id="low-level-design-and-practical-coding-prompts">Low-Level Design and Practical Coding Prompts</h1>
+<ol>
+<li><p>In-memory key-value store; then add TTL, nested transactions, value counts, thread safety, persistence.</p></li>
+<li><p>LRU and LFU caches with <span class="math inline">\(O(1)\)</span> operations.</p></li>
+<li><p>Rate limiter with pluggable algorithms; then per-tenant token budgets for an LLM API.</p></li>
+<li><p>Task scheduler with dependencies, retries with backoff, and <span class="math inline">\(N\)</span> workers.</p></li>
+<li><p>In-memory pub/sub with ordering and slow-consumer handling.</p></li>
+<li><p>Dynamic batching inference server with deadlines and backpressure.</p></li>
+<li><p>Feature store with online reads and point-in-time training reads.</p></li>
+<li><p>Tool registry and executor for an agent with permissions, approval, and budgets.</p></li>
+<li><p>Experiment tracker (runs, params, metrics, artifacts).</p></li>
+<li><p>Streaming log aggregator: parse lines, compute per-minute counts and p95 latency.</p></li>
+<li><p>Tokenizer class: train BPE, encode, decode, save and load.</p></li>
+<li><p>Data loader that shards files across workers, shuffles with a buffer, and resumes from a checkpoint.</p></li>
+<li><p>Prompt template engine with variables, validation, and versioning.</p></li>
+<li><p>Conversation memory with a sliding window plus summaries under a token budget.</p></li>
+</ol>
+<h1 id="behavioral-prompts">Behavioral Prompts</h1>
+<ol>
+<li><p>Tell me about a project you are most proud of. How did you measure impact?</p></li>
+<li><p>Tell me about a time you disagreed with a colleague or manager on a technical decision.</p></li>
+<li><p>Describe a model or launch that failed. What did you learn and change?</p></li>
+<li><p>Tell me about a time requirements were ambiguous. How did you proceed?</p></li>
+<li><p>Describe a time you dove deep into data or code to find a root cause others missed.</p></li>
+<li><p>Tell me about a time you had to choose between shipping quickly and doing it right.</p></li>
+<li><p>How have you influenced a team you did not manage?</p></li>
+<li><p>Tell me about receiving critical feedback.</p></li>
+<li><p>Describe a time you simplified something complex for a non-technical stakeholder.</p></li>
+<li><p>Tell me about a time you disagreed but committed to the decision.</p></li>
+<li><p>Why this company and this role? What do you think about the risks and benefits of AI?</p></li>
+<li><p>Tell me about mentoring someone.</p></li>
+</ol>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Practice answering out loud, then compare with the sketch and the referenced chapter.</p></li>
+<li><p>Scenario questions reward a structured checklist: data, pipeline, training, evaluation, serving, monitoring.</p></li>
+<li><p>Research rounds reward rigor: seeds, matched baselines, ablations, and honest limitations.</p></li>
+<li><p>Use the problem tables to practice pattern recognition on mixed sets, not to memorize solutions.</p></li>
+</ul>
+</div>

@@ -1,0 +1,343 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Order matters</strong> in a mixed-precision step: several operations (unscaling, overflow checking, clipping) are only correct when applied to the true gradient <span class="math inline">\(g\)</span>, not the scaled <span class="math inline">\(Sg\)</span>. The scale <span class="math inline">\(S\)</span> exists only to protect the backward pass. Everything after it should see unscaled values.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>Why must accumulated token losses share one global denominator?</p></li>
+<li><p>When is averaging independently normalized microbatch losses valid?</p></li>
+</ol>
+<p>Mixed precision accelerates tensor operations and reduces activation memory, but FP16 has limited range. Small gradients may underflow to zero; large scaled values may overflow to infinity.</p>
+<p>For parameters and gradients:</p>
+<p><span class="math display">\[\theta,g\in\mathbb{R}^{P}\]</span></p>
+<p>loss scaling computes:</p>
+<p><span class="math display">\[L_s=S L\]</span></p>
+<p>so that:</p>
+<p><span class="math display">\[g_s
+=
+\nabla_\theta L_s
+=
+S\nabla_\theta L
+=
+Sg\]</span></p>
+<p>After backward:</p>
+<p><span class="math display">\[g=\frac{g_s}{S}\]</span></p>
+<p>Scaling preserves the mathematical update while moving intermediate values into a safer numerical range.</p>
+<p>The correct step order is:</p>
+<p><span class="math display">\[\text{scaled backward}
+\rightarrow
+\text{unscale}
+\rightarrow
+\text{finite check}
+\rightarrow
+\text{clip}
+\rightarrow
+\text{optimizer step}\]</span></p>
+<p>Clipping before unscaling is wrong. If:</p>
+<p><span class="math display">\[\|g_s\|=S\|g\|\]</span></p>
+<p>and you clip <span class="math inline">\(g_s\)</span> to threshold <span class="math inline">\(c\)</span>, the effective unscaled threshold becomes:</p>
+<p><span class="math display">\[\frac{c}{S}\]</span></p>
+<p>Dynamic scaling reduces <span class="math inline">\(S\)</span> after overflow and may increase it after sustained successful steps. If any microbatch overflows during gradient accumulation, the complete accumulated update is normally discarded.</p>
+<p>BF16 has fewer mantissa bits than FP16 but approximately FP32’s exponent range, so it generally needs less loss scaling.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: why unscale before clipping</div>
+<p><strong>Step 1.</strong> After backward, the stored gradient is <span class="math inline">\(g_s=Sg\)</span>, with norm <span class="math inline">\(\|g_s\|=S\|g\|\)</span>.</p>
+<p><strong>Step 2.</strong> Clipping <span class="math inline">\(g_s\)</span> at threshold <span class="math inline">\(\tau\)</span> uses coefficient <span class="math inline">\(c=\min(1,\tau/(S\|g\|))\)</span>. In true units that’s a threshold of <span class="math inline">\(\tau/S\)</span>: with <span class="math inline">\(S=65{,}536\)</span>, almost every step gets clipped to a tiny update.</p>
+<p><strong>Step 3.</strong> Unscale first, <span class="math inline">\(g=g_s/S\)</span>, then clip: <span class="math inline">\(c=\min(1,\tau/\|g\|)\)</span>, the intended threshold.</p>
+<p><strong>Step 4.</strong> <strong>Overflow check before the step:</strong> if any <span class="math inline">\(g_s\)</span> is infinite, <span class="math inline">\(g\)</span> is too, and the whole update must be skipped. Clipping an infinite norm gives <span class="math inline">\(c=0\)</span> or NaN, which silently wastes or corrupts the step.</p>
+<p><strong>Step 5.</strong> <strong>Scaler update last:</strong> decide to halve or grow <span class="math inline">\(S\)</span> only after knowing whether this step overflowed.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: mixed-precision training step (correct order)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> model, optimizer, scaler with scale <span class="math inline">\(S\)</span>, clip threshold <span class="math inline">\(\tau\)</span></div>
+<div class="algo-line" style="--d:0">forward under autocast; backward on <span class="math inline">\(S\cdot L\)</span> (accumulate microbatches if needed)</div>
+<div class="algo-line" style="--d:0">unscale: <span class="math inline">\(g\gets g_s/S\)</span> <em>▷ <code>scaler.unscale_(optimizer)</code></em></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> any <span class="math inline">\(g\)</span> is <span class="math inline">\(\infty\)</span> or NaN <strong>then</strong></div>
+<div class="algo-line" style="--d:1">skip the step; <span class="math inline">\(S\gets S/2\)</span></div>
+<div class="algo-line" style="--d:0"><strong>else</strong></div>
+<div class="algo-line" style="--d:1">clip global norm of <span class="math inline">\(g\)</span> to <span class="math inline">\(\tau\)</span>; optimizer step; possibly grow <span class="math inline">\(S\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">zero gradients</div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Simulate FP16 gradient storage on CPU and observe underflow recovery.</p>
+<pre class="code python"><code class="language-python">import torch
+
+coefficients = torch.tensor([
+    1e-8,
+    3e-7,
+    -2e-5,
+    1e-3,
+])                                                  # [P]
+
+parameter = torch.ones(
+    4,
+    requires_grad=True,
+)                                                   # [P]
+
+loss = ...                                          # TODO 1: scalar
+
+true_gradient = torch.autograd.grad(
+    loss,
+    parameter,
+    retain_graph=True,
+)[0]
+
+# Simulate storing an unscaled gradient in FP16.
+unscaled_fp16_gradient = ...                        # TODO 2: [P]
+
+scale = 2.0**12
+
+scaled_gradient = torch.autograd.grad(
+    ...,
+    parameter,
+)[0]                                                # TODO 3: [P]
+
+stored_scaled_gradient = ...                        # TODO 4: FP16
+recovered_gradient = ...                            # TODO 5: FP32
+
+print(&quot;true gradient:     &quot;, true_gradient)
+print(&quot;unscaled via FP16: &quot;, unscaled_fp16_gradient)
+print(&quot;scaled + recovered:&quot;, recovered_gradient)
+
+print(
+    &quot;smallest gradient vanished without scaling:&quot;,
+    unscaled_fp16_gradient[0].item() == 0.0,
+)
+
+assert unscaled_fp16_gradient[0] == 0
+assert recovered_gradient[0] != 0</code></pre>
+<p>Before running, predict:</p>
+<ul>
+<li><p>Which coefficient will definitely become zero when directly cast to FP16?</p></li>
+<li><p>Does loss scaling improve the mathematical precision of the true gradient?</p></li>
+<li><p>Why must unscaling occur before the optimizer update?</p></li>
+</ul>
+<p>Now simulate dynamic scaling after overflow:</p>
+<pre class="code python"><code class="language-python">large_coefficients = torch.tensor([
+    8.0,
+    -5.0,
+])                                                  # [P]
+
+
+def simulate_scaled_backward(coefficients, scale):
+    parameter = torch.ones(
+        coefficients.numel(),
+        requires_grad=True,
+    )
+
+    loss = ...                                      # TODO 6
+
+    scaled_gradient = torch.autograd.grad(
+        ...,
+        parameter,
+    )[0]                                            # TODO 7
+
+    # Simulate a low-precision gradient-producing operation.
+    stored_gradient = ...                           # TODO 8
+
+    return stored_gradient
+
+
+dynamic_scale = 2.0**14
+
+for attempt in range(3):
+    stored_gradient = simulate_scaled_backward(
+        large_coefficients,
+        dynamic_scale,
+    )
+
+    finite = ...                                    # TODO 9
+
+    print(
+        f&quot;attempt={attempt}, &quot;
+        f&quot;scale={dynamic_scale:.0f}, &quot;
+        f&quot;finite={finite}&quot;
+    )
+
+    if finite:
+        recovered = ...                             # TODO 10
+        break
+
+    dynamic_scale = ...                             # TODO 11
+
+print(&quot;final scale:&quot;, dynamic_scale)
+print(&quot;recovered gradient:&quot;, recovered)
+
+assert dynamic_scale == 2.0**12
+assert torch.allclose(recovered, large_coefficients)</code></pre>
+<p>Finally, reproduce the clipping-order bug:</p>
+<pre class="code python"><code class="language-python">true_update_gradient = torch.tensor([
+    3.0,
+    4.0,
+])                                                  # norm = 5
+
+clip_scale = 1024.0
+max_norm = 2.0
+
+
+def clip_by_global_norm(gradient, max_norm):
+    multiplier = torch.clamp(
+        max_norm / gradient.norm(),
+        max=1.0,
+    )
+
+    return gradient * multiplier
+
+
+correct_clipped = ...                               # TODO 12
+
+wrong_clipped = ...                                 # TODO 13:
+                                                    # scale, clip, unscale
+
+print(&quot;\ncorrect clipped norm:&quot;,
+      correct_clipped.norm().item())
+
+print(&quot;wrong clipped norm:&quot;,
+      wrong_clipped.norm().item())
+
+assert torch.allclose(
+    correct_clipped.norm(),
+    torch.tensor(max_norm),
+)
+
+assert wrong_clipped.norm() &lt; 0.01</code></pre>
+<p>Hints:</p>
+<ul>
+<li><p>The toy loss is the dot product of parameter and coefficients.</p></li>
+<li><p>Direct FP16 simulation: <code>.half().float()</code>.</p></li>
+<li><p>Scale the loss before differentiating.</p></li>
+<li><p>Check every gradient element with <code>torch.isfinite(...).all()</code>.</p></li>
+<li><p>On overflow, halve the scale and skip the update.</p></li>
+<li><p>Correct clipping operates on the recovered, unscaled gradient.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why can loss scaling prevent underflow without changing the intended optimizer update?</p></li>
+<li><p>Prediction: what effective clipping threshold results from clipping scaled gradients at <span class="math inline">\(1.0\)</span> with <span class="math inline">\(S=4096\)</span>?</p></li>
+<li><p>Debugging: loss is finite, but the optimizer repeatedly skips steps. What tensors and scaler statistics should you inspect?</p></li>
+<li><p>Why must one scale remain fixed throughout a gradient-accumulation window?</p></li>
+<li><p>Why does BF16 usually require less loss scaling than FP16?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<p>Underflow experiment:</p>
+<pre class="code python"><code class="language-python">loss = (
+    parameter * coefficients
+).sum()
+
+true_gradient = torch.autograd.grad(
+    loss,
+    parameter,
+    retain_graph=True,
+)[0]
+
+unscaled_fp16_gradient = (
+    true_gradient.half().float()
+)
+
+scaled_gradient = torch.autograd.grad(
+    scale * loss,
+    parameter,
+)[0]
+
+stored_scaled_gradient = scaled_gradient.half()
+
+recovered_gradient = (
+    stored_scaled_gradient.float() / scale
+)</code></pre>
+<p>Dynamic scaling:</p>
+<pre class="code python"><code class="language-python">def simulate_scaled_backward(coefficients, scale):
+    parameter = torch.ones(
+        coefficients.numel(),
+        requires_grad=True,
+    )
+
+    loss = (
+        parameter * coefficients
+    ).sum()
+
+    scaled_gradient = torch.autograd.grad(
+        scale * loss,
+        parameter,
+    )[0]
+
+    stored_gradient = scaled_gradient.half()
+
+    return stored_gradient
+
+
+dynamic_scale = 2.0**14
+
+for attempt in range(3):
+    stored_gradient = simulate_scaled_backward(
+        large_coefficients,
+        dynamic_scale,
+    )
+
+    finite = torch.isfinite(
+        stored_gradient
+    ).all().item()
+
+    print(
+        f&quot;attempt={attempt}, &quot;
+        f&quot;scale={dynamic_scale:.0f}, &quot;
+        f&quot;finite={finite}&quot;
+    )
+
+    if finite:
+        recovered = (
+            stored_gradient.float() / dynamic_scale
+        )
+        break
+
+    dynamic_scale *= 0.5</code></pre>
+<p>Clipping order:</p>
+<pre class="code python"><code class="language-python">correct_clipped = clip_by_global_norm(
+    true_update_gradient,
+    max_norm,
+)
+
+wrong_clipped = (
+    clip_by_global_norm(
+        true_update_gradient * clip_scale,
+        max_norm,
+    )
+    / clip_scale
+)</code></pre>
+<p>The first gradient, <span class="math inline">\(10^{-8}\)</span>, disappears when directly represented in FP16. Scaling by <span class="math inline">\(4096\)</span> moves it to approximately:</p>
+<p><span class="math display">\[4.096\times10^{-5}\]</span></p>
+<p>which survives low-precision storage. Dividing in FP32 recovers an approximation of the original gradient. Scaling does not create information or improve the exact gradient; it prevents representable information from being prematurely lost.</p>
+<p>The initial dynamic scale overflows:</p>
+<p><span class="math display">\[8\cdot2^{14}=131072\]</span></p>
+<p>which exceeds the largest finite FP16 value, approximately <span class="math inline">\(65504\)</span>. The update must be skipped because unscaling an infinity does not recover the original value. Halving twice produces <span class="math inline">\(S=4096\)</span>, where the scaled gradient is finite.</p>
+<p>For clipping, the correct result has norm <span class="math inline">\(2\)</span>. Clipping first in scaled space produces:</p>
+<p><span class="math display">\[\left\|
+\frac{\operatorname{clip}(Sg,2)}{S}
+\right\|
+=
+\frac{2}{1024}\]</span></p>
+<p>so the update is almost eliminated.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Multiplying and subsequently dividing by the same scale leaves the intended gradient unchanged while shifting intermediate magnitudes into the representable range.</p></li>
+<li><p>The effective threshold is <span class="math inline">\(1/4096\)</span>.</p></li>
+<li><p>Inspect gradients before and after unscaling, the first nonfinite layer, the current scale, skipped-step count, activation ranges, and whether the forward loss hides an overflowing backward operation.</p></li>
+<li><p>Changing scale between microbatches makes accumulated gradients represent different units; one unscale operation can no longer recover their sum correctly.</p></li>
+<li><p>BF16 retains FP32’s broad exponent range, making overflow and underflow less frequent, although its reduced mantissa precision introduces different rounding concerns.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ul>
+<li><p>Accumulated token losses require one global denominator so every valid token receives equal weight.</p></li>
+<li><p>Averaging microbatch means is valid when their effective observation counts are equal, or when each mean is explicitly weighted by its count.</p></li>
+</ul>

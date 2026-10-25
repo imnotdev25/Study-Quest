@@ -1,0 +1,424 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: testing a new dish on one table</div>
+<p>A restaurant tries a new dish on one randomly chosen table per evening before putting it on the menu. Offline evaluation decides which dishes deserve a table. A small randomized online test, the canary, decides which deserve the menu.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/04fe78cb6b7f.svg" alt="diagram" loading="lazy"></figure>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why does effective sample size fall as a mixture moves away from its behavior policy?</p></li>
+<li><p>What does a Bonferroni correction protect against when searching a fixed policy grid?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="offline-evidence-earns-a-small-online-testnot-full-deployment">2. Offline evidence earns a small online test—not full deployment</h3>
+<p>Offline evaluation depends on old-policy coverage and modeling assumptions. A canary rollout sends a small, randomly selected fraction of complete episodes to the candidate policy:</p>
+<p><span class="math display">\[Z_i\sim\operatorname{Bernoulli}(p)\]</span></p>
+<p>where <span class="math inline">\(Z_i=1\)</span> means candidate and <span class="math inline">\(Z_i=0\)</span> means control.</p>
+<p>Because assignment is randomized, the difference in observed means estimates the candidate’s online effect:</p>
+<p><span class="math display">\[\hat\Delta_R
+=
+\bar R_{\text{candidate}}
+-
+\bar R_{\text{control}}\]</span></p>
+<p>Its Welch standard error is:</p>
+<p><span class="math display">\[\operatorname{SE}(\hat\Delta_R)
+=
+\sqrt{
+\frac{s_c^2}{n_c}
++
+\frac{s_b^2}{n_b}
+}\]</span></p>
+<p>At a fixed sample size, a one-sided approximate 95% lower bound is:</p>
+<p><span class="math display">\[\operatorname{LCB}_R
+=
+\hat\Delta_R
+-
+1.645\operatorname{SE}(\hat\Delta_R)\]</span></p>
+<p>Promotion should also have an independent safety gate. For a rare incident rate <span class="math inline">\(p\)</span>, a Wilson upper bound is more stable than the simple normal approximation:</p>
+<p><span class="math display">\[U_p=
+\frac{
+\hat p+\frac{z^2}{2n}
++
+z\sqrt{
+\frac{\hat p(1-\hat p)}{n}
++
+\frac{z^2}{4n^2}
+}
+}{
+1+\frac{z^2}{n}
+}\]</span></p>
+<p>Promote only if both conditions hold:</p>
+<p><span class="math display">\[\operatorname{LCB}_R&gt;\Delta_{\min}\]</span></p>
+<p><span class="math display">\[U_{\text{incident}}&lt;p_{\max}\]</span></p>
+<p>Randomize by an independent unit—usually user, prompt, or complete agent episode. Randomizing individual tokens falsely treats correlated decisions as independent and can let one policy affect another policy’s context.</p>
+<p>These are fixed-horizon bounds. Repeatedly checking an ordinary 95% interval and stopping at the first success inflates false-positive rates; that requires planned alpha spending or an anytime-valid confidence sequence.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>assignment, rewards, incidents: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>candidate and control masks: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>arm-specific samples: <span style="background-color: codeinlinebg"><code> [N_candidate]</code></span>, <span style="background-color: codeinlinebg"><code> [N_control]</code></span></p></li>
+<li><p>estimates, bounds and decisions: scalars</p></li>
+</ul>
+<p>A DPO checkpoint can be the candidate, but DPO’s preference objective does not establish better task reward, tool success, latency, or safety. The randomized canary measures those deployment outcomes directly.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: randomization and rare events</div>
+<p>Random assignment makes the two arms comparable, so a simple difference in means is unbiased. <strong>Rare safety events</strong> are the hard part. With 0 incidents in <span class="math inline">\(n\)</span> canary requests, the 95% upper bound on the incident rate is about <span class="math inline">\(3/n\)</span>. To show a rate below <span class="math inline">\(10^{-4}\)</span> you need about 30<span>,</span>000 clean canary requests, <em>regardless</em> of how good the reward looks.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Offline evaluation earns a canary, and online randomized evidence earns deployment.</p></li>
+<li><p>A reward win never overrides an unresolved safety bound.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: reward passes, safety doesn’t</div>
+<p>Canary: 2000 requests, reward <span class="math inline">\(+0.03\)</span> (CI clears 0), incidents 0. Safety bound <span class="math inline">\(\approx3/2000=0.15\%\)</span>, but the requirement is <span class="math inline">\(&lt;0.01\%\)</span>. Keep the canary running. Don’t ship.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Hand-picked (non-random) canary traffic.</p></li>
+<li><p>A canary window too short to see weekly patterns.</p></li>
+<li><p>Treating zero observed incidents as zero risk.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-reward-passes-rare-event-safety-remains-uncertain">3. PyTorch exercise — reward passes, rare-event safety remains uncertain</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_episodes = 4_000
+candidate_fraction = 0.10
+
+control_reward_probability = 0.60
+candidate_reward_probability = 0.72
+
+control_incident_probability = 0.020
+candidate_incident_probability = 0.035
+
+confidence_z = 1.645
+
+minimum_reward_improvement = 0.02
+maximum_incident_rate = 0.04
+
+num_candidate_episodes = int(
+    num_episodes * candidate_fraction
+)
+
+# TODO 1: Randomly assign exactly 10% of complete
+# episodes to the candidate.
+candidate_mask = torch.zeros(
+    num_episodes,
+    dtype=torch.bool,
+)
+
+candidate_rows = ...
+
+candidate_mask[candidate_rows] = True
+control_mask = ...
+
+# TODO 2: Generate observed reward and safety outcomes.
+reward_probabilities = ...
+
+incident_probabilities = ...
+
+rewards = ...
+
+incidents = ...
+
+# TODO 3: Estimate reward improvement and its
+# one-sided lower confidence bound.
+candidate_rewards = ...
+control_rewards = ...
+
+candidate_count = ...
+control_count = ...
+
+candidate_reward_mean = ...
+control_reward_mean = ...
+
+estimated_reward_improvement = ...
+
+reward_standard_error = ...
+
+reward_lcb = ...
+
+# TODO 4: Candidate incident rate and Wilson UCB.
+candidate_incidents = ...
+
+candidate_incident_count = ...
+candidate_incident_rate = ...
+
+wilson_denominator = ...
+wilson_center = ...
+wilson_radius = ...
+
+candidate_incident_ucb = ...
+
+# TODO 5: Apply both promotion gates.
+reward_gate_passes = ...
+
+safety_gate_passes = ...
+
+promote_candidate = ...
+
+print(
+    &quot;Allocation fraction:&quot;,
+    candidate_mask.to(
+        torch.float64
+    ).mean().item(),
+)
+
+print(
+    &quot;Control reward:&quot;,
+    control_reward_mean.item(),
+)
+
+print(
+    &quot;Candidate reward:&quot;,
+    candidate_reward_mean.item(),
+)
+
+print(
+    &quot;Estimated reward improvement:&quot;,
+    estimated_reward_improvement.item(),
+)
+
+print(
+    &quot;Reward improvement LCB:&quot;,
+    reward_lcb.item(),
+)
+
+print(
+    &quot;Candidate incidents:&quot;,
+    candidate_incident_count.item(),
+)
+
+print(
+    &quot;Candidate incident rate:&quot;,
+    candidate_incident_rate.item(),
+)
+
+print(
+    &quot;Candidate incident UCB:&quot;,
+    candidate_incident_ucb.item(),
+)
+
+print(
+    &quot;Reward gate passes:&quot;,
+    reward_gate_passes.item(),
+)
+
+print(
+    &quot;Safety gate passes:&quot;,
+    safety_gate_passes.item(),
+)
+
+print(
+    &quot;Promote candidate:&quot;,
+    promote_candidate.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is the exact expected reward improvement?</p></li>
+<li><p>Should the reward lower bound clear the <span style="background-color: codeinlinebg"><code> 0.02</code></span> requirement?</p></li>
+<li><p>Although the true incident rate is below <span style="background-color: codeinlinebg"><code> 0.04</code></span>, will only 400 candidate episodes provide enough evidence?</p></li>
+<li><p>If candidate traffic is quadrupled, what happens approximately to the uncertainty radius?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.randperm(num_episodes)[:num_candidate_episodes]</code></span>.</p></li>
+<li><p>Select probabilities with <span style="background-color: codeinlinebg"><code> torch.where(candidate_mask, candidate, control)</code></span>.</p></li>
+<li><p>Reward standard error combines the two sample variances.</p></li>
+<li><p>Convert counts to <span style="background-color: codeinlinebg"><code> float64</code></span> before division.</p></li>
+<li><p>Wilson’s radius includes both Bernoulli variance and <span class="math inline">\(z^2/(4n^2)\)</span>.</p></li>
+<li><p>Promotion requires both Boolean gates.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Route easy prompts to the candidate instead of randomizing. The observed improvement becomes confounded.</p></li>
+<li><p>Randomize tokens from one response independently. Token outcomes are not independent experimental units.</p></li>
+<li><p>Drop refusals or failures as “missing data.” They are policy outcomes and normally belong in evaluation.</p></li>
+<li><p>Check the ordinary confidence interval after every episode and stop at the first positive result.</p></li>
+<li><p>Optimize one scalar reward while ignoring incident rate, latency, cost, or subgroup regressions.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does random assignment remove the need for importance sampling here?</p></li>
+<li><p>Why can strong reward evidence coexist with insufficient safety evidence?</p></li>
+<li><p>Why should assignment usually persist for an entire user or episode?</p></li>
+<li><p>What must be logged for a trustworthy canary?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Random assignment:</p>
+<pre class="code python"><code class="language-python">candidate_rows = torch.randperm(
+    num_episodes
+)[:num_candidate_episodes]
+
+control_mask = ~candidate_mask</code></pre>
+<p>Outcomes:</p>
+<pre class="code python"><code class="language-python">reward_probabilities = torch.where(
+    candidate_mask,
+    torch.tensor(
+        candidate_reward_probability
+    ),
+    torch.tensor(
+        control_reward_probability
+    ),
+)
+
+incident_probabilities = torch.where(
+    candidate_mask,
+    torch.tensor(
+        candidate_incident_probability
+    ),
+    torch.tensor(
+        control_incident_probability
+    ),
+)
+
+rewards = (
+    torch.rand(num_episodes)
+    &lt; reward_probabilities
+).to(torch.float64)
+
+incidents = (
+    torch.rand(num_episodes)
+    &lt; incident_probabilities
+).to(torch.float64)</code></pre>
+<p>Reward improvement:</p>
+<pre class="code python"><code class="language-python">candidate_rewards = rewards[
+    candidate_mask
+]
+
+control_rewards = rewards[
+    control_mask
+]
+
+candidate_count = (
+    candidate_mask.sum()
+    .to(torch.float64)
+)
+
+control_count = (
+    control_mask.sum()
+    .to(torch.float64)
+)
+
+candidate_reward_mean = (
+    candidate_rewards.mean()
+)
+
+control_reward_mean = (
+    control_rewards.mean()
+)
+
+estimated_reward_improvement = (
+    candidate_reward_mean
+    - control_reward_mean
+)
+
+reward_standard_error = torch.sqrt(
+    candidate_rewards.var(
+        correction=1
+    ) / candidate_count
+    +
+    control_rewards.var(
+        correction=1
+    ) / control_count
+)
+
+reward_lcb = (
+    estimated_reward_improvement
+    - confidence_z
+    * reward_standard_error
+)</code></pre>
+<p>Wilson safety bound:</p>
+<pre class="code python"><code class="language-python">candidate_incidents = incidents[
+    candidate_mask
+]
+
+candidate_incident_count = (
+    candidate_incidents.sum()
+)
+
+candidate_incident_rate = (
+    candidate_incidents.mean()
+)
+
+wilson_denominator = (
+    1.0
+    + confidence_z ** 2
+    / candidate_count
+)
+
+wilson_center = (
+    candidate_incident_rate
+    + confidence_z ** 2
+    / (2.0 * candidate_count)
+)
+
+wilson_radius = (
+    confidence_z
+    * torch.sqrt(
+        candidate_incident_rate
+        * (
+            1.0
+            - candidate_incident_rate
+        )
+        / candidate_count
+        + confidence_z ** 2
+        / (
+            4.0
+            * candidate_count.square()
+        )
+    )
+)
+
+candidate_incident_ucb = (
+    wilson_center + wilson_radius
+) / wilson_denominator</code></pre>
+<p>Promotion gates:</p>
+<pre class="code python"><code class="language-python">reward_gate_passes = (
+    reward_lcb
+    &gt; minimum_reward_improvement
+)
+
+safety_gate_passes = (
+    candidate_incident_ucb
+    &lt; maximum_incident_rate
+)
+
+promote_candidate = (
+    reward_gate_passes
+    &amp; safety_gate_passes
+)</code></pre>
+<p>The exact expected reward improvement is:</p>
+<p><span class="math display">\[0.72-0.60=0.12\]</span></p>
+<p>The approximate reward standard error is:</p>
+<p><span class="math display">\[\sqrt{
+\frac{0.72(0.28)}{400}
++
+\frac{0.60(0.40)}{3600}
+}
+\approx0.0239\]</span></p>
+<p>Therefore, its expected lower bound is:</p>
+<p><span class="math display">\[0.12-1.645(0.0239)
+\approx0.081\]</span></p>
+<p>This comfortably clears the required improvement of <span style="background-color: codeinlinebg"><code> 0.02</code></span>.</p>
+<p>For safety, the candidate’s true rate is only <span style="background-color: codeinlinebg"><code> 0.035</code></span>, but the expected Wilson upper bound with 400 candidate episodes is roughly:</p>
+<p><span class="math display">\[U_{\text{incident}}\approx0.054\]</span></p>
+<p>Thus reward will likely pass while safety blocks promotion. The candidate may actually be safe, but the canary has not produced enough evidence to establish that. Quadrupling the sample size approximately halves the uncertainty radius.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Each arm directly produces on-policy outcomes from randomly comparable traffic, so its sample mean is unbiased for that arm’s current deployment value.</p></li>
+<li><p>Reward is common and has a large effect size; rare safety events need substantially more observations, especially when the true rate is close to the limit.</p></li>
+<li><p>Persistent assignment prevents cross-policy contamination, respects temporal correlation, and makes the independent sample size closer to the number of users or episodes.</p></li>
+<li><p>Log assignment probability, randomization unit, policy version, prompt/context, completion status, reward components, incidents, costs, latency, masks, timestamps, exclusions, and the precommitted stopping rule.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Moving away from the behavior policy makes a shrinking subset of logged actions carry increasingly large importance weights.</p></li>
+<li><p>Bonferroni adjusts for repeated comparisons across a prespecified grid; it does not repair support failure, data leakage, distribution shift, or candidate tuning on evaluation data.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> offline evaluation decides what deserves a canary. Randomized online evidence decides what deserves deployment—and reward improvement never overrides an unresolved safety bound.</p>

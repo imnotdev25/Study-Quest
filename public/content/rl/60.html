@@ -1,0 +1,234 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: splitting the bill only among people who came</div>
+<p>Splitting a dinner bill among “everyone at the table,” including the empty chairs, makes every real person pay less than they should. When tool trajectories of different lengths are padded into one tensor, a return calculation that doesn’t respect the mask spreads credit (or debt) into padding, or worse, pulls padded garbage into real returns.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/b4ad4594a0c1.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Return-to-go flows backward from the real final step. Padding gets <span class="math inline">\(G=0\)</span> and mask 0.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why must invalid tool actions be masked before sampling?</p></li>
+<li><p>Why can an invalid logit have zero direct gradient while shared model parameters still change?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-final-outcome-must-be-assigned-to-earlier-tool-decisions">2. A final outcome must be assigned to earlier tool decisions</h3>
+<p>Consider an agent trajectory:</p>
+<p><span class="math display">\[s_0,a_0,r_0,s_1,a_1,r_1,\ldots\]</span></p>
+<p>A tool call may receive no immediate reward but enable a successful answer several steps later. Its return-to-go is:</p>
+<p><span class="math display">\[G_t
+=
+\sum_{k=t}^{T-1}
+\gamma^{k-t}r_k\]</span></p>
+<p>Equivalently:</p>
+<p><span class="math display">\[G_t=r_t+\gamma G_{t+1}\]</span></p>
+<p>This assigns each action only rewards occurring after that action. Using the undiscounted total episode reward for every step can incorrectly assign earlier costs or successes to later actions.</p>
+<p>Without a critic, REINFORCE uses:</p>
+<p><span class="math display">\[L_\pi
+=
+-\frac{
+\sum_{i,t}M_{i,t}
+\log\pi_\theta(a_{i,t}\mid s_{i,t})
+G_{i,t}
+}{
+\sum_{i,t}M_{i,t}
+}\]</span></p>
+<p>With a critic, replace <span class="math inline">\(G_t\)</span> with an advantage such as:</p>
+<p><span class="math display">\[\hat A_t=G_t-V(s_t)\]</span></p>
+<p>Returns and advantages should be detached in the actor loss.</p>
+<p>For variable-length tool traces:</p>
+<ul>
+<li><p>padding must have zero return and zero loss;</p></li>
+<li><p>recursion must stop at episode boundaries;</p></li>
+<li><p>unrelated prompts must never share return information;</p></li>
+<li><p>step costs and terminal rewards should use a documented scale.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>logits: <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span></p></li>
+<li><p>actions, rewards, returns and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>policy loss: scalar</p></li>
+<li><p>gradient on logits: <span style="background-color: codeinlinebg"><code> [B, T, A]</code></span></p></li>
+</ul>
+<p>DPO can rank complete tool traces, but its sequence-level preference does not observe fresh environment transitions. Online RL can assign observed costs and outcomes across actual tool interactions.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: masked return-to-go</div>
+<p><span class="math inline">\(G_t=m_t\big(r_{t+1}+\gamma(1-d_{t+1})\,G_{t+1}\big)\)</span>, computed backward, with <span class="math inline">\(G=0\)</span> beyond the last valid step. The mask appears <em>twice</em>: in building <span class="math inline">\(G\)</span> (padding can’t feed values back) and in the loss reduction (padding can’t count in the denominator). <strong>Test:</strong> put <span class="math inline">\(10^6\)</span> into every padded reward and value. If any valid return or gradient changes, there’s a leak.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Compute tool credit backward, stopping at real boundaries.</p></li>
+<li><p>Mask padding in both return construction and loss reduction.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the <span class="math inline">\(10^6\)</span> test</div>
+<p>Trajectory: search, read, answer (<span class="math inline">\(R=1\)</span>), then two pad steps with garbage reward <span class="math inline">\(10^6\)</span>. <span class="math inline">\(\gamma=1\)</span>. Masked: <span class="math inline">\(G=(1,1,1,0,0)\)</span>. Unmasked: <span class="math inline">\(G_0\)</span> becomes <span class="math inline">\(1+2\times10^6\)</span>, and the search step looks incredible.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Forgetting <span class="math inline">\(d\)</span> at the real final step.</p></li>
+<li><p>Masking the loss but not the return computation.</p></li>
+<li><p>Right-padding in one place and left-padding in another.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-propagate-delayed-tool-rewards">3. PyTorch exercise — propagate delayed tool rewards</h3>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.9
+
+# [batch=2, time=4, actions=3]
+logits = torch.nn.Parameter(
+    torch.zeros(2, 4, 3)
+)
+
+# Padded actions are arbitrary and must not train.
+actions = torch.tensor([
+    [0, 1, 2, 1],
+    [2, 0, 0, 0],
+])
+
+# Trace 0: two tool costs, then eventual success.
+# Trace 1: success after two actions.
+# Padding contains deliberately extreme rewards.
+rewards = torch.tensor([
+    [-0.05, -0.05, 0.00, 1.00],
+    [ 0.00,  0.60, 99.0, 99.0],
+])
+
+mask = torch.tensor([
+    [1.0, 1.0, 1.0, 1.0],
+    [1.0, 1.0, 0.0, 0.0],
+])
+
+# TODO 1: Allocate returns and one running
+# return per trajectory.
+returns = ...
+running_return = ...
+
+# TODO 2: Compute discounted return-to-go backward.
+for time in reversed(range(rewards.shape[1])):
+    ...
+
+policy = Categorical(
+    logits=logits
+)
+
+# TODO 3: Selected action log-probabilities.
+selected_log_probs = ...
+
+# TODO 4: Masked REINFORCE loss using
+# detached returns.
+policy_loss = ...
+
+policy_loss.backward()
+
+# TODO 5: Check padding gradients.
+padding_gradient_max = (
+    logits.grad[mask == 0]
+    .abs()
+    .max()
+)
+
+print(&quot;Returns:\n&quot;, returns)
+print(&quot;Policy loss:&quot;, policy_loss.item())
+
+print(
+    &quot;Gradient norms by step:\n&quot;,
+    logits.grad.norm(dim=-1),
+)
+
+print(
+    &quot;Maximum padding gradient:&quot;,
+    padding_gradient_max.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should trace <span style="background-color: codeinlinebg"><code> 0</code></span>’s first action receive positive or negative return?</p></li>
+<li><p>Should trace <span style="background-color: codeinlinebg"><code> 1</code></span>’s padded reward values of <span style="background-color: codeinlinebg"><code> 99</code></span> affect any valid return?</p></li>
+<li><p>Which trace <span style="background-color: codeinlinebg"><code> 0</code></span> action receives the largest return?</p></li>
+<li><p>What gradient should padded logits receive?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Initialize both tensors with <span style="background-color: codeinlinebg"><code> torch.zeros_like(rewards)</code></span>.</p></li>
+<li><p>Recurse with <span style="background-color: codeinlinebg"><code> reward + gamma * running_return</code></span>.</p></li>
+<li><p>Multiply the running result by the current validity mask.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> Categorical.log_prob(actions)</code></span> returns <span style="background-color: codeinlinebg"><code> [B, T]</code></span>.</p></li>
+<li><p>Divide the masked loss by <span style="background-color: codeinlinebg"><code> mask.sum()</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Remove the mask from the return recursion. The padded rewards of <span style="background-color: codeinlinebg"><code> 99</code></span> then propagate backward into trace <span style="background-color: codeinlinebg"><code> 1</code></span>, making its valid actions appear enormously successful.</p>
+<p>Iterate forward rather than backward. You will compute accumulated past reward, not future return-to-go.</p>
+<p>Omit <span style="background-color: codeinlinebg"><code> .detach()</code></span> from returns in a larger system where rewards or values are differentiable. The actor can then alter the return-producing computation instead of treating credit as fixed.</p>
+<p>Finally, use one terminal reward for a long trace and a short trace. Inspect how discounting gives early actions in the long trace weaker credit—a meaningful modeling choice, not merely numerical stabilization.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is return-to-go more causal than assigning the total episode reward to every action?</p></li>
+<li><p>Where must the return recursion reset in packed trajectories?</p></li>
+<li><p>What does a larger <span class="math inline">\(\gamma\)</span> do to early tool-call credit?</p></li>
+<li><p>Why log returns by tool type and trajectory position?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Initialize recursion:</p>
+<pre class="code python"><code class="language-python">returns = torch.zeros_like(
+    rewards
+)
+
+running_return = torch.zeros(
+    rewards.shape[0],
+    dtype=rewards.dtype,
+)</code></pre>
+<p>Compute return-to-go:</p>
+<pre class="code python"><code class="language-python">for time in reversed(range(rewards.shape[1])):
+    running_return = (
+        rewards[:, time]
+        + gamma * running_return
+    )
+
+    running_return = (
+        running_return
+        * mask[:, time]
+    )
+
+    returns[:, time] = running_return</code></pre>
+<p>Selected log-probabilities:</p>
+<pre class="code python"><code class="language-python">selected_log_probs = policy.log_prob(
+    actions
+)</code></pre>
+<p>Masked actor loss:</p>
+<pre class="code python"><code class="language-python">policy_loss = -(
+    selected_log_probs
+    * returns.detach()
+    * mask
+).sum() / mask.sum()</code></pre>
+<p>The expected valid returns are approximately:</p>
+<p><span class="math display">\[G^{(0)}
+=
+[0.634,\;0.760,\;0.900,\;1.000]\]</span></p>
+<p>because:</p>
+<p><span class="math display">\[G_3=1\]</span></p>
+<p><span class="math display">\[G_2=0+0.9(1)=0.9\]</span></p>
+<p><span class="math display">\[G_1=-0.05+0.9(0.9)=0.76\]</span></p>
+<p><span class="math display">\[G_0=-0.05+0.9(0.76)=0.634\]</span></p>
+<p>For trace <span style="background-color: codeinlinebg"><code> 1</code></span>:</p>
+<p><span class="math display">\[G^{(1)}
+=
+[0.54,\;0.60,\;0,\;0]\]</span></p>
+<p>The padded <span style="background-color: codeinlinebg"><code> 99</code></span> values contribute nothing because the recursion is reset by the zero mask before reaching valid steps.</p>
+<p>All padded logits should have zero gradient.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It excludes rewards preceding the action, preventing later actions from receiving credit or blame for events that already happened.</p></li>
+<li><p>Reset at every termination, truncation boundary where bootstrapping is disallowed, padding boundary and boundary between unrelated prompts.</p></li>
+<li><p>It propagates delayed outcomes more strongly to earlier actions, while potentially increasing variance and weakening the preference for short solutions.</p></li>
+<li><p>Aggregate return can hide that one tool receives systematically negative credit, late actions dominate learning or long traces lose nearly all early-step signal.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Otherwise, the environment can receive an illegal action before the loss mask is applied.</p></li>
+<li><p>Shared parameters may also produce valid logits at other states, so they can receive gradients through those valid computations.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> calculate tool credit backward over each trajectory, stop at real boundaries and mask padding during both return construction and loss reduction. Extreme padded values should be unable to influence either valid returns or gradients.</p>

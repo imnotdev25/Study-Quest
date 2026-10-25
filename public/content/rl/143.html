@@ -1,0 +1,469 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What does importance-weight clipping trade for lower variance?</p></li>
+<li><p>Why can clipping only 1% of logged rows remove a large fraction of target value?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="normalize-weights-into-a-weighted-average">2. Normalize weights into a weighted average</h3>
+<p>Ordinary importance sampling is:</p>
+<p><span class="math display">\[\hat V_{\mathrm{IPS}}
+=
+\underbrace{
+\frac1N\sum_{i=1}^{N}w_iR_i
+}_{\text{mean weighted reward}},
+\qquad
+w_i=\frac{\pi(A_i)}{\mu(A_i)}\]</span></p>
+<p>Self-normalized importance sampling—also called weighted IS—uses:</p>
+<p><span class="math display">\[\bar w_i
+=
+\underbrace{
+\frac{w_i}{\sum_{j=1}^{N}w_j}
+}_{\text{weight normalized across the dataset}}\]</span></p>
+<p><span class="math display">\[\hat V_{\mathrm{SNIS}}
+=
+\underbrace{
+\sum_{i=1}^{N}\bar w_iR_i
+}_{\text{convex weighted average of observed rewards}}
+=
+\frac{\sum_iw_iR_i}{\sum_iw_i}\]</span></p>
+<p>Because <span class="math inline">\(\bar w_i\ge0\)</span> and <span class="math inline">\(\sum_i\bar w_i=1\)</span>, SNIS stays within the observed reward range. One huge weight cannot produce an estimate above the largest observed reward.</p>
+<p>But it is biased in finite samples:</p>
+<p><span class="math display">\[E\!\left[
+\frac{\sum_iw_iR_i}{\sum_iw_i}
+\right]
+\ne
+\underbrace{
+\frac{E[\sum_iw_iR_i]}
+     {E[\sum_iw_i]}
+}_{V^\pi}\]</span></p>
+<p>The expectation of a ratio is not generally the ratio of expectations.</p>
+<p>Under adequate support and regularity, it is consistent:</p>
+<p><span class="math display">\[\frac1N\sum_iw_iR_i
+\longrightarrow
+\underbrace{E_\mu[wR]}_{V^\pi}\]</span></p>
+<p><span class="math display">\[\frac1N\sum_iw_i
+\longrightarrow
+\underbrace{E_\mu[w]}_{1}\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[\hat V_{\mathrm{SNIS}}
+\longrightarrow
+\underbrace{\frac{V^\pi}{1}}_{\text{target-policy value}}\]</span></p>
+<p>Unlike fixed weight clipping, its bias normally shrinks with more data. It still cannot recover a target-relevant action that was never observed.</p>
+<p>For diagnostics, always report the raw:</p>
+<p><span class="math display">\[\bar w
+=
+\underbrace{\frac1N\sum_iw_i}_{\text{should approach }1}\]</span></p>
+<p>before normalization. SNIS forces normalized weights to sum to one and can otherwise hide poor realized overlap.</p>
+<p>DPO reference log-ratios are not automatically valid deployment importance weights. Similarly, PPO advantage normalization and PPO ratio clipping are different operations from SNIS evaluation.</p>
+<h3 class="unnumbered" id="pytorch-exercise-finite-sample-bias-shrinks-with-data">3. PyTorch exercise — finite-sample bias shrinks with data</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_repetitions = 10_000
+
+sample_sizes = [
+    100,
+    300,
+    1_000,
+]
+
+behavior_policy = torch.tensor([
+    0.99,
+    0.01,
+])
+
+target_policy = torch.tensor([
+    0.50,
+    0.50,
+])
+
+reward_by_action = torch.tensor([
+    0.0,
+    1.0,
+])
+
+clip_threshold = 30.0
+
+exact_target_value = (
+    target_policy * reward_by_action
+).sum()
+
+common_weight = ...
+rare_weight = ...
+
+all_results = []
+zero_event_fractions = []
+one_event_snis_values = []
+
+
+for sample_size in sample_sizes:
+    # TODO 1: Sample rare-action counts.
+    rare_counts = ...
+
+    common_counts = ...
+
+
+    # TODO 2: Calculate numerator and denominator.
+    weighted_reward_sums = ...
+
+    weight_sums = ...
+
+    mean_raw_weights = ...
+
+
+    # TODO 3: IPS and self-normalized IS.
+    ips_estimates = ...
+
+    snis_estimates = ...
+
+
+    # TODO 4: Fixed-threshold clipped IPS.
+    clipped_rare_weight = ...
+
+    clipped_ips_estimates = ...
+
+
+    # TODO 5: Compare estimators.
+    estimates = torch.stack([
+        ips_estimates,
+        snis_estimates,
+        clipped_ips_estimates,
+    ], dim=1)
+
+    means = ...
+
+    biases = ...
+
+    standard_deviations = ...
+
+    rmses = ...
+
+    statistics = torch.stack([
+        means,
+        biases,
+        standard_deviations,
+        rmses,
+    ], dim=1)
+
+    all_results.append(statistics)
+
+    zero_event_fractions.append(
+        ...
+    )
+
+    one_rare_numerator = ...
+
+    one_rare_denominator = ...
+
+    one_event_snis_values.append(
+        ...
+    )
+
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+for sample_size, statistics in zip(
+    sample_sizes,
+    all_results,
+):
+    print(f&quot;\nN = {sample_size}&quot;)
+    print(
+        &quot;Rows: IPS, SNIS, clipped IPS\n&quot;
+        &quot;Columns: mean, bias, SD, RMSE&quot;
+    )
+    print(statistics)
+
+print(
+    &quot;\nZero-event fractions:&quot;,
+    torch.stack(zero_event_fractions),
+)
+
+print(
+    &quot;SNIS value with exactly one rare episode:&quot;,
+    torch.stack(one_event_snis_values),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Can ordinary IPS exceed reward <span style="background-color: codeinlinebg"><code> 1.0</code></span>?</p></li>
+<li><p>Can SNIS exceed the observed reward range <span style="background-color: codeinlinebg"><code> [0, 1]</code></span>?</p></li>
+<li><p>Is SNIS exactly unbiased at <span class="math inline">\(N=100\)</span>?</p></li>
+<li><p>What does SNIS return when no rare action was observed?</p></li>
+<li><p>Which estimator’s bias persists as <span class="math inline">\(N\)</span> grows: SNIS or fixed clipping?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>Use a binomial distribution to avoid creating a large episode tensor:</p>
+<pre class="code python"><code class="language-python">torch.distributions.Binomial(
+    total_count=sample_size,
+    probs=behavior_policy[1],
+)</code></pre>
+<p>The sufficient statistics are:</p>
+<p><span class="math display">\[K
+=
+\underbrace{\text{number of rare episodes}}_{\text{binomial random variable}}\]</span></p>
+<p><span class="math display">\[\sum_iw_iR_i
+=
+\underbrace{K\,w_{\mathrm{rare}}}_{R_{\mathrm{rare}}=1}\]</span></p>
+<p><span class="math display">\[\sum_iw_i
+=
+\underbrace{K\,w_{\mathrm{rare}}}_{\text{rare episodes}}
++
+\underbrace{(N-K)w_{\mathrm{common}}}_{\text{common episodes}}\]</span></p>
+<p>Use <span style="background-color: codeinlinebg"><code> .clamp_min(1e-12)</code></span> on the denominator for numerical safety.</p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Normalize weights, then stop monitoring their raw mean and maximum.</p></li>
+<li><p>Normalize across a whole padded token batch instead of independently valid episodes.</p></li>
+<li><p>Normalize signed quantities as though they were nonnegative importance weights.</p></li>
+<li><p>Interpret lower SNIS variance as proof of unbiasedness.</p></li>
+<li><p>Apply sequence ratios from a DPO dataset as deployment propensities.</p></li>
+<li><p>Compare SNIS with PPO ratio clipping as if they served the same purpose.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Policy ratios:</p>
+<pre class="code python"><code class="language-python">common_weight = (
+    target_policy[0]
+    / behavior_policy[0]
+)
+
+rare_weight = (
+    target_policy[1]
+    / behavior_policy[1]
+)</code></pre>
+<p>Inside the loop:</p>
+<pre class="code python"><code class="language-python">rare_counts = (
+    torch.distributions.Binomial(
+        total_count=sample_size,
+        probs=behavior_policy[1],
+    ).sample((num_repetitions,))
+)
+
+common_counts = (
+    sample_size - rare_counts
+)</code></pre>
+<p>Numerator and denominator:</p>
+<pre class="code python"><code class="language-python">weighted_reward_sums = (
+    rare_counts
+    * rare_weight
+    * reward_by_action[1]
+)
+
+weight_sums = (
+    rare_counts * rare_weight
+    + common_counts * common_weight
+)
+
+mean_raw_weights = (
+    weight_sums / sample_size
+)</code></pre>
+<p>Estimators:</p>
+<pre class="code python"><code class="language-python">ips_estimates = (
+    weighted_reward_sums
+    / sample_size
+)
+
+snis_estimates = (
+    weighted_reward_sums
+    / weight_sums.clamp_min(1e-12)
+)
+
+clipped_rare_weight = min(
+    rare_weight.item(),
+    clip_threshold,
+)
+
+clipped_ips_estimates = (
+    rare_counts
+    * clipped_rare_weight
+    * reward_by_action[1]
+    / sample_size
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">estimates = torch.stack([
+    ips_estimates,
+    snis_estimates,
+    clipped_ips_estimates,
+], dim=1)
+
+means = estimates.mean(dim=0)
+
+biases = means - exact_target_value
+
+standard_deviations = estimates.std(
+    dim=0,
+    correction=1,
+)
+
+rmses = (
+    (
+        estimates
+        - exact_target_value
+    )
+    .square()
+    .mean(dim=0)
+    .sqrt()
+)
+
+statistics = torch.stack([
+    means,
+    biases,
+    standard_deviations,
+    rmses,
+], dim=1)
+
+all_results.append(statistics)
+
+zero_event_fractions.append(
+    (rare_counts == 0)
+    .to(torch.float64)
+    .mean()
+)
+
+one_rare_numerator = (
+    rare_weight
+    * reward_by_action[1]
+)
+
+one_rare_denominator = (
+    rare_weight
+    + (sample_size - 1)
+    * common_weight
+)
+
+one_event_snis_values.append(
+    one_rare_numerator
+    / one_rare_denominator
+)</code></pre>
+<p>Typical results:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong><span class="math inline">\(N\)</span></strong></th>
+<th style="text-align: left;"><strong>Estimator</strong></th>
+<th style="text-align: left;"><strong>Mean</strong></th>
+<th style="text-align: left;"><strong>Bias</strong></th>
+<th style="text-align: left;"><strong>SD</strong></th>
+<th style="text-align: left;"><strong>RMSE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong><span class="math inline">\(N\)</span></strong></td>
+<td style="text-align: left;"><strong>Estimator</strong></td>
+<td style="text-align: left;"><strong>Mean</strong></td>
+<td style="text-align: left;"><strong>Bias</strong></td>
+<td style="text-align: left;"><strong>SD</strong></td>
+<td style="text-align: left;"><strong>RMSE</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">100</td>
+<td style="text-align: left;">IPS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.500</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.497</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.497</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">100</td>
+<td style="text-align: left;">SNIS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.369</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.131</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.292</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.320</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">100</td>
+<td style="text-align: left;">clipped IPS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.300</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.200</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.299</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.359</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">300</td>
+<td style="text-align: left;">IPS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.500</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.287</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.287</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">300</td>
+<td style="text-align: left;">SNIS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.456</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.044</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.166</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.171</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">300</td>
+<td style="text-align: left;">clipped IPS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.300</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.200</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.172</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.264</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">1000</td>
+<td style="text-align: left;">IPS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.500</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.157</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.157</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">1000</td>
+<td style="text-align: left;">SNIS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.487</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.013</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.083</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.084</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;">1000</td>
+<td style="text-align: left;">clipped IPS</td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.300</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> -0.200</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.094</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.221</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>At <span class="math inline">\(N=100\)</span>, one rare episode gives:</p>
+<p><span class="math display">\[\hat V_{\mathrm{SNIS}}
+=
+\frac{
+\underbrace{50}_{\text{weighted rare reward}}
+}{
+\underbrace{50}_{\text{rare weight}}
++
+\underbrace{99(0.505)}_{\text{common weights}}
+}
+\approx0.50\]</span></p>
+<p>But no rare episode gives:</p>
+<p><span class="math display">\[\hat V_{\mathrm{SNIS}}
+=
+\underbrace{0}_{\text{no observed positive reward}}\]</span></p>
+<p>which occurs about <span style="background-color: codeinlinebg"><code> 36.6%</code></span> of the time at <span class="math inline">\(N=100\)</span>.</p>
+<p>The fixed clipped estimator converges to <span style="background-color: codeinlinebg"><code> 0.30</code></span>, not <span style="background-color: codeinlinebg"><code> 0.50</code></span>, because its clipping bias does not disappear. SNIS approaches <span style="background-color: codeinlinebg"><code> 0.50</code></span> as the rare-action count becomes representative.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Yes. A single rare contribution produces IPS <span style="background-color: codeinlinebg"><code> 0.50</code></span>; several can make it exceed <span style="background-color: codeinlinebg"><code> 1.0</code></span>.</p></li>
+<li><p>No. With nonnegative normalized weights, it is a convex combination of observed rewards.</p></li>
+<li><p>No. Its random numerator and denominator create finite-sample ratio bias.</p></li>
+<li><p>Zero; normalization cannot invent the missing reward-bearing action.</p></li>
+<li><p>Fixed clipping. Under adequate support, SNIS bias shrinks with increasing sample size.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Weight clipping exchanges unbiasedness for lower variance.</p></li>
+<li><p>Those rare rows can represent much more target-policy probability than logging-data frequency suggests.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> SNIS turns importance weighting into a stable weighted average and is often useful when raw IPS is explosive. Its bounded output is not a guarantee of correctness—retain raw overlap diagnostics and treat absent target-relevant behavior as a data-collection problem.</p>

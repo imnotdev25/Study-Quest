@@ -1,0 +1,125 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>A base model continues text; it doesn’t answer. <strong>SFT</strong> trains it on conversations written in a fixed <strong>chat template</strong>, with the loss counted only on the assistant’s tokens. The objective is the conditional likelihood <span class="math inline">\(\log p_\theta(\text{response}\mid\text{prompt})\)</span> (<em>LLM Fundamentals</em>, Session 12). Everything new in practice is about formatting, masking and efficiency.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/post/74d22a7ad489.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A ChatML-style template (Qwen, SmolLM). <code>assistant_only_loss=True</code> sets every grey token’s label to <span class="math inline">\(-100\)</span>. The end-of-turn token is trained, or the model never learns to stop.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: what packing does to the loss</div>
+<p><strong>Step 1.</strong> Without packing, a batch is padded to its longest example: if lengths are <span class="math inline">\(100\)</span> and <span class="math inline">\(2000\)</span>, almost half the compute is padding.</p>
+<p><strong>Step 2.</strong> Packing concatenates examples into full rows of <code>max_length</code>. TRL’s default <code>"bfd"</code> (best-fit decreasing) places each example whole into the row with the least space left that still fits.</p>
+<p><strong>Step 3.</strong> With <code>padding_free</code>, TRL passes per-example position IDs so FlashAttention treats each example as its own sequence: no attention across example boundaries.</p>
+<p><strong>Step 4.</strong> The loss stays a mean over trained (assistant) tokens of the whole batch; since TRL averages tokens across devices (<code>average_tokens_across_devices=True</code>), accumulation is exact (<em>LLM Fundamentals</em>, Session 50).</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Supervised fine-tuning with TRL: base model -&gt; instruction follower.
+
+Local smoke test:  python sft.py                       (tiny model, CPU, a few steps)
+On Modal:          modal run sft.py::train_remote      (Qwen3-0.6B-Base on smoltalk, 1x H100)
+&quot;&quot;&quot;
+import modal
+
+MODEL = &quot;Qwen/Qwen3-0.6B-Base&quot;
+DATASET = (&quot;HuggingFaceTB/smoltalk&quot;, &quot;all&quot;)
+
+
+def run_sft(model, dataset, output_dir, lora=True, **overrides):
+    from peft import LoraConfig
+    from trl import SFTConfig, SFTTrainer
+
+    defaults = dict(
+        output_dir=output_dir,
+        max_length=2048,
+        packing=True,                        # pack short chats into full 2048-token rows
+        per_device_train_batch_size=8,
+        gradient_accumulation_steps=4,
+        learning_rate=1e-4 if lora else 2e-5,
+        lr_scheduler_type=&quot;cosine&quot;,
+        warmup_steps=0.03,                   # a float &lt; 1 is a fraction of total steps
+        num_train_epochs=1,
+        logging_steps=10,
+        save_strategy=&quot;no&quot;,
+        report_to=&quot;none&quot;,
+    )
+    args = SFTConfig(**{**defaults, **overrides})   # smoke tests override some defaults
+    peft = LoraConfig(r=16, lora_alpha=32, target_modules=&quot;all-linear&quot;, task_type=&quot;CAUSAL_LM&quot;) if lora else None
+    trainer = SFTTrainer(model=model, args=args, train_dataset=dataset, peft_config=peft)
+    trainer.train()
+    return trainer
+
+
+app = modal.App(&quot;pt-book-sft&quot;)
+image = modal.Image.debian_slim(python_version=&quot;3.12&quot;).uv_pip_install(
+    &quot;torch==2.14.1&quot;, &quot;transformers==5.20.2&quot;, &quot;trl==1.16.0&quot;, &quot;datasets==5.1.0&quot;, &quot;peft==0.21.2&quot;, &quot;accelerate==1.15.0&quot;
+)
+out = modal.Volume.from_name(&quot;pt-book-models&quot;, create_if_missing=True)
+
+
+@app.function(gpu=&quot;H100&quot;, image=image, volumes={&quot;/models&quot;: out},
+              secrets=[modal.Secret.from_name(&quot;huggingface-secret&quot;)], timeout=6 * 60 * 60)
+def train_remote(n_examples: int = 100_000):
+    from datasets import load_dataset
+
+    ds = load_dataset(*DATASET, split=&quot;train&quot;).shuffle(seed=0).select(range(n_examples))
+    trainer = run_sft(MODEL, ds, &quot;/models/qwen3-0.6b-sft&quot;, lora=False, bf16=True, assistant_only_loss=True)
+    trainer.save_model(&quot;/models/qwen3-0.6b-sft&quot;)
+    out.commit()
+
+
+if __name__ == &quot;__main__&quot;:
+    from datasets import Dataset
+
+    chats = [{&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;What is {a} plus {b}?&quot;},
+                           {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: f&quot;{a} plus {b} is {a + b}.&quot;}]}
+             for a in range(10) for b in range(10)]
+    trainer = run_sft(&quot;trl-internal-testing/tiny-Qwen2ForCausalLM-2.5&quot;, Dataset.from_list(chats), &quot;/tmp/sft_smoke&quot;,
+                      max_length=64, per_device_train_batch_size=4, gradient_accumulation_steps=1,
+                      max_steps=12, logging_steps=4, learning_rate=1e-2, bf16=False, use_cpu=True)
+    logs = [h[&quot;loss&quot;] for h in trainer.state.log_history if &quot;loss&quot; in h]
+    print(&quot;SFT smoke test losses:&quot;, [round(l, 3) for l in logs])</code></pre>
+<p>Local smoke test on <code>trl-internal-testing/tiny-Qwen2ForCausalLM-2.5</code>, a randomly initialized test model, so the loss starts near <span class="math inline">\(\ln V\approx11.9\)</span> and barely moves in 12 steps. What it proves is that the config, LoRA and chat formatting run end to end:</p>
+<pre class="code output"><code class="output">SFT smoke test losses: [11.929, 11.925, 11.924]</code></pre>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">SFT dataset (HF id)</th>
+<th style="text-align: left;">size</th>
+<th style="text-align: left;">what it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>HuggingFaceTB/smoltalk</code></td>
+<td style="text-align: left;">1.1M chats</td>
+<td style="text-align: left;">SmolLM2’s mix, mostly synthetic (Magpie-Ultra, rewrites, math, code)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>HuggingFaceTB/smoltalk2</code></td>
+<td style="text-align: left;">multi-config</td>
+<td style="text-align: left;">SmolLM3’s mix, with reasoning (<code>/think</code>) and non-reasoning modes</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>allenai/tulu-3-sft-mixture</code></td>
+<td style="text-align: left;">939K</td>
+<td style="text-align: left;">Tulu 3’s open mix: persona-driven math/code, safety, multilingual</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>trl-lib/Capybara</code></td>
+<td style="text-align: left;">16K</td>
+<td style="text-align: left;">small, multi-turn: TRL’s quick-start set</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>open-thoughts/OpenThoughts3-1.2M</code></td>
+<td style="text-align: left;">1.2M</td>
+<td style="text-align: left;">long reasoning traces distilled from a strong reasoner</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>nvidia/Nemotron-Post-Training-Dataset-v2</code></td>
+<td style="text-align: left;">multi</td>
+<td style="text-align: left;">NVIDIA’s math, code, STEM, chat and tool-calling SFT data</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>Full fine-tuning or LoRA?</strong> Full SFT (<code>lora=False</code>, lr <span class="math inline">\(\approx2\times10^{-5}\)</span>) changes every weight and is what labs ship. LoRA (lr <span class="math inline">\(\approx10^{-4}\)</span>, 10–100<span class="math inline">\(\times\)</span> less optimizer memory) is close in quality for narrow tasks and is the right default on a single 24 GB GPU.</p>

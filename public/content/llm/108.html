@@ -1,0 +1,52 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>One or two sentences per paper on what it contributes and where it appears in this book. Entries marked <em>(not checked)</em> are described from their titles and general knowledge, not from a reading for this book; check the paper before relying on details.</p>
+</div>
+<h2 class="unnumbered" id="foundations">Foundations</h2>
+<ul>
+<li><p><strong>Attention Is All You Need</strong> (2017): the transformer. Sessions 6–10.</p></li>
+<li><p><strong>Root Mean Square Layer Normalization</strong> (2019): normalise by RMS only, no mean. Architectures part; RMSNorm backward in Toolkit I.</p></li>
+<li><p><strong>Scaling Laws for Neural Language Models</strong> (2020): loss falls as a power law in parameters, data and compute. Architectures part.</p></li>
+<li><p><strong>GQA</strong> (2023): share K/V across groups of query heads; uptrain from MHA checkpoints. KV memory in this part.</p></li>
+<li><p><strong>ZeRO</strong> (2020): shard optimizer state, gradients and parameters across data-parallel ranks; the basis of FSDP. Post-training book.</p></li>
+<li><p><strong>DeepSeek-V2</strong> (2024): MLA and DeepSeekMoE. Architectures part; MLA absorption in Toolkit II.</p></li>
+</ul>
+<h2 class="unnumbered" id="serving-systems">Serving systems</h2>
+<ul>
+<li><p><strong>Orca</strong> (2022): iteration-level scheduling, the origin of continuous batching.</p></li>
+<li><p><strong>PagedAttention / vLLM</strong> (2023): paged KV blocks, sharing and copy-on-write.</p></li>
+<li><p><strong>vAttention</strong> (2024): keep the KV cache virtually contiguous with CUDA virtual memory and map physical pages on demand, so unmodified attention kernels work without a block table.</p></li>
+<li><p><strong>On Evaluating Performance of LLM Inference Serving Systems</strong> (2025): common benchmarking pitfalls, and why TTFT/TPOT averages hide stalls.</p></li>
+<li><p><strong>MegaScale-Infer</strong> (2025): disaggregated expert parallelism, attention and FFN on separate GPUs with ping-pong micro-batches.</p></li>
+<li><p><strong>Arctic Inference with Shift Parallelism</strong> (2025): switch between tensor and sequence parallelism by load.</p></li>
+<li><p><strong>From Tensor Buffer to Distributed Memory Hierarchy</strong> <em>(not checked)</em>: by its title, treating the KV cache as a tiered, distributed memory system rather than a GPU buffer. Long-context section.</p></li>
+<li><p><strong>Prefill-as-a-Service</strong> <em>(not checked)</em>: by its title, KV caches of next-generation (smaller-KV) models become cheap enough to move across datacentres, so prefill can be a separate service.</p></li>
+<li><p><strong>Inference economics of language models</strong> (Epoch AI, 2025): the speed–cost frontier set by batching.</p></li>
+<li><p><strong>Defeating Nondeterminism in LLM Inference</strong> (Thinking Machines, 2025): batch-dependent reduction order is the real source of nondeterminism; batch-invariant kernels.</p></li>
+</ul>
+<h2 class="unnumbered" id="kernels-and-attention">Kernels and attention</h2>
+<ul>
+<li><p><strong>FlashAttention</strong> (2022) and <strong>FlashAttention-2</strong> (2023): IO-aware tiled attention with online softmax; better parallelism and work partitioning.</p></li>
+<li><p><strong>Ring Attention</strong> (2023): blockwise attention across a ring of devices for near-unbounded context.</p></li>
+<li><p><strong>Hardware-Efficient Attention for Fast Decoding</strong> (2025): raise decode arithmetic intensity with grouped-tied and grouped-latent attention.</p></li>
+<li><p><strong>MInference 1.0</strong> (2024): dynamic sparse attention for long-context prefill.</p></li>
+<li><p><strong>Native Sparse Attention</strong> (DeepSeek, 2025): compressed, selected and sliding-window branches, trained end to end with hardware-aligned blocks.</p></li>
+<li><p><strong>MoBA</strong> (Moonshot, 2025): mixture of block attention; a gate picks which KV blocks each query attends to.</p></li>
+<li><p><strong>DeepSeek-V3.2</strong> (2025): DeepSeek Sparse Attention, a lightweight indexer selecting top-<span class="math inline">\(k\)</span> tokens. Architectures part.</p></li>
+<li><p><strong>Bridging the Gap Between Promise and Performance for Microscaling FP4 Quantization</strong> <em>(not checked)</em>: by its title, why MXFP4/NVFP4 formats lose accuracy in practice and methods to close the gap.</p></li>
+</ul>
+<h2 class="unnumbered" id="speculative-decoding">Speculative decoding</h2>
+<ul>
+<li><p><strong>Fast Inference from Transformers via Speculative Decoding</strong> (Leviathan et al., 2023): the exact acceptance rule derived above.</p></li>
+<li><p><strong>EAGLE-3</strong> (2025): token-level drafting from fused multi-layer features with training-time test.</p></li>
+<li><p><strong>SuffixDecoding</strong> (2024/25): model-free speculation from suffix trees over prompts and past outputs, adaptive draft length; aimed at agentic workloads.</p></li>
+</ul>
+<h2 class="unnumbered" id="test-time-compute-and-new-architectures">Test-time compute and new architectures</h2>
+<ul>
+<li><p><strong>Scaling LLM Test-Time Compute Optimally</strong> (2024): allocating inference compute (search, revisions) adaptively by difficulty can beat a larger model.</p></li>
+<li><p><strong>Gated Delta Networks</strong> (2024): delta-rule linear attention with gating. Architectures part.</p></li>
+<li><p><strong>Kimi Linear</strong> (2025): Kimi Delta Attention hybridised with MLA. Architectures part.</p></li>
+<li><p><strong>Mamba-3</strong> <em>(not checked)</em>: the next state-space model in the Mamba line, by its title improving SSMs with state-space principles.</p></li>
+<li><p><strong>Morphing into Hybrid Attention Models</strong> <em>(not checked)</em>: by its title, converting trained full-attention models into hybrids that mix linear or sparse layers with full attention, cutting KV memory without pretraining from scratch.</p></li>
+<li><p><strong>DeepSeek-V4</strong> and <strong>DeepSeek-V4.1-Flash</strong>: compressed and sparse attention for million-token context. Summarised in the Architectures part; details there were not checked against the technical reports.</p></li>
+</ul>

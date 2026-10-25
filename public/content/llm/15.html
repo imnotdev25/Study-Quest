@@ -1,0 +1,65 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Starting point.</strong> A 95% confidence interval is a <em>procedure</em> that, over repeated datasets, contains the true value 95% of the time. Any one interval either contains it or not. The only honest check of an interval formula is to simulate many datasets and count how often it covers.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/70b4a4bd7bff.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Twenty intervals from twenty datasets. About one in twenty (red) misses.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: The z, t and Wilson intervals</div>
+<p><strong>Step 1.</strong> By the CLT, <span class="math inline">\(\frac{\bar X-\mu}{\sigma/\sqrt n}\approx N(0,1)\)</span>, so <span class="math inline">\(P(|\bar X-\mu|\le1.96\,\sigma/\sqrt n)\approx0.95\)</span>: the interval <span class="math inline">\(\bar X\pm1.96\,\sigma/\sqrt n\)</span>.</p>
+<p><strong>Step 2.</strong> With <span class="math inline">\(\sigma\)</span> unknown, plugging in <span class="math inline">\(s\)</span> adds extra randomness. For normal data <span class="math inline">\(\frac{\bar X-\mu}{s/\sqrt n}\)</span> has a Student <span class="math inline">\(t_{n-1}\)</span> distribution, with fatter tails: use <span class="math inline">\(t_{0.975,n-1}\)</span> (2.78 for <span class="math inline">\(n=5\)</span>) instead of 1.96. The z-version covers only 88% at <span class="math inline">\(n=5\)</span>.</p>
+<p><strong>Step 3.</strong> Proportions near 0 or 1: the Wald interval <span class="math inline">\(\hat p\pm1.96\sqrt{\hat p(1-\hat p)/n}\)</span> collapses when <span class="math inline">\(\hat p\)</span> is extreme (at <span class="math inline">\(\hat p=1\)</span> its width is zero). The Wilson interval inverts the test instead, solving <span class="math inline">\(|\hat p-p|\le z\sqrt{p(1-p)/n}\)</span> for <span class="math inline">\(p\)</span>: centre <span class="math inline">\(\frac{\hat p+z^2/2n}{1+z^2/n}\)</span>, half-width <span class="math inline">\(\frac{z\sqrt{\hat p(1-\hat p)/n+z^2/4n^2}}{1+z^2/n}\)</span>. At <span class="math inline">\(p=0.95,n=40\)</span>: Wald 87%, Wilson 95%.</p>
+<p><strong>Step 4.</strong> <strong>Bootstrap</strong>: resample the data with replacement many times, recompute the statistic each time, and take the 2.5% and 97.5% percentiles. It needs no formula, so it works for medians, pass@k and win rates (94% coverage for a median with <span class="math inline">\(n=60\)</span>).</p>
+<p><strong>Step 5.</strong> <strong>Sample size</strong>: for half-width <span class="math inline">\(E\)</span> on a proportion, <span class="math inline">\(n=z^2p(1-p)/E^2\le1.96^2/(4E^2)\)</span>. <span class="math inline">\(\pm2\)</span> points needs 2<span>,</span>401 questions; <span class="math inline">\(\pm1\)</span> point needs 9<span>,</span>604. Most benchmarks are too small to separate models one point apart.</p>
+</div>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference: confidence intervals and whether they really cover 95%.&quot;&quot;&quot;
+import math
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+T975 = {5: 2.776, 10: 2.262, 30: 2.045}                       # t quantiles for df = n - 1 (n = 5, 10, 30)
+
+# 1. Mean of a normal, sigma unknown: z-interval with s undercovers for small n, t-interval is exact.
+print(&quot;[ci] n    z-interval coverage   t-interval coverage   (target 0.95)&quot;)
+for n in (5, 10, 30):
+    x = rng.normal(0, 1, (100_000, n))
+    m, s = x.mean(1), x.std(1, ddof=1)
+    cz = np.mean(np.abs(m) &lt;= 1.96 * s / math.sqrt(n))
+    ct = np.mean(np.abs(m) &lt;= T975[n] * s / math.sqrt(n))
+    print(f&quot;[ci] {n:2d}   {cz:.4f}                {ct:.4f}&quot;)
+
+# 2. A proportion near 0 or 1 (eval accuracy 95% on 40 items): Wald undercovers, Wilson holds up.
+p, n = 0.95, 40
+k = rng.binomial(n, p, 200_000)
+ph = k / n
+wald = np.abs(ph - p) &lt;= 1.96 * np.sqrt(ph * (1 - ph) / n)
+z = 1.96
+center = (ph + z**2 / (2 * n)) / (1 + z**2 / n)
+half = z * np.sqrt(ph * (1 - ph) / n + z**2 / (4 * n**2)) / (1 + z**2 / n)
+wilson = np.abs(center - p) &lt;= half
+print(f&quot;[prop] p=0.95, n=40: Wald coverage {wald.mean():.4f}   Wilson coverage {wilson.mean():.4f}&quot;)
+
+# 3. Bootstrap percentile interval for a median (no formula needed). Check coverage by repetition.
+true_median = math.log(2)                                      # Exponential(1)
+hits = 0
+for _ in range(1000):
+    x = rng.exponential(1, 60)
+    boots = np.median(rng.choice(x, (2000, 60)), axis=1)
+    lo, hi = np.percentile(boots, [2.5, 97.5])
+    hits += lo &lt;= true_median &lt;= hi
+print(f&quot;[boot] percentile bootstrap CI for a median, n=60: coverage {hits / 1000:.3f}&quot;)
+
+# 4. Sample size for a margin of error: n = z^2 p(1-p) / E^2.
+for E in (0.05, 0.02, 0.01):
+    print(f&quot;[size] +-{E:.0%} at 95%, worst case p=0.5: n = {math.ceil(1.96**2 * 0.25 / E**2):,}&quot;)</code></pre>
+<pre class="code output"><code class="output">[ci] n    z-interval coverage   t-interval coverage   (target 0.95)
+[ci]  5   0.8787                0.9507
+[ci] 10   0.9192                0.9508
+[ci] 30   0.9395                0.9493
+[prop] p=0.95, n=40: Wald coverage 0.8680   Wilson coverage 0.9520
+[boot] percentile bootstrap CI for a median, n=60: coverage 0.941
+[size] +-5% at 95%, worst case p=0.5: n = 385
+[size] +-2% at 95%, worst case p=0.5: n = 2,401
+[size] +-1% at 95%, worst case p=0.5: n = 9,604</code></pre>

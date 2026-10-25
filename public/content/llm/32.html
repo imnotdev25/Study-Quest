@@ -1,0 +1,192 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>A language model</strong> assigns a probability to a whole token sequence by the chain rule of probability: <span class="math inline">\(p(x_1,\dots,x_T)=\prod_{t=1}^{T}p(x_t\mid x_{&lt;t})\)</span>. The model only ever predicts <em>one next token at a time</em>. Training maximizes this likelihood on real text. The loss is the NLL from Part 0 with a categorical distribution over <span class="math inline">\(V\)</span> tokens, applied at every position.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="concept-refresh-5-minutes">1. Concept refresh — 5 minutes</h2>
+<p>Quick retrieval:</p>
+<ol>
+<li><p>In a pre-norm decoder block, what are the two residual updates?</p></li>
+<li><p>Which decoder-block component mixes tokens, and which mixes features independently per token?</p></li>
+</ol>
+<p>For token IDs:</p>
+<p><span class="math display">\[X\in\mathbb{N}^{B\times T}\]</span></p>
+<p>a causal language model produces:</p>
+<p><span class="math display">\[Z\in\mathbb{R}^{B\times T\times V}\]</span></p>
+<p>where <span class="math inline">\(V\)</span> is vocabulary size. The logits at position <span class="math inline">\(t\)</span> predict token <span class="math inline">\(x_{t+1}\)</span>:</p>
+<p><span class="math display">\[p(x_{t+1}\mid x_{\leq t})
+=
+\operatorname{softmax}(Z_t)\]</span></p>
+<p>Therefore, training aligns:</p>
+<p><span class="math display">\[Z[:,0:T-1,:]
+\quad\text{with}\quad
+X[:,1:T]\]</span></p>
+<p>For valid target positions <span class="math inline">\(\mathcal V\)</span>:</p>
+<p><span class="math display">\[L=
+-\frac{1}{|\mathcal V|}
+\sum_{(b,t)\in\mathcal V}
+\log p(x_{b,t+1}\mid x_{b,\leq t})\]</span></p>
+<p>Padding and excluded tokens receive an ignore label, conventionally <code>-100</code>, and contribute neither loss nor gradient.</p>
+<p>Practical concerns:</p>
+<ul>
+<li><p>Unshifted labels let the model learn to reproduce the token already present in its residual stream.</p></li>
+<li><p>Some model libraries shift labels internally; manually shifting again creates a double-shift bug.</p></li>
+<li><p><code>cross_entropy</code> operates directly on logits using a stable <code>logsumexp</code>.</p></li>
+<li><p>Perplexity is <span class="math inline">\(\exp(L)\)</span>, but comparisons require compatible tokenization and masking.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: the next-token loss and the shift</div>
+<p><strong>Step 1.</strong> Log of the chain rule: <span class="math inline">\(\log p(x)=\sum_{t}\log p_\theta(x_{t+1}\mid x_{\le t})\)</span>. The product becomes a sum, one term per predicted token.</p>
+<p><strong>Step 2.</strong> The logits at position <span class="math inline">\(t\)</span> have seen <span class="math inline">\(x_0,\dots,x_t\)</span> (causal mask) and predict <span class="math inline">\(x_{t+1}\)</span>. So logits <span class="math inline">\(Z[:,t]\)</span> pair with label <span class="math inline">\(X[:,t+1]\)</span>: <strong>logits[:, :-1] with tokens[:, 1:]</strong>.</p>
+<p><strong>Step 3.</strong> Per-position loss: <span class="math inline">\(\ell_{bt}=\LSE(Z_{bt})-Z_{bt,\,x_{b,t+1}}\)</span> (Part 0).</p>
+<p><strong>Step 4.</strong> Mask <span class="math inline">\(M_{bt}=1\)</span> only where the label is real (not padding). Loss <span class="math inline">\(L=\frac{\sum M_{bt}\ell_{bt}}{\sum M_{bt}}\)</span>.</p>
+<p><strong>Step 5.</strong> Gradient at the logits: <span class="math inline">\(\frac{\partial L}{\partial Z_{bt}}=\frac{M_{bt}}{\sum M}\big(\operatorname{softmax}(Z_{bt})-\onehot(x_{b,t+1})\big)\)</span>. Masked positions get exactly 0.</p>
+<p><strong>Step 6.</strong> <strong>Without the shift:</strong> pairing <span class="math inline">\(Z[:,t]\)</span> with <span class="math inline">\(X[:,t]\)</span> asks the model to predict a token it can already see. Loss drops fast and the model learns nothing useful.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: causal language-model loss</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> token ids <span class="math inline">\(X\in\mathbb N^{B\times T}\)</span>, pad mask</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Z\gets f_\theta(X)\)</span> <em>▷ <span class="math inline">\(B\times T\times V\)</span></em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\text{logits}\gets Z[:,0{:}T-1]\)</span>; <span class="math inline">\(\text{labels}\gets X[:,1{:}T]\)</span>; <span class="math inline">\(M\gets\)</span> mask of <span class="math inline">\(\text{labels}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\ell\gets\LSE(\text{logits})-\text{logits}[\text{labels}]\)</span> <em>▷ <code>cross_entropy(..., reduction="none")</code></em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets\sum M\ell/\sum M\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement token-averaged causal language-model loss.</p>
+<pre class="code python"><code class="language-python">import math
+import torch
+import torch.nn.functional as F
+
+torch.manual_seed(81)
+
+B, T, V = 2, 6, 10
+pad_id = 0
+ignore_index = -100
+
+input_ids = torch.tensor([
+    [1, 4, 2, 7, 3, 0],
+    [1, 8, 5, 0, 0, 0],
+])                                              # [B, T]
+
+logits = torch.randn(
+    B, T, V,
+    requires_grad=True,
+)                                               # [B, T, V]
+
+# Position t predicts the token at position t+1
+shift_logits = ...                              # TODO 1: [B, T-1, V]
+shift_targets = ...                             # TODO 2: [B, T-1]
+
+# Exclude padding targets
+shift_targets = shift_targets.clone()
+shift_targets[...] = ...                        # TODO 3: replace pad with -100
+
+flat_logits = ...                               # TODO 4: [B(T-1), V]
+flat_targets = ...                              # TODO 5: [B(T-1)]
+
+loss_sum = F.cross_entropy(
+    flat_logits,
+    flat_targets,
+    ignore_index=ignore_index,
+    reduction=&quot;sum&quot;,
+)
+
+valid_tokens = ...                              # TODO 6: scalar count
+loss = ...                                      # TODO 7: token mean
+
+loss.backward()
+
+print(&quot;valid targets:&quot;, valid_tokens.item())
+print(&quot;loss:&quot;, loss.item())
+print(&quot;perplexity:&quot;, math.exp(loss.item()))
+
+# The final logit position predicts no target in this batch.
+print(
+    &quot;last-position gradient:&quot;,
+    logits.grad[:, -1, :].abs().max().item(),
+)
+
+# Ignored targets should contribute zero gradient.
+used_grad = logits.grad[:, :-1, :]
+ignored = shift_targets.eq(ignore_index)
+
+print(
+    &quot;ignored-target gradient:&quot;,
+    used_grad[ignored].abs().max().item(),
+)</code></pre>
+<p>Add these invariants:</p>
+<pre class="code python"><code class="language-python">assert valid_tokens.item() == 6
+assert logits.grad[:, -1, :].abs().max() == 0
+assert used_grad[ignored].abs().max() == 0</code></pre>
+<p>Now inspect an incorrect objective:</p>
+<pre class="code python"><code class="language-python">wrong_loss = F.cross_entropy(
+    logits.detach().reshape(-1, V),
+    input_ids.reshape(-1),
+    ignore_index=pad_id,
+)</code></pre>
+<p>Explain why aligning each logit with the token at the same position is especially dangerous when the model’s residual stream contains that token’s embedding.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>logits</code><span><code>[</code></span><code>:, :-1, :</code><span><code>]</code></span>.</p></li>
+<li><p>Targets are <code>input_ids</code><span><code>[</code></span><code>:, 1:</code><span><code>]</code></span>.</p></li>
+<li><p>Use <code>masked_fill</code>.</p></li>
+<li><p><code>.reshape(-1, V)</code> is safe for potentially non-contiguous slices.</p></li>
+<li><p>Count targets that are not <code>ignore_index</code>.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why are there only <span class="math inline">\(T-1\)</span> supervised predictions for a length-<span class="math inline">\(T\)</span> sequence in this setup?</p></li>
+<li><p>What gradient should an ignored target position contribute?</p></li>
+<li><p>Prediction: if the mean token loss is <span class="math inline">\(2\)</span>, what is the approximate perplexity?</p></li>
+<li><p>Debugging: loss becomes extremely low almost immediately, but generation is incoherent. Which label-alignment bug should you test first?</p></li>
+<li><p>Why can averaging per sequence produce a different result from averaging across all valid tokens?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">shift_logits = logits[:, :-1, :]
+shift_targets = input_ids[:, 1:]
+
+shift_targets = shift_targets.clone()
+shift_targets = shift_targets.masked_fill(
+    shift_targets.eq(pad_id),
+    ignore_index,
+)
+
+flat_logits = shift_logits.reshape(-1, V)
+flat_targets = shift_targets.reshape(-1)
+
+loss_sum = F.cross_entropy(
+    flat_logits,
+    flat_targets,
+    ignore_index=ignore_index,
+    reduction=&quot;sum&quot;,
+)
+
+valid_tokens = shift_targets.ne(ignore_index).sum()
+loss = loss_sum / valid_tokens</code></pre>
+<p>There are six valid targets:</p>
+<pre class="code text"><code class="language-plaintext">Row 1: 4, 2, 7, 3
+Row 2: 8, 5</code></pre>
+<p>The last logit position is unused because there is no next token inside the supplied sequence. Ignored targets also produce zero gradients.</p>
+<p>With unshifted labels, the representation at position <span class="math inline">\(t\)</span> already includes the embedding of <span class="math inline">\(x_t\)</span>. The model can learn an identity-like mapping from that embedding to the same token, producing deceptively low training loss without learning next-token prediction.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>The first token provides context but has no previous position predicting it; the last input position has no subsequent target inside the sequence.</p></li>
+<li><p>Exactly zero.</p></li>
+<li><p>Approximately:</p>
+<p><span class="math display">\[e^2\approx7.39\]</span></p></li>
+<li><p>Check whether logits and labels were left unshifted. Also check whether a framework that shifts internally received already-shifted labels.</p></li>
+<li><p>Per-sequence averaging gives short and long sequences equal total weight. Token averaging gives every valid token equal weight, so longer sequences contribute more.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<p><span class="math display">\[U=X+\operatorname{MHA}(\operatorname{LN}_1(X))\]</span></p>
+<p><span class="math display">\[Y=U+\operatorname{MLP}(\operatorname{LN}_2(U))\]</span></p>
+<p>Attention mixes information across positions; the MLP transforms each position independently across features.</p>

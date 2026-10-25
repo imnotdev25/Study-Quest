@@ -1,0 +1,98 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Continuous integration and delivery pipelines, deployment strategies (rolling, blue/green, canary, feature flags), GitOps, infrastructure as code, software supply-chain security, and CI/CD for ML and LLM applications.</p>
+</div>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>In a car factory, every part is checked as it is added, not at the end. Continuous Integration checks every code change automatically. Continuous Delivery means the car is always ready to drive off the line. Continuous Deployment means it drives off automatically once it passes inspection.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/f06dfb801886.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A typical CI/CD pipeline.</em></p>
+<h1 id="continuous-integration">Continuous Integration</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Everyone merges small changes to the main branch at least daily (<strong>trunk-based development</strong>). Each push runs: build, lint, unit tests, static analysis (SAST), dependency scanning (SCA), secret scanning, and container image build. Keep CI under 10 minutes using caching, test parallelization, and running only affected targets in monorepos (Bazel, Nx, Turborepo). Tools: GitHub Actions, GitLab CI, Jenkins, Buildkite, CircleCI.</p>
+</div>
+<h1 id="deployment-strategies">Deployment Strategies</h1>
+<figure class="tikz"><img src="figs/sd/2b5b4734c3ae.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Canary release with automated analysis.</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Strategy</th>
+<th style="text-align: left;">How</th>
+<th style="text-align: left;">Trade-off</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Recreate</td>
+<td style="text-align: left;">Stop all v1, start v2</td>
+<td style="text-align: left;">Downtime; simplest</td>
+</tr>
+<tr>
+<td style="text-align: left;">Rolling</td>
+<td style="text-align: left;">Replace instances gradually</td>
+<td style="text-align: left;">No extra capacity; mixed versions during rollout</td>
+</tr>
+<tr>
+<td style="text-align: left;">Blue/green</td>
+<td style="text-align: left;">Full v2 environment; switch traffic at once</td>
+<td style="text-align: left;">Instant rollback; double capacity</td>
+</tr>
+<tr>
+<td style="text-align: left;">Canary</td>
+<td style="text-align: left;">Small percentage to v2, watch metrics, expand</td>
+<td style="text-align: left;">Limits blast radius; needs good metrics</td>
+</tr>
+<tr>
+<td style="text-align: left;">Feature flags</td>
+<td style="text-align: left;">Ship code dark; enable per user/segment</td>
+<td style="text-align: left;">Decouples deploy from release; flag debt</td>
+</tr>
+<tr>
+<td style="text-align: left;">Shadow</td>
+<td style="text-align: left;">Mirror traffic to v2, discard responses</td>
+<td style="text-align: left;">Zero user risk; side effects must be disabled</td>
+</tr>
+</tbody>
+</table>
+<p><em>Deployment strategies</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Database migrations are the hard part.</strong> Use <strong>expand/contract</strong>: (1) add the new column, (2) deploy code that writes both, (3) backfill, (4) switch reads, (5) stop writing old, (6) drop old. Every step is backward compatible so any deploy can be rolled back. Progressive delivery tools (Argo Rollouts, Flagger) automate canary analysis against Prometheus metrics. Feature-flag platforms (LaunchDarkly, Unleash, OpenFeature standard) also act as kill switches during incidents. Large companies deploy region by region with bake times between waves, so a bad change never reaches every region at once.</p>
+</div>
+<h1 id="gitops-and-infrastructure-as-code">GitOps and Infrastructure as Code</h1>
+<figure class="tikz"><img src="figs/sd/4afcaf6ef392.svg" alt="diagram" loading="lazy"></figure>
+<p><em>GitOps: Git is the single source of truth; an agent in the cluster pulls and reconciles.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Infrastructure as Code (IaC)</strong> defines cloud resources in versioned files: Terraform / OpenTofu (HCL, multi-cloud), Pulumi (general-purpose languages), AWS CDK, Crossplane (Kubernetes-native). Run <code>plan</code> in CI on every PR, require review, and <code>apply</code> from the pipeline, not laptops. Store state remotely with locking. <strong>GitOps</strong> extends this: Argo CD or Flux pull from Git and continuously reconcile, so the cluster self-heals from manual drift and every change is auditable. <strong>Platform engineering</strong> teams package these into internal developer platforms (Backstage) with golden paths.</p>
+</div>
+<h1 id="supply-chain-security">Supply-Chain Security</h1>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Attacks such as SolarWinds, Codecov, and the 2024 <code>xz</code> backdoor target the build pipeline itself. Defenses: pinned dependencies with lockfiles, pinned CI actions by commit SHA, short-lived OIDC credentials from CI to cloud (no stored keys), SBOM generation (Syft), artifact signing and verification at admission (Sigstore cosign plus Kyverno or policy controllers), and build provenance at <strong>SLSA</strong> level 3. Treat AI-generated code like any other contribution: review, test, and scan it.</p>
+</div>
+<h1 id="cicd-for-ml-and-llm-applications">CI/CD for ML and LLM Applications</h1>
+<div class="box box-newin" data-kind="newin"><div class="box-title">🆕 New in 2026</div>
+<p>LLM features change behavior through prompts, models, retrieval data, and tools, not only code. Treat all of them as versioned artifacts:</p>
+<ul>
+<li><p><strong>Eval gates in CI</strong>: run a golden dataset through the new prompt or model; block merge if quality scores (LLM-as-judge, exact match, groundedness) drop below threshold.</p></li>
+<li><p><strong>Prompt registry</strong> with versions and rollback.</p></li>
+<li><p><strong>Model rollout</strong> via canary or shadow traffic, comparing quality, latency, and cost per request.</p></li>
+<li><p><strong>Model registry</strong> (MLflow, cloud registries) for fine-tuned weights; weights are large artifacts pulled at startup, so pre-stage them on nodes or use streaming loaders to cut cold starts.</p></li>
+</ul>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: SaaS team shipping 50 times a day</div>
+<p>Trunk-based development, 8-minute CI, every merge auto-deploys to staging and then to a 5% canary. Argo Rollouts promotes after 10 minutes if error rate and p99 are within bounds. Risky features ship behind flags and are enabled for internal users first.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Regulated bank</div>
+<p>Same pipeline with added gates: change tickets created automatically, two-person review, signed artifacts, SBOMs archived for auditors, blue/green deploys during approved windows with instant switch-back.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Updating a RAG chatbot prompt</div>
+<p>A prompt change is a PR. CI runs 500 eval questions; groundedness drops 4%, so the merge is blocked. After a fix, the new prompt rolls out to 10% of conversations with thumbs-up rate and escalation rate monitored.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Small, frequent, automated changes are safer than large, rare ones.</p></li>
+<li><p>Canary plus automatic rollback limits blast radius; flags decouple deploy from release.</p></li>
+<li><p>Git as source of truth for apps and infrastructure gives audit and self-healing.</p></li>
+<li><p>Secure the pipeline itself; for AI apps, add evals as merge gates.</p></li>
+</ul>
+</div>

@@ -1,0 +1,15 @@
+
+<h2 class="unnumbered" id="how-to-reproduce-an-inference-paper">How to reproduce an inference paper</h2>
+<p>Read for the claim, the workload and the baseline. Recreate the workload first (length distributions, arrival process, prefix sharing), then the baseline with its tuned settings, and only then the method. Profile both, run ablations to find which part gives the gain, and find the limits: the load, length or batch size where the gain disappears. Speculation, sparse attention and disaggregation all have such a crossover.</p>
+<h2 class="unnumbered" id="capstone-checklist">Capstone checklist</h2>
+<ol>
+<li><p>Define the workload (lengths, rate, prefix sharing) and the SLO.</p></li>
+<li><p>Choose the model and the smallest GPU that fits weights plus the KV you need.</p></li>
+<li><p>Baseline with defaults: goodput at the SLO, latency curve.</p></li>
+<li><p>Profile prefill and decode; decide what bounds each.</p></li>
+<li><p>Optimise memory (utilisation, block size, prefix caching), then precision (FP8 weights and KV, measuring quality).</p></li>
+<li><p>Decide multi-GPU: replicas first; TP only if latency or model size demands it.</p></li>
+<li><p>Add routing (prefix-aware) and autoscaling.</p></li>
+<li><p>Failure-test: kill a replica, flood with long prompts, check admission control.</p></li>
+<li><p>Publish the workload, configs, numbers and the cost per million tokens.</p></li>
+</ol>

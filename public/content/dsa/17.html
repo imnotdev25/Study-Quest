@@ -1,0 +1,212 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>The algorithms behind modern models, at the level research engineers and AI engineers are asked to implement and reason about: backpropagation, optimizers, normalization and initialization, convolution and NMS, attention and its variants, positional encodings (RoPE), the online softmax behind FlashAttention, KV caching, decoding strategies, speculative decoding, contrastive and preference losses (InfoNCE, DPO, PPO, GRPO), LoRA, quantization, vector search (HNSW, IVF-PQ), and distributed training.</p>
+</div>
+<h1 id="backpropagation">Backpropagation</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A factory produces a bad product. To fix it, trace backward: how much did the last machine contribute to the defect, and how much did each earlier machine contribute through it? Backpropagation does exactly that with derivatives, reusing each machine’s answer instead of recomputing it.</p>
+</div>
+<p><em>Reverse-mode automatic differentiation</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>forward:</strong> evaluate operations in topological order, recording each node’s inputs (the tape)</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\bar{L} \gets 1\)</span>; all other gradients <span class="math inline">\(\gets 0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each node <span class="math inline">\(v\)</span> in <strong>reverse</strong> topological order <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each input <span class="math inline">\(u\)</span> of <span class="math inline">\(v\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(\bar u \gets \bar u + \bar v \cdot \partial v/\partial u\)</span> <em>▷ chain rule; accumulate over all uses</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Reverse order guarantees that when <span class="math inline">\(v\)</span> is processed, <span class="math inline">\(\bar v\)</span> already includes the contributions of every node that uses <span class="math inline">\(v\)</span>. The cost is a small constant times the forward pass, regardless of the number of parameters, which is why reverse mode (not forward mode) is used for scalar losses with millions of parameters. Memory is the catch: activations must be stored for the backward pass, which motivates <strong>activation checkpointing</strong> (recompute some activations in backward, trading about 30% more compute for much less memory). Verify gradients with <strong>finite differences</strong>: <span class="math inline">\(\frac{L(\theta + \epsilon) - L(\theta - \epsilon)}{2\epsilon}\)</span> in double precision, compared by relative error.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Gradients of a linear layer</strong> <span class="math inline">\(Y = XW + b\)</span> with upstream gradient <span class="math inline">\(G = \partial
+L/\partial Y\)</span>: <span class="math inline">\(\partial L/\partial W = X^\top G\)</span>, <span class="math inline">\(\partial L/\partial X = G W^\top\)</span>, <span class="math inline">\(\partial L/\partial b = \sum_{\text{rows}} G\)</span>. Shapes check the formulas: <span class="math inline">\(X\)</span> is <span class="math inline">\(n\times d\)</span>, <span class="math inline">\(W\)</span> is <span class="math inline">\(d\times h\)</span>, <span class="math inline">\(G\)</span> is <span class="math inline">\(n\times h\)</span>. ReLU passes gradients where the input was positive. Softmax + cross-entropy together give <span class="math inline">\(P - Y\)</span> (Chapter 17).</p>
+</div>
+<h1 id="optimizers">Optimizers</h1>
+<p><em>AdamW</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> learning rate <span class="math inline">\(\eta\)</span>, <span class="math inline">\(\beta_1 = 0.9\)</span>, <span class="math inline">\(\beta_2 = 0.95\)</span>–<span class="math inline">\(0.999\)</span>, <span class="math inline">\(\epsilon = 10^{-8}\)</span>, weight decay <span class="math inline">\(\lambda\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(m \gets 0\)</span>; <span class="math inline">\(v \gets 0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t \gets 1, 2, \dots\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(g \gets \nabla L(\theta)\)</span> (after optional global-norm clipping)</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(m \gets \beta_1 m + (1-\beta_1) g\)</span> <em>▷ momentum: running mean of gradients</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(v \gets \beta_2 v + (1-\beta_2) g^2\)</span> <em>▷ running mean of squared gradients</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\hat m \gets m/(1-\beta_1^t)\)</span>; <span class="math inline">\(\hat v \gets v/(1-\beta_2^t)\)</span> <em>▷ bias correction for zero init</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\theta \gets \theta - \eta\big(\hat m/(\sqrt{\hat v} + \epsilon) + \lambda\theta\big)\)</span> <em>▷ decoupled decay</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>SGD with momentum</strong> accumulates velocity to move through ravines; <strong>Nesterov</strong> evaluates the gradient at the look-ahead point.</p></li>
+<li><p><strong>Adagrad / RMSProp / Adam</strong> scale each parameter’s step by the inverse root of its recent squared gradients, so rarely updated parameters take bigger steps.</p></li>
+<li><p><strong>AdamW</strong> applies weight decay directly to weights rather than adding <span class="math inline">\(\lambda\theta\)</span> to the gradient; inside Adam, L2-through-the-gradient gets rescaled by <span class="math inline">\(1/\sqrt{v}\)</span> and stops being proper regularization.</p></li>
+<li><p><strong>Memory</strong>: Adam stores two extra values per parameter, so a 7B-parameter model needs about <span class="math inline">\(7\text{B}\times(2 \text{ weights in BF16} + 4 \text{ FP32 master} + 8 \text{ moments}) \approx 100\)</span> GB of training state before activations.</p></li>
+<li><p><strong>Schedules</strong>: linear warmup (stabilizes early Adam statistics) then cosine or linear decay; “warmup-stable-decay” is common for LLM pre-training.</p></li>
+<li><p><strong>Gradient clipping</strong> by global norm (e.g. 1.0) prevents loss spikes.</p></li>
+</ul>
+</div>
+<h1 id="initialization-and-normalization">Initialization and Normalization</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Initialization</strong> keeps activation variance stable across layers: Xavier/Glorot (<span class="math inline">\(\text{Var} = 2/(d_{in} + d_{out})\)</span>) for tanh, He/Kaiming (<span class="math inline">\(2/d_{in}\)</span>) for ReLU. Residual networks often scale the last layer of each block down (or initialize it to zero) so each block starts near the identity.</p>
+<p><strong>Normalization</strong>: <strong>BatchNorm</strong> normalizes each feature over the batch (running statistics at inference; problematic with small or variable batches and sequences). <strong>LayerNorm</strong> normalizes over features within each example: <span class="math inline">\(\frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}}\gamma + \beta\)</span>, independent of batch size, standard in transformers. <strong>RMSNorm</strong> drops the mean subtraction: <span class="math inline">\(x/\sqrt{\text{mean}(x^2) + \epsilon}\cdot\gamma\)</span>, cheaper and used by most current LLMs. <strong>Pre-norm</strong> (normalize before attention/MLP, add the residual after) trains more stably at depth than post-norm. <strong>Dropout</strong> randomly zeroes activations with probability <span class="math inline">\(p\)</span> during training and scales survivors by <span class="math inline">\(1/(1-p)\)</span> (inverted dropout), so inference needs no change.</p>
+</div>
+<h1 id="convolution-iou-and-non-max-suppression">Convolution, IoU, and Non-Max Suppression</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Output size of a convolution: <span class="math inline">\(\lfloor (W - K + 2P)/S\rfloor + 1\)</span> for input width <span class="math inline">\(W\)</span>, kernel <span class="math inline">\(K\)</span>, padding <span class="math inline">\(P\)</span>, stride <span class="math inline">\(S\)</span>. Parameters per layer: <span class="math inline">\(K^2 C_{in} C_{out} + C_{out}\)</span>. Convolutions are implemented as matrix multiplies (<code>im2col</code>: unfold each receptive field into a column) or with FFT/Winograd for large kernels. Receptive field grows with depth, stride, and dilation.</p>
+</div>
+<p><em>Non-max suppression</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> boxes with scores, IoU threshold <span class="math inline">\(\tau\)</span> (e.g. 0.5)</div>
+<div class="algo-line" style="--d:0">sort boxes by score descending; <span class="math inline">\(keep \gets []\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> boxes remain <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(b \gets\)</span> the highest-scoring remaining box; append to <span class="math inline">\(keep\)</span></div>
+<div class="algo-line" style="--d:1">remove every remaining box with <span class="math inline">\(\text{IoU}(b, \cdot) &gt; \tau\)</span> <em>▷ duplicates of the same object</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(keep\)</span></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>IoU <span class="math inline">\(= \frac{\text{area}(A\cap B)}{\text{area}(A) + \text{area}(B) - \text{area}(A\cap B)}\)</span>, with intersection width <span class="math inline">\(\max(0, \min(x_2) - \max(x_1))\)</span>. NMS is <span class="math inline">\(O(n^2)\)</span> worst case; run it per class, vectorize IoU against all remaining boxes, and consider Soft-NMS (decay scores instead of deleting) for crowded scenes. DETR-style detectors avoid NMS with Hungarian matching (Chapter 9).</p>
+</div>
+<h1 id="attention">Attention</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Reading “the animal didn’t cross the street because <em>it</em> was tired,” you decide what “it” means by looking back at the other words and weighing how relevant each is. Attention does this for every token: each token asks a question (query), every token offers a label (key) and content (value), and the answer is a relevance-weighted mix of contents.</p>
+</div>
+<p><em>Multi-head causal self-attention</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(X \in \mathbb{R}^{n\times d}\)</span>, weights <span class="math inline">\(W_Q, W_K, W_V, W_O\)</span>, <span class="math inline">\(h\)</span> heads, <span class="math inline">\(d_k = d/h\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Q \gets XW_Q\)</span>, <span class="math inline">\(K \gets XW_K\)</span>, <span class="math inline">\(V \gets XW_V\)</span>; reshape each to <span class="math inline">\((h, n, d_k)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(S \gets QK^\top/\sqrt{d_k}\)</span> <em>▷ <span class="math inline">\((h, n, n)\)</span> scores</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(S_{ij} \gets -\infty\)</span> for <span class="math inline">\(j &gt; i\)</span> <em>▷ causal mask: no peeking at the future</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(A \gets \text{softmax}(S)\)</span> along the last axis <em>▷ stable softmax</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(O \gets AV\)</span>; concatenate heads to <span class="math inline">\((n, d)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(OW_O\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p><strong>Why <span class="math inline">\(\sqrt{d_k}\)</span>:</strong> if query and key entries have unit variance, their dot product has variance <span class="math inline">\(d_k\)</span>; dividing by <span class="math inline">\(\sqrt{d_k}\)</span> keeps scores at unit scale so softmax does not saturate into near one-hot outputs with vanishing gradients. <strong>Why multiple heads:</strong> each head can attend to a different kind of relation (syntax, coreference, position) in a lower-dimensional subspace at the same total cost. <strong>Cost:</strong> <span class="math inline">\(O(n^2 d)\)</span> compute and <span class="math inline">\(O(n^2)\)</span> memory for scores, the bottleneck for long contexts.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Variants that shrink the KV cache</strong> (the companion System Design book’s inference chapter covers serving): <strong>multi-query attention</strong> (all heads share one K/V head), <strong>grouped-query attention</strong> (<span class="math inline">\(g\)</span> K/V heads shared by groups of query heads; used by most open LLMs), <strong>multi-head latent attention</strong> (compress K/V into a small latent vector). <strong>Sliding-window / local attention</strong> limits each token to the last <span class="math inline">\(w\)</span> tokens: <span class="math inline">\(O(nw)\)</span>. <strong>Cross-attention</strong> takes queries from one sequence and keys/values from another (encoder–decoder, multimodal).</p>
+</div>
+<h2 id="positional-encodings">Positional Encodings</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Attention by itself is permutation-invariant, so position must be injected. <strong>Sinusoidal</strong>: <span class="math inline">\(PE(p, 2i) = \sin(p/10000^{2i/d})\)</span>, <span class="math inline">\(PE(p, 2i+1) = \cos(\cdot)\)</span>, added to embeddings. <strong>Learned absolute</strong> embeddings do not extrapolate past the training length. <strong>RoPE</strong> (rotary): rotate each pair of query/key dimensions by angle <span class="math inline">\(p\,\theta_i\)</span>; then <span class="math inline">\(q_m^\top k_n\)</span> depends only on the <em>relative</em> offset <span class="math inline">\(m - n\)</span>, because rotations compose: <span class="math inline">\((R_m q)^\top(R_n k) = q^\top R_{n-m} k\)</span>. Context extension methods (position interpolation, NTK-aware scaling, YaRN) rescale those angles. <strong>ALiBi</strong> adds a linear distance penalty to scores instead.</p>
+</div>
+<h2 id="online-softmax-and-flashattention">Online Softmax and FlashAttention</h2>
+<p><em>Online softmax-weighted sum (one query, streaming over key/value blocks)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(m \gets -\infty\)</span>; <span class="math inline">\(\ell \gets 0\)</span>; <span class="math inline">\(o \gets 0_{d}\)</span> <em>▷ running max, normalizer, output</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each block of scores <span class="math inline">\(s_{1..B}\)</span> with values <span class="math inline">\(v_{1..B}\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(m&#39; \gets \max(m, \max_j s_j)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\ell \gets \ell\, e^{m - m&#39;} + \sum_j e^{s_j - m&#39;}\)</span> <em>▷ rescale old sum to the new max</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(o \gets o\, e^{m - m&#39;} + \sum_j e^{s_j - m&#39;} v_j\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(m \gets m&#39;\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(o/\ell\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Softmax seems to need all scores before normalizing, but partial results can be corrected when a larger maximum appears: multiplying by <span class="math inline">\(e^{m - m&#39;}\)</span> re-expresses the old sum relative to the new maximum. The final <span class="math inline">\(o/\ell\)</span> is exactly <span class="math inline">\(\sum_j \text{softmax}(s)_j v_j\)</span>. <strong>FlashAttention</strong> applies this per tile of <span class="math inline">\(Q\)</span>, <span class="math inline">\(K\)</span>, <span class="math inline">\(V\)</span> held in fast on-chip SRAM, never writing the <span class="math inline">\(n\times n\)</span> score matrix to GPU memory. Compute is the same <span class="math inline">\(O(n^2d)\)</span>, but memory traffic falls dramatically and memory becomes <span class="math inline">\(O(n)\)</span>, which is why long-context training became practical. It is a memory-bandwidth optimization, not an approximation.</p>
+</div>
+<h2 id="kv-cache">KV Cache</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>During generation, keys and values of past tokens never change, so cache them: each new token computes only its own <span class="math inline">\(q, k, v\)</span>, appends <span class="math inline">\(k, v\)</span> to the cache, and attends over the cache. Per-token cost falls from recomputing <span class="math inline">\(O(n)\)</span> tokens’ projections to <span class="math inline">\(O(1)\)</span> projections plus an <span class="math inline">\(O(n)\)</span> attention read. Cache size per token <span class="math inline">\(= 2 \times \text{layers} \times \text{KV heads} \times d_k \times \text{bytes}\)</span>; it, not compute, limits batch size in serving. An ML coding question may ask you to implement an append-only KV cache with preallocated buffers and a length pointer, and to show that incremental decoding matches full recomputation.</p>
+</div>
+<h1 id="decoding">Decoding</h1>
+<p><em>Temperature, top-<span class="math inline">\(k\)</span>, and top-<span class="math inline">\(p\)</span> (nucleus) sampling</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logits <span class="math inline">\(z\)</span>, temperature <span class="math inline">\(T &gt; 0\)</span>, <span class="math inline">\(k\)</span>, <span class="math inline">\(p\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(z \gets z/T\)</span> <em>▷ <span class="math inline">\(T&lt;1\)</span> sharpens, <span class="math inline">\(T&gt;1\)</span> flattens</em></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> top-<span class="math inline">\(k\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:1">set all but the <span class="math inline">\(k\)</span> largest logits to <span class="math inline">\(-\infty\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\pi \gets \text{softmax}(z)\)</span></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> top-<span class="math inline">\(p\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:1">sort <span class="math inline">\(\pi\)</span> descending; keep the smallest prefix whose cumulative sum <span class="math inline">\(\ge p\)</span></div>
+<div class="algo-line" style="--d:1">(always keep at least the top token); zero the rest</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">renormalize <span class="math inline">\(\pi\)</span> and sample a token <em>▷ CDF + binary search, Chapter 15</em></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Greedy</strong> picks the argmax (deterministic, can repeat itself). <strong>Beam search</strong> keeps the <span class="math inline">\(B\)</span> best partial sequences by total log-probability; normalize by length (or the beam favors short outputs); good for translation and constrained tasks, poor for open-ended text (bland, repetitive). Top-<span class="math inline">\(p\)</span> adapts the candidate set to the model’s confidence, unlike a fixed <span class="math inline">\(k\)</span>. <strong>Repetition / frequency penalties</strong> lower logits of tokens already generated. <strong>Min-<span class="math inline">\(p\)</span></strong> keeps tokens with probability at least a fraction of the top token’s. <strong>Constrained decoding</strong> masks tokens that would violate a JSON schema or grammar at every step.</p>
+</div>
+<h2 id="speculative-decoding">Speculative Decoding</h2>
+<p><em>Speculative decoding (acceptance rule)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0">draft model <span class="math inline">\(q\)</span> proposes tokens <span class="math inline">\(x_1..x_\gamma\)</span> autoregressively</div>
+<div class="algo-line" style="--d:0">target model <span class="math inline">\(p\)</span> scores all <span class="math inline">\(\gamma\)</span> positions in <strong>one</strong> forward pass</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i \gets 1\)</span> <strong>to</strong> <span class="math inline">\(\gamma\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">accept <span class="math inline">\(x_i\)</span> with probability <span class="math inline">\(\min\big(1, p(x_i)/q(x_i)\big)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> rejected <strong>then</strong></div>
+<div class="algo-line" style="--d:2">sample a replacement from the residual <span class="math inline">\(\propto \max(0, p - q)\)</span>; <strong>break</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">if all accepted, sample one bonus token from <span class="math inline">\(p\)</span> at the next position</div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>This is rejection sampling (Chapter 13) arranged so the output distribution is <em>exactly</em> the target’s: tokens where the draft over-proposes are thinned, and the residual distribution fills in what the draft under-proposes. Speedup depends on the acceptance rate; with greedy decoding the rule simplifies to “accept while the draft token equals the target’s argmax.”</p>
+</div>
+<h1 id="training-objectives">Training Objectives</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Language modeling</strong>: next-token cross-entropy averaged over positions; <strong>perplexity</strong> <span class="math inline">\(= \exp(\text{mean cross-entropy})\)</span>, comparable only between models with the same tokenizer. <strong>Masked LM</strong> (BERT) predicts masked tokens from both sides. <strong>Distillation</strong>: train a student on the teacher’s softened distribution, <span class="math inline">\(T^2\cdot\text{KL}(\text{softmax}(z_t/T)\,\Vert\,\text{softmax}(z_s/T))\)</span>.</p>
+</div>
+<p><em>Symmetric InfoNCE (CLIP-style contrastive loss)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> batch of <span class="math inline">\(B\)</span> paired embeddings <span class="math inline">\(a_i, b_i\)</span> (L2-normalized), temperature <span class="math inline">\(\tau\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(S \gets AB^\top/\tau\)</span> <em>▷ <span class="math inline">\(B\times B\)</span>; the diagonal holds the positive pairs</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L_a \gets\)</span> cross-entropy of each row of <span class="math inline">\(S\)</span> with target index <span class="math inline">\(i\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L_b \gets\)</span> cross-entropy of each column of <span class="math inline">\(S\)</span> with target index <span class="math inline">\(i\)</span></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\((L_a + L_b)/2\)</span></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Every other item in the batch serves as a negative, so larger batches give more negatives and better embeddings; the temperature controls how sharply hard negatives are penalized. The same loss trains dense retrievers (query, relevant passage) and two-tower recommenders. <strong>Triplet loss</strong> <span class="math inline">\(\max(0, d(a,p) - d(a,n) + \text{margin})\)</span> is an older alternative needing hard-negative mining.</p>
+</div>
+<h2 id="preference-optimization">Preference Optimization</h2>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>RLHF with PPO</strong>: train a reward model on human preference pairs with the Bradley–Terry loss <span class="math inline">\(-\log\sigma(r(x, y_w) - r(x, y_l))\)</span>, then optimize the policy to maximize reward minus a KL penalty to the reference model, using PPO’s clipped objective <span class="math inline">\(\min(\rho A, \text{clip}(\rho, 1-\epsilon, 1+\epsilon)A)\)</span> with probability ratio <span class="math inline">\(\rho\)</span> and advantages <span class="math inline">\(A\)</span> from a value model.</p>
+<p><strong>DPO</strong> skips the reward model and RL loop: <span class="math display">\[L = -\log\sigma\Big(\beta\big[\log\tfrac{\pi(y_w|x)}{\pi_{ref}(y_w|x)} - \log\tfrac{\pi(y_l|x)}{\pi_{ref}(y_l|x)}\big]\Big)\]</span> computed from summed token log-probabilities of the chosen (<span class="math inline">\(y_w\)</span>) and rejected (<span class="math inline">\(y_l\)</span>) responses under the policy and a frozen reference. It is the closed-form consequence of the KL-regularized reward objective.</p>
+<p><strong>GRPO</strong> (group relative policy optimization) samples a group of responses per prompt, scores them (often with a verifiable reward: a correct math answer, passing tests), and uses each response’s reward standardized within its group as the advantage, removing the separate value model. It is widely used for training reasoning models with reinforcement learning on verifiable tasks.</p>
+</div>
+<h1 id="efficient-fine-tuning-and-quantization">Efficient Fine-Tuning and Quantization</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>LoRA</strong>: freeze <span class="math inline">\(W\)</span> and learn a low-rank update <span class="math inline">\(\Delta W = \frac{\alpha}{r}BA\)</span> with <span class="math inline">\(A \in \mathbb{R}^{r\times d}\)</span>, <span class="math inline">\(B \in \mathbb{R}^{d\times r}\)</span>, <span class="math inline">\(r \ll d\)</span>; initialize <span class="math inline">\(B = 0\)</span> so training starts at the original model. Trainable parameters per layer fall from <span class="math inline">\(d^2\)</span> to <span class="math inline">\(2dr\)</span> (for <span class="math inline">\(d = 4096\)</span>, <span class="math inline">\(r = 16\)</span>: 16.8M <span class="math inline">\(\to\)</span> 131K). At inference, merge <span class="math inline">\(W + \Delta W\)</span> for zero overhead, or keep adapters separate to serve many fine-tunes on one base model. <strong>QLoRA</strong> trains LoRA adapters on a 4-bit quantized base model.</p>
+<p><strong>Quantization</strong>: map floats to <span class="math inline">\(b\)</span>-bit integers with a scale (and zero point): <span class="math inline">\(q = \text{round}(x/s)\)</span>, <span class="math inline">\(s = \max|x|/(2^{b-1} - 1)\)</span> for symmetric quantization. Per-channel or per-group (e.g. 128 values) scales reduce error from outliers. Weight-only INT4 (GPTQ, AWQ) helps memory-bound decoding; FP8 for weights and activations is common on recent GPUs. <strong>Mixed precision training</strong>: BF16 compute with FP32 master weights; FP16 needs loss scaling to avoid underflowing gradients, BF16 does not (same exponent range as FP32).</p>
+</div>
+<h1 id="vector-search">Vector Search</h1>
+<figure class="tikz"><img src="figs/dsa/54df299c6997.svg" alt="diagram" loading="lazy"></figure>
+<p><em>HNSW: a hierarchy of proximity graphs.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>HNSW</strong>: each point is inserted into layer 0 and, with exponentially decreasing probability, into higher layers. Search starts at the top layer’s entry point, moves greedily to the closest neighbor until no improvement, drops a layer, and repeats; at layer 0 it runs a best-first search keeping a candidate min-heap and a result max-heap of size <code>efSearch</code>. Higher <code>efSearch</code> and more links per node (<code>M</code>) raise recall at the cost of latency and memory. Roughly logarithmic search time; high memory use (vectors plus graph).</p>
+<p><strong>IVF-PQ</strong>: k-means partitions vectors into <span class="math inline">\(n_{list}\)</span> cells (inverted lists); a query probes the <code>nprobe</code> closest cells. <strong>Product quantization</strong> splits each vector into <span class="math inline">\(m\)</span> sub-vectors and replaces each with the ID of its nearest centroid in a 256-entry codebook (1 byte), compressing a 768-dim float vector (3 KB) to <span class="math inline">\(m = 96\)</span> bytes. Distances are computed with lookup tables (precompute the query’s distance to every codebook entry, then sum <span class="math inline">\(m\)</span> table lookups per vector). Re-rank top candidates with exact vectors. Metrics: recall@<span class="math inline">\(k\)</span> vs queries per second.</p>
+</div>
+<h1 id="distributed-training">Distributed Training</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Data parallelism</strong>: each GPU holds a model copy and a slice of the batch; gradients are averaged with <strong>all-reduce</strong>. Ring all-reduce sends <span class="math inline">\(2\frac{N-1}{N}\)</span> times the gradient size per GPU, independent of <span class="math inline">\(N\)</span>, as a reduce-scatter followed by an all-gather.</p></li>
+<li><p><strong>ZeRO / FSDP</strong>: shard optimizer states (stage 1), gradients (stage 2), and parameters (stage 3) across data-parallel ranks, all-gathering parameters just in time for each layer. Memory per GPU falls roughly by <span class="math inline">\(N\)</span>.</p></li>
+<li><p><strong>Tensor parallelism</strong> splits each layer’s matrices across GPUs (column- then row-parallel in the MLP needs one all-reduce per block); keep it within a node.</p></li>
+<li><p><strong>Pipeline parallelism</strong> splits layers into stages and uses micro-batches to reduce idle “bubbles” (1F1B schedules).</p></li>
+<li><p><strong>Gradient accumulation</strong> simulates a large batch on small hardware: sum gradients over several micro-batches before one optimizer step.</p></li>
+</ul>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Implement scaled dot-product attention with a causal mask</div>
+<p>State shapes: <code>Q, K, V</code> are <code>(batch, heads, n, d_k)</code>. Scores <code>Q @ K.T / sqrt(d_k)</code> give <code>(batch, heads, n, n)</code>. Build the mask once as an upper-triangular boolean matrix and fill masked scores with a large negative number (not <code>-inf</code> if a row could be fully masked, which would produce NaN). Stable softmax over the last axis; multiply by <code>V</code>. Test: with a causal mask, changing a later token must not change earlier outputs; with identical keys, attention weights are uniform over allowed positions. Discuss <span class="math inline">\(O(n^2)\)</span> memory and how FlashAttention’s online softmax avoids it; how a KV cache turns generation into one new query per step; padding masks for variable-length batches (combine with the causal mask by logical OR).</p>
+</div>
+<div class="box box-followups" data-kind="followups"><div class="box-title">➕ Follow-ups</div>
+<ul>
+<li><p>Why does attention divide by <span class="math inline">\(\sqrt{d_k}\)</span> rather than <span class="math inline">\(d_k\)</span>?</p></li>
+<li><p>What breaks if you apply the mask after the softmax instead of before?</p></li>
+<li><p>How do GQA and MQA change the KV cache size, and what do they cost in quality?</p></li>
+<li><p>Why does AdamW decouple weight decay? What happens to Adam without bias correction in early steps?</p></li>
+<li><p>Show that RoPE makes attention scores depend only on relative position.</p></li>
+<li><p>How is DPO’s loss derived from the RLHF objective, and what does <span class="math inline">\(\beta\)</span> control?</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Backprop is reverse topological traversal with the chain rule; memory, not compute, is its constraint.</p></li>
+<li><p>Stable softmax, the online softmax rescaling trick, and the <span class="math inline">\(\sqrt{d_k}\)</span> scaling are must-know details.</p></li>
+<li><p>KV caching, GQA/MQA, and speculative decoding exist because generation is memory-bound.</p></li>
+<li><p>Contrastive, DPO, and GRPO losses are short formulas; know what each term does.</p></li>
+<li><p>HNSW and IVF-PQ are the algorithms behind vector databases.</p></li>
+</ul>
+</div>

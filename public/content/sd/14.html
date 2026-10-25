@@ -1,0 +1,149 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>Containers and images, Kubernetes architecture and core objects, autoscaling, service discovery patterns, service meshes, and running GPU workloads on Kubernetes.</p>
+</div>
+<h1 id="docker-and-containers">Docker and Containers</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Before shipping containers, every cargo type needed different handling. The standard steel box changed everything: any crane, ship, or truck can move it. A software container is that box. Your app and everything it needs are packed together, so it runs the same on a laptop, a test server, or the cloud.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/34462520cda0.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Containers share the host kernel, so they start in milliseconds and use far less memory than VMs.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A container is an isolated process using Linux <strong>namespaces</strong> (what it can see: PIDs, network, mounts) and <strong>cgroups</strong> (what it can use: CPU, memory). An <strong>image</strong> is a stack of read-only layers built from a Dockerfile and stored in a registry; standards are defined by the OCI.</p>
+</div>
+<pre class="code text"><code class="language-plaintext"># ---- build stage ----
+FROM golang:1.23 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download                 # cached layer unless deps change
+COPY . .
+RUN CGO_ENABLED=0 go build -o /app ./cmd/server
+
+# ---- runtime stage: tiny, no shell, non-root ----
+FROM gcr.io/distroless/static:nonroot
+COPY --from=build /app /app
+USER nonroot:nonroot
+EXPOSE 8080
+ENTRYPOINT [&quot;/app&quot;]</code></pre>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Image hygiene: pin base images by digest, use minimal bases (distroless, Chainguard, Alpine), order layers from least to most frequently changed, use <code>.dockerignore</code>, run as non-root with a read-only root filesystem, never bake secrets into layers (use BuildKit secret mounts), and scan images (Trivy, Grype). Sign images (Sigstore cosign) and attach an SBOM. Containers are not a strong security boundary; for untrusted code (including code written by AI agents) use sandboxes such as gVisor, Kata Containers, or Firecracker microVMs.</p>
+</div>
+<h1 id="kubernetes">Kubernetes</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>If containers are shipping boxes, Kubernetes is the port authority. You tell it “I want five copies of this box running at all times,” and it finds space on ships, replaces boxes that fall overboard, and adds more when the port gets busy.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/5c2cb6b6fd8c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Kubernetes architecture: a declarative control plane reconciling worker nodes.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Core idea: declarative reconciliation.</strong> You declare desired state in YAML; controllers continuously compare actual state to desired state and act to close the gap.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Object</th>
+<th style="text-align: left;">Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Pod</td>
+<td style="text-align: left;">One or more containers sharing network and storage; the scheduling unit</td>
+</tr>
+<tr>
+<td style="text-align: left;">Deployment</td>
+<td style="text-align: left;">Stateless app; manages ReplicaSets, rolling updates, rollback</td>
+</tr>
+<tr>
+<td style="text-align: left;">StatefulSet</td>
+<td style="text-align: left;">Stable identity and storage per replica (databases, Kafka)</td>
+</tr>
+<tr>
+<td style="text-align: left;">DaemonSet</td>
+<td style="text-align: left;">One pod per node (log agents, CNI, GPU device plugin)</td>
+</tr>
+<tr>
+<td style="text-align: left;">Job / CronJob</td>
+<td style="text-align: left;">Run to completion / on a schedule</td>
+</tr>
+<tr>
+<td style="text-align: left;">Service</td>
+<td style="text-align: left;">Stable virtual IP and DNS name for a set of pods</td>
+</tr>
+<tr>
+<td style="text-align: left;">Ingress / Gateway API</td>
+<td style="text-align: left;">L7 routing from outside the cluster</td>
+</tr>
+<tr>
+<td style="text-align: left;">ConfigMap / Secret</td>
+<td style="text-align: left;">Configuration and sensitive values</td>
+</tr>
+<tr>
+<td style="text-align: left;">HPA / VPA / KEDA</td>
+<td style="text-align: left;">Scale replicas on CPU, memory, or custom metrics / queue depth</td>
+</tr>
+<tr>
+<td style="text-align: left;">PodDisruptionBudget</td>
+<td style="text-align: left;">Keep minimum replicas during node maintenance</td>
+</tr>
+</tbody>
+</table>
+</div>
+<pre class="code text"><code class="language-plaintext">apiVersion: apps/v1
+kind: Deployment
+metadata: { name: api }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: api } }
+  strategy: { rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  template:
+    metadata: { labels: { app: api } }
+    spec:
+      containers:
+      - name: api
+        image: registry.example.com/api@sha256:3f9a...
+        ports: [{ containerPort: 8080 }]
+        resources:
+          requests: { cpu: &quot;250m&quot;, memory: &quot;256Mi&quot; }
+          limits:   { memory: &quot;512Mi&quot; }
+        readinessProbe: { httpGet: { path: /ready, port: 8080 }, periodSeconds: 5 }
+        livenessProbe:  { httpGet: { path: /live,  port: 8080 }, periodSeconds: 10 }</code></pre>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>Scheduling and capacity:</strong> requests drive scheduling; limits drive throttling (CPU) and OOM kills (memory). Many teams set memory limit = request and omit CPU limits to avoid throttling. Use topology spread constraints across zones, PodDisruptionBudgets, and priority classes. Cluster autoscaling with <strong>Karpenter</strong> provisions right-sized nodes in seconds.</p>
+<p><strong>Graceful shutdown:</strong> on termination, the pod is removed from endpoints <em>at the same time</em> SIGTERM is sent, so add a short <code>preStop</code> sleep, then drain in-flight requests within <code>terminationGracePeriodSeconds</code>.</p>
+<p><strong>GPUs on Kubernetes:</strong> the NVIDIA device plugin or GPU Operator exposes <code>nvidia.com/gpu</code>; <strong>Dynamic Resource Allocation (DRA)</strong>, now generally available, allows finer GPU requests and sharing; MIG and time-slicing share one GPU across pods. LLM serving stacks such as <strong>KServe</strong>, <strong>llm-d</strong>, <strong>NVIDIA Dynamo</strong>, and the <strong>Gateway API Inference Extension</strong> add model-aware routing and autoscaling on top. Gang scheduling (Kueue, Volcano) is needed for multi-node training jobs.</p>
+</div>
+<h1 id="service-discovery">Service Discovery</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>In a city where shops move every day, you need a live directory telling you where each shop is right now. Service discovery is that directory for services whose containers start, stop, and move constantly.</p>
+</div>
+<figure class="tikz"><img src="figs/sd/30e7689967a2.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Client-side discovery (client picks the instance) vs server-side (a load balancer picks).</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Instances <em>register</em> on startup (self-registration or a platform registrar), send heartbeats, and are removed when they stop. Implementations:</p>
+<ul>
+<li><p><strong>Kubernetes</strong>: CoreDNS resolves <code>orders.prod.svc.cluster.local</code> to a Service IP; kube-proxy or eBPF (Cilium) load balances to ready pods via EndpointSlices. Headless Services return pod IPs directly.</p></li>
+<li><p><strong>Consul</strong>, <strong>etcd</strong>, <strong>ZooKeeper</strong>, <strong>Eureka</strong>: registries for VMs and mixed environments.</p></li>
+<li><p><strong>Cloud</strong>: AWS Cloud Map, ECS Service Connect.</p></li>
+<li><p><strong>xDS</strong>: Envoy’s API for pushing endpoints to proxies and gRPC clients.</p></li>
+</ul>
+</div>
+<h1 id="service-mesh">Service Mesh</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A service mesh moves networking concerns (mTLS, retries, timeouts, circuit breaking, traffic splitting, telemetry) out of application code into the infrastructure. Classic meshes inject an Envoy <strong>sidecar</strong> into every pod. Newer <strong>sidecarless</strong> designs reduce overhead: Istio <strong>ambient mode</strong> (per-node ztunnel for L4 mTLS plus optional waypoint proxies for L7) and <strong>Cilium</strong> (eBPF in the kernel). Linkerd uses a lightweight Rust proxy.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Zero-downtime rolling deploy</div>
+<p>A Deployment with <code>maxUnavailable: 0</code> starts a new pod, waits for readiness, then removes an old one. If the new pods fail readiness, the rollout stalls instead of taking traffic, and <code>kubectl rollout undo</code> reverts.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Queue-driven autoscaling</div>
+<p>KEDA scales video-transcoding workers from 0 to 200 pods based on SQS queue depth; Karpenter adds spot GPU nodes as needed and removes them when the queue drains, cutting cost compared to always-on capacity.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Zero-trust service-to-service traffic</div>
+<p>Istio ambient mode gives every workload a SPIFFE identity and mutual TLS without code changes. An authorization policy states that only <code>checkout</code> may call <code>payments</code> on <code>POST /charges</code>.</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Containers package apps; images should be small, pinned, signed, and non-root.</p></li>
+<li><p>Kubernetes reconciles declared state; probes, requests, and PDBs make it reliable.</p></li>
+<li><p>Service discovery maps names to live instances; in Kubernetes it is DNS plus Services.</p></li>
+<li><p>Meshes provide mTLS and traffic policy; sidecarless modes cut overhead.</p></li>
+</ul>
+</div>

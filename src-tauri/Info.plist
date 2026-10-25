@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Study Quest adds your study sessions and planned study blocks to Calendar.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Study Quest uses the microphone for voice typing in "Explain it back" and notes.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Study Quest turns your speech into text for voice typing.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Study Quest adds your study sessions and planned study blocks to Calendar.</string>
+</dict>
+</plist>

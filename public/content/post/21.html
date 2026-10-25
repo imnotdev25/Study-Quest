@@ -1,0 +1,50 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>A <strong>guard model</strong> is a separate classifier that reads a prompt (input moderation) or a prompt plus response (output moderation) and returns a verdict. It lets a deployment enforce policy without retraining the main model, and it can be updated faster. Most guards today are small LLMs that <em>generate</em> their verdict.</p>
+</div>
+<p><strong>Qwen3Guard</strong> (Qwen, October 2025; model card read this month): 0.6B, 4B and 8B. The <code>Gen</code> variants output <code>Safety: Safe | Unsafe | Controversial</code>, a list of <code>Categories</code> (Violent, Non-violent Illegal Acts, Sexual Content, PII, Suicide &amp; Self-Harm, Unethical Acts, Politically Sensitive Topics, Copyright Violation, and Jailbreak for inputs), and for responses <code>Refusal: Yes | No</code>. The <code>Stream</code> variants add a per-token head to moderate output while it’s generated. <code>Controversial</code> lets you choose a strict or loose policy at deployment.</p>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Guard model (HF id)</th>
+<th style="text-align: left;">access</th>
+<th style="text-align: left;">notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>Qwen/Qwen3Guard-Gen-0.6B</code> (4B, 8B)</td>
+<td style="text-align: left;">open</td>
+<td style="text-align: left;">three severity levels, refusal detection, streaming variant</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>meta-llama/Llama-Guard-4-12B</code></td>
+<td style="text-align: left;">gated</td>
+<td style="text-align: left;">multimodal, MLCommons hazard taxonomy</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>allenai/wildguard</code></td>
+<td style="text-align: left;">gated</td>
+<td style="text-align: left;">prompt harm, response harm and refusal in one pass</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>google/shieldgemma-2b</code></td>
+<td style="text-align: left;">gated</td>
+<td style="text-align: left;">policy-conditioned yes/no probability</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>ibm-granite/granite-guardian-3.3-8b</code></td>
+<td style="text-align: left;">open</td>
+<td style="text-align: left;">harm plus RAG groundedness and hallucination checks</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: layers help, but less than multiplication suggests</div>
+<p><strong>Step 1.</strong> Let layer <span class="math inline">\(i\)</span> miss a given harmful exchange with probability <span class="math inline">\(m_i\)</span>: an input guard, the model’s own refusal, an output guard.</p>
+<p><strong>Step 2.</strong> If misses were independent, all three would miss with probability <span class="math inline">\(\prod_im_i\)</span>: three 10% layers give 0.1%.</p>
+<p><strong>Step 3.</strong> They aren’t independent: the same clever phrasing that fools one classifier tends to fool others. For two layers with miss correlation <span class="math inline">\(\rho\)</span>: <span class="math inline">\(P(\text{both miss})=m_1m_2+\rho\sqrt{m_1(1-m_1)m_2(1-m_2)}\)</span>.</p>
+<p><strong>Step 4.</strong> Example <span class="math inline">\(m_1=m_2=0.1\)</span>: independent gives 0.010; <span class="math inline">\(\rho=0.5\)</span> gives <span class="math inline">\(0.01+0.5\cdot0.09=0.055\)</span>, more than 5<span class="math inline">\(\times\)</span> worse.</p>
+<p><strong>Step 5.</strong> So diversify layers (different models, different training data, rules plus models), and measure the <em>combined</em> miss rate on attacks, not each layer alone.</p>
+</div>

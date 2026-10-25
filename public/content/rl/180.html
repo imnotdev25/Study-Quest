@@ -1,0 +1,102 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 8 · checks 5</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: comparing moves from the same chess position</div>
+<p>Saying “you won the game” doesn’t tell you which move was good. But if you’ve reached the same position several times and played different moves from it, you can compare those moves directly. GiGPO finds repeated states across an agent’s trajectories and compares the actions taken from each one.</p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why is GRPO’s advantage the same for every step of a trajectory?</p></li>
+<li><p>What is the delayed-credit problem in tool use? (Topic 35)</p></li>
+</ol>
+<h3 class="unnumbered" id="the-idea-feng-et-al.-2025-neurips">2. The idea (Feng et al., 2025, NeurIPS)</h3>
+<p>GiGPO stays critic-free and adds a second level of grouping.</p>
+<ul>
+<li><p><strong>Episode level:</strong> like GRPO, <span class="math inline">\(A^E_i=\frac{R_i-\bar R}{\operatorname{std}(R)}\)</span> over complete trajectories from the same task.</p></li>
+<li><p><strong>Step level, “anchor states”:</strong> find environment states that appear in several trajectories, group the actions taken from each such state, and compute a relative advantage within the group from each step’s discounted return <span class="math inline">\(G_t\)</span>.</p></li>
+<li><p><strong>Combine:</strong> <span class="math inline">\(A_{i,t}=A^E_i+\omega\,A^S_{i,t}\)</span>.</p></li>
+</ul>
+<p>It needs no extra rollouts or models: the anchor states are found in the trajectories already collected. The paper reports gains over GRPO of more than 12% on ALFWorld and more than 9% on WebShop, at the same rollout and memory cost.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Repeated states give free step-level comparisons.</p></li>
+<li><p>Episode advantage plus weighted step advantage, still without a critic.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: state s1</div>
+<p>Trajectories 0, 1 and 3 all reach <span class="math inline">\(s_1\)</span> at step 1, with discounted returns <span class="math inline">\(0.95,0,0.95\)</span>. Group mean <span class="math inline">\(0.633\)</span>, std <span class="math inline">\(0.548\)</span>, so step advantages <span class="math inline">\((+0.58,-1.15,+0.58)\)</span>. Trajectory 1’s action at <span class="math inline">\(s_1\)</span> is singled out as the mistake, which GRPO alone can’t see.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Matching states too loosely (e.g. by observation text that hides different internal states).</p></li>
+<li><p>Groups of size 1 getting non-zero advantages.</p></li>
+<li><p>An <span class="math inline">\(\omega\)</span> so large that noisy step groups dominate.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-two-level-advantages">3. PyTorch exercise — two-level advantages</h3>
+<pre class="code python"><code class="language-python">import torch
+from collections import defaultdict
+
+gamma, omega = 0.95, 1.0
+trajs = [([&quot;s0&quot;, &quot;s1&quot;, &quot;s2&quot;], 1.0),
+         ([&quot;s0&quot;, &quot;s1&quot;, &quot;s3&quot;], 0.0),
+         ([&quot;s0&quot;, &quot;s4&quot;], 0.0),
+         ([&quot;s0&quot;, &quot;s1&quot;, &quot;s2&quot;], 1.0)]
+# TODO 1: episode-level advantage over the four final rewards
+# TODO 2: discounted return-to-go G_t for every step
+# TODO 3: group steps by state; normalize G_t within groups of size &gt; 1
+# TODO 4: combined advantage A = A_E + omega * A_S</code></pre>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does state <span class="math inline">\(s_2\)</span> get a step advantage of 0?</p></li>
+<li><p>Why does this matter more for long agent tasks than for single-turn math?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+from collections import defaultdict
+
+gamma, omega = 0.95, 1.0
+# Each trajectory: list of state ids visited, and a final episode reward.
+trajs = [([&quot;s0&quot;, &quot;s1&quot;, &quot;s2&quot;], 1.0),
+         ([&quot;s0&quot;, &quot;s1&quot;, &quot;s3&quot;], 0.0),
+         ([&quot;s0&quot;, &quot;s4&quot;], 0.0),
+         ([&quot;s0&quot;, &quot;s1&quot;, &quot;s2&quot;], 1.0)]
+
+R = torch.tensor([r for _, r in trajs])
+episode_adv = (R - R.mean()) / (R.std() + 1e-6)
+
+# Step-level: discounted return from each step, grouped by anchor state.
+steps = []                                        # (traj, t, state, G_t)
+for i, (states, r) in enumerate(trajs):
+    T = len(states)
+    for t, s in enumerate(states):
+        steps.append((i, t, s, gamma ** (T - 1 - t) * r))
+groups = defaultdict(list)
+for idx, (_, _, s, g) in enumerate(steps):
+    groups[s].append(idx)
+step_adv = torch.zeros(len(steps))
+for s, idxs in groups.items():
+    g = torch.tensor([steps[k][3] for k in idxs])
+    if len(idxs) &gt; 1 and g.std() &gt; 0:
+        step_adv[idxs] = (g - g.mean()) / g.std()
+for k, (i, t, s, g) in enumerate(steps):
+    total = episode_adv[i] + omega * step_adv[k]
+    print(f&quot;traj {i} step {t} state {s}: A_E {episode_adv[i]:+.2f}  A_S {step_adv[k]:+.2f}  A {total:+.2f}&quot;)</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">traj 0 step 0 state s0: A_E +0.87  A_S +0.87  A +1.73
+traj 0 step 1 state s1: A_E +0.87  A_S +0.58  A +1.44
+traj 0 step 2 state s2: A_E +0.87  A_S +0.00  A +0.87
+traj 1 step 0 state s0: A_E -0.87  A_S -0.87  A -1.73
+traj 1 step 1 state s1: A_E -0.87  A_S -1.15  A -2.02
+traj 1 step 2 state s3: A_E -0.87  A_S +0.00  A -0.87
+traj 2 step 0 state s0: A_E -0.87  A_S -0.87  A -1.73
+traj 2 step 1 state s4: A_E -0.87  A_S +0.00  A -0.87
+traj 3 step 0 state s0: A_E +0.87  A_S +0.87  A +1.73
+traj 3 step 1 state s1: A_E +0.87  A_S +0.58  A +1.44
+traj 3 step 2 state s2: A_E +0.87  A_S +0.00  A +0.87</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>Both visits to <span class="math inline">\(s_2\)</span> have the same return, so there’s no difference to learn from.</p></li>
+<li><p>Long tasks have many decisions and one final reward. Step groups tell good and bad decisions apart within a single trajectory.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) It’s computed from the final reward only. (2) The final answer’s reward has to be credited to tool calls made many turns earlier.</p>
+<p><strong>Takeaway:</strong> in agent environments, states repeat across rollouts. Use those repeats as free, critic-free step-level baselines.</p>

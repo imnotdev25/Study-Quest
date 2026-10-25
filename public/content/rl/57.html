@@ -1,0 +1,237 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: the best-looking apartment listing</div>
+<p>You scroll 50 apartment listings and pick the one with the best photos. It’s probably a good apartment, but it’s also, almost by definition, the one whose photos flatter it most. The more listings you scan, the more of the “best” score is flattering photography. That’s the optimizer’s curse, and best-of-<span class="math inline">\(N\)</span> has it.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/96a3fe26fe5b.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Selected judge error keeps rising with <span class="math inline">\(N\)</span>, roughly like <span class="math inline">\(\sqrt{\ln N}\)</span>.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why can a confidently mislabeled DPO pair produce a large gradient?</p></li>
+<li><p>Why doesn’t low DPO training loss establish response quality?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="selecting-the-highest-score-selects-positive-noise">2. Selecting the highest score selects positive noise</h3>
+<p>Suppose candidate <span class="math inline">\(i\)</span> has true utility <span class="math inline">\(u_i\)</span>, but the reward model observes:</p>
+<p><span class="math display">\[r_i=u_i+\epsilon_i\]</span></p>
+<p>where <span class="math inline">\(\epsilon_i\)</span> is evaluator error.</p>
+<p>Best-of-<span class="math inline">\(N\)</span> selects:</p>
+<p><span class="math display">\[i^*=\arg\max_i r_i\]</span></p>
+<p>Selection considers both quality and noise. Even when the noise has zero mean before selection, the winning candidate tends to have unusually positive noise:</p>
+<p><span class="math display">\[\mathbb E[r_{i^*}-u_{i^*}]&gt;0\]</span></p>
+<p>This is the optimizer’s curse: searching harder against an imperfect proxy finds examples that exploit its errors. Increasing <span class="math inline">\(N\)</span> may improve actual quality, but the reported reward usually improves faster.</p>
+<p>The same effect appears during RL training. Repeated policy updates search for outputs receiving high reward-model scores, including accidentally high scores caused by misspecification.</p>
+<p>Useful safeguards include:</p>
+<ul>
+<li><p>evaluate with an independent judge not used for selection;</p></li>
+<li><p>report proxy reward and held-out quality separately;</p></li>
+<li><p>vary evaluator seeds or models;</p></li>
+<li><p>manually inspect the largest reward disagreements;</p></li>
+<li><p>test adversarial and distribution-shifted prompts.</p></li>
+</ul>
+<p>DPO is not immune. If its chosen responses were produced by best-of-<span class="math inline">\(N\)</span> using a noisy reward model, DPO can distill that reward model’s mistakes. DPO itself remains offline preference optimization, not online exploration.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>true utilities, proxy scores: <span style="background-color: codeinlinebg"><code> [prompts, N]</code></span></p></li>
+<li><p>selected candidate indices: <span style="background-color: codeinlinebg"><code> [prompts]</code></span></p></li>
+<li><p>selected scores and utilities: <span style="background-color: codeinlinebg"><code> [prompts]</code></span></p></li>
+<li><p>mean optimism and regret: scalar</p></li>
+</ul>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: selection selects noise</div>
+<p>Proxy <span class="math inline">\(\hat r=r+e\)</span> with <span class="math inline">\(e\sim\mathcal N(0,\sigma^2)\)</span> independent of <span class="math inline">\(r\)</span>. Choosing <span class="math inline">\(\arg\max_i\hat r_i\)</span> gives <span class="math inline">\(\mathbb E[\hat r_{\text{sel}}]-\mathbb E[r_{\text{sel}}]=\mathbb E[e_{\text{sel}}]&gt;0\)</span>. The reported score overstates the true quality. <strong>Cost:</strong> <span class="math inline">\(\mathrm{KL}(\pi_{\text{BoN}}\|\pi)=\log N-\frac{N-1}{N}\)</span>, so best-of-<span class="math inline">\(N\)</span> is a cheap way to get large KL, and the RL policy can push further still. <strong>Cure:</strong> score the selected outputs with an independent judge or held-out labels.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Stronger search improves quality <em>and</em> finds judge errors.</p></li>
+<li><p>Track selected proxy reward against an independent estimate as <span class="math inline">\(N\)</span> grows.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: <span class="math inline">\(N=16\)</span></div>
+<p>Judge noise <span class="math inline">\(\sigma=0.5\)</span>. Expected selected noise <span class="math inline">\(\approx0.5\times1.77=0.88\)</span> reward units, so a reported 0.88 of improvement could be pure judge error. KL from the base policy: <span class="math inline">\(\ln16-\tfrac{15}{16}=2.77-0.94=1.83\)</span> nats.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Reporting the selected score as the quality estimate.</p></li>
+<li><p>Increasing <span class="math inline">\(N\)</span> without increasing the audit.</p></li>
+<li><p>Using the same judge to select and to evaluate.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Best-of-<span class="math inline">\(N\)</span> sampling</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy <span class="math inline">\(\pi\)</span>, reward model <span class="math inline">\(\hat r\)</span>, number of samples <span class="math inline">\(N\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each prompt <span class="math inline">\(x\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">sample <span class="math inline">\(y_1,\dots,y_N\sim\pi(\cdot|x)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(s_i\gets\hat r(x,y_i)\)</span> for each <span class="math inline">\(i\)</span></div>
+<div class="algo-line" style="--d:1"><strong>return</strong> <span class="math inline">\(y_{i^*}\)</span> with <span class="math inline">\(i^*=\arg\max_is_i\)</span> <em>▷ <span class="math inline">\(\mathrm{KL}\approx\log N-\frac{N-1}{N}\)</span> from <span class="math inline">\(\pi\)</span></em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">audit the winners with an <em>independent</em> judge: larger <span class="math inline">\(N\)</span> selects reward-model errors too</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-watch-selection-amplify-noise">3. PyTorch exercise — watch selection amplify noise</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+num_prompts = 20_000
+noise_std = 1.0
+candidate_counts = [1, 4, 16, 64]
+
+def evaluate_best_of_n(num_candidates):
+    torch.manual_seed(
+        100 + num_candidates
+    )
+
+    # Synthetic &quot;true&quot; quality. In real applications,
+    # this quantity is not directly observable.
+    true_utilities = torch.randn(
+        num_prompts,
+        num_candidates,
+    )
+
+    proxy_noise = noise_std * torch.randn_like(
+        true_utilities
+    )
+
+    # TODO 1: Noisy reward-model scores.
+    proxy_scores = ...
+
+    # A fresh evaluator whose errors were not used
+    # to select the candidate.
+    independent_scores = (
+        true_utilities
+        + noise_std
+        * torch.randn_like(true_utilities)
+    )
+
+    # TODO 2: Select the highest proxy score per prompt.
+    selected_indices = ...
+
+    rows = torch.arange(num_prompts)
+
+    # TODO 3: Gather selected proxy, true and
+    # independent scores.
+    selected_proxy = ...
+    selected_true = ...
+    selected_independent = ...
+
+    # TODO 4: True-quality oracle and diagnostics.
+    oracle_true = ...
+    optimism = ...
+    regret = ...
+    independent_error = ...
+
+    return {
+        &quot;N&quot;: num_candidates,
+        &quot;selected_proxy&quot;:
+            selected_proxy.mean().item(),
+        &quot;selected_true&quot;:
+            selected_true.mean().item(),
+        &quot;independent_score&quot;:
+            selected_independent.mean().item(),
+        &quot;optimism&quot;:
+            optimism.item(),
+        &quot;true_regret&quot;:
+            regret.item(),
+        &quot;independent_error&quot;:
+            independent_error.item(),
+    }
+
+# TODO 5: Run every candidate count.
+results = ...
+
+for result in results:
+    print(result)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What is true-quality regret when <span class="math inline">\(N=1\)</span>?</p></li>
+<li><p>As <span class="math inline">\(N\)</span> grows, which rises faster: selected proxy score or selected true utility?</p></li>
+<li><p>Should the independent evaluator reproduce the selected proxy’s optimism?</p></li>
+<li><p>Does a higher selected true utility prove that increasing <span class="math inline">\(N\)</span> is always worthwhile?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Proxy score is true utility plus proxy noise.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> argmax(dim=1)</code></span>.</p></li>
+<li><p>Gather with <span style="background-color: codeinlinebg"><code> [rows, selected_indices]</code></span>.</p></li>
+<li><p>The oracle uses <span style="background-color: codeinlinebg"><code> true_utilities.max(dim=1).values</code></span>.</p></li>
+<li><p>Optimism is selected proxy minus selected true utility.</p></li>
+<li><p>Regret is oracle true utility minus selected true utility.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Reuse <span style="background-color: codeinlinebg"><code> proxy_scores</code></span> as the “independent” evaluation. The reported evaluation then inherits precisely the noise used for selection and cannot reveal optimism.</p>
+<p>Set <span style="background-color: codeinlinebg"><code> noise_std = 0</code></span>. Proxy and true utility become identical, so optimism and regret should approach zero.</p>
+<p>Increase reward noise to <span style="background-color: codeinlinebg"><code> 3.0</code></span>. Best-of-<span class="math inline">\(N\)</span> reward rises dramatically, while actual selected quality improves much less.</p>
+<p>Finally, copy the same candidate <span class="math inline">\(N\)</span> times. Candidate count increases, but effective diversity does not; independent samples—not tensor width alone—create the selection effect.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can zero-mean evaluator noise produce positive post-selection bias?</p></li>
+<li><p>Why should the selection judge and evaluation judge differ?</p></li>
+<li><p>How can this effect become reward hacking during policy optimization?</p></li>
+<li><p>Which diagnostics would reveal proxy–quality divergence?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Proxy scores:</p>
+<pre class="code python"><code class="language-python">proxy_scores = (
+    true_utilities + proxy_noise
+)</code></pre>
+<p>Selection:</p>
+<pre class="code python"><code class="language-python">selected_indices = (
+    proxy_scores.argmax(dim=1)
+)</code></pre>
+<p>Gather selected quantities:</p>
+<pre class="code python"><code class="language-python">selected_proxy = proxy_scores[
+    rows, selected_indices
+]
+
+selected_true = true_utilities[
+    rows, selected_indices
+]
+
+selected_independent = independent_scores[
+    rows, selected_indices
+]</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">oracle_true = (
+    true_utilities.max(dim=1).values
+)
+
+optimism = (
+    selected_proxy - selected_true
+).mean()
+
+regret = (
+    oracle_true - selected_true
+).mean()
+
+independent_error = (
+    selected_independent - selected_true
+).mean()</code></pre>
+<p>Run every <span class="math inline">\(N\)</span>:</p>
+<pre class="code python"><code class="language-python">results = [
+    evaluate_best_of_n(n)
+    for n in candidate_counts
+]</code></pre>
+<p>For <span class="math inline">\(N=1\)</span>, the only candidate is also the true-quality oracle, so:</p>
+<p><span class="math display">\[\text{regret}=0\]</span></p>
+<p>As <span class="math inline">\(N\)</span> increases, selected true utility generally improves. However, selected proxy score improves faster because selection increasingly favors positive evaluator errors.</p>
+<p>The independent evaluator’s error was not used during selection, so:</p>
+<p><span class="math display">\[\mathbb E[
+r^{\text{independent}}_{i^*}
+-u_{i^*}
+]\approx0\]</span></p>
+<p>Its finite-sample mean will not be exactly zero, but it should not reproduce the proxy’s growing optimism.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p><span style="background-color: codeinlinebg"><code> argmax</code></span> preferentially selects candidates whose noise realization is positive, making the selected noise distribution non-zero-mean.</p></li>
+<li><p>Reusing the selection judge measures success against the same exploitable errors; an independent judge provides a less biased estimate.</p></li>
+<li><p>Policy optimization repeatedly searches output space for reward-model weaknesses, making those weaknesses systematic policy behaviors.</p></li>
+<li><p>Log training reward, held-out judge scores, human ratings, judge disagreement, best-of-<span class="math inline">\(N\)</span> optimism, reward–quality correlation and results across evaluator variants.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A reversed label gives the genuinely preferred response a large negative DPO margin; its gradient approaches the maximum magnitude <span class="math inline">\(\beta\)</span>.</p></li>
+<li><p>The model may simply fit annotation errors, biases or incomplete preferences. Training loss measures dataset fit, not factuality or safety.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> stronger search improves both quality and exploitation opportunities. Track selected proxy reward against an independent quality estimate—especially as rollout count, policy optimization or best-of-<span class="math inline">\(N\)</span> increases.</p>

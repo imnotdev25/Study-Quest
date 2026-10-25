@@ -1,0 +1,450 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>How do token-average and prompt-average PPO losses weight long responses?</p></li>
+<li><p>Does PPO clipping repair an unintended loss-reduction choice?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="centering-and-scaling-do-different-things">2. Centering and scaling do different things</h3>
+<p>A common PPO preprocessing step is:</p>
+<p><span class="math display">\[\tilde A_i
+=
+\frac{A_i-\mu_A}
+{\sigma_A+\epsilon}\]</span></p>
+<p>This combines two operations:</p>
+<ul>
+<li><p>dividing by <span class="math inline">\(\sigma_A\)</span> rescales gradient magnitude;</p></li>
+<li><p>subtracting <span class="math inline">\(\mu_A\)</span> acts like a batch-estimated baseline and can change individual advantage signs.</p></li>
+</ul>
+<p>Under ideal on-policy expectation, an action-independent baseline does not change the expected policy gradient:</p>
+<p><span class="math display">\[E[
+\nabla_\theta\log\pi_\theta(a\mid s)b(s)
+]
+=0\]</span></p>
+<p>In a finite batch, however, centering changes the sampled gradient. Its statistics must therefore be calculated from exactly the intended valid population.</p>
+<p>For a response mask <span class="math inline">\(m_{b,t}\)</span>:</p>
+<p><span class="math display">\[\mu_A
+=
+\frac{\sum_{b,t}m_{b,t}A_{b,t}}
+{\sum_{b,t}m_{b,t}}\]</span></p>
+<p><span class="math display">\[\sigma_A^2
+=
+\frac{
+\sum_{b,t}m_{b,t}(A_{b,t}-\mu_A)^2
+}{
+\sum_{b,t}m_{b,t}
+}\]</span></p>
+<p>Padding zeros are not neutral observations. Including them changes both the baseline and scale.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>advantages and response mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>valid count, mean and variance: scalars</p></li>
+<li><p>normalized advantages: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+</ul>
+<p>In distributed PPO, compute global sums, squared sums and counts. Averaging independently whitened worker batches gives different normalization when workers contain different lengths or reward mixtures.</p>
+<p>GRPO constructs relative advantages within each prompt group, so zero-variance groups provide no relative learning signal. DPO has no rollout advantages; its <span class="math inline">\(\beta\)</span> scales preference log-ratio margins and is not equivalent to PPO advantage whitening.</p>
+<h3 class="unnumbered" id="pytorch-exercise-padded-zeros-flip-the-gradient-sign">3. PyTorch exercise — padded zeros flip the gradient sign</h3>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.set_default_dtype(torch.float64)
+
+batch_size = 2
+maximum_length = 8
+epsilon = 1e-8
+
+lengths = torch.tensor([2, 8])
+
+# Short response: [-2, -1]
+# Long response: eight advantages of +1
+dense_advantages = torch.tensor([
+    [-2.0, -1.0, -1.0, -1.0,
+     -1.0, -1.0, -1.0, -1.0],
+    [1.0, 1.0, 1.0, 1.0,
+     1.0, 1.0, 1.0, 1.0],
+])
+
+
+# TODO 1: Build response mask and safe advantages.
+token_positions = ...
+
+response_mask = ...
+
+padded_advantages = ...
+
+safe_advantages = ...
+
+
+# TODO 2: Correct masked whitening.
+float_mask = ...
+
+valid_count = ...
+
+masked_mean = ...
+
+centered_valid_advantages = ...
+
+masked_variance = ...
+
+masked_standard_deviation = ...
+
+correct_whitened_advantages = ...
+
+
+# TODO 3: Incorrect whitening that includes
+# zero-filled padding in its statistics.
+wrong_mean = ...
+
+wrong_variance = ...
+
+wrong_standard_deviation = ...
+
+wrong_whitened_advantages = ...
+
+
+# Slightly different score gradients per token.
+# This makes the finite-batch baseline matter.
+feature_values = (
+    1.0
+    - 0.05
+    * (safe_advantages - 0.5)
+)
+
+safe_features = torch.where(
+    response_mask,
+    feature_values,
+    torch.zeros_like(feature_values),
+)
+
+
+# TODO 4: Measure the actor-ascent gradient.
+def actor_gradient(advantages):
+    theta = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    old_log_probabilities = ...
+
+    new_log_probabilities = ...
+
+    probability_ratios = ...
+
+    objective = ...
+
+    loss = ...
+    loss.backward()
+
+    ascent_gradient = ...
+
+    return (
+        objective.detach(),
+        ascent_gradient,
+    )
+
+
+raw_objective, raw_gradient = actor_gradient(
+    safe_advantages
+)
+
+correct_objective, correct_gradient = (
+    actor_gradient(
+        correct_whitened_advantages
+    )
+)
+
+wrong_objective, wrong_gradient = (
+    actor_gradient(
+        wrong_whitened_advantages
+    )
+)
+
+
+# TODO 5: Diagnostics over valid tokens only.
+correct_valid_mean = ...
+correct_valid_std = ...
+
+wrong_valid_mean = ...
+wrong_valid_std = ...
+
+
+print(
+    &quot;Correct mean/std:&quot;,
+    masked_mean.item(),
+    masked_standard_deviation.item(),
+)
+print(
+    &quot;Wrong padded mean/std:&quot;,
+    wrong_mean.item(),
+    wrong_standard_deviation.item(),
+)
+
+print(
+    &quot;\nWhitened valid-token mean/std&quot;
+)
+print(
+    &quot;Correct:&quot;,
+    correct_valid_mean.item(),
+    correct_valid_std.item(),
+)
+print(
+    &quot;Wrong:&quot;,
+    wrong_valid_mean.item(),
+    wrong_valid_std.item(),
+)
+
+print(
+    &quot;\nObjectives: raw, correct, wrong&quot;
+)
+print(
+    raw_objective.item(),
+    correct_objective.item(),
+    wrong_objective.item(),
+)
+
+print(
+    &quot;Ascent gradients: raw, correct, wrong&quot;
+)
+print(
+    raw_gradient.item(),
+    correct_gradient.item(),
+    wrong_gradient.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Is the correct valid-token mean <span style="background-color: codeinlinebg"><code> 0.5</code></span>?</p></li>
+<li><p>Will correctly whitened valid advantages have mean zero?</p></li>
+<li><p>Will padding-aware and padding-unaware gradients have the same sign?</p></li>
+<li><p>What happens if every advantage in a GRPO group is identical?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span>; multiplying a padded <span style="background-color: codeinlinebg"><code> NaN</code></span> by zero still gives <span style="background-color: codeinlinebg"><code> NaN</code></span>.</p></li>
+<li><p>Correct variance divides by <span style="background-color: codeinlinebg"><code> valid_count</code></span>.</p></li>
+<li><p>Incorrect statistics use <span style="background-color: codeinlinebg"><code> .mean()</code></span> over the complete <span style="background-color: codeinlinebg"><code> [B, T]</code></span> tensor.</p></li>
+<li><p>The old policy has <span style="background-color: codeinlinebg"><code> theta = 0</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> F.logsigmoid(theta * safe_features)</code></span>.</p></li>
+<li><p>Detach advantages inside the actor objective.</p></li>
+<li><p>Return <span style="background-color: codeinlinebg"><code> -theta.grad</code></span> after differentiating <span style="background-color: codeinlinebg"><code> loss = -objective</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Normalize zero-padded <span style="background-color: codeinlinebg"><code> [B, T]</code></span> tensors directly.</p></li>
+<li><p>Forget <span style="background-color: codeinlinebg"><code> epsilon</code></span> for a zero-variance GRPO group.</p></li>
+<li><p>Whiten independently on every distributed worker.</p></li>
+<li><p>Recompute normalization from different minibatches during every PPO epoch.</p></li>
+<li><p>Backpropagate through GAE or normalization statistics.</p></li>
+<li><p>Mix reward sources with incompatible scales without monitoring them separately.</p></li>
+<li><p>Normalize rewards and advantages twice, then compensate with a larger learning rate.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Which part of whitening can change advantage signs?</p></li>
+<li><p>Why is padding-aware whitening still not necessarily prompt-balanced?</p></li>
+<li><p>What global quantities should distributed workers aggregate?</p></li>
+<li><p>Should advantage normalization statistics change during repeated PPO epochs over one rollout?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Masking:</p>
+<pre class="code python"><code class="language-python">token_positions = torch.arange(
+    maximum_length
+)[None, :]
+
+response_mask = (
+    token_positions
+    &lt; lengths[:, None]
+)
+
+padded_advantages = torch.where(
+    response_mask,
+    dense_advantages,
+    torch.tensor(float(&quot;nan&quot;)),
+)
+
+safe_advantages = torch.where(
+    response_mask,
+    padded_advantages,
+    torch.zeros_like(
+        padded_advantages
+    ),
+)</code></pre>
+<p>Correct statistics:</p>
+<pre class="code python"><code class="language-python">float_mask = response_mask.to(
+    torch.float64
+)
+
+valid_count = float_mask.sum()
+
+masked_mean = (
+    safe_advantages.sum()
+    / valid_count
+)
+
+centered_valid_advantages = torch.where(
+    response_mask,
+    padded_advantages - masked_mean,
+    torch.zeros_like(
+        padded_advantages
+    ),
+)
+
+masked_variance = (
+    centered_valid_advantages
+    .square()
+    .sum()
+    / valid_count
+)
+
+masked_standard_deviation = (
+    masked_variance.sqrt()
+)
+
+correct_whitened_advantages = (
+    centered_valid_advantages
+    / (
+        masked_standard_deviation
+        + epsilon
+    )
+).detach()</code></pre>
+<p>Incorrect padded statistics:</p>
+<pre class="code python"><code class="language-python">wrong_mean = (
+    safe_advantages.mean()
+)
+
+wrong_variance = (
+    (
+        safe_advantages
+        - wrong_mean
+    )
+    .square()
+    .mean()
+)
+
+wrong_standard_deviation = (
+    wrong_variance.sqrt()
+)
+
+wrong_whitened_advantages = torch.where(
+    response_mask,
+    (
+        safe_advantages
+        - wrong_mean
+    )
+    / (
+        wrong_standard_deviation
+        + epsilon
+    ),
+    torch.zeros_like(
+        safe_advantages
+    ),
+).detach()</code></pre>
+<p>Actor gradient:</p>
+<pre class="code python"><code class="language-python">def actor_gradient(advantages):
+    theta = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    old_log_probabilities = (
+        F.logsigmoid(
+            torch.zeros_like(
+                safe_features
+            )
+        )
+    )
+
+    new_log_probabilities = (
+        F.logsigmoid(
+            theta * safe_features
+        )
+    )
+
+    probability_ratios = torch.exp(
+        new_log_probabilities
+        - old_log_probabilities
+    )
+
+    objective = (
+        probability_ratios
+        * advantages.detach()
+        * float_mask
+    ).sum() / valid_count
+
+    loss = -objective
+    loss.backward()
+
+    ascent_gradient = (
+        -theta.grad.detach()
+    )
+
+    return (
+        objective.detach(),
+        ascent_gradient,
+    )</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">correct_valid_mean = (
+    correct_whitened_advantages[
+        response_mask
+    ].mean()
+)
+
+correct_valid_std = (
+    correct_whitened_advantages[
+        response_mask
+    ].std(correction=0)
+)
+
+wrong_valid_mean = (
+    wrong_whitened_advantages[
+        response_mask
+    ].mean()
+)
+
+wrong_valid_std = (
+    wrong_whitened_advantages[
+        response_mask
+    ].std(correction=0)
+)</code></pre>
+<p>There are ten valid tokens:</p>
+<p><span class="math display">\[\mu_{\text{valid}}
+=
+\frac{-2-1+8(1)}{10}
+=
+0.5\]</span></p>
+<p>The correct variance is:</p>
+<p><span class="math display">\[\sigma_{\text{valid}}^2
+=
+\frac{
+(-2.5)^2+(-1.5)^2+8(0.5)^2
+}{10}
+=
+1.05\]</span></p>
+<p>so:</p>
+<p><span class="math display">\[\sigma_{\text{valid}}
+\approx1.025\]</span></p>
+<p>Including six padded zeros instead gives:</p>
+<p><span class="math display">\[\mu_{\text{wrong}}
+=
+\frac5{16}
+=
+0.3125\]</span></p>
+<p>and approximately:</p>
+<p><span class="math display">\[\sigma_{\text{wrong}}
+\approx0.845\]</span></p>
+<p>Consequently, incorrectly whitened valid tokens no longer have mean zero. In this constructed finite batch, correct and padding-contaminated baselines produce actor gradients with opposite signs.</p>
+<p>This does not mean whitening generally reverses the true expected policy gradient. It demonstrates that finite-batch normalization is part of the estimator, and corrupting its statistics can materially alter an update.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Mean subtraction; standard-deviation division only applies a positive rescaling.</p></li>
+<li><p>Masking determines which tokens enter the statistics. It does not decide whether long responses or prompts receive equal outer weight.</p></li>
+<li><p>Aggregate valid count, advantage sum and squared-deviation information—or equivalent numerically stable sufficient statistics.</p></li>
+<li><p>Usually normalize the collected rollout advantages once and keep them fixed across PPO epochs. Changing statistics per minibatch makes repeated passes optimize shifting targets.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Token averaging weights responses by their valid-token counts; prompt averaging gives each response equal outer weight.</p></li>
+<li><p>No. Clipping bounds probability-ratio effects but does not change which tokens, responses or prompts dominate the reduction.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> advantage whitening is not a harmless <span style="background-color: codeinlinebg"><code> .mean()</code></span> and <span style="background-color: codeinlinebg"><code> .std()</code></span>. Freeze detached statistics over the intended valid population, synchronize them across workers and log zero-variance groups before they silently erase or invent policy-gradient signal.</p>

@@ -1,0 +1,116 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>The front door of a microservice system: what API gateways do, BFFs, the four main rate-limiting algorithms, distributed rate limiting with Redis, and how AI gateways limit by tokens instead of requests.</p>
+</div>
+<h1 id="api-gateways">API Gateways</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>An API gateway is an airport security checkpoint. Every passenger passes through one place where tickets are checked (authentication), bags are scanned (validation), crowds are metered (rate limiting), and people are pointed to their gate (routing).</p>
+</div>
+<figure class="tikz"><img src="figs/sd/edd9b18b50ea.svg" alt="diagram" loading="lazy"></figure>
+<p><em>API gateway handles cross-cutting concerns so services can focus on business logic.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Gateway responsibilities: authentication (API keys, OAuth2 JWT validation, mTLS), authorization hooks, rate limiting and quotas, request routing and canary splits, protocol translation (REST to gRPC), request/response transformation, response aggregation, caching, CORS, and observability.</p>
+<p><strong>Backend for Frontend (BFF):</strong> instead of one gateway for all clients, run one per client type. The mobile BFF returns compact payloads that combine three services into one call; the web BFF returns richer data.</p>
+<p><strong>Products:</strong> Kong, AWS API Gateway, Apigee, Azure API Management, Tyk, Envoy Gateway, and Kubernetes <strong>Gateway API</strong> implementations (the successor to Ingress, now the standard way to configure L7 routing in Kubernetes).</p>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>Keep gateways thin. Business logic in the gateway creates a distributed monolith that every team must deploy through. Put domain aggregation in BFFs or GraphQL federation (a supergraph composed from per-team subgraphs). Gateways are in every request’s path, so latency budget matters: JWT validation with cached JWKS keys is microseconds; calling an auth service per request is milliseconds and a new failure dependency. Run gateways in multiple zones and treat their config as code with staged rollouts. A bad gateway config push is a global outage.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Public developer platform</div>
+<p>A payments company exposes <code>api.example.com</code>. The gateway validates API keys, applies per-plan quotas (free: 100 req/min, enterprise: 10<span>,</span>000), enforces idempotency keys on POST, records usage for billing, and routes <code>/v1</code> and <code>/v2</code> to different service versions.</p>
+</div>
+<h1 id="rate-limiting">Rate Limiting</h1>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>A nightclub bouncer lets in a fixed number of people per minute. Arrive too fast and you are asked to wait. This protects everyone inside: the club never gets dangerously packed, and one big group cannot take every spot.</p>
+</div>
+<p>Rate limiting protects against abuse and overload, enforces fairness and business tiers, and controls cost (critical for LLM APIs, where each request burns GPU time).</p>
+<h2 id="algorithms">Algorithms</h2>
+<figure class="tikz"><img src="figs/sd/800669fc94f4.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Token bucket allows bursts up to <span class="math inline">\(b\)</span>; leaky bucket smooths output to a constant rate.</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Algorithm</th>
+<th style="text-align: left;">How it works</th>
+<th style="text-align: left;">Pros / Cons</th>
+<th style="text-align: left;">Used by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Token bucket</td>
+<td style="text-align: left;">Bucket of <span class="math inline">\(b\)</span> tokens refilled at <span class="math inline">\(r\)</span>/s; each request spends one</td>
+<td style="text-align: left;">Allows bursts, <span class="math inline">\(O(1)\)</span> memory</td>
+<td style="text-align: left;">AWS, Stripe</td>
+</tr>
+<tr>
+<td style="text-align: left;">Leaky bucket</td>
+<td style="text-align: left;">Queue drained at fixed rate</td>
+<td style="text-align: left;">Smooth output; adds queueing delay</td>
+<td style="text-align: left;">Nginx <code>limit_req</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">Fixed window</td>
+<td style="text-align: left;">Counter per minute</td>
+<td style="text-align: left;">Simple; 2<span class="math inline">\(\times\)</span> burst at window edges</td>
+<td style="text-align: left;">Basic quotas</td>
+</tr>
+<tr>
+<td style="text-align: left;">Sliding log</td>
+<td style="text-align: left;">Store every timestamp</td>
+<td style="text-align: left;">Exact; memory heavy</td>
+<td style="text-align: left;">Low volume, strict</td>
+</tr>
+<tr>
+<td style="text-align: left;">Sliding window counter</td>
+<td style="text-align: left;">Weighted mix of current and previous window</td>
+<td style="text-align: left;">Accurate, cheap</td>
+<td style="text-align: left;">Cloudflare</td>
+</tr>
+</tbody>
+</table>
+<p><em>Rate-limiting algorithms</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Sliding window counter estimate: <span class="math display">\[\text{count} \approx \text{curr} + \text{prev}\times\frac{\text{window} - \text{elapsed}}{\text{window}}\]</span> With a 60 s window, 40 requests in the previous window, 20 so far, and 15 s elapsed: <span class="math inline">\(20 + 40\times 45/60 = 50\)</span>.</p>
+<p>Respond with <code>429 Too Many Requests</code> and headers: <code>Retry-After</code>, <code>RateLimit-Limit</code>, <code>RateLimit-Remaining</code>, <code>RateLimit-Reset</code>. Limit keys can be user ID, API key, IP, tenant, or endpoint, and you usually layer several (per-IP at the edge, per-tenant at the gateway, per-dependency inside services).</p>
+</div>
+<h2 id="distributed-rate-limiting">Distributed Rate Limiting</h2>
+<figure class="tikz"><img src="figs/sd/129bf796abaf.svg" alt="diagram" loading="lazy"></figure>
+<p><em>A shared counter store makes limits global across gateway instances.</em></p>
+<pre class="code text"><code class="language-plaintext">-- KEYS[1]=bucket key  ARGV: rate, capacity, now_ms, cost
+local b = redis.call(&#x27;HMGET&#x27;, KEYS[1], &#x27;tokens&#x27;, &#x27;ts&#x27;)
+local rate, cap, now, cost = tonumber(ARGV[1]), tonumber(ARGV[2]),
+                             tonumber(ARGV[3]), tonumber(ARGV[4])
+local tokens = tonumber(b[1]) or cap
+local ts     = tonumber(b[2]) or now
+tokens = math.min(cap, tokens + (now - ts) / 1000 * rate)   -- refill
+local allowed = tokens &gt;= cost
+if allowed then tokens = tokens - cost end
+redis.call(&#x27;HSET&#x27;, KEYS[1], &#x27;tokens&#x27;, tokens, &#x27;ts&#x27;, now)
+redis.call(&#x27;PEXPIRE&#x27;, KEYS[1], math.ceil(cap / rate * 1000))
+return { allowed and 1 or 0, tokens }</code></pre>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>A central Redis adds a network hop per request and becomes a hot spot. Options at scale: (1) <strong>local token buckets with periodic sync</strong>: each node gets a share of the global limit and reconciles every few hundred ms (slightly inaccurate, very fast); (2) <strong>sharded counters</strong> by key; (3) <strong>fail-open vs fail-closed</strong> decision when Redis is down: fail open for user-facing traffic (accept a short overrun), fail closed for cost-sensitive or security limits (login attempts). Envoy’s global rate limit service and Cloudflare’s edge limiter use these hybrids.</p>
+<p><strong>Load shedding</strong> differs from rate limiting: it drops work based on <em>server</em> health (CPU, queue depth, latency) rather than a client quota, and should drop lowest-priority traffic first. <strong>Adaptive concurrency</strong> limits (Netflix’s concurrency-limits, based on TCP Vegas-style latency gradients) find the right concurrency automatically.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: Login brute-force protection</div>
+<p>Limit by IP (20 attempts/min) and by username (5 failures/15 min, then exponential lockout). Fail closed if the limiter store is unreachable.</p>
+</div>
+<div class="box box-usecase" data-kind="usecase"><div class="box-title">📦 Use case: LLM API token-based limits</div>
+<p>Request counts are meaningless when one request is 10 tokens and another is 100K. LLM providers limit <strong>requests per minute (RPM)</strong>, <strong>input tokens per minute (ITPM)</strong>, and <strong>output tokens per minute (OTPM)</strong>. The gateway estimates input tokens before forwarding, reserves <code>max_tokens</code> of output budget, and refunds the unused part after the response completes. Tenants also get monthly spend caps.</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Limiting only by IP: NATs and mobile carriers put thousands of users behind one IP.</p></li>
+<li><p>Not returning <code>Retry-After</code>, so clients retry immediately and make overload worse.</p></li>
+<li><p>Rate-limiting check that is slower than the work it protects.</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Gateways centralize auth, limits, routing, and telemetry; keep them free of business logic.</p></li>
+<li><p>Token bucket is the default algorithm; sliding window counter for accurate quotas.</p></li>
+<li><p>Distributed limits need a shared store or approximate local shares.</p></li>
+<li><p>AI systems limit by tokens and cost, not just requests.</p></li>
+</ul>
+</div>

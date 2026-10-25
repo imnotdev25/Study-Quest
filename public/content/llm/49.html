@@ -1,0 +1,21 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>GPT</strong> is a decoder-only Transformer trained with the next-token loss (Session 11). GPT-1 (2018, 117M) fine-tuned per task. GPT-2 (2019, 1.5B) moved LayerNorm to the start of each block (pre-norm, Session 10) and showed zero-shot transfer. GPT-3 (2020, 175B, 96 layers, <span class="math inline">\(D=12288\)</span>, 96 heads) showed <strong>in-context learning</strong>: put examples in the prompt and the model continues the pattern, with no gradient update.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: power-law scaling (Kaplan et al., 2020)</div>
+<p><strong>Step 1.</strong> Empirically, test loss falls as a power law in parameters <span class="math inline">\(N\)</span> (with enough data): <span class="math inline">\(L(N)\approx(N_c/N)^{\alpha_N}\)</span>, with <span class="math inline">\(\alpha_N\approx0.076\)</span>.</p>
+<p><strong>Step 2.</strong> Take logs: <span class="math inline">\(\log L=\alpha_N\log N_c-\alpha_N\log N\)</span>. A power law is a straight line on a log–log plot.</p>
+<p><strong>Step 3.</strong> Doubling <span class="math inline">\(N\)</span> multiplies <span class="math inline">\(L\)</span> by <span class="math inline">\(2^{-0.076}=0.949\)</span>: about 5% lower loss per doubling, forever, until something else (data, compute) limits it.</p>
+<p><strong>Step 4.</strong> Training compute <span class="math inline">\(C\approx6ND\)</span> FLOPs (Session 10: about 2 FLOPs per parameter per token forward, 4 backward). This identity is what lets us trade <span class="math inline">\(N\)</span> against <span class="math inline">\(D\)</span>, which is the next chapter’s question.</p>
+<p><strong>Step 5.</strong> Kaplan’s fits suggested putting most extra compute into <span class="math inline">\(N\)</span>. Chinchilla later found that was wrong because the runs weren’t trained to convergence with matched learning-rate schedules.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/2273941374b5.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Kaplan’s fit <span class="math inline">\(L=(N_c/N)^{0.076}\)</span> with <span class="math inline">\(N_c=8.8\times10^{13}\)</span>: a straight line on log–log axes.</em></p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Decoder-only + next-token loss: every position is a training example.</p></li>
+<li><p>Loss falls as a power law in size, which made “just scale it” a rational plan.</p></li>
+</ul>
+</div>

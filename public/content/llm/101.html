@@ -1,0 +1,227 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Why decode is slow.</strong> A decode step reads all the weights to produce one token per sequence, and the GPU’s compute sits idle (the roofline). Verifying <span class="math inline">\(k\)</span> proposed tokens in one pass costs about the same as generating one, because it’s the same weight read. Speculative decoding drafts several tokens cheaply, verifies them in one target pass, and keeps the longest correct prefix. With the right acceptance rule, the output distribution is <em>exactly</em> the target model’s.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Speculative sampling is exact (Leviathan et al.; Chen et al., 2023)</div>
+<p><strong>Step 1.</strong> Draft <span class="math inline">\(x\sim q\)</span>. Accept with probability <span class="math inline">\(\min(1,p(x)/q(x))\)</span>. On rejection, sample from <span class="math inline">\(r(x)=\frac{(p(x)-q(x))_+}{\sum_y(p(y)-q(y))_+}\)</span>.</p>
+<p><strong>Step 2.</strong> Probability of outputting <span class="math inline">\(x\)</span> by acceptance: <span class="math inline">\(q(x)\min(1,\tfrac{p(x)}{q(x)})=\min(p(x),q(x))\)</span>.</p>
+<p><strong>Step 3.</strong> Total acceptance probability: <span class="math inline">\(\beta=\sum_x\min(p,q)=1-\mathrm{TV}(p,q)\)</span>. The rejection mass is <span class="math inline">\(1-\beta=\sum_x(p-q)_+\)</span>.</p>
+<p><strong>Step 4.</strong> Probability of outputting <span class="math inline">\(x\)</span> by rejection: <span class="math inline">\((1-\beta)\,r(x)=(p(x)-q(x))_+\)</span>.</p>
+<p><strong>Step 5.</strong> Sum: <span class="math inline">\(\min(p,q)+(p-q)_+=p(x)\)</span>. <span class="math inline">\(\boxed{\text{The output is distributed exactly as }p.}\)</span> For greedy decoding this reduces to: accept a draft token iff it equals the target’s argmax.</p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Expected speedup</div>
+<p><strong>Step 1.</strong> With per-token acceptance <span class="math inline">\(\alpha\)</span> (assumed independent) and <span class="math inline">\(k\)</span> drafts, token <span class="math inline">\(i\)</span> is accepted only if all before it were: <span class="math inline">\(\Pr=\alpha^i\)</span>.</p>
+<p><strong>Step 2.</strong> Tokens per target pass, counting the one the target always adds (the correction or a bonus token): <span class="math inline">\(\mathbb E[N]=\sum_{i=0}^k\alpha^i=\frac{1-\alpha^{k+1}}{1-\alpha}\)</span>.</p>
+<p><strong>Step 3.</strong> If one draft step costs <span class="math inline">\(c\)</span> of a target step, speedup <span class="math inline">\(=\frac{1-\alpha^{k+1}}{(1-\alpha)(1+ck)}\)</span>. It has an optimum in <span class="math inline">\(k\)</span>: long drafts waste work once <span class="math inline">\(\alpha^k\)</span> is small. At <span class="math inline">\(\alpha=0.9\)</span> and <span class="math inline">\(c=0.05\)</span>, <span class="math inline">\(k=13\)</span> gives 4.7<span class="math inline">\(\times\)</span>.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Speculative decoding loop (any drafter)</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> target <span class="math inline">\(p\)</span>, drafter, max draft length <span class="math inline">\(k\)</span></div>
+<div class="algo-line" style="--d:0"><strong>loop</strong></div>
+<div class="algo-line" style="--d:1">draft <span class="math inline">\(\tilde x_1..\tilde x_k\)</span> with draft probabilities <span class="math inline">\(q_1..q_k\)</span> <em>▷ a model, heads, n-grams, …</em></div>
+<div class="algo-line" style="--d:1">one target pass on <span class="math inline">\(\text{context}+\tilde x_{1..k}\)</span> gives <span class="math inline">\(p_1..p_{k+1}\)</span></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> <span class="math inline">\(i=1..k\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2">accept <span class="math inline">\(\tilde x_i\)</span> with prob <span class="math inline">\(\min(1,p_i(\tilde x_i)/q_i(\tilde x_i))\)</span>; else sample from <span class="math inline">\((p_i-q_i)_+\)</span>, <strong>break</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1">if all <span class="math inline">\(k\)</span> accepted, also sample a bonus token from <span class="math inline">\(p_{k+1}\)</span></div>
+<div class="algo-line" style="--d:1">roll back the KV cache past the first rejection</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="the-drafters">The drafters</h2>
+<div class="center">
+<table style="width:90%;">
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 42%" />
+<col style="width: 28%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Method</strong></th>
+<th style="text-align: left;"><strong>How it drafts</strong></th>
+<th style="text-align: left;"><strong>Trade-off</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Draft model</td>
+<td style="text-align: left;">a small model from the same family (e.g. 0.6B for 32B)</td>
+<td style="text-align: left;">needs a matching tokenizer and its own KV cache</td>
+</tr>
+<tr>
+<td style="text-align: left;">Medusa</td>
+<td style="text-align: left;">extra heads on the target’s last hidden state, head <span class="math inline">\(i\)</span> predicts token <span class="math inline">\(t+i\)</span>; a <em>tree</em> of candidates verified with a tree attention mask</td>
+<td style="text-align: left;">cheap, trained on target outputs; accuracy falls quickly with <span class="math inline">\(i\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">EAGLE / EAGLE-2</td>
+<td style="text-align: left;">a one-layer drafter that runs autoregressively on the target’s <em>features</em> (second-to-top hidden states) plus the sampled token; EAGLE-2 grows the tree dynamically by draft confidence</td>
+<td style="text-align: left;">features are far easier to predict than tokens</td>
+</tr>
+<tr>
+<td style="text-align: left;">EAGLE-3</td>
+<td style="text-align: left;">drops the feature-prediction loss and predicts tokens directly; fuses low, middle and high-layer features; “training-time test” trains the drafter on its own multi-step outputs, as at inference</td>
+<td style="text-align: left;">acceptance keeps improving as drafter training data grows</td>
+</tr>
+<tr>
+<td style="text-align: left;">MTP heads</td>
+<td style="text-align: left;">DeepSeek-V3 trains multi-token prediction modules with the model; at inference they act as a built-in drafter</td>
+<td style="text-align: left;">no separate training; fixed shallow depth</td>
+</tr>
+<tr>
+<td style="text-align: left;">Prompt lookup / n-gram</td>
+<td style="text-align: left;">find the last <span class="math inline">\(n\)</span> tokens earlier in the context, copy what followed</td>
+<td style="text-align: left;">free; great for editing, RAG and code, useless for novel text</td>
+</tr>
+<tr>
+<td style="text-align: left;">SuffixDecoding</td>
+<td style="text-align: left;">a suffix tree over the current prompt <em>and</em> past outputs; drafts longest well-supported continuations, and adapts the draft length to how confident the match is</td>
+<td style="text-align: left;">model-free; very large speedups on repetitive agent workloads</td>
+</tr>
+<tr>
+<td style="text-align: left;">Lookahead decoding</td>
+<td style="text-align: left;">Jacobi iteration: guess a window of future tokens, refine all in parallel, harvest n-grams that converge</td>
+<td style="text-align: left;">no drafter at all; lower acceptance</td>
+</tr>
+<tr>
+<td style="text-align: left;">DFlash</td>
+<td style="text-align: left;">a block-diffusion drafter: proposes a whole block of tokens in one parallel denoising pass, conditioned on target features, instead of one draft token per step</td>
+<td style="text-align: left;">draft cost no longer grows with <span class="math inline">\(k\)</span> (details not checked here; see the paper)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 class="unnumbered" id="trees">Trees</h2>
+<p>With top-2 candidates per level instead of one, a draft position counts as accepted if <em>either</em> candidate matches. If the top-1 matches 60% of the time and the top-2 another 20%, three levels of a chain accept <span class="math inline">\(0.6+0.6^2+0.6^3=1.18\)</span> drafts on average, and a 2-ary tree accepts <span class="math inline">\(0.8+0.8^2+0.8^3=1.95\)</span>, for 14 candidate tokens verified in one pass with a tree attention mask (each node sees only its ancestors). Trees spend spare compute, so they help at small batch and hurt when the GPU is already compute-bound.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference ch. &#x27;Speculative Decoding&#x27;: exactness of speculative sampling, expected speedup,
+tree drafts, and model-free drafting (prompt lookup vs suffix-tree style) on an agent-like workload.&quot;&quot;&quot;
+import random
+from collections import defaultdict
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# 1. Speculative sampling is exact: accept x~q with prob min(1, p/q), else resample from (p - q)+.
+V = 8
+p = rng.dirichlet(np.ones(V))                       # target
+q = 0.6 * p + 0.4 * rng.dirichlet(np.ones(V))       # draft, close but not equal
+N, out, acc = 200_000, np.zeros(V), 0
+resid = np.maximum(p - q, 0); resid /= resid.sum()
+for x in rng.choice(V, N, p=q):
+    if rng.random() &lt; min(1, p[x] / q[x]):
+        out[x] += 1; acc += 1
+    else:
+        out[rng.choice(V, p=resid)] += 1
+tv = 0.5 * np.abs(p - q).sum()
+print(f&quot;[exact] TV(empirical, target) = {0.5 * np.abs(out / N - p).sum():.4f}  (sampling noise ~0.003)&quot;)
+print(f&quot;[exact] acceptance {acc / N:.4f}  vs  1 - TV(p, q) = {1 - tv:.4f}&quot;)
+
+# 2. Expected tokens per target pass with k drafts and per-token acceptance a: (1 - a^(k+1)) / (1 - a).
+print(&quot;[speedup] a     k=1   k=3   k=5   k=8    best k (draft cost c = 0.05 of target)&quot;)
+for a in (0.6, 0.75, 0.9):
+    tok = {k: (1 - a ** (k + 1)) / (1 - a) for k in (1, 3, 5, 8)}
+    sp = {k: (1 - a ** (k + 1)) / (1 - a) / (1 + 0.05 * k) for k in range(1, 16)}
+    kb = max(sp, key=sp.get)
+    print(f&quot;[speedup] {a:.2f}  &quot; + &quot;  &quot;.join(f&quot;{tok[k]:4.2f}&quot; for k in (1, 3, 5, 8))
+          + f&quot;    k={kb}, speedup {sp[kb]:.2f}x&quot;)
+
+# 3. Tree drafts: top-2 candidates at each of 3 levels (Medusa / EAGLE-2 style). If the target token is
+#    the draft&#x27;s top-1 with prob 0.6 and its top-2 with prob 0.2, a chain accepts on top-1 only.
+a1, a2, depth = 0.6, 0.2, 3
+chain = sum(a1**i for i in range(1, depth + 1))
+tree = sum((a1 + a2) ** i for i in range(1, depth + 1))
+print(f&quot;[tree] expected accepted drafts, depth {depth}: chain {chain:.2f}  tree (2 per level, &quot;
+      f&quot;{2 + 4 + 8} nodes) {tree:.2f}&quot;)
+
+# 4. Model-free drafting on an agent-like workload (characters as tokens, greedy target = the text).
+random.seed(0)
+tools = [&quot;search&quot;, &quot;read_file&quot;, &quot;run_tests&quot;]
+
+
+def episode():
+    s = &quot;&quot;
+    for _ in range(6):
+        t = random.choice(tools)
+        arg = random.choice([&quot;src/app.py&quot;, &quot;tests/test_api.py&quot;, &quot;README.md&quot;, &quot;pricing bug&quot;, &quot;login flow&quot;])
+        s += f&#x27;Thought: I should call {t}.\n{{&quot;tool&quot;: &quot;{t}&quot;, &quot;args&quot;: {{&quot;query&quot;: &quot;{arg}&quot;}}}}\n&#x27;
+        s += random.choice([&quot;Result: ok\n&quot;, &quot;Result: 2 failures\n&quot;, &quot;Result: found 3 matches\n&quot;])
+    return s
+
+
+history = [episode() for _ in range(30)]
+
+
+def run(text, draft_fn, k_max):
+    &quot;&quot;&quot;Count target passes to emit `text` when each pass verifies a draft and adds one free token.&quot;&quot;&quot;
+    i, passes, accepted = 0, 0, 0
+    while i &lt; len(text):
+        d = draft_fn(text[:i], k_max)
+        n = 0
+        while n &lt; len(d) and i + n &lt; len(text) and d[n] == text[i + n]:
+            n += 1
+        i += n + 1; passes += 1; accepted += n
+    return passes, accepted
+
+
+def prompt_lookup(ctx, k, n=3):
+    &quot;&quot;&quot;Find the last earlier occurrence of the final n tokens in this request; copy what followed.&quot;&quot;&quot;
+    if len(ctx) &lt; n:
+        return &quot;&quot;
+    j = ctx.rfind(ctx[-n:], 0, len(ctx) - 1)
+    return ctx[j + n:j + n + k] if j &gt;= 0 else &quot;&quot;
+
+
+class SuffixIndex:
+    &quot;&quot;&quot;Suffix-decoding style: index past outputs by context; draft length grows with match length.&quot;&quot;&quot;
+
+    def __init__(self, texts, n=8):
+        self.n, self.next = n, defaultdict(lambda: defaultdict(int))
+        for t in texts:
+            for i in range(len(t)):
+                for m in range(1, n + 1):
+                    if i - m &gt;= 0:
+                        self.next[t[i - m:i]][t[i]] += 1
+
+    def draft(self, ctx, k_max):
+        out = &quot;&quot;
+        for _ in range(k_max):
+            c = ctx + out
+            for m in range(self.n, 0, -1):          # longest matching context wins
+                nxt = self.next.get(c[-m:])
+                if nxt:
+                    tok, cnt = max(nxt.items(), key=lambda kv: kv[1])
+                    if cnt / sum(nxt.values()) &lt; 0.5 or m &lt; 3:   # stop when the continuation is uncertain
+                        return out
+                    out += tok
+                    break
+            else:
+                return out
+        return out
+
+
+idx = SuffixIndex(history[:20])
+test = history[20:]
+total = sum(len(t) for t in test)
+for name, fn, k in ((&quot;none&quot;, lambda c, k: &quot;&quot;, 0), (&quot;prompt lookup&quot;, prompt_lookup, 8),
+                    (&quot;suffix index&quot;, idx.draft, 32)):
+    passes = sum(run(t, fn, k)[0] for t in test)
+    print(f&quot;[model-free] {name:13s}: {total / passes:5.2f} tokens per target pass  ({passes} passes for {total} tokens)&quot;)</code></pre>
+<pre class="code output"><code class="output">[exact] TV(empirical, target) = 0.0028  (sampling noise ~0.003)
+[exact] acceptance 0.8178  vs  1 - TV(p, q) = 0.8188
+[speedup] a     k=1   k=3   k=5   k=8    best k (draft cost c = 0.05 of target)
+[speedup] 0.60  1.60  2.18  2.38  2.47    k=4, speedup 1.92x
+[speedup] 0.75  1.75  2.73  3.29  3.70    k=7, speedup 2.67x
+[speedup] 0.90  1.90  3.44  4.69  6.13    k=13, speedup 4.67x
+[tree] expected accepted drafts, depth 3: chain 1.18  tree (2 per level, 14 nodes) 1.95
+[model-free] none         :  1.00 tokens per target pass  (6318 passes for 6318 tokens)
+[model-free] prompt lookup:  2.54 tokens per target pass  (2483 passes for 6318 tokens)
+[model-free] suffix index : 20.85 tokens per target pass  (303 passes for 6318 tokens)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>The empirical distribution matches the target to within sampling noise, and acceptance equals <span class="math inline">\(1-\mathrm{TV}(p,q)\)</span> to three decimals. Speculation changes speed, never answers (in exact arithmetic).</p></li>
+<li><p>On the agent-like workload, prompt lookup gives 2.5 tokens per pass, and a suffix index over <em>past requests</em> gives 21, because agents repeat tool-call boilerplate across requests. That is the SuffixDecoding argument in miniature; real gains are smaller since real text is less repetitive than this toy.</p></li>
+<li><p>Speculation competes with batching for the same spare compute. At high load, <span class="math inline">\(B\)</span> is large, decode moves toward compute-bound, and the speedup shrinks; engines lower <span class="math inline">\(k\)</span> or turn speculation off under load.</p></li>
+</ul>
+</div>

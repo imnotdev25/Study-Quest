@@ -1,0 +1,180 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>The algorithms ML coding rounds ask you to implement and ML breadth rounds ask you to explain: linear and logistic regression, regularization, softmax and cross-entropy, kNN, k-means, Naive Bayes, decision trees, random forests, gradient boosting, PCA, SVMs, matrix factorization, and the evaluation metrics (ROC-AUC, PR-AUC, NDCG, calibration) with their algorithms.</p>
+</div>
+<h4 id="how-to-answer-an-ml-coding-question.">How to answer an ML coding question.</h4>
+<p>State shapes and assumptions first (“<span class="math inline">\(X\)</span> is <span class="math inline">\(n\times d\)</span>, <span class="math inline">\(y\)</span> is length <span class="math inline">\(n\)</span> with values in {0,1}”). Write a correct, vectorized baseline. Handle numerical stability. Test a normal case and an edge case (empty cluster, all one class, ties). Then discuss complexity and how it scales.</p>
+<h1 id="linear-regression">Linear Regression</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Model <span class="math inline">\(\hat y = Xw + b\)</span>, loss (mean squared error) <span class="math inline">\(L = \frac{1}{n}\lVert Xw + b - y\rVert^2\)</span>. Gradient: <span class="math inline">\(\nabla_w L = \frac{2}{n}X^\top(Xw + b - y)\)</span>, <span class="math inline">\(\nabla_b L = \frac{2}{n}\sum(\hat y - y)\)</span>. <strong>Closed form</strong> (normal equation): <span class="math inline">\(w = (X^\top X)^{-1}X^\top y\)</span>, <span class="math inline">\(O(nd^2 + d^3)\)</span>; solve with a Cholesky or QR factorization rather than an explicit inverse, and use gradient descent when <span class="math inline">\(d\)</span> or <span class="math inline">\(n\)</span> is large. <strong>Ridge</strong> adds <span class="math inline">\(\lambda\lVert
+w\rVert^2\)</span>: <span class="math inline">\(w = (X^\top X + \lambda I)^{-1}X^\top y\)</span>, always invertible.</p>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>MSE is the maximum-likelihood objective if <span class="math inline">\(y = Xw + \varepsilon\)</span> with Gaussian noise. L2 regularization is a Gaussian prior on <span class="math inline">\(w\)</span> (MAP estimation); L1 (lasso) is a Laplace prior, whose sharp corner at zero produces exactly sparse weights. Lasso has no closed form; solve with coordinate descent and soft-thresholding <span class="math inline">\(w_j \gets \text{sign}(z)\max(|z| - \lambda, 0)\)</span>.</p>
+</div>
+<h1 id="logistic-regression">Logistic Regression</h1>
+<p><em>Logistic regression with batch gradient descent</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(X \in \mathbb{R}^{n\times d}\)</span> (standardized), <span class="math inline">\(y \in \{0,1\}^n\)</span>, learning rate <span class="math inline">\(\eta\)</span>, L2 strength <span class="math inline">\(\lambda\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(w \gets 0_d\)</span>; <span class="math inline">\(b \gets 0\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(t \gets 1\)</span> <strong>to</strong> <span class="math inline">\(T\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(z \gets Xw + b\)</span>; <span class="math inline">\(p \gets \sigma(z)\)</span> <em>▷ stable sigmoid: use <span class="math inline">\(e^{z}/(1+e^{z})\)</span> when <span class="math inline">\(z&lt;0\)</span></em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(g_w \gets \frac{1}{n}X^\top(p - y) + \lambda w\)</span>; <span class="math inline">\(g_b \gets \frac{1}{n}\sum(p - y)\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(w \gets w - \eta\, g_w\)</span>; <span class="math inline">\(b \gets b - \eta\, g_b\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> loss change <span class="math inline">\(&lt;\)</span> tolerance <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>break</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(w, b\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Loss is binary cross-entropy <span class="math inline">\(-\frac1n\sum[y\log p + (1-y)\log(1-p)]\)</span>, the negative log-likelihood of a Bernoulli model. The gradient is the remarkably simple <span class="math inline">\(X^\top(p - y)/n\)</span> because <span class="math inline">\(\sigma&#39;(z) = \sigma(z)(1-\sigma(z))\)</span> cancels with the derivative of the log. The loss is convex, so gradient descent reaches the global minimum. <strong>Compute the loss from logits</strong> with <span class="math inline">\(\log(1+e^{z}) - yz\)</span>, written stably as <span class="math inline">\(\max(z,0) - yz + \log(1+e^{-|z|})\)</span>, to avoid <span class="math inline">\(\log 0\)</span>. On linearly separable data, unregularized weights grow without bound; L2 fixes it.</p>
+</div>
+<h1 id="softmax-and-cross-entropy">Softmax and Cross-Entropy</h1>
+<p><em>Numerically stable softmax and cross-entropy</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> logits <span class="math inline">\(Z \in \mathbb{R}^{n\times K}\)</span>, integer labels <span class="math inline">\(y\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(m \gets\)</span> row-wise max of <span class="math inline">\(Z\)</span>; <span class="math inline">\(S \gets Z - m\)</span> <em>▷ shift: softmax is shift-invariant</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(lse \gets \log\sum_k e^{S_{:,k}}\)</span> <em>▷ log-sum-exp per row</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\log P \gets S - lse\)</span>; <span class="math inline">\(P \gets e^{\log P}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(loss \gets -\frac1n\sum_i \log P_{i, y_i}\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\nabla_Z \gets (P - \text{onehot}(y))/n\)</span> <em>▷ gradient w.r.t. logits</em></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>Without the max shift, <span class="math inline">\(e^{1000}\)</span> overflows to infinity; with it, the largest exponent is <span class="math inline">\(e^0 = 1\)</span> and nothing overflows. Subtracting a constant does not change softmax because it cancels in the ratio. The gradient <span class="math inline">\(P - Y\)</span> is the same elegant form as logistic regression. This algorithm is the most frequently asked “easy” ML coding question, and the most frequently gotten wrong.</p>
+</div>
+<h1 id="k-nearest-neighbors">k-Nearest Neighbors</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Predict by majority vote (classification) or mean (regression) of the <span class="math inline">\(k\)</span> closest training points. Training is free; prediction costs <span class="math inline">\(O(nd)\)</span> per query with brute force. Vectorize distances for a batch: <span class="math inline">\(\lVert a - b\rVert^2 = \lVert a\rVert^2 +
+\lVert b\rVert^2 - 2a^\top b\)</span>, one matrix multiply instead of a triple loop; select the top <span class="math inline">\(k\)</span> with a partial sort (<code>argpartition</code>). Choose <span class="math inline">\(k\)</span> by validation (odd <span class="math inline">\(k\)</span> avoids ties in binary problems), scale features (distances are dominated by large-range features), and consider distance-weighted votes. Curse of dimensionality: in high dimensions all distances become similar, which is why kNN on raw features fails and kNN on learned embeddings works.</p>
+</div>
+<h1 id="k-means-and-k-means">k-Means and k-Means++</h1>
+<p><em>k-means with k-means++ initialization</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> points <span class="math inline">\(X\)</span> (<span class="math inline">\(n\times d\)</span>), <span class="math inline">\(k\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(C_1 \gets\)</span> a random point</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(j \gets 2\)</span> <strong>to</strong> <span class="math inline">\(k\)</span> <strong>do</strong> <em>▷ k-means++</em></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(D(x) \gets\)</span> squared distance from <span class="math inline">\(x\)</span> to its nearest chosen center</div>
+<div class="algo-line" style="--d:1">choose <span class="math inline">\(C_j \gets x\)</span> with probability <span class="math inline">\(D(x)/\sum D\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>repeat</strong></div>
+<div class="algo-line" style="--d:1">assign each <span class="math inline">\(x\)</span> to its nearest center <em>▷ one <span class="math inline">\(n\times k\)</span> distance matrix</em></div>
+<div class="algo-line" style="--d:1"><strong>for</strong> each cluster <span class="math inline">\(j\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> cluster <span class="math inline">\(j\)</span> is empty <strong>then</strong></div>
+<div class="algo-line" style="--d:3">reseed <span class="math inline">\(C_j\)</span> with the point farthest from its center</div>
+<div class="algo-line" style="--d:2"><strong>else</strong>  </div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(C_j \gets\)</span> mean of points assigned to <span class="math inline">\(j\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>until</strong> assignments stop changing <strong>or</strong> max iterations</div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>k-means minimizes inertia <span class="math inline">\(\sum_i \lVert x_i - C_{a(i)}\rVert^2\)</span>. The assignment step minimizes it for fixed centers; the update step (the mean minimizes squared distance) minimizes it for fixed assignments. Inertia never increases and there are finitely many assignments, so it converges, but only to a <em>local</em> minimum. k-means++ spreads initial centers out and is <span class="math inline">\(O(\log k)\)</span>-competitive with the optimum in expectation. Run several restarts and keep the lowest inertia. Choose <span class="math inline">\(k\)</span> with the elbow method or silhouette score. Each iteration is <span class="math inline">\(O(nkd)\)</span>. k-means assumes roughly spherical, similar-sized clusters; use GMMs or density methods (DBSCAN) otherwise.</p>
+</div>
+<div class="box box-mlconn" data-kind="mlconn"><div class="box-title">🤖 ML connection</div>
+<p>k-means builds the coarse quantizer of IVF vector indexes and the codebooks of product quantization (Chapter 18), clusters embeddings for data deduplication and diversity sampling, and initializes vocabularies in vector-quantized models.</p>
+</div>
+<h1 id="gaussian-mixtures-and-em">Gaussian Mixtures and EM</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A GMM models data as a weighted sum of Gaussians. <strong>EM</strong> alternates the <em>E-step</em> (responsibilities <span class="math inline">\(r_{ij} \propto \pi_j\,\mathcal{N}(x_i|\mu_j,\Sigma_j)\)</span>, computed with log-sum-exp) and the <em>M-step</em> (weighted means, covariances, and mixture weights). Each iteration never decreases the likelihood. k-means is the limit of EM with hard assignments and equal spherical covariances. Add a small value to covariance diagonals to avoid singularities when a component collapses onto one point.</p>
+</div>
+<h1 id="naive-bayes">Naive Bayes</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><span class="math inline">\(P(y|x) \propto P(y)\prod_j P(x_j|y)\)</span>, assuming features are conditionally independent given the class. <strong>Multinomial NB</strong> for text: <span class="math inline">\(P(w|y) = \frac{\text{count}(w,y) + \alpha}{\sum_w \text{count}(w,y) + \alpha|V|}\)</span> (Laplace smoothing prevents zero probabilities). Predict with log probabilities (sums, not products) to avoid underflow. Training is one counting pass, <span class="math inline">\(O(\text{nnz})\)</span>; it is a strong baseline for text classification with little data, and badly calibrated because the independence assumption double-counts correlated evidence.</p>
+</div>
+<h1 id="decision-trees">Decision Trees</h1>
+<p><em>Find the best split for one numeric feature (Gini)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> values <span class="math inline">\(x\)</span> and binary labels <span class="math inline">\(y\)</span> for the rows at this node</div>
+<div class="algo-line" style="--d:0">sort rows by <span class="math inline">\(x\)</span>; <span class="math inline">\(P \gets \sum y\)</span>; <span class="math inline">\(N \gets\)</span> number of rows</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(l_n \gets 0\)</span>; <span class="math inline">\(l_p \gets 0\)</span>; <span class="math inline">\(best \gets (\infty, \text{none})\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(i \gets 0\)</span> <strong>to</strong> <span class="math inline">\(N-2\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(l_n \gets l_n + 1\)</span>; <span class="math inline">\(l_p \gets l_p + y_i\)</span> <em>▷ move row <span class="math inline">\(i\)</span> to the left side</em></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(x_i = x_{i+1}\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><strong>continue</strong> <em>▷ can only split between distinct values</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(G_L \gets 1 - (l_p/l_n)^2 - (1 - l_p/l_n)^2\)</span>; similarly <span class="math inline">\(G_R\)</span> for the right side</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(score \gets \frac{l_n}{N}G_L + \frac{N - l_n}{N}G_R\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(score &lt; best.score\)</span> <strong>then</strong></div>
+<div class="algo-line" style="--d:2"><span class="math inline">\(best \gets (score, (x_i + x_{i+1})/2)\)</span></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(best\)</span></div>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Sorting once and sweeping with running counts makes each feature <span class="math inline">\(O(N\log N)\)</span> instead of <span class="math inline">\(O(N^2)\)</span>; histogram-based learners (LightGBM, XGBoost <code>hist</code>) bin values into about 256 buckets for <span class="math inline">\(O(N)\)</span> per feature. Build the tree recursively (CART), stopping at max depth, minimum samples per leaf, or no impurity gain. <strong>Gini</strong> <span class="math inline">\(1 - \sum p_k^2\)</span> and <strong>entropy</strong> <span class="math inline">\(-\sum p_k\log p_k\)</span> give similar trees; regression trees use variance reduction. Trees need no feature scaling, handle mixed types, and overfit easily alone.</p>
+</div>
+<h1 id="ensembles-bagging-and-boosting">Ensembles: Bagging and Boosting</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Random forest</strong>: train many deep trees on bootstrap samples, each split considering a random subset of features (about <span class="math inline">\(\sqrt d\)</span>), then average. Bagging reduces <em>variance</em>; feature subsampling decorrelates trees so averaging helps more. Out-of-bag rows give a free validation estimate.</p>
+<p><strong>Gradient boosting</strong>: build shallow trees <em>sequentially</em>, each fitting the negative gradient of the loss with respect to the current predictions (the “pseudo-residuals”), added with a small learning rate. Boosting reduces <em>bias</em>.</p>
+</div>
+<p><em>Gradient boosting (generic loss)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(F_0(x) \gets \arg\min_c \sum_i L(y_i, c)\)</span> <em>▷ mean for MSE, log-odds for log loss</em></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> <span class="math inline">\(m \gets 1\)</span> <strong>to</strong> <span class="math inline">\(M\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(r_i \gets -\partial L(y_i, F)/\partial F\,\big|_{F = F_{m-1}(x_i)}\)</span> <em>▷ <span class="math inline">\(y - p\)</span> for log loss</em></div>
+<div class="algo-line" style="--d:1">fit a regression tree <span class="math inline">\(h_m\)</span> to <span class="math inline">\(\{(x_i, r_i)\}\)</span></div>
+<div class="algo-line" style="--d:1">set each leaf’s value to the step minimizing the loss in that leaf</div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(F_m \gets F_{m-1} + \nu\, h_m\)</span> <em>▷ shrinkage <span class="math inline">\(\nu \approx 0.05\)</span>–0.1</em></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p>XGBoost uses a second-order Taylor expansion: with gradients <span class="math inline">\(g_i\)</span> and Hessians <span class="math inline">\(h_i\)</span>, the optimal leaf weight is <span class="math inline">\(w^* = -\frac{\sum g_i}{\sum h_i + \lambda}\)</span> and the split gain is <span class="math inline">\(\frac12\left[\frac{G_L^2}{H_L+\lambda} + \frac{G_R^2}{H_R+\lambda} -
+\frac{(G_L+G_R)^2}{H_L+H_R+\lambda}\right] - \gamma\)</span>. LightGBM grows leaf-wise with histograms and gradient-based sampling; CatBoost uses ordered target statistics to avoid target leakage in categorical encoding. Gradient-boosted trees remain the strongest default for tabular data.</p>
+</div>
+<h1 id="pca">PCA</h1>
+<p><em>PCA via SVD</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><span class="math inline">\(\mu \gets\)</span> column means of <span class="math inline">\(X\)</span>; <span class="math inline">\(X_c \gets X - \mu\)</span> <em>▷ centering is essential</em></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(U, S, V^\top \gets \text{SVD}(X_c)\)</span> <em>▷ thin SVD</em></div>
+<div class="algo-line" style="--d:0">components <span class="math inline">\(\gets\)</span> first <span class="math inline">\(k\)</span> rows of <span class="math inline">\(V^\top\)</span>; explained variance <span class="math inline">\(\gets S_k^2/(n-1)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Z \gets X_c V_k\)</span> <em>▷ project to <span class="math inline">\(k\)</span> dimensions</em></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>The first principal component is the unit direction <span class="math inline">\(v\)</span> maximizing the variance <span class="math inline">\(v^\top \Sigma v\)</span> of projected data, which is the top eigenvector of the covariance <span class="math inline">\(\Sigma = X_c^\top X_c/(n-1)\)</span> (Lagrange multipliers give <span class="math inline">\(\Sigma v = \lambda v\)</span>). SVD of <span class="math inline">\(X_c\)</span> gives the same vectors without forming <span class="math inline">\(\Sigma\)</span> (more stable). Standardize features first if they use different units. For very large data, use randomized SVD or power iteration.</p>
+</div>
+<h1 id="support-vector-machines">Support Vector Machines</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>A linear SVM finds the separating hyperplane with the largest margin, minimizing <span class="math inline">\(\frac{\lambda}{2}\lVert w\rVert^2 + \frac1n\sum\max(0, 1 - y_i w^\top x_i)\)</span> (hinge loss, <span class="math inline">\(y \in \{-1, +1\}\)</span>). Subgradient: for points with <span class="math inline">\(y_i w^\top x_i &lt; 1\)</span>, contribute <span class="math inline">\(-y_i x_i\)</span>; others contribute 0. Only points on or inside the margin (support vectors) affect the solution. The <strong>kernel trick</strong> replaces dot products with <span class="math inline">\(k(x, x&#39;)\)</span> (RBF, polynomial) to separate non-linearly in an implicit feature space, at <span class="math inline">\(O(n^2)\)</span> memory for the kernel matrix.</p>
+</div>
+<h1 id="matrix-factorization-for-recommendations">Matrix Factorization for Recommendations</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Approximate the user–item matrix <span class="math inline">\(R \approx UV^\top\)</span> with <span class="math inline">\(k\)</span>-dimensional user and item vectors, minimizing squared error on <em>observed</em> entries plus L2. Solve with SGD over observed ratings, or <strong>alternating least squares</strong>: fix <span class="math inline">\(V\)</span> and each user vector has a closed-form ridge solution, then fix <span class="math inline">\(U\)</span>; ALS parallelizes well. For implicit feedback (clicks, views), weight observed interactions by confidence and treat missing as weak negatives. Modern systems use <strong>two-tower</strong> neural models (user tower and item tower producing embeddings, scored by dot product) trained with sampled softmax and in-batch negatives (Chapter 16), served with ANN search.</p>
+</div>
+<h1 id="evaluation-metrics-and-their-algorithms">Evaluation Metrics and Their Algorithms</h1>
+<p><em>ROC-AUC by ranks (Mann–Whitney)</em></p>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> scores <span class="math inline">\(s\)</span>, labels <span class="math inline">\(y \in \{0,1\}\)</span> with <span class="math inline">\(n_+\)</span> positives, <span class="math inline">\(n_-\)</span> negatives</div>
+<div class="algo-line" style="--d:0">rank all scores ascending from 1, giving tied scores the average of their ranks</div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(R_+ \gets\)</span> sum of ranks of the positives</div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\big(R_+ - n_+(n_+ + 1)/2\big) / (n_+ n_-)\)</span></div>
+</div>
+<div class="box box-why" data-kind="why"><div class="box-title">❓ Why</div>
+<p>AUC equals the probability that a random positive scores higher than a random negative (ties count half). <span class="math inline">\(R_+ - n_+(n_++1)/2\)</span> counts exactly the (positive, negative) pairs where the positive ranks higher, so dividing by the number of pairs gives that probability. <span class="math inline">\(O(n\log n)\)</span> instead of <span class="math inline">\(O(n_+ n_-)\)</span>. AUC is threshold-free and insensitive to class balance, which is also its weakness: with 99.9% negatives, a high AUC can still mean poor precision at useful thresholds, so use <strong>PR-AUC</strong> (average precision) for rare positives.</p>
+</div>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<ul>
+<li><p><strong>Precision / recall / F1</strong>: from the confusion matrix at a threshold; <strong>macro</strong> averaging gives each class equal weight, <strong>micro</strong> pools counts (equals accuracy for single-label multiclass).</p></li>
+<li><p><strong>Log loss</strong> rewards calibrated probabilities; <strong>Brier score</strong> is MSE on probabilities.</p></li>
+<li><p><strong>Calibration</strong>: bin predictions and compare mean prediction with the observed rate (reliability diagram, expected calibration error). Fix with <strong>Platt scaling</strong> (fit a logistic regression on the logit) or <strong>isotonic regression</strong> (a monotone step function, via pool-adjacent-violators) on a held-out set. Temperature scaling (divide logits by <span class="math inline">\(T\)</span>) is the neural-network version.</p></li>
+<li><p><strong>Ranking</strong>: precision@<span class="math inline">\(k\)</span>, recall@<span class="math inline">\(k\)</span>, MRR (mean of <span class="math inline">\(1/\text{rank}\)</span> of the first relevant item), and NDCG@<span class="math inline">\(k\)</span>: <span class="math inline">\(\text{DCG} = \sum_{i=1}^{k}\frac{2^{rel_i} - 1}{\log_2(i+1)}\)</span>, normalized by the DCG of the ideal ordering.</p></li>
+<li><p><strong>Regression</strong>: MSE/RMSE (penalize large errors), MAE (robust), MAPE (undefined at zero), <span class="math inline">\(R^2\)</span>.</p></li>
+</ul>
+</div>
+<h1 id="bias-variance-and-experiments">Bias, Variance, and Experiments</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Expected squared error = bias<span class="math inline">\(^2\)</span> + variance + irreducible noise. High training error means high bias (bigger model, better features, less regularization); a large gap between training and validation error means high variance (more data, regularization, simpler model, ensembling). Learning curves (error vs training size) tell you whether more data will help.</p>
+<p><strong>A/B tests</strong>: pick a primary metric and guardrails, compute the sample size from the minimum detectable effect, randomize by user, run for full weekly cycles, and test once at the planned end (peeking inflates false positives; use sequential methods if you must look early). For a proportion, <span class="math inline">\(n \approx 16\,p(1-p)/\delta^2\)</span> per arm for 80% power at <span class="math inline">\(\alpha = 0.05\)</span>. CUPED (regressing out pre-experiment behavior) reduces variance and required sample size.</p>
+</div>
+<div class="box box-interview" data-kind="interview"><div class="box-title">🎤 Interview: Implement k-means in NumPy-style pseudocode</div>
+<p>State shapes: <code>X (n,d)</code>, <code>k</code>, returns centers <code>(k,d)</code> and labels <code>(n,)</code>. Initialize with k-means++ (explain why). Assignment: distances via <span class="math inline">\(\lVert x\rVert^2 + \lVert c\rVert^2 - 2xc^\top\)</span> (an <span class="math inline">\(n\times k\)</span> matrix, clip tiny negatives to 0), <code>argmin</code> per row. Update: per-cluster mean; handle empty clusters by reseeding. Stop when labels stop changing or the inertia improvement is below a tolerance. Complexity <span class="math inline">\(O(nkd)\)</span> per iteration, memory <span class="math inline">\(O(nk)\)</span>; for huge <span class="math inline">\(n\)</span>, use mini-batch k-means. Test on two well-separated blobs (should recover them) and on <span class="math inline">\(k = n\)</span> (zero inertia). Follow-ups: choose <span class="math inline">\(k\)</span>; non-spherical clusters; scaling to a billion points (mini-batch, distributed assignment with a broadcast of centers).</p>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Logistic regression and softmax share the gradient “prediction minus target”; compute losses from logits with log-sum-exp.</p></li>
+<li><p>k-means alternates two minimizations; k-means++ and restarts fight local minima.</p></li>
+<li><p>Trees: sorted sweep for splits; random forests cut variance, boosting cuts bias.</p></li>
+<li><p>AUC is a ranking probability computed from ranks; know PR-AUC, NDCG, and calibration fixes.</p></li>
+</ul>
+</div>

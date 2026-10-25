@@ -1,0 +1,139 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: four house rules for a study group</div>
+<p>A study group sets four rules. (1) Let quiet members speak up more than loud members can shout. (2) Skip questions everyone already got right, or everyone got wrong, since nobody learns from those. (3) Count every sentence equally, not every speaker. (4) Gently penalize rambling before cutting off someone who goes too long. Those are DAPO’s four techniques.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/630d07ceb30c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Clip-higher: a good token’s probability may grow a bit more before the gradient stops.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>In PPO with <span class="math inline">\(A&gt;0\)</span>, when is the gradient zero? (Topic 20)</p></li>
+<li><p>What is the difference between a token-mean and a sequence-mean loss? (Topic 46)</p></li>
+</ol>
+<h3 class="unnumbered" id="the-four-techniques-yu-et-al.-2025">2. The four techniques (Yu et al., 2025)</h3>
+<p>DAPO (“Decoupled Clip and Dynamic sAmpling Policy Optimization”) is built on GRPO and drops the KL penalty entirely, arguing that a long-reasoning model is <em>supposed</em> to drift far from its starting point.</p>
+<ol>
+<li><p><strong>Clip-higher:</strong> <span class="math inline">\(\operatorname{clip}(\rho,1-\epsilon_{\text{low}},1+\epsilon_{\text{high}})\)</span> with <span class="math inline">\(\epsilon_{\text{low}}=0.2\)</span>, <span class="math inline">\(\epsilon_{\text{high}}=0.28\)</span>. A symmetric clip caps how fast a <em>rare</em> useful token can grow (going from <span class="math inline">\(p=0.01\)</span> to <span class="math inline">\(0.012\)</span> already hits <span class="math inline">\(1.2\)</span>), which speeds up entropy collapse. Raising only the upper bound helps exploration. Raising the lower bound too would let tokens be pushed toward zero.</p></li>
+<li><p><strong>Dynamic sampling:</strong> drop prompts whose <span class="math inline">\(G\)</span> samples are all correct or all wrong (their advantages are all 0), and keep sampling until the batch is full of informative prompts: <span class="math inline">\(0&lt;|\{\text{correct}\}|&lt;G\)</span>.</p></li>
+<li><p><strong>Token-level loss:</strong> normalize by <span class="math inline">\(\sum_i|o_i|\)</span>, the total tokens in the group, instead of averaging per response. Long responses then get weight proportional to their length, so a long, rambling wrong answer is penalized per token as hard as a short one.</p></li>
+<li><p><strong>Overlong reward shaping:</strong> mask the loss of truncated responses, and add a soft length penalty <span class="math display">\[R_{\text{len}}(y)=\begin{cases}0 &amp; |y|\le L_{\max}-L_{\text{cache}}\\ \frac{(L_{\max}-L_{\text{cache}})-|y|}{L_{\text{cache}}} &amp; L_{\max}-L_{\text{cache}}&lt;|y|\le L_{\max}\\ -1 &amp; |y|&gt;L_{\max}\end{cases}\]</span> with <span class="math inline">\(L_{\max}=20{,}480\)</span> and <span class="math inline">\(L_{\text{cache}}=4{,}096\)</span> in the paper.</p></li>
+</ol>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: the full objective</div>
+<p><span class="math display">\[\mathcal J_{\text{DAPO}}=\mathbb E\Big[\frac{1}{\sum_i|o_i|}\sum_{i=1}^G\sum_{t=1}^{|o_i|}\min\big(\rho_{i,t}\hat A_{i,t},\ \operatorname{clip}(\rho_{i,t},1-\epsilon_{\text{low}},1+\epsilon_{\text{high}})\hat A_{i,t}\big)\Big]\]</span> subject to <span class="math inline">\(0&lt;|\{o_i\text{ correct}\}|&lt;G\)</span>, with <span class="math inline">\(\hat A_{i,t}=\frac{R_i-\operatorname{mean}(R)}{\operatorname{std}(R)}\)</span> and a rule-based reward <span class="math inline">\(R\in\{-1,+1\}\)</span>. There is no KL term.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Clip-higher protects rare exploration tokens, and dynamic sampling removes zero-signal groups.</p></li>
+<li><p>Token-level loss plus overlong shaping control length without hiding long failures.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: the soft length penalty</div>
+<p>Toy settings <span class="math inline">\(L_{\max}=20\)</span>, <span class="math inline">\(L_{\text{cache}}=4\)</span>, so the penalty starts after 16 tokens. Length 10: <span class="math inline">\(0\)</span>. Length 18: <span class="math inline">\(\frac{16-18}{4}=-0.5\)</span>. Length 20: <span class="math inline">\(-1\)</span>. Length 25: <span class="math inline">\(-1\)</span> (and that sample is also masked as truncated).</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Raising <span class="math inline">\(\epsilon_{\text{low}}\)</span> along with <span class="math inline">\(\epsilon_{\text{high}}\)</span>.</p></li>
+<li><p>Dynamic sampling that drops groups but doesn’t refill the batch (the effective batch shrinks).</p></li>
+<li><p>Applying the length penalty but still training on truncated responses.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: DAPO training step</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> policy <span class="math inline">\(\pi_\theta\)</span>, group size <span class="math inline">\(G\)</span>, clip <span class="math inline">\(\epsilon_{\text{low}},\epsilon_{\text{high}}\)</span>, batch size <span class="math inline">\(B\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\pi_{\text{old}}\gets\pi_\theta\)</span>; batch <span class="math inline">\(\gets\emptyset\)</span></div>
+<div class="algo-line" style="--d:0"><strong>while</strong> <span class="math inline">\(|\text{batch}|&lt;B\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:1">sample a prompt <span class="math inline">\(x\)</span> and <span class="math inline">\(G\)</span> responses; reward <span class="math inline">\(R_i=\pm1\)</span> plus <span class="math inline">\(R_{\text{len}}\)</span></div>
+<div class="algo-line" style="--d:1"><strong>if</strong> <span class="math inline">\(0&lt;\#\text{correct}&lt;G\)</span> <strong>then</strong> add the group to the batch <em>▷ dynamic sampling</em></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0">mask out truncated responses; <span class="math inline">\(\hat A_i\gets(R_i-\bar R)/\operatorname{std}(R)\)</span></div>
+<div class="algo-line" style="--d:0">gradient steps on <span class="math inline">\(-\mathcal J_{\text{DAPO}}\)</span> with one denominator <span class="math inline">\(\sum_i|o_i|\)</span> <em>▷ token-level</em></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-implement-the-dapo-pieces">3. PyTorch exercise — implement the DAPO pieces</h3>
+<pre class="code python"><code class="language-python">import torch
+
+
+def dapo_loss(logp_new, logp_old, adv, mask, eps_low=0.2, eps_high=0.28):
+    ratio = (logp_new - logp_old).exp()
+    # TODO 1: asymmetric clip and the PPO-style min
+    per_token = ...
+    # TODO 2: token-level reduction (one denominator for all tokens)
+    return ...
+
+
+def keep_group(rewards):
+    # TODO 3: True only if some but not all samples are correct (reward &gt; 0)
+    return ...
+
+
+def overlong_penalty(length, l_max=20, l_cache=4):
+    # TODO 4: the three-piece soft penalty
+    return ...</code></pre>
+<p>Then test a rare token whose probability rose 25% with <span class="math inline">\(A&gt;0\)</span>: compare its gradient for <span class="math inline">\(\epsilon_{\text{high}}=0.2\)</span> vs <span class="math inline">\(0.28\)</span>.</p>
+<p><strong>Hints</strong></p>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> ratio.clamp(1 - eps_low, 1 + eps_high)</code></span>.</p></li>
+<li><p>Token-level: <span style="background-color: codeinlinebg"><code> (per_token * mask).sum() / mask.sum()</code></span>.</p></li>
+<li><p>A 25% increase means <span class="math inline">\(\rho=1.25\)</span>: between 1.2 and 1.28.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does a symmetric clip especially hurt low-probability tokens?</p></li>
+<li><p>Why must dynamic sampling refill the batch?</p></li>
+<li><p>Why does DAPO drop the KL penalty, and what does it lose?</p></li>
+</ol>
+<hr />
+<h3 class="unnumbered" id="solutions">Solutions</h3>
+<pre class="code python"><code class="language-python">import torch
+
+
+def dapo_loss(logp_new, logp_old, adv, mask, eps_low=0.2, eps_high=0.28):
+    ratio = (logp_new - logp_old).exp()
+    unclipped = ratio * adv
+    clipped = ratio.clamp(1 - eps_low, 1 + eps_high) * adv
+    per_token = torch.min(unclipped, clipped)
+    return -(per_token * mask).sum() / mask.sum()   # token-level: one denominator for the group
+
+
+def keep_group(rewards):                            # dynamic sampling
+    solved = (rewards &gt; 0).float().mean()
+    return bool(0 &lt; solved &lt; 1)
+
+
+def overlong_penalty(length, l_max=20, l_cache=4):
+    if length &lt;= l_max - l_cache:
+        return 0.0
+    if length &lt;= l_max:
+        return ((l_max - l_cache) - length) / l_cache
+    return -1.0
+
+
+# A rare &quot;exploration&quot; token whose probability rose 25% after one update, with A &gt; 0.
+logp_old = torch.tensor([-3.0])
+logp_new = (logp_old + torch.log(torch.tensor(1.25))).requires_grad_()
+adv, mask = torch.tensor([1.0]), torch.tensor([1.0])
+for eps_high in (0.2, 0.28):
+    if logp_new.grad is not None:
+        logp_new.grad = None
+    dapo_loss(logp_new, logp_old, adv, mask, eps_high=eps_high).backward()
+    print(f&quot;eps_high={eps_high}: grad on logp = {logp_new.grad.item():.3f}&quot;)
+
+print(&quot;keep [1,1,1,1]:&quot;, keep_group(torch.tensor([1., 1, 1, 1])),
+      &quot; keep [1,0,1,0]:&quot;, keep_group(torch.tensor([1., 0, 1, 0])))
+print(&quot;penalties for lengths 10, 18, 20, 25:&quot;, [overlong_penalty(n) for n in (10, 18, 20, 25)])</code></pre>
+<p>Output:</p>
+<pre class="code text"><code class="language-plaintext">eps_high=0.2: grad on logp = 0.000
+eps_high=0.28: grad on logp = -1.250
+keep [1,1,1,1]: False  keep [1,0,1,0]: True
+penalties for lengths 10, 18, 20, 25: [0.0, -0.5, -1.0, -1.0]</code></pre>
+<p><strong>Check answers</strong></p>
+<ol>
+<li><p>The clip is relative: a token at <span class="math inline">\(p=0.01\)</span> is capped at <span class="math inline">\(0.012\)</span> per update, so rare useful tokens can barely grow, which favors already-likely tokens and collapses entropy.</p></li>
+<li><p>Otherwise the effective batch shrinks as training progresses (more prompts become all-correct), and gradient noise rises.</p></li>
+<li><p>Long reasoning legitimately moves far from the base model, and the KL penalty held that back. Without it you lose an explicit guard against drift, so monitoring matters more.</p></li>
+</ol>
+<p><strong>Retrieval answers:</strong> (1) When <span class="math inline">\(\rho&gt;1+\epsilon\)</span>. (2) Token mean weights each token equally, while sequence mean weights each response equally.</p>
+<p><strong>Takeaway:</strong> DAPO is GRPO with four engineering fixes: asymmetric clipping, informative-only batches, token-level loss, and soft length control.</p>
+<p><em>Next: Dr. GRPO, which removes two hidden biases from GRPO’s normalization.</em></p>

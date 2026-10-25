@@ -1,0 +1,432 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What does the pessimistic ensemble score <span class="math inline">\(\mu-\kappa s\)</span> attempt to penalize?</p></li>
+<li><p>Why can reward-model disagreement fail to detect a shared blind spot?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="ensemble-size-is-not-effective-ensemble-size">2. Ensemble size is not effective ensemble size</h3>
+<p>Imagine consulting sixteen weather apps that all consume the same faulty weather station. Their agreement is less reassuring than sixteen independent measurements.</p>
+<p>Let each reward model’s error have variance <span class="math inline">\(\sigma^2\)</span>, with pairwise error correlation <span class="math inline">\(\rho\)</span>. The ensemble mean error is:</p>
+<p><span class="math display">\[\bar\epsilon=\frac1M\sum_{m=1}^M\epsilon_m\]</span></p>
+<p>In general:</p>
+<p><span class="math display">\[\operatorname{Var}(\bar\epsilon)
+=
+\frac{1}{M^2}
+\sum_{i=1}^{M}
+\sum_{j=1}^{M}
+\operatorname{Cov}(\epsilon_i,\epsilon_j)\]</span></p>
+<p>If every pair has correlation <span class="math inline">\(\rho\)</span>:</p>
+<p><span class="math display">\[\operatorname{Var}(\bar\epsilon)
+=
+\sigma^2
+\left[
+\rho+\frac{1-\rho}{M}
+\right]\]</span></p>
+<p>For independent models, <span class="math inline">\(\rho=0\)</span>, giving the familiar <span class="math inline">\(\sigma^2/M\)</span>. For correlated models:</p>
+<p><span class="math display">\[\lim_{M\rightarrow\infty}
+\operatorname{Var}(\bar\epsilon)
+=
+\rho\sigma^2\]</span></p>
+<p>More models cannot remove the shared component.</p>
+<p>Define the effective ensemble size by:</p>
+<p><span class="math display">\[\operatorname{Var}(\bar\epsilon)
+=
+\frac{\sigma^2}{M_{\mathrm{eff}}}\]</span></p>
+<p>Then:</p>
+<p><span class="math display">\[M_{\mathrm{eff}}
+=
+\frac{M}{1+(M-1)\rho}\]</span></p>
+<p>Sixteen models with <span class="math inline">\(\rho=0.75\)</span> have:</p>
+<p><span class="math display">\[M_{\mathrm{eff}}
+=
+\frac{16}{1+15(0.75)}
+\approx1.31\]</span></p>
+<p>There is another trap: member disagreement measures mostly the unshared error:</p>
+<p><span class="math display">\[E[s^2]
+=
+\sigma^2(1-\rho)\frac{M-1}{M}\]</span></p>
+<p>Thus highly correlated models can show low disagreement while their ensemble mean remains unreliable.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>correlation settings: <span style="background-color: codeinlinebg"><code> [C]</code></span></p></li>
+<li><p>shared noise: <span style="background-color: codeinlinebg"><code> [C, B, N, 1]</code></span></p></li>
+<li><p>independent member noise: <span style="background-color: codeinlinebg"><code> [C, B, N, M]</code></span></p></li>
+<li><p>ensemble errors: <span style="background-color: codeinlinebg"><code> [B, N]</code></span></p></li>
+<li><p>selected maximum per prompt pool: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+</ul>
+<p>For reward-model ensembles, diversity should involve data sources, annotator groups, architectures, objectives and training pipelines—not merely different random seeds.</p>
+<p>DPO does not ordinarily average scalar reward models, but preference models or label generators trained on the same data can have equally correlated blind spots. Consensus among them is not independent evidence.</p>
+<h3 class="unnumbered" id="pytorch-exercise-measure-effective-ensemble-size">3. PyTorch exercise — measure effective ensemble size</h3>
+<p>Every candidate has true utility zero. Selecting the largest ensemble score therefore measures pure optimizer’s curse.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float32)
+
+num_prompt_pools = 2_000
+num_candidates = 64
+maximum_models = 16
+
+model_counts = [1, 2, 4, 8, 16]
+
+correlations = torch.tensor([
+    0.00,
+    0.25,
+    0.75,
+])
+
+error_sd = 1.0
+num_settings = correlations.numel()
+
+
+# TODO 1: Generate correlated model errors.
+shared_noise = ...
+
+independent_noise = ...
+
+rho = ...
+
+reward_model_errors = ...
+
+
+# TODO 2: Verify the empirical correlation between
+# the first two models.
+pairwise_correlations = []
+
+for setting_index in range(num_settings):
+    model_zero_errors = ...
+
+    model_one_errors = ...
+
+    empirical_correlation = ...
+
+    pairwise_correlations.append(
+        empirical_correlation
+    )
+
+pairwise_correlations = torch.stack(
+    pairwise_correlations
+)
+
+
+# TODO 3: Evaluate each correlation and ensemble size.
+rows = []
+
+for setting_index, correlation in enumerate(
+    correlations
+):
+    for model_count in model_counts:
+        member_errors = ...
+
+        ensemble_errors = ...
+
+        empirical_mean_variance = ...
+
+        theoretical_mean_variance = ...
+
+        empirical_within_variance = ...
+
+        theoretical_within_variance = ...
+
+        # Best-of-64 selection when all true utilities
+        # are exactly zero.
+        selected_optimism = ...
+
+        effective_model_count = ...
+
+        rows.append(
+            torch.stack([
+                correlation,
+                torch.tensor(
+                    float(model_count)
+                ),
+                empirical_mean_variance,
+                theoretical_mean_variance,
+                empirical_within_variance,
+                theoretical_within_variance,
+                selected_optimism,
+                effective_model_count,
+            ])
+        )
+
+results = torch.stack(rows)
+
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Requested/empirical pairwise correlations:&quot;
+)
+print(
+    torch.stack([
+        correlations,
+        pairwise_correlations,
+    ], dim=1)
+)
+
+print(
+    &quot;\nColumns: rho, M, empirical mean variance, &quot;
+    &quot;theoretical mean variance, empirical disagreement &quot;
+    &quot;variance, theoretical disagreement variance, &quot;
+    &quot;selected optimism, effective M&quot;
+)
+print(results)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>With <span class="math inline">\(\rho=0\)</span>, how should the ensemble-mean variance change as <span class="math inline">\(M\)</span> doubles?</p></li>
+<li><p>With <span class="math inline">\(M=16,\rho=0.25\)</span>, is the effective size closer to <span style="background-color: codeinlinebg"><code> 4</code></span> or <span style="background-color: codeinlinebg"><code> 16</code></span>?</p></li>
+<li><p>Which setting should have the smallest member disagreement?</p></li>
+<li><p>Which setting should retain the greatest best-of-64 optimism?</p></li>
+<li><p>Can adding models increase nominal ensemble size without adding much information?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<p>Construct correlated errors as:</p>
+<p><span class="math display">\[\epsilon_m
+=
+\sigma
+\left[
+\sqrt{\rho}\,z_{\mathrm{shared}}
++
+\sqrt{1-\rho}\,z_m
+\right]\]</span></p>
+<p>Both noises have unit variance, so each model’s marginal error variance remains <span class="math inline">\(\sigma^2\)</span>.</p>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> correlations[:, None, None, None]</code></span> for broadcasting.</p></li>
+<li><p>Flatten two member tensors before <span style="background-color: codeinlinebg"><code> torch.corrcoef</code></span>.</p></li>
+<li><p>Reduce the member dimension with <span style="background-color: codeinlinebg"><code> .mean(dim=-1)</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> correction=0</code></span> for population-style variance.</p></li>
+<li><p>Best-of-<span class="math inline">\(N\)</span> optimism is the mean of each row’s maximum.</p></li>
+<li><p>The expected within-ensemble variance is:</p></li>
+</ul>
+<p><span class="math display">\[\sigma^2(1-\rho)\frac{M-1}{M}\]</span></p>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Report <span style="background-color: codeinlinebg"><code> M=16</code></span> without estimating error correlation.</p></li>
+<li><p>Train sixteen models from identical initialization, labels and data order.</p></li>
+<li><p>Measure correlation only on random outputs rather than optimized tails.</p></li>
+<li><p>Treat low ensemble disagreement as proof of correctness.</p></li>
+<li><p>Average member scores before calibrating their different scales.</p></li>
+<li><p>Calculate model correlation using prompt tokens or padding as independent samples.</p></li>
+<li><p>Tune ensemble composition on the final audit set.</p></li>
+<li><p>Backpropagate PPO through unfrozen ensemble predictions instead of detaching rewards.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does positive correlation create a variance floor?</p></li>
+<li><p>What happens to <span class="math inline">\(M_{\mathrm{eff}}\)</span> as <span class="math inline">\(M\rightarrow\infty\)</span>?</p></li>
+<li><p>Why can lower disagreement accompany worse ensemble-mean uncertainty?</p></li>
+<li><p>What changes can produce genuine ensemble diversity?</p></li>
+<li><p>Where should reward-model correlation be measured?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Correlated errors:</p>
+<pre class="code python"><code class="language-python">shared_noise = torch.randn(
+    num_settings,
+    num_prompt_pools,
+    num_candidates,
+    1,
+)
+
+independent_noise = torch.randn(
+    num_settings,
+    num_prompt_pools,
+    num_candidates,
+    maximum_models,
+)
+
+rho = correlations[
+    :, None, None, None
+]
+
+reward_model_errors = (
+    error_sd
+    * (
+        rho.sqrt()
+        * shared_noise
+        + (
+            1.0 - rho
+        ).sqrt()
+        * independent_noise
+    )
+)</code></pre>
+<p>Empirical correlations:</p>
+<pre class="code python"><code class="language-python">pairwise_correlations = []
+
+for setting_index in range(num_settings):
+    model_zero_errors = (
+        reward_model_errors[
+            setting_index, ..., 0
+        ].flatten()
+    )
+
+    model_one_errors = (
+        reward_model_errors[
+            setting_index, ..., 1
+        ].flatten()
+    )
+
+    empirical_correlation = torch.corrcoef(
+        torch.stack([
+            model_zero_errors,
+            model_one_errors,
+        ])
+    )[0, 1]
+
+    pairwise_correlations.append(
+        empirical_correlation
+    )
+
+pairwise_correlations = torch.stack(
+    pairwise_correlations
+)</code></pre>
+<p>Ensemble diagnostics:</p>
+<pre class="code python"><code class="language-python">rows = []
+
+for setting_index, correlation in enumerate(
+    correlations
+):
+    for model_count in model_counts:
+        member_errors = reward_model_errors[
+            setting_index,
+            ...,
+            :model_count,
+        ]
+
+        ensemble_errors = member_errors.mean(
+            dim=-1
+        )
+
+        empirical_mean_variance = (
+            ensemble_errors.var(
+                correction=0
+            )
+        )
+
+        theoretical_mean_variance = (
+            error_sd ** 2
+            * (
+                correlation
+                + (
+                    1.0 - correlation
+                ) / model_count
+            )
+        )
+
+        empirical_within_variance = (
+            member_errors.var(
+                dim=-1,
+                correction=0,
+            ).mean()
+        )
+
+        theoretical_within_variance = (
+            error_sd ** 2
+            * (
+                1.0 - correlation
+            )
+            * (
+                model_count - 1
+            )
+            / model_count
+        )
+
+        selected_optimism = (
+            ensemble_errors.max(
+                dim=1
+            ).values.mean()
+        )
+
+        effective_model_count = (
+            model_count
+            / (
+                1.0
+                + (
+                    model_count - 1
+                )
+                * correlation
+            )
+        )
+
+        rows.append(
+            torch.stack([
+                correlation,
+                torch.tensor(
+                    float(model_count)
+                ),
+                empirical_mean_variance,
+                theoretical_mean_variance,
+                empirical_within_variance,
+                theoretical_within_variance,
+                selected_optimism,
+                effective_model_count,
+            ])
+        )
+
+results = torch.stack(rows)</code></pre>
+<p>For sixteen members, the theoretical comparison is:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Error correlation</strong></th>
+<th style="text-align: left;"><strong>Mean-error variance</strong></th>
+<th style="text-align: left;"><strong>Disagreement variance</strong></th>
+<th style="text-align: left;"><strong>Effective <span class="math inline">\(M\)</span></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Error correlation</strong></td>
+<td style="text-align: left;"><strong>Mean-error variance</strong></td>
+<td style="text-align: left;"><strong>Disagreement variance</strong></td>
+<td style="text-align: left;"><strong>Effective <span class="math inline">\(M\)</span></strong></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.00</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.0625</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.9375</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 16.00</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.25</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.2969</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.7031</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 3.37</code></span></td>
+</tr>
+<tr>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.75</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.7656</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 0.2344</code></span></td>
+<td style="text-align: left;"><span style="background-color: codeinlinebg"><code> 1.31</code></span></td>
+</tr>
+</tbody>
+</table>
+<p>The most correlated ensemble has the smallest visible disagreement but the largest ensemble-mean error. Consequently, selecting the best of 64 candidates still finds a large positive error.</p>
+<p>For <span class="math inline">\(\rho&gt;0\)</span>:</p>
+<p><span class="math display">\[\lim_{M\rightarrow\infty}M_{\mathrm{eff}}
+=
+\frac1\rho\]</span></p>
+<p>Thus:</p>
+<ul>
+<li><p><span class="math inline">\(\rho=0.25\)</span> can never exceed an effective size of <span style="background-color: codeinlinebg"><code> 4</code></span>;</p></li>
+<li><p><span class="math inline">\(\rho=0.75\)</span> can never exceed approximately <span style="background-color: codeinlinebg"><code> 1.33</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Every pair contributes a covariance term that averaging does not cancel, leaving the floor <span class="math inline">\(\rho\sigma^2\)</span>.</p></li>
+<li><p>It approaches <span class="math inline">\(1/\rho\)</span>, rather than growing without limit.</p></li>
+<li><p>Disagreement removes the shared component before measuring spread; that shared component remains in the ensemble mean.</p></li>
+<li><p>Vary training data, annotators, model families, objectives and information sources—not only seeds.</p></li>
+<li><p>On deployment-like and optimization-selected outputs, especially the high-reward tail where the policy will concentrate.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>It subtracts a multiple of member disagreement from mean predicted reward, making uncertain candidates less attractive.</p></li>
+<li><p>If all members inherit the same bias, they agree with one another while remaining wrong.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> count independent error sources, not checkpoints. A large, highly correlated reward ensemble can be confidently wrong—and strong optimization will still locate those shared errors.</p>

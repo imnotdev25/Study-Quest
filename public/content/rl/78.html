@@ -1,0 +1,364 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: zero food poisonings in 20 meals</div>
+<p>A restaurant with zero food poisonings in 20 meals hasn’t proven it’s safe. The “rule of three” says that with 0 events in <span class="math inline">\(n\)</span> tries, the true rate could still be as high as about <span class="math inline">\(3/n\)</span> (95% confidence): 15% here. “20% error on this sample” isn’t “risk below 20%.”</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/085f1bb09de0.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The rule of three: proving a rate below 0.1% needs about 3000 clean samples.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>What denominator defines selective risk?</p></li>
+<li><p>Why should a routing threshold be evaluated on data separate from the data used to choose it?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="empirical-risk-is-only-an-estimate">2. Empirical risk is only an estimate</h3>
+<p>Suppose 2 of 10 directly answered requests are wrong:</p>
+<p><span class="math display">\[\hat R=\frac{2}{10}=0.20\]</span></p>
+<p>That does not establish that the population risk is at most 20%. Ten samples provide little evidence.</p>
+<p>For a fixed threshold, Hoeffding’s inequality gives a simple upper confidence bound:</p>
+<p><span class="math display">\[U_k
+=
+\min\left(
+1,\;
+\hat R_k+
+\sqrt{\frac{\log(1/\delta)}{2k}}
+\right)\]</span></p>
+<p>Here:</p>
+<ul>
+<li><p><span class="math inline">\(k\)</span> is the number of answered calibration requests;</p></li>
+<li><p><span class="math inline">\(\delta=0.05\)</span> gives a 95% confidence level;</p></li>
+<li><p>the margin shrinks as <span class="math inline">\(1/\sqrt{k}\)</span>.</p></li>
+</ul>
+<p>If we inspect <span class="math inline">\(K\)</span> thresholds and select the best-looking one, a pointwise bound is insufficient. A union-bound correction gives:</p>
+<p><span class="math display">\[U_k^{\text{sim}}
+=
+\min\left(
+1,\;
+\hat R_k+
+\sqrt{
+\frac{\log(K/\delta)}{2k}
+}
+\right)\]</span></p>
+<p>Under IID calibration data and fixed candidate rules, all <span class="math inline">\(K\)</span> bounds then hold simultaneously with probability at least <span class="math inline">\(1-\delta\)</span>.</p>
+<p>Choose the largest coverage satisfying:</p>
+<p><span class="math display">\[U_k^{\text{sim}}\le R_{\max}\]</span></p>
+<p>This is intentionally conservative. Exact binomial and conformal risk-control methods can provide sharper guarantees.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>sorted confidence and errors: <span style="background-color: codeinlinebg"><code> [B]</code></span>;</p></li>
+<li><p>empirical risks and upper bounds: <span style="background-color: codeinlinebg"><code> [B]</code></span>;</p></li>
+<li><p>chosen threshold: scalar.</p></li>
+</ul>
+<p>The guarantee does not cover distribution shift, incorrect labels, correlated samples or changing the model afterward. For tool agents, count independent prompts or episodes—not highly correlated timesteps—as statistical samples.</p>
+<p>DPO can improve refusal behavior from preference data, but its loss does not provide a finite-sample guarantee on deployment risk.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: bounds with a safety margin</div>
+<p><strong>Hoeffding:</strong> for losses in <span class="math inline">\([0,1]\)</span>, with probability <span class="math inline">\(\ge1-\delta\)</span>, <span class="math inline">\(R\le\hat R+\sqrt{\ln(1/\delta)/(2n)}\)</span>. <strong>Search penalty:</strong> if you tried <span class="math inline">\(m\)</span> thresholds and picked the best, use <span class="math inline">\(\delta/m\)</span> (a union bound) or a method like Learn-then-Test. <strong>Tighter:</strong> Clopper–Pearson (exact binomial) bounds are better for small rates. The assumptions are i.i.d. samples from the deployment distribution, and drift breaks them.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Include finite-sample uncertainty and correct for threshold search.</p></li>
+<li><p>State the assumptions behind any safety claim.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: does 15% clear a 20% target?</div>
+<p><span class="math inline">\(n=1000\)</span>, <span class="math inline">\(\hat R=0.15\)</span>, <span class="math inline">\(\delta=0.05\)</span>: margin <span class="math inline">\(=\sqrt{\ln20/2000}=0.055\)</span>, so the bound is <span class="math inline">\(0.205&gt;0.20\)</span>. It fails, narrowly. After searching 10 thresholds: margin <span class="math inline">\(=\sqrt{\ln200/2000}=0.073\)</span>, so the bound is <span class="math inline">\(0.223\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Treating <span class="math inline">\(\hat R\)</span> as the guarantee.</p></li>
+<li><p>Searching thresholds without a correction.</p></li>
+<li><p>Applying an i.i.d. bound to correlated turns from the same users.</p></li>
+</ul>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-empirical-risk-versus-a-simultaneous-bound">3. PyTorch exercise — empirical risk versus a simultaneous bound</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_examples = 1_000
+maximum_risk = 0.20
+delta = 0.05
+
+# Initially ordered from high to low confidence.
+ordered_confidences = torch.linspace(
+    0.999,
+    0.500,
+    num_examples,
+)
+
+ordered_errors = torch.zeros(
+    num_examples,
+    dtype=torch.bool,
+)
+
+# Top 600 examples: 30 errors, or 5%.
+ordered_errors[19:600:20] = True
+
+# Remaining 400 examples: 120 errors, or 30%.
+for offset in range(3):
+    ordered_errors[
+        600 + offset::10
+    ] = True
+
+# Shuffle to simulate ordinary stored evaluation rows.
+permutation = torch.randperm(
+    num_examples
+)
+
+confidences = ordered_confidences[
+    permutation
+]
+
+is_correct = ~ordered_errors[
+    permutation
+]
+
+# TODO 1: Recover descending-confidence order.
+sorted_confidences, order = ...
+sorted_errors = ...
+
+# TODO 2: Compute empirical prefix risks.
+answered_counts = torch.arange(
+    1,
+    num_examples + 1,
+    dtype=confidences.dtype,
+)
+
+prefix_error_counts = ...
+empirical_risks = ...
+coverages = ...
+
+# TODO 3: Compute pointwise and simultaneous
+# Hoeffding upper bounds.
+pointwise_radii = ...
+
+num_candidates = num_examples
+simultaneous_radii = ...
+
+pointwise_upper_bounds = ...
+simultaneous_upper_bounds = ...
+
+# TODO 4: Find the largest feasible prefix
+# under each decision rule.
+empirical_index = ...
+pointwise_index = ...
+simultaneous_index = ...
+
+# TODO 5: Reconstruct the simultaneous router
+# in the original row order.
+chosen_count = ...
+chosen_threshold = ...
+
+answer_mask = ...
+
+realized_coverage = ...
+realized_risk = ...
+
+print(
+    &quot;Empirical-only answered count:&quot;,
+    (empirical_index + 1).item(),
+)
+
+print(
+    &quot;Pointwise-bound answered count:&quot;,
+    (pointwise_index + 1).item(),
+)
+
+print(
+    &quot;Simultaneous-bound answered count:&quot;,
+    chosen_count.item(),
+)
+
+print(
+    &quot;Chosen threshold:&quot;,
+    chosen_threshold.item(),
+)
+
+print(
+    &quot;Realized coverage:&quot;,
+    realized_coverage.item(),
+)
+
+print(
+    &quot;Empirical risk at chosen point:&quot;,
+    realized_risk.item(),
+)
+
+print(
+    &quot;Simultaneous upper bound:&quot;,
+    simultaneous_upper_bounds[
+        simultaneous_index
+    ].item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will empirical risk alone allow all 1,000 requests to be answered?</p></li>
+<li><p>Why can the pointwise bound also accept all 1,000 requests?</p></li>
+<li><p>Approximately how many requests will the simultaneous rule answer?</p></li>
+<li><p>What happens to the confidence margin if the sample size is quadrupled?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Sort confidence descending and use the same indices for correctness.</p></li>
+<li><p>Prefix risk is cumulative errors divided by prefix size.</p></li>
+<li><p>Pointwise radius uses <span style="background-color: codeinlinebg"><code> math.log(1 / delta)</code></span>.</p></li>
+<li><p>Simultaneous radius uses <span style="background-color: codeinlinebg"><code> math.log(K / delta)</code></span>.</p></li>
+<li><p>Clamp upper bounds to at most one.</p></li>
+<li><p>Select the final index whose risk or bound is at most <span style="background-color: codeinlinebg"><code> maximum_risk</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Search 1,000 thresholds but use only the pointwise bound. This ignores multiple comparisons.</p></li>
+<li><p>Treat every token or tool step as independent. Correlation makes the effective sample size much smaller.</p></li>
+<li><p>Change the verifier after selecting the threshold. The bound no longer describes the deployed router.</p></li>
+<li><p>Observe zero errors in a tiny prefix and report zero risk. The confidence radius should remain large.</p></li>
+<li><p>Reuse training rollouts for calibration. Memorization can make the bound meaningless for new prompts.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does searching many thresholds require a correction?</p></li>
+<li><p>Why are small high-confidence prefixes often rejected despite zero errors?</p></li>
+<li><p>Does this bound protect against distribution shift?</p></li>
+<li><p>What should be logged alongside the claimed risk guarantee?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Sorting:</p>
+<pre class="code python"><code class="language-python">sorted_confidences, order = torch.sort(
+    confidences,
+    descending=True,
+)
+
+sorted_errors = (
+    ~is_correct[order]
+).to(confidences.dtype)</code></pre>
+<p>Empirical risks:</p>
+<pre class="code python"><code class="language-python">prefix_error_counts = (
+    sorted_errors.cumsum(dim=0)
+)
+
+empirical_risks = (
+    prefix_error_counts
+    / answered_counts
+)
+
+coverages = (
+    answered_counts
+    / num_examples
+)</code></pre>
+<p>Confidence bounds:</p>
+<pre class="code python"><code class="language-python">pointwise_radii = torch.sqrt(
+    torch.full_like(
+        answered_counts,
+        math.log(1.0 / delta),
+    )
+    / (2.0 * answered_counts)
+)
+
+simultaneous_radii = torch.sqrt(
+    torch.full_like(
+        answered_counts,
+        math.log(
+            num_candidates / delta
+        ),
+    )
+    / (2.0 * answered_counts)
+)
+
+pointwise_upper_bounds = (
+    empirical_risks
+    + pointwise_radii
+).clamp(max=1.0)
+
+simultaneous_upper_bounds = (
+    empirical_risks
+    + simultaneous_radii
+).clamp(max=1.0)</code></pre>
+<p>Selecting operating points:</p>
+<pre class="code python"><code class="language-python">empirical_index = torch.where(
+    empirical_risks
+    &lt;= maximum_risk
+)[0][-1]
+
+pointwise_index = torch.where(
+    pointwise_upper_bounds
+    &lt;= maximum_risk
+)[0][-1]
+
+simultaneous_index = torch.where(
+    simultaneous_upper_bounds
+    &lt;= maximum_risk
+)[0][-1]</code></pre>
+<p>Reconstructing the router:</p>
+<pre class="code python"><code class="language-python">chosen_count = (
+    simultaneous_index + 1
+)
+
+chosen_threshold = (
+    sorted_confidences[
+        simultaneous_index
+    ]
+)
+
+answer_mask = (
+    confidences
+    &gt;= chosen_threshold
+)
+
+realized_coverage = (
+    answer_mask
+    .to(confidences.dtype)
+    .mean()
+)
+
+realized_risk = (
+    (
+        (~is_correct)
+        &amp; answer_mask
+    )
+    .to(confidences.dtype)
+    .sum()
+    / answer_mask.sum()
+)</code></pre>
+<p>Empirical selection answers all 1,000 examples because:</p>
+<p><span class="math display">\[\hat R_{1000}
+=
+\frac{150}{1000}
+=
+0.15\]</span></p>
+<p>The pointwise upper bound at that point is approximately:</p>
+<p><span class="math display">\[0.15+
+\sqrt{
+\frac{\log 20}{2000}
+}
+\approx0.189\]</span></p>
+<p>But that bound assumes the threshold was fixed in advance. It does not account for searching 1,000 candidates.</p>
+<p>The simultaneous rule selects 850 examples:</p>
+<p><span class="math display">\[\hat R_{850}
+=
+\frac{105}{850}
+\approx0.1235\]</span></p>
+<p><span class="math display">\[U_{850}^{\text{sim}}
+\approx
+0.1235+
+\sqrt{
+\frac{\log(20000)}{1700}
+}
+\approx0.1999\]</span></p>
+<p>Thus coverage is 85% while the corrected upper bound remains just below 20%.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Searching creates multiple chances to find an artificially low empirical risk; the union correction covers all candidate thresholds together.</p></li>
+<li><p>With few observations, zero errors is weak evidence, so the <span class="math inline">\(1/\sqrt{k}\)</span> margin remains large.</p></li>
+<li><p>No. It assumes deployment resembles the calibration distribution and that samples satisfy the independence assumptions.</p></li>
+<li><p>Report calibration size, error count, coverage, threshold, confidence level, number of candidates, sampling unit, subgroup bounds and evidence of distribution drift.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Selective risk divides selected errors by the number of requests actually answered.</p></li>
+<li><p>Choosing and reporting on the same observations exploits sampling noise and produces an optimistic risk estimate.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> “20% error on this sample” is not the same as “risk is below 20%.” Include finite-sample uncertainty, correct for threshold search and state the assumptions behind any safety claim.</p>

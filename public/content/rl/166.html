@@ -1,0 +1,261 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<p><strong>Curriculum position:</strong> LLM × RL → reliable agent/tool-use training<br />
+<strong>Previously delivered:</strong> action masks, trajectory credit and reward shaping; mastery not yet assessed.</p>
+<h3 class="unnumbered" id="spaced-retrieval-2-minutes">1. Spaced retrieval — 2 minutes</h3>
+<ol>
+<li><p>How can arbitrary tool-call bonuses change the task being optimized?</p></li>
+<li><p>Under what terminal-potential condition does potential shaping preserve action rankings?</p></li>
+<li><p>Why should environment reward and shaping reward be logged separately?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="two-ways-a-rollout-can-stop-5-minutes">2. Two ways a rollout can stop — 5 minutes</h3>
+<p>An agent trajectory can end because:</p>
+<ul>
+<li><p><strong>Termination:</strong> the task genuinely ended—success, failure or a terminal state.</p></li>
+<li><p><strong>Truncation:</strong> data collection stopped—the time limit, token budget or rollout horizon was reached, but the underlying task could have continued.</p></li>
+</ul>
+<p>Imagine pausing a chess game because the recording window ended. The game is truncated, not checkmated.</p>
+<p>For a value estimate, the one-step TD error is:</p>
+<p><span class="math display">\[\underbrace{\delta_t}_{\text{new evidence about }V(s_t)}
+=
+\underbrace{r_t}_{\text{immediate reward}}
++
+\underbrace{\gamma(1-d_t^{\mathrm{term}})V(s_{t+1})}_{\text{bootstrap unless truly terminal}}
+-
+\underbrace{V(s_t)}_{\text{current prediction}}\]</span></p>
+<p>Here:</p>
+<ul>
+<li><p><span class="math inline">\(d_t^{\mathrm{term}}=1\)</span>: true terminal transition;</p></li>
+<li><p><span class="math inline">\(d_t^{\mathrm{term}}=0\)</span>: continuing or truncated transition.</p></li>
+</ul>
+<p>At true termination, there is no future environment return, so the next-state value is discarded.</p>
+<p>At truncation, the future still exists outside the collected rollout, so we bootstrap from the final observation:</p>
+<p><span class="math display">\[\delta_t^{\mathrm{trunc}}
+=
+r_t+\gamma V(s_{t+1})-V(s_t)\]</span></p>
+<p>Treating every timeout as terminal incorrectly uses:</p>
+<p><span class="math display">\[\delta_t^{\mathrm{wrong}}
+=
+r_t-V(s_t)\]</span></p>
+<p>This systematically undervalues states near rollout limits.</p>
+<p>For GAE, we need a second boundary mask:</p>
+<p><span class="math display">\[\underbrace{A_t^{\mathrm{GAE}}}_{\text{multi-step advantage}}
+=
+\underbrace{\delta_t}_{\text{current TD error}}
++
+\underbrace{\gamma\lambda c_t A_{t+1}^{\mathrm{GAE}}}_{\text{earlier errors carried backward}}\]</span></p>
+<p>where</p>
+<p><span class="math display">\[\underbrace{c_t}_{\text{trace continuation}}
+=
+1-
+\underbrace{\max(d_t^{\mathrm{term}},d_t^{\mathrm{trunc}})}_{\text{stored episode ends here}}\]</span></p>
+<p>This gives two distinct decisions:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Boundary</strong></th>
+<th style="text-align: left;"><strong>Bootstrap in <span class="math inline">\(\delta_t\)</span>?</strong></th>
+<th style="text-align: left;"><strong>Carry GAE across reset?</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Boundary</strong></td>
+<td style="text-align: left;"><strong>Bootstrap in <span class="math inline">\(\delta_t\)</span>?</strong></td>
+<td style="text-align: left;"><strong>Carry GAE across reset?</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Normal transition</td>
+<td style="text-align: left;">Yes</td>
+<td style="text-align: left;">Yes</td>
+</tr>
+<tr>
+<td style="text-align: left;">True termination</td>
+<td style="text-align: left;">No</td>
+<td style="text-align: left;">No</td>
+</tr>
+<tr>
+<td style="text-align: left;">Time-limit truncation</td>
+<td style="text-align: left;">Yes</td>
+<td style="text-align: left;">No</td>
+</tr>
+</tbody>
+</table>
+<p>We bootstrap at truncation using the final observation, but do not allow the GAE recursion to cross into the next reset episode.</p>
+<p>For tool agents:</p>
+<ul>
+<li><p>genuine submitted answer or unrecoverable failure may terminate;</p></li>
+<li><p>collector horizon or infrastructure timeout usually truncates;</p></li>
+<li><p>exhausting a task-defined budget may terminate if the specification explicitly scores it as failure.</p></li>
+</ul>
+<p>DPO does not face TD bootstrapping because it trains on fixed preference pairs rather than online transitions. It can still inherit biased treatment of incomplete responses from its dataset.</p>
+<p>Shapes:</p>
+<ul>
+<li><p>rewards, values, next values: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>terminated, truncated, valid masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>TD errors, advantages, value targets: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+</ul>
+<h3 class="unnumbered" id="pytorch-exercise-10-minutes">3. PyTorch exercise — 10 minutes</h3>
+<p>The first trajectory terminates. The second is truncated at the same step. The third continues through the rollout.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.90
+gae_lambda = 0.80
+
+lengths = torch.tensor([3, 3, 4])
+max_steps = 4
+
+valid = (
+    torch.arange(max_steps)[None, :]
+    &lt; lengths[:, None]
+).to(torch.float64)
+
+rewards = torch.tensor([
+    [0.0, 0.0, 1.0, 0.0],  # true terminal success
+    [0.0, 0.0, 0.0, 0.0],  # collector timeout
+    [0.0, 0.1, 0.0, 0.0],  # continuing rollout
+])
+
+values = torch.tensor([
+    [0.4, 0.5, 0.6, 0.0],
+    [0.4, 0.5, 0.6, 0.0],
+    [0.2, 0.3, 0.4, 0.5],
+])
+
+# Value of the actual observation following each transition.
+# The 9.0 after true termination must be ignored.
+next_values = torch.tensor([
+    [0.5, 0.6, 9.0, 0.0],
+    [0.5, 0.6, 0.7, 0.0],
+    [0.3, 0.4, 0.5, 0.6],
+])
+
+terminated = torch.tensor([
+    [False, False, True,  False],
+    [False, False, False, False],
+    [False, False, False, False],
+])
+
+truncated = torch.tensor([
+    [False, False, False, False],
+    [False, False, True,  False],
+    [False, False, False, False],
+])
+
+# TODO 1: Bootstrap through truncation, but not termination.
+bootstrap_mask = ...
+
+# TODO 2: Do not propagate a GAE trace across either boundary.
+episode_ended = ...
+trace_continue = ...
+
+td_errors = (
+    rewards
+    + gamma * bootstrap_mask * next_values
+    - values
+) * valid
+
+advantages = torch.zeros_like(rewards)
+running_advantage = torch.zeros(3)
+
+for t in reversed(range(max_steps)):
+    # TODO 3: Masked backward GAE recurrence.
+    running_advantage = ...
+    advantages[:, t] = ...
+
+# TODO 4: Targets for critic regression.
+value_targets = ...
+
+print(&quot;TD errors:\n&quot;, td_errors)
+print(&quot;Advantages:\n&quot;, advantages)
+print(&quot;Value targets:\n&quot;, value_targets)
+
+print(&quot;Terminal final TD:&quot;, td_errors[0, 2].item())
+print(&quot;Truncated final TD:&quot;, td_errors[1, 2].item())
+print(
+    &quot;Largest padded advantage:&quot;,
+    (advantages * (1.0 - valid)).abs().max().item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Does the terminal transition use the artificial next value <span style="background-color: codeinlinebg"><code> 9.0</code></span>?</p></li>
+<li><p>Does the truncated transition bootstrap from <span style="background-color: codeinlinebg"><code> 0.7</code></span>?</p></li>
+<li><p>Should the truncated transition’s GAE trace enter a newly reset episode?</p></li>
+<li><p>Should padded advantages be nonzero?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Bootstrap mask: logical negation of <span style="background-color: codeinlinebg"><code> terminated</code></span>.</p></li>
+<li><p>Episode end: <span style="background-color: codeinlinebg"><code> terminated | truncated</code></span>.</p></li>
+<li><p>Convert Boolean masks to the floating dtype where needed.</p></li>
+<li><p>In the backward recurrence, multiply the final running advantage by <span style="background-color: codeinlinebg"><code> valid[:, t]</code></span>.</p></li>
+<li><p>Critic target is detached advantage plus the old value estimate.</p></li>
+</ul>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<pre class="code python"><code class="language-python">bootstrap_mask = (~terminated).to(torch.float64)
+
+episode_ended = terminated | truncated
+trace_continue = (~episode_ended).to(torch.float64)
+
+td_errors = (
+    rewards
+    + gamma * bootstrap_mask * next_values
+    - values
+) * valid
+
+advantages = torch.zeros_like(rewards)
+running_advantage = torch.zeros(3)
+
+for t in reversed(range(max_steps)):
+    running_advantage = (
+        td_errors[:, t]
+        + gamma
+        * gae_lambda
+        * trace_continue[:, t]
+        * running_advantage
+    )
+    running_advantage = running_advantage * valid[:, t]
+    advantages[:, t] = running_advantage
+
+value_targets = (advantages + values).detach() * valid</code></pre>
+<p>At the final valid transition:</p>
+<p><span class="math display">\[\delta^{\mathrm{term}}_2
+=
+1-0.6
+=
+0.4\]</span></p>
+<p>The <span style="background-color: codeinlinebg"><code> 9.0</code></span> is ignored.</p>
+<p>For the truncated trajectory:</p>
+<p><span class="math display">\[\delta^{\mathrm{trunc}}_2
+=
+0+0.9(0.7)-0.6
+=
+0.03\]</span></p>
+<p>If truncation were incorrectly treated as termination:</p>
+<p><span class="math display">\[\delta^{\mathrm{wrong}}_2=0-0.6=-0.6\]</span></p>
+<p>That is a large artificial negative target produced solely by the collection limit.</p>
+<h3 class="unnumbered" id="checks-for-understanding-3-minutes">4. Checks for understanding — 3 minutes</h3>
+<ol>
+<li><p>Why are separate bootstrap and trace-continuation masks necessary?</p></li>
+<li><p>What observation must an environment retain when it reports truncation?</p></li>
+<li><p>When should a tool-budget exhaustion be treated as termination?</p></li>
+<li><p>What training symptom might appear if every rollout-horizon cutoff is marked terminal?</p></li>
+</ol>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Truncation needs future-value bootstrapping, but the stored recursion must stop before the reset episode. One mask cannot express both requirements.</p></li>
+<li><p>The final observation before reset. Bootstrapping from the new episode’s initial observation estimates the wrong state.</p></li>
+<li><p>When the task specification defines budget exhaustion as an actual failed outcome. An incidental collector or infrastructure limit is normally truncation.</p></li>
+<li><p>Values become artificially low near the horizon. Advantages may turn strongly negative there, encouraging premature stopping and creating horizon-dependent behaviour.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>They add reward for the intermediate behaviour itself, so the agent may farm tool calls rather than improve task success.</p></li>
+<li><p>Terminal potential should be zero—or otherwise handled consistently so the terminal boundary term does not change action rankings.</p></li>
+<li><p>Combined reward can rise while true task reward falls. Separate logs expose whether the policy is improving the goal or exploiting the shaping signal.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> termination controls whether a future value exists; truncation only says that collection stopped. Bootstrap through time limits, stop traces at reset boundaries, and never bootstrap from the next episode’s initial state.</p>

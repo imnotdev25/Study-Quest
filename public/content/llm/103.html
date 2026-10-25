@@ -1,0 +1,138 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>Scale out when the model doesn’t fit, when one GPU’s latency is too high, or when you need more throughput. Each kind of parallelism splits a different axis and pays a different communication bill.</p>
+</div>
+<div class="center">
+<table style="width:87%;">
+<colgroup>
+<col style="width: 16%" />
+<col style="width: 30%" />
+<col style="width: 42%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;"><strong>Parallelism</strong></th>
+<th style="text-align: left;"><strong>Splits</strong></th>
+<th style="text-align: left;"><strong>Cost</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Data (replicas)</td>
+<td style="text-align: left;">requests</td>
+<td style="text-align: left;">none between replicas; each needs the full model</td>
+</tr>
+<tr>
+<td style="text-align: left;">Tensor (TP)</td>
+<td style="text-align: left;">each weight matrix</td>
+<td style="text-align: left;">2 all-reduces per layer per step; needs NVLink, usually TP <span class="math inline">\(\le8\)</span></td>
+</tr>
+<tr>
+<td style="text-align: left;">Pipeline (PP)</td>
+<td style="text-align: left;">layers into stages</td>
+<td style="text-align: left;">bubble <span class="math inline">\((p-1)/(m+p-1)\)</span>; point-to-point, works across nodes</td>
+</tr>
+<tr>
+<td style="text-align: left;">Expert (EP)</td>
+<td style="text-align: left;">MoE experts across GPUs</td>
+<td style="text-align: left;">2 all-to-alls per MoE layer; load imbalance</td>
+</tr>
+<tr>
+<td style="text-align: left;">Context (CP)</td>
+<td style="text-align: left;">the sequence</td>
+<td style="text-align: left;">ring-pass KV shards; for very long prefill</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: Tensor parallelism needs one all-reduce per MLP</div>
+<p><strong>Step 1.</strong> <span class="math inline">\(\text{MLP}(x)=W_2\phi(W_1x)\)</span>. Split <span class="math inline">\(W_1\)</span> by rows (output features) across <span class="math inline">\(n\)</span> GPUs: GPU <span class="math inline">\(r\)</span> computes <span class="math inline">\(h_r=\phi(W_1^{(r)}x)\)</span>, its slice of the hidden layer. <span class="math inline">\(\phi\)</span> is elementwise, so no communication.</p>
+<p><strong>Step 2.</strong> Split <span class="math inline">\(W_2\)</span> by columns to match: GPU <span class="math inline">\(r\)</span> computes <span class="math inline">\(W_2^{(r)}h_r\)</span>, a partial sum of the output.</p>
+<p><strong>Step 3.</strong> <span class="math inline">\(y=\sum_rW_2^{(r)}h_r\)</span>: one all-reduce. Attention is the same with heads as the split axis.</p>
+<p><strong>Step 4.</strong> A ring all-reduce sends <span class="math inline">\(2\frac{n-1}{n}\)</span> times the message size per GPU. Decode messages are small (<span class="math inline">\(B\cdot d\cdot2\)</span> bytes), so the fixed latency per collective dominates; that is why TP gives less than linear decode speedup.</p>
+</div>
+<h2 class="unnumbered" id="moe-inference">MoE inference</h2>
+<p>Each token picks <span class="math inline">\(k\)</span> experts, so expert-parallel serving sends every token’s hidden state to the GPUs holding its experts and back (dispatch and combine all-to-alls). The busiest GPU sets the step time, so load imbalance is a direct slowdown; it shrinks with more tokens per step, which pushes MoE serving toward large batches. Fixes: redundant copies of hot experts (DeepSeek’s EPLB), FP8 dispatch, overlapping communication with compute, and, in <em>MegaScale-Infer</em>, <strong>disaggregated expert parallelism</strong>: attention and experts run on separate GPU pools, with micro-batches ping-ponging between them so neither side idles.</p>
+<h2 class="unnumbered" id="long-context-and-tiered-kv">Long context and tiered KV</h2>
+<p>At 128k tokens, prefill is dominated by attention’s <span class="math inline">\(O(T^2)\)</span> term, and the KV of one Llama-3.1-8B request is 16 GiB. Options: sparse prefill (<em>MInference</em> picks per-head sparse patterns from a few offline-found shapes), KV quantisation, context parallelism (<em>Ring Attention</em> passes KV blocks around a ring of GPUs and merges partial softmaxes, exactly the LSE merge in the code), and a <strong>KV hierarchy</strong>: HBM, then CPU DRAM, then local NVMe, then remote storage. Reloading over PCIe is far cheaper than recomputing, so cache admission should keep long, frequently reused prefixes (system prompts, documents, agent histories) and drop one-off ones. Mooncake and LMCache are open implementations; <em>Prefill-as-a-Service</em> pushes the idea to KV moving between datacentres (not checked in detail here).</p>
+<h2 class="unnumbered" id="prefilldecode-disaggregation">Prefill/decode disaggregation</h2>
+<p>Prefill is compute-bound and bursty; decode is bandwidth-bound and steady. On one GPU they interfere (chunked prefill is the compromise). Disaggregation (DistServe, Splitwise, Mooncake) runs them on separate pools, sized independently: prefill GPUs <span class="math inline">\(\approx\lambda\cdot T_{\text{prompt}}/\text{prefill tokens/s per GPU}\)</span>, decode GPUs from concurrent sequences and the TPOT target. The KV cache moves from prefill to decode over RDMA; the code shows the transfer is 10–70<span class="math inline">\(\times\)</span> shorter than the prefill that made it, and MLA’s small cache makes it cheaper still. Snowflake’s <em>Shift Parallelism</em> attacks the same latency–throughput tension differently: switch at runtime between tensor parallelism (low latency at small batch) and sequence parallelism (high throughput at large batch), using a KV layout both share.</p>
+<pre class="code python"><code class="language-python">&quot;&quot;&quot;Inference chs. &#x27;Multi-GPU&#x27;, &#x27;MoE Inference&#x27;, &#x27;Long Context&#x27;, &#x27;Disaggregation&#x27;: simulated parallelism
+and the bandwidth arithmetic behind each design.&quot;&quot;&quot;
+import numpy as np
+import torch
+
+torch.manual_seed(0)
+rng = np.random.default_rng(0)
+
+# 1. Tensor parallelism (Megatron MLP): column-split W1, row-split W2, one all-reduce (sum) at the end.
+d, f, tp = 64, 256, 4
+x, W1, W2 = torch.randn(8, d, dtype=torch.float64), torch.randn(f, d, dtype=torch.float64), torch.randn(d, f, dtype=torch.float64)
+full = torch.relu(x @ W1.T) @ W2.T
+parts = [torch.relu(x @ W1[r * f // tp:(r + 1) * f // tp].T) @ W2[:, r * f // tp:(r + 1) * f // tp].T for r in range(tp)]
+print(f&quot;[tp] sum of {tp} shard outputs (all-reduce) == unsharded MLP: {torch.allclose(sum(parts), full)}&quot;)
+
+# Decode step for Llama-3.1-70B: weights read in parallel; 2 all-reduces per layer of B*d*2 bytes.
+P, L, D, B = 70.6e9, 80, 8192, 32
+for n in (2, 4, 8):
+    t_w = 2 * P / n / 3.35e12
+    ring = 2 * (n - 1) / n * B * D * 2                  # bytes each GPU sends per all-reduce
+    t_c = 2 * L * (ring / 450e9 + 8e-6)                 # NVLink ~450 GB/s per direction + ~8 us latency
+    print(f&quot;[tp] TP={n}: weight read {t_w * 1e3:5.2f} ms + all-reduce {t_c * 1e3:4.2f} ms = {(t_w + t_c) * 1e3:5.2f} ms/step&quot;)
+
+# 2. Pipeline parallelism bubble: (p - 1) / (m + p - 1) with m micro-batches over p stages.
+print(&quot;[pp] bubble fraction  &quot; + &quot;  &quot;.join(f&quot;m={m}: {(4 - 1) / (m + 4 - 1):.0%}&quot; for m in (1, 4, 16, 64)) + &quot;  (p=4)&quot;)
+
+# 3. MoE expert parallelism: 256 experts on 32 GPUs, top-8 routing. The busiest GPU sets the step time.
+E, G, K = 256, 32, 8
+pop = rng.dirichlet(np.full(E, 2.0))                    # some experts are more popular
+for T in (64, 1024, 16384):
+    load = np.zeros(G)
+    for _ in range(T):
+        load[(rng.choice(E, K, replace=False, p=pop)) // (E // G)] += 1
+    print(f&quot;[ep] {T:6d} tokens: busiest GPU / mean = {load.max() / load.mean():.2f}&quot;)
+tok_b = 7168 * 1                                        # DeepSeek-V3 hidden size, fp8 dispatch
+print(f&quot;[ep] all-to-all per token: dispatch {K * tok_b / 1024:.0f} KiB (fp8) + combine {K * 7168 * 2 / 1024:.0f} KiB (bf16)&quot;)
+
+# 4. Context parallel / ring attention: each rank holds a KV slice; merge partial softmaxes with LSE.
+q, k, v = (torch.randn(n_, 32, dtype=torch.float64) for n_ in (4, 512, 512))
+ref = (q @ k.T / 32**0.5).softmax(-1) @ v
+m_, num, den = None, 0, 0
+for r in range(4):
+    s = q @ k[r * 128:(r + 1) * 128].T / 32**0.5
+    mr = s.amax(1, keepdim=True)
+    m_new = mr if m_ is None else torch.maximum(m_, mr)
+    scale_old = 0 if m_ is None else (m_ - m_new).exp()
+    num = num * scale_old + (s - m_new).exp() @ v[r * 128:(r + 1) * 128]
+    den = den * scale_old + (s - m_new).exp().sum(1, keepdim=True)
+    m_ = m_new
+print(f&quot;[ring] 4 KV shards merged == full attention: {torch.allclose(num / den, ref)}&quot;)
+
+# 5. Prefill/decode disaggregation: KV transfer vs prefill compute (H100 ~ 700 TFLOP/s effective).
+print(&quot;[pd] model, prompt          KV size    RDMA 50 GB/s   prefill compute&quot;)
+for name, P_, kvb, T in ((&quot;Llama-3.1-8B, 8k&quot;, 8e9, 131072, 8192), (&quot;Llama-3.1-70B, 8k&quot;, 70.6e9, 327680, 8192),
+                         (&quot;DeepSeek-V3 MLA, 8k (37B active)&quot;, 37e9, 70272, 8192)):
+    size = kvb * T
+    print(f&quot;[pd] {name:32s} {size / 2**30:5.2f} GiB  {size / 50e9 * 1e3:7.0f} ms   {2 * P_ * T / 700e12 * 1e3:6.0f} ms&quot;)
+
+# 6. Tiered KV: reload a 128k-token Llama-3.1-8B prefix vs recompute it.
+T = 131072
+size = 131072 * T
+recompute = (2 * 8e9 * T + 2 * 32 * T * T * 4096) / 700e12
+print(f&quot;[tier] 128k prefix = {size / 2**30:.0f} GiB:  HBM-local 0 s | CPU over PCIe5 (~50 GB/s) {size / 50e9:.2f} s | &quot;
+      f&quot;NVMe (~7 GB/s) {size / 7e9:.2f} s | recompute {recompute:.1f} s&quot;)</code></pre>
+<pre class="code output"><code class="output">[tp] sum of 4 shard outputs (all-reduce) == unsharded MLP: True
+[tp] TP=2: weight read 21.07 ms + all-reduce 1.47 ms = 22.54 ms/step
+[tp] TP=4: weight read 10.54 ms + all-reduce 1.56 ms = 12.10 ms/step
+[tp] TP=8: weight read  5.27 ms + all-reduce 1.61 ms =  6.87 ms/step
+[pp] bubble fraction  m=1: 75%  m=4: 43%  m=16: 16%  m=64: 4%  (p=4)
+[ep]     64 tokens: busiest GPU / mean = 1.54
+[ep]   1024 tokens: busiest GPU / mean = 1.46
+[ep]  16384 tokens: busiest GPU / mean = 1.33
+[ep] all-to-all per token: dispatch 56 KiB (fp8) + combine 112 KiB (bf16)
+[ring] 4 KV shards merged == full attention: True
+[pd] model, prompt          KV size    RDMA 50 GB/s   prefill compute
+[pd] Llama-3.1-8B, 8k                  1.00 GiB       21 ms      187 ms
+[pd] Llama-3.1-70B, 8k                 2.50 GiB       54 ms     1652 ms
+[pd] DeepSeek-V3 MLA, 8k (37B active)  0.54 GiB       12 ms      866 ms
+[tier] 128k prefix = 16 GiB:  HBM-local 0 s | CPU over PCIe5 (~50 GB/s) 0.34 s | NVMe (~7 GB/s) 2.45 s | recompute 9.4 s</code></pre>

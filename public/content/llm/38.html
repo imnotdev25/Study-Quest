@@ -1,0 +1,205 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Softmax cross-entropy</strong> is the categorical NLL from Part 0: <span class="math inline">\(\ell=-\log p_y\)</span> with <span class="math inline">\(p=\operatorname{softmax}(z)\)</span>. Here we derive its gradient the long way, through the full softmax Jacobian, to see <em>why</em> the shortcut <span class="math inline">\(p-\onehot(y)\)</span> is exact.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="concept-refresh-5-minutes">1. Concept refresh — 5 minutes</h2>
+<p>For hidden representations and an output projection:</p>
+<p><span class="math display">\[H\in\mathbb{R}^{B\times D},\qquad
+W\in\mathbb{R}^{D\times C}\]</span></p>
+<p><span class="math display">\[Z=HW\in\mathbb{R}^{B\times C}\]</span></p>
+<p>For example <span class="math inline">\(i\)</span>, softmax converts logits into probabilities:</p>
+<p><span class="math display">\[p_{ic}=\frac{e^{z_{ic}}}{\sum_{j=1}^{C}e^{z_{ij}}}\]</span></p>
+<p>Cross-entropy for target class <span class="math inline">\(y_i\)</span> is:</p>
+<p><span class="math display">\[\ell_i=-\log p_{i,y_i}\]</span></p>
+<p>Equivalently:</p>
+<p><span class="math display">\[\ell_i
+=
+-z_{i,y_i}
++
+\log\sum_{c=1}^{C}e^{z_{ic}}\]</span></p>
+<p>With mean reduction:</p>
+<p><span class="math display">\[L=\frac{1}{B}\sum_i\ell_i\]</span></p>
+<p>The important combined derivative is:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial z_{ic}}
+=
+\frac{p_{ic}-\mathbf{1}[c=y_i]}{B}\]</span></p>
+<p>In matrix form:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial Z}
+=
+\frac{P-\operatorname{onehot}(y)}{B}\]</span></p>
+<p>Then ordinary matrix-multiplication backprop gives:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial W}
+=
+H^\top\frac{\partial L}{\partial Z}
+\in\mathbb{R}^{D\times C}\]</span></p>
+<p><span class="math display">\[\frac{\partial L}{\partial H}
+=
+\frac{\partial L}{\partial Z}W^\top
+\in\mathbb{R}^{B\times D}\]</span></p>
+<p>For language models, logits are <span><code>[</code></span><code>B,T,V</code><span><code>]</code></span>. Conceptually, cross-entropy treats them as <span><code>[</code></span><code>B*T,V</code><span><code>]</code></span>, excluding ignored prompt or padding positions.</p>
+<p>For numerical stability, compute:</p>
+<p><span class="math display">\[\log\sum_c e^{z_c}
+=
+m+\log\sum_c e^{z_c-m},
+\qquad m=\max_c z_c\]</span></p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: through the softmax Jacobian</div>
+<p><strong>Step 1.</strong> Softmax Jacobian: <span class="math inline">\(\frac{\partial p_i}{\partial z_j}=\frac{\delta_{ij}e^{z_i}\Sigma-e^{z_i}e^{z_j}}{\Sigma^2}=p_i(\delta_{ij}-p_j)\)</span>, with <span class="math inline">\(\Sigma=\sum_ke^{z_k}\)</span>. As a matrix: <span class="math inline">\(J=\operatorname{diag}(p)-pp^\top\)</span>.</p>
+<p><strong>Step 2.</strong> Loss in terms of <span class="math inline">\(p\)</span>: <span class="math inline">\(\ell=-\log p_y\Rightarrow\frac{\partial\ell}{\partial p_i}=-\frac{\mathbb 1[i=y]}{p_y}\)</span>.</p>
+<p><strong>Step 3.</strong> Chain rule: <span class="math inline">\(\frac{\partial\ell}{\partial z_j}=\sum_i\frac{\partial\ell}{\partial p_i}\frac{\partial p_i}{\partial z_j}=-\frac{1}{p_y}\,p_y(\delta_{yj}-p_j)=p_j-\delta_{yj}\)</span>.</p>
+<p><strong>Step 4.</strong> So <span class="math inline">\(\nabla_z\ell=p-\onehot(y)\)</span>. Its entries sum to <span class="math inline">\(1-1=0\)</span>, because adding a constant to all logits doesn’t change the loss.</p>
+<p><strong>Step 5.</strong> Batch with mean reduction, <span class="math inline">\(Z=HW\)</span>: <span class="math inline">\(\Delta=\frac{P-Y}{B}\)</span>, <span class="math inline">\(\frac{\partial L}{\partial W}=H^\top\Delta\)</span>, <span class="math inline">\(\frac{\partial L}{\partial H}=\Delta W^\top\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Why fuse:</strong> computing <span class="math inline">\(p\)</span> and then <span class="math inline">\(\log p\)</span> separately loses precision when <span class="math inline">\(p_y\)</span> is tiny. The fused form <span class="math inline">\(\LSE(z)-z_y\)</span> never takes the log of a small number.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: manual softmax cross-entropy backward</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(H\in\mathbb R^{B\times D}\)</span>, <span class="math inline">\(W\in\mathbb R^{D\times C}\)</span>, labels <span class="math inline">\(y\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(Z\gets HW\)</span>; <span class="math inline">\(P\gets\operatorname{softmax}(Z-\max Z)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(L\gets\frac1B\sum_i\big(\LSE(Z_i)-Z_{i,y_i}\big)\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\Delta\gets(P-\onehot(y))/B\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(\nabla_W\gets H^\top\Delta\)</span>; <span class="math inline">\(\nabla_H\gets\Delta W^\top\)</span></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement stable cross-entropy and its complete backward pass manually.</p>
+<pre class="code python"><code class="language-python">import torch
+import torch.nn.functional as F
+
+torch.manual_seed(101)
+
+B, D, C = 4, 5, 3
+
+H = torch.randn(B, D, requires_grad=True)  # [B, D]
+W = torch.randn(D, C, requires_grad=True)  # [D, C]
+targets = torch.tensor([0, 2, 1, 2])        # [B]
+
+logits = ...                                # TODO 1: [B, C]
+
+# Work on detached logits for the manual derivation
+z = logits.detach()
+
+# Stable log-softmax
+row_max = ...                               # TODO 2: [B, 1]
+shifted = ...                               # TODO 3: [B, C]
+log_normalizer = ...                        # TODO 4: [B, 1]
+log_probs = ...                             # TODO 5: [B, C]
+
+manual_loss = ...                           # TODO 6: scalar
+
+# Manual dL/dlogits
+probs = ...                                 # TODO 7: [B, C]
+manual_dlogits = probs.clone()
+manual_dlogits[...] -= ...                  # TODO 8: subtract one-hot target
+manual_dlogits /= ...                       # TODO 9: mean reduction
+
+manual_dW = ...                             # TODO 10: [D, C]
+manual_dH = ...                             # TODO 11: [B, D]
+
+# Autograd reference
+loss = F.cross_entropy(logits, targets)
+loss.backward()
+
+print(&quot;manual loss:&quot;, manual_loss.item())
+print(&quot;PyTorch loss:&quot;, loss.item())
+print(&quot;dW match:&quot;, torch.allclose(manual_dW, W.grad, atol=1e-6))
+print(&quot;dH match:&quot;, torch.allclose(manual_dH, H.grad, atol=1e-6))
+print(&quot;gradient row sums:&quot;, manual_dlogits.sum(dim=-1))
+
+assert torch.allclose(manual_loss, loss.detach(), atol=1e-6)
+assert torch.allclose(manual_dW, W.grad, atol=1e-6)
+assert torch.allclose(manual_dH, H.grad, atol=1e-6)</code></pre>
+<p>Predict the output of <code>manual_dlogits.sum(dim=-1)</code>. Explain why each row has that value.</p>
+<p>Now expose the numerical-stability bug:</p>
+<pre class="code python"><code class="language-python">extreme = torch.tensor([[1000.0, 0.0, -1000.0]])
+
+naive_probs = extreme.exp() / extreme.exp().sum(dim=-1, keepdim=True)
+stable_probs = torch.softmax(extreme, dim=-1)
+
+print(&quot;naive:&quot;, naive_probs)
+print(&quot;stable:&quot;, stable_probs)</code></pre>
+<p>Finally, add <code>5000</code> to every logit:</p>
+<pre class="code python"><code class="language-python">shifted_extreme = extreme + 5000
+
+print(torch.softmax(extreme, dim=-1))
+print(torch.softmax(shifted_extreme, dim=-1))</code></pre>
+<p>Predict whether the probabilities change.</p>
+<p>Hints:</p>
+<ul>
+<li><p><code>logits = H @ W</code>.</p></li>
+<li><p>Preserve the class dimension with <code>keepdim=True</code>.</p></li>
+<li><p><code>log_normalizer</code> uses <code>shifted.exp().sum(...).log()</code>.</p></li>
+<li><p>Select targets with <code>log_probs</code><span><code>[</code></span><code>torch.arange(B), targets</code><span><code>]</code></span>.</p></li>
+<li><p>Subtract one at <code>manual_dlogits</code><span><code>[</code></span><code>torch.arange(B), targets</code><span><code>]</code></span>.</p></li>
+<li><p>Reuse matrix-multiplication backward rules.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>Why does the correct-class logit receive gradient <span class="math inline">\((p_y-1)/B\)</span>, while other logits receive <span class="math inline">\(p_c/B\)</span>?</p></li>
+<li><p>Why does every row of <span class="math inline">\(\partial L/\partial Z\)</span> sum to zero?</p></li>
+<li><p>Prediction: if the model assigns probability <span class="math inline">\(1\)</span> to the correct class, what happens to the logits gradient?</p></li>
+<li><p>Debugging: training loss is <code>nan</code> only when logits become very large. What unstable implementation is likely being used?</p></li>
+<li><p>For LM logits <span><code>[</code></span><code>B,T,V</code><span><code>]</code></span> with some labels equal to <code>ignore_index</code>, what should replace <span class="math inline">\(B\)</span> in the mean-gradient denominator?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">logits = H @ W
+
+z = logits.detach()
+
+row_max = z.max(dim=-1, keepdim=True).values
+shifted = z - row_max
+
+log_normalizer = (
+    shifted.exp()
+    .sum(dim=-1, keepdim=True)
+    .log()
+)
+
+log_probs = shifted - log_normalizer
+
+manual_loss = -log_probs[
+    torch.arange(B), targets
+].mean()
+
+probs = log_probs.exp()
+
+manual_dlogits = probs.clone()
+manual_dlogits[torch.arange(B), targets] -= 1
+manual_dlogits /= B
+
+manual_dW = H.detach().T @ manual_dlogits
+manual_dH = manual_dlogits @ W.detach().T</code></pre>
+<p>The gradient rows sum to zero:</p>
+<p><span class="math display">\[\sum_c(p_c-\mathbf 1[c=y])
+=
+\sum_c p_c-1
+=
+0\]</span></p>
+<p>Softmax is invariant to adding the same constant to every logit:</p>
+<p><span class="math display">\[\operatorname{softmax}(z+k)=\operatorname{softmax}(z)\]</span></p>
+<p>The naïve implementation overflows because <span class="math inline">\(e^{1000}\)</span> becomes infinity. Its leading probability becomes <code>inf / inf</code>, producing <code>nan</code>. Subtracting the row maximum avoids this without changing the probabilities.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>Increasing the correct logit lowers the loss, producing <span class="math inline">\(p_y-1\leq0\)</span>. Increasing an incorrect logit raises its probability and therefore the loss, producing <span class="math inline">\(p_c\geq0\)</span>.</p></li>
+<li><p>Softmax probabilities sum to one, as does the one-hot target.</p></li>
+<li><p>Every component approaches zero; the example contributes almost no gradient.</p></li>
+<li><p>It likely computes <code>exp(logits)</code> or <code>log(softmax(logits))</code> directly instead of using stable <code>logsumexp</code> or fused cross-entropy.</p></li>
+<li><p>Use the total number of non-ignored target tokens:</p></li>
+</ol>
+<p><span class="math display">\[N_{\text{valid}}
+=
+\sum_{b,t}\mathbf 1[y_{b,t}\neq\text{ignore\_index}]\]</span></p>
+<p>Retrieval:</p>
+<ul>
+<li><p>Adam bias correction compensates for zero-initialized moment estimates.</p></li>
+<li><p>AdamW with zero task gradient applies proportional shrinkage:</p></li>
+</ul>
+<p><span class="math display">\[\theta_t=(1-\eta\lambda)\theta_{t-1}\]</span></p>

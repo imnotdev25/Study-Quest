@@ -1,0 +1,365 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: two commutes with the same average</div>
+<p>Commute A always takes 30 minutes. Commute B usually takes 25, but once a month it takes over two hours. Their averages are nearly equal. Which one would you pick if you had a flight to catch? Mean cost describes ordinary days. CVaR describes your worst days.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/b07d1dfa657c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Both average 30 minutes. B’s worst 5% averages 125.</em></p>
+</div>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why must remaining tool budget be part of the policy state?</p></li>
+<li><p>Why must PPO training reconstruct the action mask used during rollout?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="average-cost-can-look-safe-while-rare-failures-are-severe">2. Average cost can look safe while rare failures are severe</h3>
+<p>Consider two tools:</p>
+<ul>
+<li><p>safe tool: always costs <span style="background-color: codeinlinebg"><code> 1</code></span>;</p></li>
+<li><p>risky tool: usually costs <span style="background-color: codeinlinebg"><code> 0</code></span>, but occasionally costs <span style="background-color: codeinlinebg"><code> 20</code></span>.</p></li>
+</ul>
+<p>Both can have the same mean cost. The mean hides the risky tool’s rare failures—like reporting average API latency while ignoring the worst outages.</p>
+<p>For costs, where larger is worse, upper-tail CVaR at confidence <span class="math inline">\(\alpha\)</span> is the average cost in the worst <span class="math inline">\(1-\alpha\)</span> fraction:</p>
+<p><span class="math display">\[\operatorname{CVaR}_{\alpha}(C)
+=
+\mathbb E[
+C\mid C\text{ is in the worst }1-\alpha
+]\]</span></p>
+<p>A useful optimization form is:</p>
+<p><span class="math display">\[\operatorname{CVaR}_{\alpha}(C)
+=
+\min_\eta
+\left[
+\eta+
+\frac{1}{1-\alpha}
+\mathbb E[(C-\eta)_+]
+\right]\]</span></p>
+<p>Here:</p>
+<ul>
+<li><p><span class="math inline">\(\eta\)</span> approximates the value-at-risk threshold;</p></li>
+<li><p><span class="math inline">\((C-\eta)_+=\max(C-\eta,0)\)</span>;</p></li>
+<li><p>only costs exceeding the threshold contribute excess loss.</p></li>
+</ul>
+<p>A risk-adjusted objective might be:</p>
+<p><span class="math display">\[J(\pi)
+=
+\mathbb E[R]
+-
+\lambda_{\text{risk}}
+\operatorname{CVaR}_{\alpha}(C)\]</span></p>
+<p>CVaR is not a hard guarantee. It reduces tail cost on average; action shields are still needed for inviolable limits.</p>
+<p>Tensor shapes in the exercise:</p>
+<ul>
+<li><p>sampled costs: <span style="background-color: codeinlinebg"><code> [strategies, rollouts]</code></span></p></li>
+<li><p>threshold <span class="math inline">\(\eta\)</span>: <span style="background-color: codeinlinebg"><code> [strategies]</code></span></p></li>
+<li><p>excess costs: <span style="background-color: codeinlinebg"><code> [strategies, rollouts]</code></span></p></li>
+<li><p>mean cost and CVaR: <span style="background-color: codeinlinebg"><code> [strategies]</code></span></p></li>
+</ul>
+<p>DPO can learn aversion to catastrophic traces only if those failures appear in the preference dataset. Online RL can discover new failures, but rare tails require many rollouts and careful evaluation.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: VaR and CVaR</div>
+<p>For a cost <span class="math inline">\(C\)</span>: <span class="math inline">\(\mathrm{VaR}_\alpha=\)</span> the <span class="math inline">\(\alpha\)</span>-quantile, and <span class="math inline">\(\mathrm{CVaR}_\alpha=\mathbb E[C\mid C\ge\mathrm{VaR}_\alpha]\)</span>, the mean of the worst <span class="math inline">\((1-\alpha)\)</span> fraction. Rockafellar–Uryasev form, convenient to optimize: <span class="math display">\[\mathrm{CVaR}_\alpha(C)=\min_\nu\Big\{\nu+\tfrac{1}{1-\alpha}\mathbb E\big[(C-\nu)_+\big]\Big\}.\]</span> <strong>Sample size:</strong> to see the worst 1%, you need many more than 100 rollouts. Expect roughly <span class="math inline">\(n(1-\alpha)\)</span> tail samples.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>Means describe ordinary behaviour, and CVaR describes bad days.</p></li>
+<li><p>Keep hard shields for outcomes that must never happen.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: CVaR<span class="math inline">\(_{0.95}\)</span></div>
+<p>A: always 30, so CVaR <span class="math inline">\(=30\)</span>. B: 25 with probability 0.95 and 125 with probability 0.05, mean <span class="math inline">\(23.75+6.25=30\)</span>. The worst 5% is exactly the 125 case, so CVaR<span class="math inline">\(_{0.95}=125\)</span>. At <span class="math inline">\(\alpha=0.9\)</span>, B’s worst 10% <span class="math inline">\(=\)</span> half 125, half 25, so CVaR <span class="math inline">\(=75\)</span>.</p>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Estimating CVaR<span class="math inline">\(_{0.99}\)</span> from 100 samples (one tail sample).</p></li>
+<li><p>Using the wrong tail (for rewards, the bad tail is the <em>lower</em> one).</p></li>
+<li><p>Reporting VaR as if it described how bad the tail gets.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: Empirical CVaR of rollout costs</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> costs <span class="math inline">\(C_1,\dots,C_n\)</span> from independent rollouts, level <span class="math inline">\(\alpha\)</span></div>
+<div class="algo-line" style="--d:0">sort costs in descending order: <span class="math inline">\(C_{(1)}\ge C_{(2)}\ge\dots\)</span></div>
+<div class="algo-line" style="--d:0"><span class="math inline">\(m\gets\lceil n(1-\alpha)\rceil\)</span> <em>▷ number of tail samples</em></div>
+<div class="algo-line" style="--d:0"><strong>if</strong> <span class="math inline">\(m&lt;\)</span> about 30 <strong>then</strong> warn: the tail estimate is unreliable</div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>return</strong> <span class="math inline">\(\mathrm{VaR}=C_{(m)}\)</span>, <span class="math inline">\(\mathrm{CVaR}=\frac1m\sum_{i=1}^mC_{(i)}\)</span> (bootstrap whole rollouts for a CI)</div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-equal-means-different-tails">3. PyTorch exercise — equal means, different tails</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_rollouts = 10_000
+alpha = 0.90
+
+# Safe strategy: every rollout costs 1.
+safe_costs = torch.ones(
+    num_rollouts
+)
+
+# Risky strategy: 5% cost 20; 95% cost 0.
+risky_costs = torch.zeros(
+    num_rollouts
+)
+
+risky_costs[:500] = 20.0
+
+risky_costs = risky_costs[
+    torch.randperm(num_rollouts)
+]
+
+# Shape: [strategies=2, rollouts]
+costs = torch.stack([
+    safe_costs,
+    risky_costs,
+])
+
+strategy_rewards = torch.tensor([
+    1.0,  # safe
+    1.2,  # risky has more ordinary reward
+])
+
+# TODO 1: Mean costs and empirical
+# value-at-risk thresholds.
+mean_costs = ...
+value_at_risk = ...
+
+# TODO 2: A tempting but incorrect CVaR estimate:
+# average every sample &gt;= the quantile.
+naive_tail_mask = ...
+
+naive_cvar = ...
+
+# TODO 3: Correct finite-sample CVaR by taking
+# exactly the worst (1 - alpha) fraction.
+worst_count = ...
+
+worst_costs = ...
+
+topk_cvar = ...
+
+# Learn the threshold using the differentiable
+# Rockafellar-Uryasev objective.
+eta = torch.nn.Parameter(
+    torch.tensor([0.5, 0.5])
+)
+
+optimizer = torch.optim.Adam(
+    [eta],
+    lr=0.03,
+)
+
+for step in range(500):
+    # TODO 4: Excess costs and CVaR objective.
+    excess_costs = ...
+
+    cvar_objectives = ...
+
+    loss = ...
+    
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+with torch.no_grad():
+    optimized_excess = ...
+
+    optimized_cvar = ...
+
+# TODO 5: Compare mean-cost and CVaR penalties.
+risk_weight = 0.05
+
+mean_adjusted_scores = ...
+cvar_adjusted_scores = ...
+
+print(&quot;Mean costs:&quot;, mean_costs)
+
+print(
+    &quot;Value-at-risk thresholds:&quot;,
+    value_at_risk,
+)
+
+print(
+    &quot;Naive quantile-mask CVaR:&quot;,
+    naive_cvar,
+)
+
+print(
+    &quot;Top-k empirical CVaR:&quot;,
+    topk_cvar,
+)
+
+print(
+    &quot;Optimized eta:&quot;,
+    eta.detach(),
+)
+
+print(
+    &quot;Optimized CVaR objective:&quot;,
+    optimized_cvar,
+)
+
+print(
+    &quot;Mean-adjusted scores:&quot;,
+    mean_adjusted_scores,
+)
+
+print(
+    &quot;CVaR-adjusted scores:&quot;,
+    cvar_adjusted_scores,
+)
+
+print(
+    &quot;Mean-based choice:&quot;,
+    mean_adjusted_scores.argmax().item(),
+)
+
+print(
+    &quot;CVaR-based choice:&quot;,
+    cvar_adjusted_scores.argmax().item(),
+)</code></pre>
+<p>Strategy indices are:</p>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> 0</code></span>: safe;</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> 1</code></span>: risky.</p></li>
+</ul>
+<p>Predict before running:</p>
+<ol>
+<li><p>What mean cost does each strategy have?</p></li>
+<li><p>Why will the risky strategy’s 90th-percentile threshold be zero?</p></li>
+<li><p>What is its worst-10% CVaR?</p></li>
+<li><p>Which strategy will each adjusted objective select?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> .mean(dim=1)</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.quantile(costs, alpha, dim=1)</code></span>.</p></li>
+<li><p>The naïve mask is <span style="background-color: codeinlinebg"><code> costs &gt;= threshold[:, None]</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> math.ceil((1 - alpha) * num_rollouts)</code></span>.</p></li>
+<li><p><span style="background-color: codeinlinebg"><code> torch.topk(..., dim=1).values</code></span> selects the largest costs.</p></li>
+<li><p>Excess cost is <span style="background-color: codeinlinebg"><code> torch.relu(costs.detach() - eta[:, None])</code></span>.</p></li>
+<li><p>Sum the two CVaR objectives before backpropagating.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<p>Reduce the rollout count to <span style="background-color: codeinlinebg"><code> 20</code></span>. The rare event may disappear entirely, making both empirical mean and CVaR misleading.</p>
+<p>Estimate CVaR using all values greater than or equal to the empirical quantile. When many samples equal the threshold, the “tail” may contain far more than <span class="math inline">\(10\%\)</span> of the batch.</p>
+<p>Set <span style="background-color: codeinlinebg"><code> alpha = 0.99</code></span>. Only the worst 1% matters, increasing estimator variance and sample requirements.</p>
+<p>Finally, compute CVaR over rewards without changing the tail direction. For rewards, low values are bad, so use the lower tail or convert reward into a loss first.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why can two policies with equal expected cost have different safety profiles?</p></li>
+<li><p>Why is quantile-threshold masking unreliable when many samples are tied?</p></li>
+<li><p>Does low CVaR prove that catastrophic outcomes are impossible?</p></li>
+<li><p>What diagnostics should accompany tail-risk optimization?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Mean and value-at-risk:</p>
+<pre class="code python"><code class="language-python">mean_costs = costs.mean(
+    dim=1
+)
+
+value_at_risk = torch.quantile(
+    costs,
+    alpha,
+    dim=1,
+)</code></pre>
+<p>Naïve estimate:</p>
+<pre class="code python"><code class="language-python">naive_tail_mask = (
+    costs &gt;= value_at_risk[:, None]
+)
+
+naive_cvar = (
+    costs * naive_tail_mask
+).sum(dim=1) / naive_tail_mask.sum(dim=1)</code></pre>
+<p>For the risky strategy, the 90th percentile is zero. Therefore, <span style="background-color: codeinlinebg"><code> cost &gt;= 0</code></span> selects every rollout, and the naïve “CVaR” incorrectly becomes the ordinary mean.</p>
+<p>Exact worst-fraction estimate:</p>
+<pre class="code python"><code class="language-python">worst_count = math.ceil(
+    (1.0 - alpha)
+    * num_rollouts
+)
+
+worst_costs = torch.topk(
+    costs,
+    k=worst_count,
+    dim=1,
+).values
+
+topk_cvar = worst_costs.mean(
+    dim=1
+)</code></pre>
+<p>Differentiable objective:</p>
+<pre class="code python"><code class="language-python">excess_costs = torch.relu(
+    costs.detach()
+    - eta[:, None]
+)
+
+cvar_objectives = (
+    eta
+    + excess_costs.mean(dim=1)
+    / (1.0 - alpha)
+)
+
+loss = cvar_objectives.sum()</code></pre>
+<p>Final optimized estimate:</p>
+<pre class="code python"><code class="language-python">optimized_excess = torch.relu(
+    costs - eta[:, None]
+)
+
+optimized_cvar = (
+    eta
+    + optimized_excess.mean(dim=1)
+    / (1.0 - alpha)
+)</code></pre>
+<p>Risk-adjusted scores:</p>
+<pre class="code python"><code class="language-python">mean_adjusted_scores = (
+    strategy_rewards
+    - risk_weight * mean_costs
+)
+
+cvar_adjusted_scores = (
+    strategy_rewards
+    - risk_weight * topk_cvar
+)</code></pre>
+<p>Both mean costs equal:</p>
+<p><span class="math display">\[\mathbb E[C_{\text{safe}}]
+=
+\mathbb E[C_{\text{risky}}]
+=
+1\]</span></p>
+<p>For the risky strategy, the worst 10% contains:</p>
+<ul>
+<li><p>500 rollouts costing <span style="background-color: codeinlinebg"><code> 20</code></span>;</p></li>
+<li><p>500 rollouts costing <span style="background-color: codeinlinebg"><code> 0</code></span>.</p></li>
+</ul>
+<p>Therefore:</p>
+<p><span class="math display">\[\operatorname{CVaR}_{0.9}
+=
+\frac{500(20)+500(0)}{1000}
+=
+10\]</span></p>
+<p>The resulting scores are:</p>
+<p><span class="math display">\[J_{\text{mean}}
+=
+[0.95,\;1.15]\]</span></p>
+<p>so the mean-based objective chooses the risky strategy.</p>
+<p><span class="math display">\[J_{\text{CVaR}}
+=
+[0.95,\;0.70]\]</span></p>
+<p>so the CVaR-based objective chooses the safe strategy.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Expected cost discards distribution shape; one policy may concentrate the same mean into rare catastrophic events.</p></li>
+<li><p>A threshold tie can select much more than the intended tail fraction. Top-<span class="math inline">\(k\)</span> selection controls its exact size.</p></li>
+<li><p>No. CVaR summarizes tail severity but cannot guarantee zero probability of catastrophe.</p></li>
+<li><p>Report mean, quantiles, CVaR at several <span class="math inline">\(\alpha\)</span> values, maximum cost, failure frequency, confidence intervals and rollout count.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Earlier spending changes which future actions are legal, so remaining budget is necessary to make the state Markov.</p></li>
+<li><p>Otherwise the numerator and denominator use different action distributions, creating incorrect PPO ratios even with unchanged weights.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> means describe ordinary behavior; CVaR describes bad days. Use enough rollouts to observe the tail, and retain hard shields for outcomes that must never occur.</p>

@@ -1,0 +1,503 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can low GAE <span class="math inline">\(\lambda\)</span> erase delayed credit when the critic is blind?</p></li>
+<li><p>Why should advantages be detached before the actor update?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="value-clipping-limits-how-quickly-the-critic-may-change">2. Value clipping limits how quickly the critic may change</h3>
+<p>PPO’s policy-ratio clipping and value clipping are separate mechanisms.</p>
+<p>Save the critic prediction made during rollout collection:</p>
+<p><span class="math display">\[V_{\text{old}}(s_t)\]</span></p>
+<p>During PPO optimization, compute:</p>
+<p><span class="math display">\[V_{\text{clip}}
+=
+V_{\text{old}}
++
+\operatorname{clip}
+\left(
+V_{\text{new}}-V_{\text{old}},
+-\epsilon_v,\epsilon_v
+\right)\]</span></p>
+<p>A common value loss is:</p>
+<p><span class="math display">\[L_V
+=
+\frac12
+\mathbb E_{\text{valid}}
+\left[
+\max
+\left(
+(V_{\text{new}}-\hat R)^2,
+(V_{\text{clip}}-\hat R)^2
+\right)
+\right]\]</span></p>
+<p>The maximum prevents the optimizer from claiming a large improvement by moving far outside the permitted interval.</p>
+<p>Suppose:</p>
+<p><span class="math display">\[V_{\text{old}}=0,\qquad
+\hat R=10,\qquad
+\epsilon_v=1\]</span></p>
+<p>At <span class="math inline">\(V_{\text{new}}=2\)</span>:</p>
+<p><span class="math display">\[(V_{\text{new}}-\hat R)^2=64\]</span></p>
+<p>but:</p>
+<p><span class="math display">\[V_{\text{clip}}=1,\qquad
+(V_{\text{clip}}-\hat R)^2=81\]</span></p>
+<p>The clipped branch wins. Because <span style="background-color: codeinlinebg"><code> clamp</code></span> is flat beyond <span style="background-color: codeinlinebg"><code> 1</code></span>, that sample supplies zero value gradient. The critic can therefore stall for the remainder of the PPO epochs. A later rollout refreshes <span class="math inline">\(V_{\text{old}}\)</span>, permitting another step.</p>
+<p>This brake can stabilize critic updates, but it is scale-dependent: an <span class="math inline">\(\epsilon_v=1\)</span> clip is large for returns near <span style="background-color: codeinlinebg"><code> 1</code></span> and extremely restrictive for returns near <span style="background-color: codeinlinebg"><code> 100</code></span>.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>new values, old values, returns, response mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>per-token value losses: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>masked value loss: scalar</p></li>
+</ul>
+<p>Detach both old values and return targets. Sanitize padding before arithmetic because <span style="background-color: codeinlinebg"><code> NaN * 0</code></span> remains <span style="background-color: codeinlinebg"><code> NaN</code></span>.</p>
+<p>Useful diagnostics include value loss, value clip fraction, prediction bias, and:</p>
+<p><span class="math display">\[\text{explained variance}
+=
+1-
+\frac{\operatorname{Var}(\hat R-V)}
+{\operatorname{Var}(\hat R)}\]</span></p>
+<p>Values near <span style="background-color: codeinlinebg"><code> 1</code></span> are good, <span style="background-color: codeinlinebg"><code> 0</code></span> resembles predicting the mean, and negative values indicate predictions worse than that baseline. It is unstable when return variance is nearly zero.</p>
+<p>DPO has no critic, bootstrapped return, GAE, or value clipping. It directly optimizes preference margins from fixed pairs.</p>
+<h3 class="unnumbered" id="pytorch-exercise-clipping-freezes-a-badly-scaled-critic">3. PyTorch exercise — clipping freezes a badly scaled critic</h3>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+old_value = torch.tensor(0.0)
+target_return = torch.tensor(10.0)
+clip_range = 1.0
+
+learning_rate = 0.20
+num_epochs = 10
+
+
+# TODO 1: Inspect the value-loss gradient at several
+# candidate predictions.
+candidate_values = torch.tensor(
+    [0.0, 0.5, 0.9, 1.1, 2.0, 5.0, 10.0],
+    requires_grad=True,
+)
+
+unclipped_errors = ...
+
+candidate_values_clipped = ...
+
+clipped_errors = ...
+
+ppo_value_losses = ...
+
+ppo_value_losses.sum().backward()
+
+clipped_loss_gradients = ...
+
+unclipped_loss_gradients = ...
+
+clipped_branch_selected = ...
+
+
+# TODO 2: Optimize one scalar critic.
+def train_critic(
+    use_value_clipping,
+    refresh_old_each_step=False,
+):
+    value = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    saved_old_value = torch.tensor(0.0)
+
+    history = [
+        value.detach().clone()
+    ]
+
+    for _ in range(num_epochs):
+        ordinary_loss = ...
+
+        if use_value_clipping:
+            clipped_value = ...
+
+            clipped_loss = ...
+
+            loss = ...
+        else:
+            loss = ordinary_loss
+
+        loss.backward()
+
+        with torch.no_grad():
+            value -= ...
+
+            value.grad.zero_()
+
+            # This represents collecting a fresh rollout,
+            # not normal minibatch behavior.
+            if refresh_old_each_step:
+                saved_old_value = ...
+
+        history.append(
+            value.detach().clone()
+        )
+
+    return torch.stack(history)
+
+
+unclipped_history = ...
+
+fixed_old_clipped_history = ...
+
+fresh_rollout_history = ...
+
+
+# TODO 3: Show reward-scale sensitivity.
+target_gaps = torch.tensor([
+    1.0,
+    10.0,
+    100.0,
+])
+
+relative_clip_sizes = ...
+
+
+# TODO 4: Implement a masked [B, T] loss with NaN padding.
+raw_new_values = torch.tensor([
+    [0.2, 1.4, float(&quot;nan&quot;)],
+    [-0.2, float(&quot;nan&quot;), float(&quot;nan&quot;)],
+], requires_grad=True)
+
+batched_old_values = torch.zeros(2, 3)
+
+batched_returns = torch.tensor([
+    [0.5, 2.0, float(&quot;nan&quot;)],
+    [-0.5, float(&quot;nan&quot;), float(&quot;nan&quot;)],
+])
+
+response_mask = torch.tensor([
+    [True, True, False],
+    [True, False, False],
+])
+
+safe_new_values = ...
+safe_old_values = ...
+safe_returns = ...
+
+batched_clipped_values = ...
+
+batched_unclipped_errors = ...
+batched_clipped_errors = ...
+
+per_token_losses = ...
+
+masked_value_loss = ...
+
+masked_value_loss.backward()
+
+padding_gradient_max = ...
+
+valid_clip_fraction = ...
+
+
+torch.set_printoptions(
+    precision=4,
+    sci_mode=False,
+)
+
+print(
+    &quot;Candidate values:&quot;,
+    candidate_values.detach(),
+)
+print(
+    &quot;Unclipped gradients:&quot;,
+    unclipped_loss_gradients,
+)
+print(
+    &quot;Clipped-loss gradients:&quot;,
+    clipped_loss_gradients,
+)
+print(
+    &quot;Clipped branch selected:&quot;,
+    clipped_branch_selected,
+)
+
+print(&quot;\nUnclipped history:&quot;)
+print(unclipped_history)
+
+print(&quot;\nClipped history, fixed old values:&quot;)
+print(fixed_old_clipped_history)
+
+print(&quot;\nClipped history, fresh rollout each step:&quot;)
+print(fresh_rollout_history)
+
+print(
+    &quot;\nRelative clip sizes for gaps 1, 10, 100:&quot;
+)
+print(relative_clip_sizes)
+
+print(&quot;\nMasked value loss:&quot;)
+print(masked_value_loss.item())
+
+print(&quot;Masked gradients:&quot;)
+print(raw_new_values.grad)
+
+print(
+    &quot;Maximum padding gradient:&quot;,
+    padding_gradient_max.item(),
+)
+print(
+    &quot;Valid-token clip fraction:&quot;,
+    valid_clip_fraction.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>What gradient will clipped loss produce once <span class="math inline">\(V_{\text{new}}&gt;1\)</span>?</p></li>
+<li><p>Where will the fixed-old clipped critic stall?</p></li>
+<li><p>Why does refreshing the old value restore progress?</p></li>
+<li><p>Does the same clip range behave identically after multiplying rewards by <span style="background-color: codeinlinebg"><code> 100</code></span>?</p></li>
+<li><p>Should padding receive any gradient?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.clamp(new - old, -clip_range, clip_range)</code></span>.</p></li>
+<li><p>PPO value loss takes the elementwise maximum of the two squared errors.</p></li>
+<li><p>Ordinary scalar squared-error gradient is <span class="math inline">\(V-\hat R\)</span> when the loss includes <span class="math inline">\(1/2\)</span>.</p></li>
+<li><p>Treat rollout-time old values as fixed during all PPO epochs.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.where</code></span> to replace padded values before subtraction.</p></li>
+<li><p>Divide the masked sum by the number of valid tokens.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Recompute old values after every minibatch and call them rollout snapshots.</p></li>
+<li><p>Clip the return target instead of the prediction change.</p></li>
+<li><p>Backpropagate through returns, advantages, or old values.</p></li>
+<li><p>Rescale rewards without adjusting <span style="background-color: codeinlinebg"><code> clip_range</code></span>.</p></li>
+<li><p>Multiply NaN-padded losses by zero and expect the NaNs to disappear.</p></li>
+<li><p>Confuse actor ratio clip fraction with critic value clip fraction.</p></li>
+<li><p>Report value loss without explained variance or prediction bias.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does the loss use the maximum of clipped and unclipped error?</p></li>
+<li><p>Is value clipping guaranteed to improve PPO?</p></li>
+<li><p>Why is value-clip range tied to reward scale?</p></li>
+<li><p>What does negative explained variance mean?</p></li>
+<li><p>Why does value clipping not apply to DPO?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Loss surface:</p>
+<pre class="code python"><code class="language-python">unclipped_errors = (
+    candidate_values - target_return
+).square()
+
+candidate_values_clipped = (
+    old_value
+    + torch.clamp(
+        candidate_values - old_value,
+        -clip_range,
+        clip_range,
+    )
+)
+
+clipped_errors = (
+    candidate_values_clipped
+    - target_return
+).square()
+
+ppo_value_losses = (
+    0.5
+    * torch.maximum(
+        unclipped_errors,
+        clipped_errors,
+    )
+)
+
+ppo_value_losses.sum().backward()
+
+clipped_loss_gradients = (
+    candidate_values.grad.detach().clone()
+)
+
+unclipped_loss_gradients = (
+    candidate_values.detach()
+    - target_return
+)
+
+clipped_branch_selected = (
+    clipped_errors &gt; unclipped_errors
+)</code></pre>
+<p>Critic optimization:</p>
+<pre class="code python"><code class="language-python">def train_critic(
+    use_value_clipping,
+    refresh_old_each_step=False,
+):
+    value = torch.tensor(
+        0.0,
+        requires_grad=True,
+    )
+
+    saved_old_value = torch.tensor(0.0)
+
+    history = [
+        value.detach().clone()
+    ]
+
+    for _ in range(num_epochs):
+        ordinary_loss = (
+            0.5
+            * (value - target_return).square()
+        )
+
+        if use_value_clipping:
+            clipped_value = (
+                saved_old_value
+                + torch.clamp(
+                    value - saved_old_value,
+                    -clip_range,
+                    clip_range,
+                )
+            )
+
+            clipped_loss = (
+                0.5
+                * (
+                    clipped_value
+                    - target_return
+                ).square()
+            )
+
+            loss = torch.maximum(
+                ordinary_loss,
+                clipped_loss,
+            )
+        else:
+            loss = ordinary_loss
+
+        loss.backward()
+
+        with torch.no_grad():
+            value -= (
+                learning_rate
+                * value.grad
+            )
+
+            value.grad.zero_()
+
+            if refresh_old_each_step:
+                saved_old_value = (
+                    value.detach().clone()
+                )
+
+        history.append(
+            value.detach().clone()
+        )
+
+    return torch.stack(history)
+
+
+unclipped_history = train_critic(
+    use_value_clipping=False,
+)
+
+fixed_old_clipped_history = train_critic(
+    use_value_clipping=True,
+)
+
+fresh_rollout_history = train_critic(
+    use_value_clipping=True,
+    refresh_old_each_step=True,
+)</code></pre>
+<p>Scale sensitivity:</p>
+<pre class="code python"><code class="language-python">relative_clip_sizes = (
+    clip_range / target_gaps
+)</code></pre>
+<p>Masked value loss:</p>
+<pre class="code python"><code class="language-python">safe_new_values = torch.where(
+    response_mask,
+    raw_new_values,
+    torch.zeros_like(raw_new_values),
+)
+
+safe_old_values = torch.where(
+    response_mask,
+    batched_old_values,
+    torch.zeros_like(batched_old_values),
+).detach()
+
+safe_returns = torch.where(
+    response_mask,
+    batched_returns,
+    torch.zeros_like(batched_returns),
+).detach()
+
+batched_clipped_values = (
+    safe_old_values
+    + torch.clamp(
+        safe_new_values - safe_old_values,
+        -clip_range,
+        clip_range,
+    )
+)
+
+batched_unclipped_errors = (
+    safe_new_values - safe_returns
+).square()
+
+batched_clipped_errors = (
+    batched_clipped_values - safe_returns
+).square()
+
+per_token_losses = (
+    0.5
+    * torch.maximum(
+        batched_unclipped_errors,
+        batched_clipped_errors,
+    )
+)
+
+masked_value_loss = torch.where(
+    response_mask,
+    per_token_losses,
+    torch.zeros_like(per_token_losses),
+).sum() / response_mask.sum()
+
+masked_value_loss.backward()
+
+padding_gradient_max = (
+    raw_new_values.grad[
+        ~response_mask
+    ].abs().max()
+)
+
+valid_clip_fraction = (
+    (
+        (
+            safe_new_values
+            - safe_old_values
+        ).abs() &gt; clip_range
+    )
+    &amp; response_mask
+).to(torch.float64).sum() / response_mask.sum()</code></pre>
+<p>The unclipped critic approaches <span style="background-color: codeinlinebg"><code> 10</code></span> geometrically:</p>
+<p><span class="math display">\[0,\;2,\;3.6,\;4.88,\ldots\]</span></p>
+<p>The fixed-old clipped critic moves from <span style="background-color: codeinlinebg"><code> 0</code></span> to <span style="background-color: codeinlinebg"><code> 2</code></span>, then stalls. Once its prediction exceeds the allowed interval, the clipped error is larger and locally flat.</p>
+<p>Refreshing the snapshot after every update produces the same sequence as the unclipped example. In real PPO, however, the snapshot should refresh only after collecting a new rollout—not between minibatches from one rollout.</p>
+<p>The relative clip sizes are:</p>
+<p><span class="math display">\[[1,\;0.1,\;0.01]\]</span></p>
+<p>Thus the same absolute clip becomes one hundred times more restrictive relative to a return gap that grew from <span style="background-color: codeinlinebg"><code> 1</code></span> to <span style="background-color: codeinlinebg"><code> 100</code></span>.</p>
+<p>The masked example has finite loss, zero padding gradients, and a valid-token clip fraction of:</p>
+<p><span class="math display">\[\frac13\]</span></p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>It prevents a large prediction change from being counted as an improvement, while the ordinary branch still penalizes changes that make the prediction worse.</p></li>
+<li><p>No. It can stabilize an overactive critic, but it can also slow or freeze correction of a badly initialized or newly rescaled critic.</p></li>
+<li><p>The clip is measured directly in value units; changing reward magnitude changes its relative size.</p></li>
+<li><p>The critic predicts returns worse than a constant mean predictor on that sample.</p></li>
+<li><p>DPO has no learned value function or bootstrapped return target; it optimizes preference log-probability margins directly.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A blind critic gives similar next-state values after good and bad actions, so early TD residuals contain little action information. Low <span class="math inline">\(\lambda\)</span> prevents distant terminal evidence from reaching that decision.</p></li>
+<li><p>The advantage is a fixed policy-gradient weight. Detaching it prevents the actor loss from changing the critic or differentiating through the return estimator.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> value clipping limits critic movement relative to rollout-time predictions, not relative to truth. Track its clip fraction and reward scale—a safety rail that is too narrow can leave the actor learning from a critic that is known to be wrong.</p>

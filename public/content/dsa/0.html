@@ -1,0 +1,217 @@
+
+<div class="box box-chapterintro" data-kind="chapterintro"><div class="box-title">👋 Intro</div>
+<p>The roles (ML Engineer, AI Engineer, Applied Scientist, Research Engineer, Research Scientist), the rounds in a typical loop, what each round actually scores, how big tech and AI labs differ, and how levels change expectations.</p>
+</div>
+<h4 id="a-note-on-sources.">A note on sources.</h4>
+<p>Interview loops change often and vary by team. This chapter combines what companies publish about their own processes (for example Amazon’s applied scientist interview prep page and Anthropic’s candidate guidance on AI use) with widely shared community resources (Chip Huyen’s <em>Introduction to Machine Learning Interviews</em>, the <em>Machine-Learning-Interviews</em> guide by A. Dadashzadeh based on offers from Meta, Google, Amazon, and Apple). Treat specifics as typical patterns, and always ask your recruiter for the exact loop.</p>
+<h1 id="the-roles">The Roles</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Role</th>
+<th style="text-align: left;">What the job is</th>
+<th style="text-align: left;">What interviews emphasize</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">ML Engineer (MLE)</td>
+<td style="text-align: left;">Build, train, ship, and operate models in products (ranking, ads, integrity, recommendations)</td>
+<td style="text-align: left;">DSA coding, ML breadth, ML system design, behavioral</td>
+</tr>
+<tr>
+<td style="text-align: left;">AI Engineer</td>
+<td style="text-align: left;">Build products on top of foundation models: RAG, agents, evaluation, LLM infrastructure</td>
+<td style="text-align: left;">Coding, LLM/GenAI system design, practical ML, often a take-home or pairing exercise</td>
+</tr>
+<tr>
+<td style="text-align: left;">Applied Scientist (Amazon and others)</td>
+<td style="text-align: left;">Research-flavored modeling on business problems; papers optional</td>
+<td style="text-align: left;">ML breadth and depth, coding, science application, Leadership Principles</td>
+</tr>
+<tr>
+<td style="text-align: left;">Research Engineer (AI labs)</td>
+<td style="text-align: left;">Implement and scale research: training infrastructure, experiments, evals</td>
+<td style="text-align: left;">Strong coding (often practical, not puzzle-style), ML implementation, debugging, systems</td>
+</tr>
+<tr>
+<td style="text-align: left;">Research Scientist</td>
+<td style="text-align: left;">Set research direction, publish, run experiments</td>
+<td style="text-align: left;">Research talk, paper discussion, ML depth, math, some coding</td>
+</tr>
+</tbody>
+</table>
+<p><em>The roles this book targets</em></p>
+<div class="box box-beginner" data-kind="beginner"><div class="box-title">🌱 Beginner</div>
+<p>Think of the loop as a set of different exams, each graded by a different teacher. One checks whether you can solve a new problem with code (DSA). One checks whether you know ML deeply (breadth/depth). One checks whether you can design a real system (ML system design). One checks whether you would be a good colleague (behavioral). You need to pass most of them, not ace one.</p>
+</div>
+<h1 id="anatomy-of-a-typical-loop">Anatomy of a Typical Loop</h1>
+<figure class="tikz"><img src="figs/dsa/6e82a895886c.svg" alt="diagram" loading="lazy"></figure>
+<p><em>The common shape of ML and AI interview loops.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>The six round types and what they score:</strong></p>
+<ol>
+<li><p><strong>DSA coding.</strong> Classic algorithm problems (Parts II–III). Scored on: clarifying the problem, choosing data structures, a correct solution, complexity analysis, clean code, testing, and communication. Community guides recommend 300–400 deeply reviewed problems organized by pattern, not by memorizing answers.</p></li>
+<li><p><strong>ML coding.</strong> Implement an ML algorithm or component from scratch, usually with NumPy or plain Python: k-means, kNN, logistic regression with gradient descent, stable softmax and cross-entropy, ROC-AUC, attention, BPE, top-p sampling, a KV cache, or a training loop (Chapters 17–18). Scored on shapes, numerical stability, vectorization, correctness, and tests.</p></li>
+<li><p><strong>ML breadth / depth.</strong> Rapid-fire fundamentals (bias-variance, regularization, metrics, optimizers, transformers) followed by a deep dive into one area or your past project. “Why” questions dominate.</p></li>
+<li><p><strong>ML / GenAI system design.</strong> Design a recommendation, search, ranking, fraud, or RAG/agent system end to end (Chapter 20). For GenAI designs, evaluation methodology, cost, latency, and guardrails matter more than boxes.</p></li>
+<li><p><strong>Behavioral.</strong> Past experiences in STAR format: conflict, failure, impact, ambiguity, leadership. Amazon structures this around its Leadership Principles and asks two or three such questions in <em>every</em> round.</p></li>
+<li><p><strong>Role-specific.</strong> Research talk (researchers), low-level/object-oriented design (some MLE and AI engineer loops, Chapter 19), practical debugging, or a take-home project.</p></li>
+</ol>
+</div>
+<h1 id="company-patterns">Company Patterns</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Company type</th>
+<th style="text-align: left;">Commonly reported patterns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Google</td>
+<td style="text-align: left;">Generalist hiring: several DSA rounds, ML domain round(s), behavioral (“Googleyness and leadership”). Hiring committee reviews written feedback; team matching often happens after the committee.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Meta</td>
+<td style="text-align: left;">MLE loop typically has two coding rounds, ML system design (sometimes two at senior levels), and behavioral. Coding rounds are fast-paced: often two problems in 45 minutes, so speed of pattern recognition matters.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Amazon</td>
+<td style="text-align: left;">Per Amazon’s prep page for applied scientists: one or two 60-minute phone screens, then a loop of four 55-minute interviews covering technical topics, problem solving and coding, knowledge depth and breadth, a tech talk, and Leadership Principles in every round. One interviewer is a “Bar Raiser” from outside the team.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Apple, Microsoft, Netflix</td>
+<td style="text-align: left;">More team-specific: interviews often reflect the team’s domain (speech, vision, recommendations), with DSA, ML depth, and a project deep dive. Netflix emphasizes senior judgment and culture.</td>
+</tr>
+<tr>
+<td style="text-align: left;">AI labs (OpenAI, Anthropic, Google DeepMind, others)</td>
+<td style="text-align: left;">Practical coding more than puzzles: build or debug something realistic, often multi-part and progressively harder; ML implementation; systems and scaling; research or project discussion; strong focus on mission and values. Anthropic’s published guidance: AI assistance is not allowed in live interviews unless stated, encouraged for preparation.</td>
+</tr>
+</tbody>
+</table>
+<p><em>How loops differ (verify with your recruiter; they change)</em></p>
+<div class="box box-expert" data-kind="expert"><div class="box-title">🧠 Expert</div>
+<p><strong>The “practical coding” style at AI labs and newer companies</strong> looks different from LeetCode. Typical shapes: implement a small in-memory key-value store with transactions, then add TTLs, then make it thread-safe; parse and aggregate logs; implement a tokenizer or a simple autograd engine; debug a training loop whose loss is NaN; build a rate limiter or a job scheduler. The algorithms are the same ones in this book, but the scoring rewards clean abstractions, incremental extension, and testing under changing requirements. Chapter 19 (low-level design) prepares you directly for this.</p>
+</div>
+<h1 id="what-candidates-report-20252026">What Candidates Report (2025–2026)</h1>
+<h4 id="about-this-section.">About this section.</h4>
+<p>These are patterns from public, first-hand interview reports (LeetCode Discuss, PracHub, interviewing.io, igotanoffer, and candidate blogs), summarized without names. Single reports are anecdotes; treat them as examples of the <em>kind</em> of question, not a prediction of yours.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Reported loop</th>
+<th style="text-align: left;">What came up</th>
+<th style="text-align: left;">Where in this book</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Meta MLE onsite (early 2026)</td>
+<td style="text-align: left;">ML design: nearby place recommendations; ranking notifications from several products. Coding: a “next permutation” variant; smallest <span class="math inline">\(k\)</span> numbers from <span class="math inline">\(m\)</span> sorted sequences. An <strong>AI-enabled coding round</strong>: choose a subset of words maximizing unique characters. Behavioral: proudest project, a failure, what you would improve</td>
+<td style="text-align: left;">Ch. 6 (<span class="math inline">\(k\)</span>-way merge), Ch. 11–12 (bitmask search), Ch. 20</td>
+</tr>
+<tr>
+<td style="text-align: left;">Google MLE</td>
+<td style="text-align: left;">a heap-based coding problem; ML domain round; standard DSA rounds for L3 with at least one problem the interviewer called rarely solved</td>
+<td style="text-align: left;">Ch. 6, Ch. 17–18</td>
+</tr>
+<tr>
+<td style="text-align: left;">Amazon SDE II (2026)</td>
+<td style="text-align: left;">DSA plus Leadership Principles in every round; a cache design discussion that began with clarifying what to store (file path and name, content loaded from disk on demand)</td>
+<td style="text-align: left;">Ch. 4 (LRU), Ch. 19, Ch. 20</td>
+</tr>
+<tr>
+<td style="text-align: left;">Amazon SDE I</td>
+<td style="text-align: left;">one easy and one medium DSA problem per round</td>
+<td style="text-align: left;">Ch. 3–10</td>
+</tr>
+<tr>
+<td style="text-align: left;">Anthropic SWE / research engineer</td>
+<td style="text-align: left;">not LeetCode style; practical, multi-part Python problems (often in CodeSignal) that get harder each level; concurrency recurs across rounds; implement a data structure yourself after first using the standard library; a heavily weighted values/culture round; no AI assistance</td>
+<td style="text-align: left;">Ch. 19, Ch. 20, Ch. 23</td>
+</tr>
+<tr>
+<td style="text-align: left;">Anthropic applied AI engineer</td>
+<td style="text-align: left;">LLM-adjacent coding (a retrieval scorer, a token-budget allocator, a tool-use orchestrator), a customer-conversation simulation, system design</td>
+<td style="text-align: left;">Ch. 18–19, Ch. 22</td>
+</tr>
+</tbody>
+</table>
+<p><em>Examples from public interview reports.</em></p>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p><strong>Trends across reports:</strong></p>
+<ul>
+<li><p><strong>AI-assisted coding rounds are appearing</strong> at some big-tech loops: you may be given an AI assistant and judged on problem decomposition, verifying its output, and testing, not on typing speed. Practice reviewing generated code critically.</p></li>
+<li><p><strong>AI labs favor practical, extensible coding</strong> (key-value stores, schedulers, parsers, LLM utilities) over puzzles; clean structure under changing requirements and concurrency matter (Chapter 19).</p></li>
+<li><p><strong>Clarifying questions are part of the score</strong>: the Amazon cache discussion above began with what exactly to store.</p></li>
+<li><p><strong>ML loops mix classic DSA with ML design</strong>; recommendation and ranking prompts dominate ML system design reports.</p></li>
+<li><p><strong>Behavioral is consistent</strong>: proudest project, failure, conflict, growth.</p></li>
+</ul>
+</div>
+<h1 id="what-levels-change">What Levels Change</h1>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;"></th>
+<th style="text-align: left;">Mid (L4/E4/SDE II)</th>
+<th style="text-align: left;">Senior (L5/E5)</th>
+<th style="text-align: left;">Staff (L6/E6+)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Coding</td>
+<td style="text-align: left;">Solve mediums cleanly with hints</td>
+<td style="text-align: left;">Solve fast, few hints, strong tests</td>
+<td style="text-align: left;">Same bar; more weight elsewhere</td>
+</tr>
+<tr>
+<td style="text-align: left;">ML design</td>
+<td style="text-align: left;">Reasonable end-to-end design</td>
+<td style="text-align: left;">Trade-offs, metrics, failure modes, iteration plan</td>
+<td style="text-align: left;">Ambiguous scope, multiple teams, long-term strategy</td>
+</tr>
+<tr>
+<td style="text-align: left;">ML depth</td>
+<td style="text-align: left;">Explain standard methods</td>
+<td style="text-align: left;">Know why and when they fail</td>
+<td style="text-align: left;">Original insight; teach the interviewer something</td>
+</tr>
+<tr>
+<td style="text-align: left;">Behavioral</td>
+<td style="text-align: left;">Own your tasks</td>
+<td style="text-align: left;">Own projects; influence peers</td>
+<td style="text-align: left;">Set direction across teams; handle org-level conflict</td>
+</tr>
+</tbody>
+</table>
+<p><em>Expectations by level</em></p>
+<h1 id="how-interviewers-score">How Interviewers Score</h1>
+<div class="box box-intermediate" data-kind="intermediate"><div class="box-title">🔧 Intermediate</div>
+<p>Most companies use a rubric with four or five dimensions per round, each rated on a scale, plus an overall hire/no-hire signal. For coding:</p>
+<ul>
+<li><p><strong>Problem solving</strong>: did you explore approaches, recognize the pattern, and reach an optimal solution with limited hints?</p></li>
+<li><p><strong>Coding</strong>: is the code correct, readable, and well structured?</p></li>
+<li><p><strong>Verification</strong>: did you test with examples, edge cases, and find your own bugs?</p></li>
+<li><p><strong>Communication</strong>: could the interviewer follow your reasoning the whole time?</p></li>
+</ul>
+<p>A correct solution with silent, unexplained thinking often scores lower than a slightly slower solution that was explained clearly. Interviewers write down <em>evidence</em>; give them evidence to write.</p>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall</div>
+<ul>
+<li><p>Memorizing solutions: a single twist in the problem exposes it immediately.</p></li>
+<li><p>Jumping into code before confirming the problem and the approach.</p></li>
+<li><p>Neglecting ML coding: many MLE candidates prepare only LeetCode and fail “implement k-means.”</p></li>
+<li><p>Treating behavioral as an afterthought; it can veto an otherwise strong loop.</p></li>
+<li><p>Using AI tools during a live interview where it is not permitted.</p></li>
+</ul>
+</div>
+<div class="box box-takeaways" data-kind="takeaways"><div class="box-title">🔑 Takeaways</div>
+<ul>
+<li><p>Loops share the same building blocks: DSA, ML coding, ML breadth/depth, ML system design, behavioral, plus role-specific rounds.</p></li>
+<li><p>Prepare by pattern and by understanding, not by memorized solutions.</p></li>
+<li><p>AI labs favor practical, multi-part coding; big tech favors classic DSA plus ML design.</p></li>
+<li><p>Seniority shifts weight from “can solve” to “chooses well and explains trade-offs.”</p></li>
+</ul>
+</div>

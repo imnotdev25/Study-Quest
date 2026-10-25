@@ -1,0 +1,15 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p>RoPE pair <span class="math inline">\(i\)</span> rotates by <span class="math inline">\(\theta_i=p\cdot\omega_i\)</span> with <span class="math inline">\(\omega_i=\text{base}^{-2i/d}\)</span> (Session 24). Its <strong>wavelength</strong> <span class="math inline">\(\lambda_i=2\pi/\omega_i\)</span> is the number of tokens for one full turn. High-frequency pairs encode local order. Low-frequency pairs encode long-range position, but if the model never saw a full turn during training, positions beyond training length are unfamiliar.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/llm/ac6ca4621e07.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Each RoPE pair rotates at its own speed. YaRN treats pairs differently depending on which side of the training length their wavelength falls.</em></p>
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: position interpolation, NTK scaling and YaRN</div>
+<p><strong>Step 1.</strong> Longest wavelength (64 rotary dims, last pair <span class="math inline">\(i=31\)</span>): <span class="math inline">\(\lambda_{\max}=2\pi\,\text{base}^{62/64}\)</span>. Base <span class="math inline">\(10^4\)</span>: 47<span>,</span>117 tokens. Base <span class="math inline">\(5\times10^5\)</span> (Llama 3): about 2.08M. A bigger base slows every low-frequency pair.</p>
+<p><strong>Step 2.</strong> <strong>Position interpolation:</strong> to extend by <span class="math inline">\(s\times\)</span>, use <span class="math inline">\(p/s\)</span>. All rotations stay within the trained range, but high-frequency pairs get <span class="math inline">\(s\times\)</span> coarser, which hurts local order.</p>
+<p><strong>Step 3.</strong> <strong>NTK-aware:</strong> instead raise the base, <span class="math inline">\(\text{base}&#39;=\text{base}\cdot s^{d/(d-2)}\)</span>. Highest frequencies barely change, and the lowest is stretched by about <span class="math inline">\(s\)</span>.</p>
+<p><strong>Step 4.</strong> <strong>YaRN:</strong> per pair, compare its wavelength with the training length <span class="math inline">\(L\)</span>. Pairs with <span class="math inline">\(\lambda_i\ll L\)</span> are left alone, pairs with <span class="math inline">\(\lambda_i&gt;L\)</span> are interpolated by <span class="math inline">\(s\)</span>, and pairs in between are blended. It also scales logits by about <span class="math inline">\(0.1\ln s+1\)</span> to keep attention entropy steady. DeepSeek-V4 uses YaRN with factor 16 from 64K to 1M (its config).</p>
+<p><strong>Step 5.</strong> <strong>NoPE layers:</strong> some layers use no positional encoding at all, and causal masking alone leaks enough order information. Llama 4 interleaves NoPE layers (“iRoPE”), and Kimi K3’s MLA layers are NoPE, with order carried by the linear-attention layers.</p>
+</div>

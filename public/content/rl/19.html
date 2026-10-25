@@ -1,0 +1,339 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 9 · checks 4</strong></p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: a gym coach who caps your progress</div>
+<p>A good coach lets you add weight each session, but never more than about 20% at once. Even if you feel strong, the cap stops you from overdoing it on a lucky good day. PPO’s clip does the same: once a probability ratio has moved more than <span class="math inline">\(\pm\epsilon\)</span> in the helpful direction, the objective stops rewarding further movement.</p>
+</div>
+<div class="center">
+<figure class="tikz"><img src="figs/rl/1de4877cfe70.svg" alt="diagram" loading="lazy"></figure>
+<p><em>Clipped objective (blue) vs unclipped <span class="math inline">\(\rho A\)</span> (dashed), <span class="math inline">\(\epsilon=0.2\)</span>. Where blue is flat, the gradient is zero: no more pushing.</em></p>
+</div>
+<h3 class="unnumbered" id="quick-retrieval">1. Quick retrieval</h3>
+<ol>
+<li><p>Why does a trust region constrain policy movement?</p></li>
+<li><p>Write the new-to-old policy probability ratio.</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-practical-approximation-to-trust-regions">2. A practical approximation to trust regions</h3>
+<p>TRPO constrains KL divergence directly, but its curvature calculations and line search are relatively expensive.</p>
+<p>PPO uses a simpler idea: prevent the surrogate objective from rewarding probability-ratio changes beyond a chosen interval.</p>
+<p>Start with the importance-weighted objective:</p>
+<p><span class="math display">\[L_t(\theta)=r_t(\theta)\hat A_t\]</span></p>
+<p>where:</p>
+<p><span class="math display">\[r_t(\theta)
+=
+\frac{\pi_\theta(A_t\mid S_t)}
+{\pi_{\text{old}}(A_t\mid S_t)}
+=
+\exp\left(
+\log\pi_\theta-\log\pi_{\text{old}}
+\right)\]</span></p>
+<p>PPO’s clipped objective is:</p>
+<p><span class="math display">\[L_t^{\text{CLIP}}(\theta)
+=
+\min\left(
+r_t\hat A_t,\;
+\operatorname{clip}(r_t,1-\epsilon,1+\epsilon)\hat A_t
+\right)\]</span></p>
+<p>We maximize its mean, or minimize its negative.</p>
+<h3 class="unnumbered" id="what-clipping-does">What clipping does</h3>
+<p>Suppose <span class="math inline">\(\epsilon=0.2\)</span>, giving the interval <span class="math inline">\([0.8,1.2]\)</span>.</p>
+<p>For positive advantage:</p>
+<ul>
+<li><p>increasing the sampled action’s probability helps;</p></li>
+<li><p>once <span class="math inline">\(r_t&gt;1.2\)</span>, PPO stops rewarding further increases.</p></li>
+</ul>
+<p>For negative advantage:</p>
+<ul>
+<li><p>decreasing the sampled action’s probability helps;</p></li>
+<li><p>once <span class="math inline">\(r_t&lt;0.8\)</span>, PPO stops rewarding further decreases.</p></li>
+</ul>
+<p>The <span style="background-color: codeinlinebg"><code> min</code></span> is essential. PPO clips only changes that improve the sampled objective too aggressively. It does not hide harmful changes.</p>
+<h3 class="unnumbered" id="clipping-is-not-a-hard-trust-region">Clipping is not a hard trust region</h3>
+<p>PPO clipping does not guarantee:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}
+(\pi_{\text{old}}\|\pi_\theta)
+\leq\delta\]</span></p>
+<p>Parameters are shared, and changing one sampled action can alter many unsampled probabilities. Practical implementations therefore monitor:</p>
+<ul>
+<li><p>approximate or exact KL;</p></li>
+<li><p>clipping fraction;</p></li>
+<li><p>entropy;</p></li>
+<li><p>policy loss;</p></li>
+<li><p>value loss;</p></li>
+<li><p>explained variance;</p></li>
+<li><p>episodic return or task reward.</p></li>
+</ul>
+<p>Training often reuses one rollout batch for several minibatch epochs. Too many epochs make that data increasingly stale.</p>
+<p>For a batch:</p>
+<ul>
+<li><p>old and new log-probabilities: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>advantages and ratios: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>unclipped and clipped terms: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>policy objective: scalar</p></li>
+</ul>
+<h3 class="unnumbered" id="llm-connection">LLM connection</h3>
+<p>For an LLM, the ratio is calculated separately for each generated token:</p>
+<p><span class="math display">\[r_t
+=
+\exp\left(
+\log\pi_\theta(y_t\mid x,y_{&lt;t})
+-
+\log\pi_{\text{old}}(y_t\mid x,y_{&lt;t})
+\right)\]</span></p>
+<p>Only response tokens should enter the loss. Prompt and padding tokens require masks.</p>
+<p>Full LLM PPO normally combines the clipped policy objective with a critic loss, entropy diagnostics and a KL constraint or penalty involving a reference model.</p>
+<div class="box box-deeper" data-kind="deeper"><div class="box-title">🔍 Deeper: case analysis of the clip</div>
+<p><span class="math inline">\(L^{\text{CLIP}}=\mathbb E\big[\min\big(\rho A,\ \operatorname{clip}(\rho,1-\epsilon,1+\epsilon)A\big)\big]\)</span>, with <span class="math inline">\(\rho=\pi_\theta/\pi_{\text{old}}\)</span>.</p>
+<ul>
+<li><p><span class="math inline">\(A&gt;0,\ \rho&gt;1+\epsilon\)</span>: flat, so there’s no reason to make the good action even more likely.</p></li>
+<li><p><span class="math inline">\(A&lt;0,\ \rho&lt;1-\epsilon\)</span>: flat, so there’s no reason to suppress the bad action further.</p></li>
+<li><p>In the “wrong” direction (<span class="math inline">\(A&gt;0,\rho&lt;1\)</span> or <span class="math inline">\(A&lt;0,\rho&gt;1\)</span>) there’s no clip: the <span class="math inline">\(\min\)</span> keeps the full penalty. The objective is a <em>pessimistic</em> lower bound.</p></li>
+</ul>
+<p><strong>Full loss:</strong> <span class="math inline">\(\mathcal L=-L^{\text{CLIP}}+c_1(V_\phi-\hat G)^2-c_2\,\mathcal H[\pi_\theta]\)</span>.</p>
+<p><strong>Diagnostics:</strong> clip fraction <span class="math inline">\(=\)</span> the share of samples with <span class="math inline">\(|\rho-1|&gt;\epsilon\)</span>, and approx-KL <span class="math inline">\(\approx\mathbb E[(\rho-1)-\log\rho]\)</span>. If clip fraction climbs past roughly 0.2–0.3, you’re overfitting the batch.</p>
+</div>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li><p>PPO = cheap trust region: clip the ratio, take several epochs on the same batch.</p></li>
+<li><p>Clipping is a guardrail, not a guarantee. Watch KL and clip fraction.</p></li>
+</ul>
+</div>
+<div class="box box-walkthrough" data-kind="walkthrough"><div class="box-title">🚶 Walkthrough: four clipping cases</div>
+<p><span class="math inline">\(\epsilon=0.2\)</span>:</p>
+<div class="center">
+<table>
+<thead>
+<tr>
+<th style="text-align: center;"><span class="math inline">\(A\)</span></th>
+<th style="text-align: center;"><span class="math inline">\(\rho\)</span></th>
+<th style="text-align: center;"><span class="math inline">\(\min(\rho A,\operatorname{clip}(\rho)A)\)</span></th>
+<th style="text-align: center;">gradient?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;"><span class="math inline">\(+1\)</span></td>
+<td style="text-align: center;">1.3</td>
+<td style="text-align: center;"><span class="math inline">\(\min(1.3,1.2)=1.2\)</span></td>
+<td style="text-align: center;">no (clipped)</td>
+</tr>
+<tr>
+<td style="text-align: center;"><span class="math inline">\(+1\)</span></td>
+<td style="text-align: center;">0.7</td>
+<td style="text-align: center;"><span class="math inline">\(\min(0.7,0.8)=0.7\)</span></td>
+<td style="text-align: center;">yes</td>
+</tr>
+<tr>
+<td style="text-align: center;"><span class="math inline">\(-1\)</span></td>
+<td style="text-align: center;">0.7</td>
+<td style="text-align: center;"><span class="math inline">\(\min(-0.7,-0.8)=-0.8\)</span></td>
+<td style="text-align: center;">no (clipped)</td>
+</tr>
+<tr>
+<td style="text-align: center;"><span class="math inline">\(-1\)</span></td>
+<td style="text-align: center;">1.3</td>
+<td style="text-align: center;"><span class="math inline">\(\min(-1.3,-1.2)=-1.3\)</span></td>
+<td style="text-align: center;">yes, full penalty</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>Common mistakes</strong></p>
+<ul>
+<li><p>Recomputing <span class="math inline">\(\log\pi_{\text{old}}\)</span> inside the epoch loop (the ratio becomes 1 forever).</p></li>
+<li><p>Using <span class="math inline">\(\max\)</span> instead of <span class="math inline">\(\min\)</span>.</p></li>
+<li><p>Normalizing advantages per minibatch with tiny minibatches.</p></li>
+</ul>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: PPO-Clip</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> actor <span class="math inline">\(\pi_\theta\)</span>, critic <span class="math inline">\(V_\phi\)</span>, clip <span class="math inline">\(\epsilon\)</span>, epochs <span class="math inline">\(K\)</span>, coefficients <span class="math inline">\(c_1,c_2\)</span></div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each iteration <strong>do</strong></div>
+<div class="algo-line" style="--d:1">collect a batch of trajectories with <span class="math inline">\(\pi_\theta\)</span>; store <span class="math inline">\(\log\pi_{\text{old}}(a_t|s_t)\)</span></div>
+<div class="algo-line" style="--d:1">compute <span class="math inline">\(\hat A_t,\hat R_t\)</span> with GAE (Topic 17)</div>
+<div class="algo-line" style="--d:1"><strong>for</strong> epoch <span class="math inline">\(=1,\dots,K\)</span> <strong>do</strong></div>
+<div class="algo-line" style="--d:2"><strong>for</strong> each minibatch <strong>do</strong></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(\rho_t\gets\exp\big(\log\pi_\theta(a_t|s_t)-\log\pi_{\text{old}}(a_t|s_t)\big)\)</span></div>
+<div class="algo-line" style="--d:3"><span class="math inline">\(L^{\text{CLIP}}\gets\operatorname{mean}_t\min\big(\rho_t\hat A_t,\ \operatorname{clip}(\rho_t,1-\epsilon,1+\epsilon)\hat A_t\big)\)</span></div>
+<div class="algo-line" style="--d:3">gradient step on <span class="math inline">\(-L^{\text{CLIP}}+c_1\operatorname{mean}_t(V_\phi(s_t)-\hat R_t)^2-c_2\,\mathcal H[\pi_\theta]\)</span></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:2"><strong>if</strong> approx-KL <span class="math inline">\(&gt;\)</span> target <strong>then</strong> <strong>break</strong> <em>▷ optional early stop</em></div>
+<div class="algo-line" style="--d:2"><strong>end</strong></div>
+<div class="algo-line" style="--d:1"><strong>end</strong></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h3 class="unnumbered" id="pytorch-exercise-optimize-one-ppo-rollout-batch">3. PyTorch exercise — optimize one PPO rollout batch</h3>
+<p>The old policy is uniform. Action <span style="background-color: codeinlinebg"><code> 2</code></span> is good, action <span style="background-color: codeinlinebg"><code> 0</code></span> is bad, and action <span style="background-color: codeinlinebg"><code> 1</code></span> is neutral.</p>
+<pre class="code python"><code class="language-python">import torch
+from torch.distributions import Categorical, kl_divergence
+
+torch.manual_seed(7)
+
+batch_size = 2048
+clip_epsilon = 0.2
+num_epochs = 20
+
+reward_by_action = torch.tensor([
+    -1.0, 0.0, 2.0
+])
+
+old_logits = torch.zeros(3)
+old_policy = Categorical(logits=old_logits)
+
+# Collect one rollout batch. It remains fixed for every PPO epoch.
+actions = old_policy.sample((batch_size,))
+old_log_probs = old_policy.log_prob(actions).detach()
+
+rewards = (
+    reward_by_action[actions]
+    + 0.2 * torch.randn(batch_size)
+)
+
+# A simple baseline followed by normalization.
+advantages = rewards - rewards.mean()
+advantages = advantages / (
+    advantages.std(unbiased=False) + 1e-8
+)
+advantages = advantages.detach()
+
+new_logits = torch.nn.Parameter(old_logits.clone())
+optimizer = torch.optim.Adam([new_logits], lr=0.05)
+
+for epoch in range(num_epochs):
+    new_policy = Categorical(logits=new_logits)
+    new_log_probs = new_policy.log_prob(actions)
+
+    # TODO 1: Stable current-to-old probability ratios.
+    ratios = ...
+
+    # TODO 2: Unclipped and clipped surrogate terms.
+    unclipped_terms = ...
+    clipped_terms = ...
+
+    # TODO 3: PPO&#x27;s pessimistic clipped objective.
+    objective = ...
+    policy_loss = ...
+
+    optimizer.zero_grad()
+    policy_loss.backward()
+    torch.nn.utils.clip_grad_norm_([new_logits], 1.0)
+    optimizer.step()
+
+    with torch.no_grad():
+        updated_policy = Categorical(logits=new_logits)
+
+        # TODO 4: Exact KL and fraction outside the clip interval.
+        exact_kl = ...
+        clip_fraction = ...
+
+        entropy = updated_policy.entropy()
+
+    if epoch in [0, 1, 4, 9, 19]:
+        print(
+            f&quot;epoch={epoch:2d}&quot;,
+            f&quot;loss={policy_loss.item(): .4f}&quot;,
+            f&quot;KL={exact_kl.item():.4f}&quot;,
+            f&quot;clip_frac={clip_fraction.item():.3f}&quot;,
+            f&quot;entropy={entropy.item():.3f}&quot;,
+            f&quot;probs={updated_policy.probs.tolist()}&quot;,
+        )
+
+with torch.no_grad():
+    final_policy = Categorical(logits=new_logits)
+
+    # Exact ratio for each of the three possible actions.
+    action_probability_ratios = (
+        final_policy.probs / old_policy.probs
+    )
+
+print(&quot;Final probabilities:&quot;, final_policy.probs)
+print(&quot;Ratios by action:&quot;, action_probability_ratios)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Which action’s probability should increase?</p></li>
+<li><p>At epoch zero, before updating, what are all sampled ratios?</p></li>
+<li><p>For positive advantage, where does PPO stop rewarding ratio increases?</p></li>
+<li><p>Does clipping guarantee that the final KL remains small?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>Ratio: <span style="background-color: codeinlinebg"><code> exp(new_log_prob - old_log_prob)</code></span>.</p></li>
+<li><p>Clip using <span style="background-color: codeinlinebg"><code> .clamp(1 - epsilon, 1 + epsilon)</code></span>.</p></li>
+<li><p>Use <span style="background-color: codeinlinebg"><code> torch.minimum</code></span> elementwise.</p></li>
+<li><p>Optimizers minimize, so negate the mean objective.</p></li>
+<li><p>Clip fraction checks whether <span style="background-color: codeinlinebg"><code> abs(ratio - 1) &gt; epsilon</code></span>.</p></li>
+<li><p>KL direction: old policy to updated policy.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiment">Debugging experiment</h3>
+<p>Replace:</p>
+<pre class="code python"><code class="language-python">torch.minimum(unclipped_terms, clipped_terms)</code></pre>
+<p>with:</p>
+<pre class="code python"><code class="language-python">torch.maximum(unclipped_terms, clipped_terms)</code></pre>
+<p>Now the objective selects the optimistic term. It no longer conservatively limits beneficial probability changes.</p>
+<p>Also remove <span style="background-color: codeinlinebg"><code> .detach()</code></span> from <span style="background-color: codeinlinebg"><code> old_log_probs</code></span> in a real implementation where the old policy still has a computation graph. Gradients could then flow into the rollout policy, which is meant to remain fixed.</p>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does PPO use <span style="background-color: codeinlinebg"><code> minimum</code></span> rather than simply using the clipped ratio everywhere?</p></li>
+<li><p>For negative advantage, which ratio direction is beneficial?</p></li>
+<li><p>Why can multiple epochs over one rollout batch become dangerous?</p></li>
+<li><p>If clipping fraction is nearly one, what does that suggest?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Probability ratios:</p>
+<pre class="code python"><code class="language-python">ratios = (
+    new_log_probs - old_log_probs
+).exp()</code></pre>
+<p>Surrogate terms:</p>
+<pre class="code python"><code class="language-python">unclipped_terms = ratios * advantages
+
+clipped_ratios = ratios.clamp(
+    1.0 - clip_epsilon,
+    1.0 + clip_epsilon,
+)
+
+clipped_terms = clipped_ratios * advantages</code></pre>
+<p>PPO objective and loss:</p>
+<pre class="code python"><code class="language-python">objective = torch.minimum(
+    unclipped_terms,
+    clipped_terms,
+).mean()
+
+policy_loss = -objective</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">exact_kl = kl_divergence(
+    old_policy,
+    updated_policy,
+)
+
+clip_fraction = (
+    (ratios - 1.0).abs() &gt; clip_epsilon
+).float().mean()</code></pre>
+<p>Initially:</p>
+<p><span class="math display">\[r_t=
+\frac{\pi_{\text{old}}}{\pi_{\text{old}}}
+=1\]</span></p>
+<p>so the first objective is identical to the ordinary advantage-weighted policy objective.</p>
+<p>Training should:</p>
+<ul>
+<li><p>increase action <span style="background-color: codeinlinebg"><code> 2</code></span> probability;</p></li>
+<li><p>decrease action <span style="background-color: codeinlinebg"><code> 0</code></span> probability;</p></li>
+<li><p>reduce entropy as the distribution becomes less uniform.</p></li>
+</ul>
+<p>For positive advantages, increases beyond <span class="math inline">\(r=1.2\)</span> receive no additional sampled objective improvement. For negative advantages, decreases below <span class="math inline">\(r=0.8\)</span> receive no additional improvement.</p>
+<p>However, the final exact ratios need not all remain inside <span style="background-color: codeinlinebg"><code> [0.8, 1.2]</code></span>. PPO clips objective contributions; it does not directly clamp the complete policy distribution.</p>
+<p>In production, a common safeguard is early stopping when measured KL exceeds a chosen threshold.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p><span style="background-color: codeinlinebg"><code> minimum</code></span> keeps harmful changes fully visible while limiting only overly large changes that improve the sampled surrogate.</p></li>
+<li><p>Reducing the sampled action’s probability, so <span class="math inline">\(r_t&lt;1\)</span>, is beneficial.</p></li>
+<li><p>The policy moves farther from the policy that generated the actions and advantages, making the fixed data increasingly stale.</p></li>
+<li><p>Most samples have moved outside the trusted ratio interval; reduce learning rate, epochs or update magnitude and inspect KL.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>A local gradient and old-policy rollout remain trustworthy only near the policy that generated the data.</p></li>
+<li><p><span class="math inline">\(r_t=\exp(\log\pi_\theta(A_t\mid S_t)-\log\pi_{\text{old}}(A_t\mid S_t))\)</span>.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> PPO reuses old-policy data while removing the incentive for excessively helpful-looking ratio changes. Clipping is a practical guardrail—not a guarantee—so KL and clipping diagnostics remain essential.</p>

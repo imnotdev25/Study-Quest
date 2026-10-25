@@ -1,0 +1,384 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Which mask belongs in a TD bootstrap term?</p></li>
+<li><p>Why are trajectory validity and value continuation different masks?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="a-timeout-needs-bootstrappingbut-must-stop-the-trace">2. A timeout needs bootstrapping—but must stop the trace</h3>
+<p>GAE builds an advantage from TD residuals:</p>
+<p><span class="math display">\[\delta_t
+=
+r_t
++
+\gamma b_tV(s_{t+1})
+-
+V(s_t)\]</span></p>
+<p><span class="math display">\[A_t
+=
+\delta_t
++
+\gamma\lambda c_tA_{t+1}\]</span></p>
+<p>Two masks serve different jobs:</p>
+<p><span class="math display">\[b_t
+=
+1-\mathbb{1}[\text{terminated}_t]\]</span></p>
+<p>The <strong>bootstrap mask</strong> retains <span class="math inline">\(V(s_{t+1})\)</span> at collector truncations because the underlying task may continue.</p>
+<p><span class="math display">\[c_t
+=
+1-\mathbb{1}[
+\text{terminated}_t
+\lor
+\text{truncated}_t
+]\]</span></p>
+<p>The <strong>trace mask</strong> stops GAE at an episode boundary. Otherwise, an auto-reset environment can propagate the next episode’s reward backward into the previous episode.</p>
+<p>Therefore, at a timeout:</p>
+<ul>
+<li><p>bootstrap from the timeout’s final observation;</p></li>
+<li><p>stop recursive advantage propagation before the reset episode.</p></li>
+</ul>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>rewards, values and masks: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+<li><p>running backward advantage: <span style="background-color: codeinlinebg"><code> [B]</code></span></p></li>
+<li><p>policy loss:</p></li>
+</ul>
+<p><span class="math display">\[L_\pi
+=
+-
+\frac{
+\sum_{b,t}
+m_{b,t}\log\pi_\theta(a_{b,t}\mid s_{b,t})
+\operatorname{stopgrad}(A_{b,t})
+}{
+\sum_{b,t}m_{b,t}
+}\]</span></p>
+<p><span style="background-color: codeinlinebg"><code> valid_mask</code></span> handles padding. It is distinct from both GAE masks.</p>
+<p>For LLM agents, a new prompt after <span style="background-color: codeinlinebg"><code> max_new_tokens</code></span>, timeout or tool-budget exhaustion must not contribute credit to the previous response. DPO does not calculate GAE, but truncated and accidentally concatenated completions still corrupt its fixed preference data; DPO is not online RL.</p>
+<h3 class="unnumbered" id="pytorch-exercise-prevent-reward-from-the-reset-episode-leaking-backward">3. PyTorch exercise — prevent reward from the reset episode leaking backward</h3>
+<p>A vectorized environment truncates after step <span style="background-color: codeinlinebg"><code> 2</code></span> and immediately starts a new episode at step <span style="background-color: codeinlinebg"><code> 3</code></span>. The new episode gives reward <span style="background-color: codeinlinebg"><code> 100</code></span>.</p>
+<pre class="code python"><code class="language-python">import torch
+
+torch.set_default_dtype(torch.float64)
+
+gamma = 0.90
+gae_lambda = 0.95
+
+# Shape: [B=1, T=5]
+rewards = torch.tensor([[
+    0.0, 0.0, 1.0, 100.0, 0.0
+]])
+
+values = torch.zeros_like(rewards)
+
+# At the timeout, the true final observation
+# has estimated value 10.
+next_values = torch.tensor([[
+    0.0, 0.0, 10.0, 0.0, 0.0
+]])
+
+terminated = torch.tensor([[
+    False, False, False, False, True
+]])
+
+truncated = torch.tensor([[
+    False, False, True, False, False
+]])
+
+valid_mask = torch.ones_like(
+    rewards,
+    dtype=torch.bool,
+)
+
+
+# TODO 1: Construct boundaries and masks.
+episode_boundary = ...
+
+correct_bootstrap_mask = ...
+wrong_done_bootstrap_mask = ...
+
+correct_trace_mask = ...
+leaky_trace_mask = ...
+
+
+# TODO 2: Implement backward GAE.
+def compute_gae(
+    bootstrap_mask,
+    trace_mask,
+):
+    td_errors = ...
+
+    advantages = torch.zeros_like(
+        rewards
+    )
+
+    running_advantage = torch.zeros(
+        rewards.shape[0]
+    )
+
+    for time_index in reversed(
+        range(rewards.shape[1])
+    ):
+        running_advantage = ...
+
+        # Padding must neither contribute nor
+        # carry a trace into earlier positions.
+        running_advantage = torch.where(
+            valid_mask[:, time_index],
+            running_advantage,
+            torch.zeros_like(
+                running_advantage
+            ),
+        )
+
+        advantages[:, time_index] = ...
+
+    return td_errors, advantages
+
+
+# TODO 3: Correct calculation.
+correct_td_errors, correct_advantages = ...
+
+
+# TODO 4: Two distinct bugs.
+# Bug A: timeout is treated as terminal.
+_, terminal_on_timeout_advantages = ...
+
+# Bug B: bootstrap is correct, but GAE crosses
+# into the auto-reset episode.
+_, cross_episode_advantages = ...
+
+
+# TODO 5: Compare actor-gradient scale on only
+# the first episode&#x27;s three valid actions.
+first_episode_mask = torch.tensor([[
+    True, True, True, False, False
+]])
+
+correct_actor_signal = ...
+
+terminal_bug_actor_signal = ...
+
+leaky_actor_signal = ...
+
+
+results = torch.cat([
+    correct_td_errors,
+    correct_advantages,
+    terminal_on_timeout_advantages,
+    cross_episode_advantages,
+], dim=0)
+
+print(
+    &quot;Rows: correct TD errors, correct GAE, &quot;
+    &quot;timeout-as-terminal GAE, cross-episode GAE&quot;
+)
+print(results)
+
+print(
+    &quot;\nMean first-episode advantages:&quot;
+)
+print(
+    &quot;Correct:&quot;,
+    correct_actor_signal.item(),
+)
+print(
+    &quot;Timeout treated terminal:&quot;,
+    terminal_bug_actor_signal.item(),
+)
+print(
+    &quot;Cross-episode leakage:&quot;,
+    leaky_actor_signal.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Should the TD error at the truncated step be <span style="background-color: codeinlinebg"><code> 1</code></span> or <span style="background-color: codeinlinebg"><code> 10</code></span>?</p></li>
+<li><p>Should reward <span style="background-color: codeinlinebg"><code> 100</code></span> affect the preceding episode?</p></li>
+<li><p>Which bug underestimates the first episode?</p></li>
+<li><p>Which bug produces an enormous, high-variance policy update?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p><span style="background-color: codeinlinebg"><code> episode_boundary = terminated | truncated</code></span>.</p></li>
+<li><p>Bootstrap using <span style="background-color: codeinlinebg"><code> ~terminated</code></span>.</p></li>
+<li><p>Stop the trace using <span style="background-color: codeinlinebg"><code> ~episode_boundary</code></span>.</p></li>
+<li><p>The recursion is:</p></li>
+</ul>
+<pre class="code python"><code class="language-python">running = delta_t + gamma * lambda_ * trace_t * running</code></pre>
+<ul>
+<li><p>Detach advantages before using them in an actor loss.</p></li>
+<li><p>The first-episode mask selects time indices <span style="background-color: codeinlinebg"><code> 0</code></span>, <span style="background-color: codeinlinebg"><code> 1</code></span> and <span style="background-color: codeinlinebg"><code> 2</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Use one <span style="background-color: codeinlinebg"><code> done</code></span> mask for both equations.</p></li>
+<li><p>Bootstrap from the auto-reset state rather than the timeout’s final observation.</p></li>
+<li><p>Let GAE cross from one prompt or user into the next.</p></li>
+<li><p>Forget to clear the running advantage at padded positions.</p></li>
+<li><p>Backpropagate the actor loss through critic-produced advantages.</p></li>
+<li><p>Compare advantage variance without conditioning on EOS, timeout and tool-budget finish reasons.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why does truncation retain the bootstrap but stop GAE recursion?</p></li>
+<li><p>What happens if an auto-reset observation replaces the true final observation?</p></li>
+<li><p>How should an ordinary rollout-chunk boundary be handled?</p></li>
+<li><p>Which diagnostics can reveal cross-episode leakage?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Masks:</p>
+<pre class="code python"><code class="language-python">episode_boundary = (
+    terminated | truncated
+)
+
+correct_bootstrap_mask = (
+    ~terminated
+).to(torch.float64)
+
+wrong_done_bootstrap_mask = (
+    ~episode_boundary
+).to(torch.float64)
+
+correct_trace_mask = (
+    ~episode_boundary
+).to(torch.float64)
+
+leaky_trace_mask = (
+    ~terminated
+).to(torch.float64)</code></pre>
+<p>GAE implementation:</p>
+<pre class="code python"><code class="language-python">def compute_gae(
+    bootstrap_mask,
+    trace_mask,
+):
+    td_errors = (
+        rewards
+        + gamma
+        * bootstrap_mask
+        * next_values
+        - values
+    )
+
+    advantages = torch.zeros_like(
+        rewards
+    )
+
+    running_advantage = torch.zeros(
+        rewards.shape[0]
+    )
+
+    for time_index in reversed(
+        range(rewards.shape[1])
+    ):
+        running_advantage = (
+            td_errors[:, time_index]
+            + gamma
+            * gae_lambda
+            * trace_mask[:, time_index]
+            * running_advantage
+        )
+
+        running_advantage = torch.where(
+            valid_mask[:, time_index],
+            running_advantage,
+            torch.zeros_like(
+                running_advantage
+            ),
+        )
+
+        advantages[:, time_index] = (
+            running_advantage
+        )
+
+    return td_errors, advantages</code></pre>
+<p>Three calculations:</p>
+<pre class="code python"><code class="language-python">(
+    correct_td_errors,
+    correct_advantages,
+) = compute_gae(
+    correct_bootstrap_mask,
+    correct_trace_mask,
+)
+
+(
+    _,
+    terminal_on_timeout_advantages,
+) = compute_gae(
+    wrong_done_bootstrap_mask,
+    correct_trace_mask,
+)
+
+(
+    _,
+    cross_episode_advantages,
+) = compute_gae(
+    correct_bootstrap_mask,
+    leaky_trace_mask,
+)</code></pre>
+<p>Actor signals:</p>
+<pre class="code python"><code class="language-python">def masked_advantage_mean(advantages):
+    mask = first_episode_mask.to(
+        torch.float64
+    )
+
+    return (
+        advantages.detach()
+        * mask
+    ).sum() / mask.sum()
+
+
+correct_actor_signal = (
+    masked_advantage_mean(
+        correct_advantages
+    )
+)
+
+terminal_bug_actor_signal = (
+    masked_advantage_mean(
+        terminal_on_timeout_advantages
+    )
+)
+
+leaky_actor_signal = (
+    masked_advantage_mean(
+        cross_episode_advantages
+    )
+)</code></pre>
+<p>At the truncated transition:</p>
+<p><span class="math display">\[\delta_2
+=
+1+0.9(10)-0
+=
+10\]</span></p>
+<p>Correct GAE stops there:</p>
+<p><span class="math display">\[A_2=10\]</span></p>
+<p><span class="math display">\[A_1=0+(0.9)(0.95)(10)=8.55\]</span></p>
+<p><span class="math display">\[A_0=(0.9)(0.95)(8.55)\approx7.31\]</span></p>
+<p>Thus the correct advantages are approximately:</p>
+<p><span class="math display">\[[7.31,\;8.55,\;10,\;100,\;0]\]</span></p>
+<p>Treating the timeout as terminal removes its bootstrap:</p>
+<p><span class="math display">\[[0.73,\;0.86,\;1,\;100,\;0]\]</span></p>
+<p>Failing to stop the trace lets the new episode’s reward leak backward:</p>
+<p><span class="math display">\[A_2
+=
+10+(0.9)(0.95)(100)
+=
+95.5\]</span></p>
+<p>producing approximately:</p>
+<p><span class="math display">\[[69.81,\;81.65,\;95.5,\;100,\;0]\]</span></p>
+<p>This can create a large policy-gradient update crediting actions from the first episode for reward earned after reset.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>The final observation still contains future value, but the next buffer row belongs to a different episode.</p></li>
+<li><p>The critic bootstraps from the wrong state, usually introducing arbitrary bias determined by the reset-state distribution.</p></li>
+<li><p>Bootstrap at the chunk’s final observation, then stop the stored backward recursion unless the next chunk is explicitly joined to the same trajectory.</p></li>
+<li><p>Inspect advantage magnitudes around boundaries, reward/advantage correlations across episode IDs, finish-reason-specific statistics and unexpected advantage spikes before resets.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Use <span style="background-color: codeinlinebg"><code> ~terminated</code></span>; collector truncations normally retain the next-state value.</p></li>
+<li><p>Validity decides whether a tensor position exists. Continuation decides whether future value belongs in that transition’s target.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> GAE needs two boundary decisions. At a timeout, bootstrap from the real final observation, but never let the reset episode’s rewards flow backward across that boundary.</p>

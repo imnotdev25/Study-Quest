@@ -1,0 +1,176 @@
+
+<div class="box box-startbox" data-kind="startbox"><div class="box-title">🚀 Starting point</div>
+<p><strong>Momentum</strong> keeps a running sum of past gradients, <span class="math inline">\(v_t=\beta v_{t-1}+g_t\)</span>, and steps along it: <span class="math inline">\(\theta_{t+1}=\theta_t-\eta v_t\)</span>. The state <span class="math inline">\(v\)</span> is part of the optimizer and must persist across steps. <span class="math inline">\(\beta\in[0,1)\)</span> controls how much memory it has.</p>
+</div>
+<p><strong>Total: 20 minutes</strong></p>
+<h2 class="unnumbered" id="retrieval-concept-refresh-5-minutes">1. Retrieval + concept refresh — 5 minutes</h2>
+<p>First, retrieve from Session 3:</p>
+<ol>
+<li><p>For curvature eigenvalue <span class="math inline">\(\lambda_i\)</span>, what multiplier does plain gradient descent apply each step?</p></li>
+<li><p>Why can changing a loss from <code>.mean()</code> to <code>.sum()</code> destabilize training?</p></li>
+</ol>
+<p>Plain SGD uses only the current gradient:</p>
+<p><span class="math display">\[\theta_{t+1}=\theta_t-\eta g_t,
+\qquad
+g_t=\nabla_\theta L(\theta_t)\]</span></p>
+<p>Momentum maintains a gradient accumulator:</p>
+<p><span class="math display">\[v_t=\beta v_{t-1}+g_t\]</span></p>
+<p><span class="math display">\[\theta_{t+1}=\theta_t-\eta v_t\]</span></p>
+<p>For <span class="math inline">\(\theta,g,v\in\mathbb{R}^{D}\)</span>:</p>
+<ul>
+<li><p><span class="math inline">\(\eta\)</span>: learning rate</p></li>
+<li><p><span class="math inline">\(\beta\)</span>: momentum coefficient, commonly near <span class="math inline">\(0.9\)</span></p></li>
+<li><p><span class="math inline">\(v_t\)</span>: optimizer state with the same shape as <span class="math inline">\(\theta\)</span></p></li>
+</ul>
+<p>Intuition: momentum acts like a low-pass filter. Consistent gradient directions accumulate, while rapidly changing directions partially cancel. This can accelerate movement through shallow directions of an ill-conditioned loss, although excessive momentum can produce oscillation.</p>
+<p>Optimizer state has practical costs. Momentum adds roughly one parameter-sized state tensor; Adam generally adds two. With billions of parameters, optimizer state can consume more memory than the model weights.</p>
+<div class="center">
+<hr />
+</div>
+<div class="box box-derive" data-kind="derive"><div class="box-title">✏️ Derivation: what momentum does on a constant slope and on a quadratic</div>
+<p><strong>Step 1.</strong> Unroll: <span class="math inline">\(v_t=g_t+\beta g_{t-1}+\beta^2g_{t-2}+\dots=\sum_{k\ge0}\beta^kg_{t-k}\)</span>.</p>
+<p><strong>Step 2.</strong> Constant gradient <span class="math inline">\(g\)</span>: <span class="math inline">\(v_t\to g\sum_k\beta^k=\frac{g}{1-\beta}\)</span>. The effective learning rate is <span class="math inline">\(\frac{\eta}{1-\beta}\)</span>: <span class="math inline">\(10\eta\)</span> for <span class="math inline">\(\beta=0.9\)</span>.</p>
+<p><strong>Step 3.</strong> Quadratic <span class="math inline">\(L=\frac12\lambda\theta^2\)</span>, <span class="math inline">\(g_t=\lambda\theta_t\)</span>. From the update, <span class="math inline">\(v_{t-1}=(\theta_{t-1}-\theta_t)/\eta\)</span>. Substitute: <span class="math inline">\(\theta_{t+1}=\theta_t-\eta\lambda\theta_t+\beta(\theta_t-\theta_{t-1})\)</span>.</p>
+<p><strong>Step 4.</strong> Try <span class="math inline">\(\theta_t=r^t\)</span>: <span class="math inline">\(r^2-(1+\beta-\eta\lambda)r+\beta=0\)</span>.</p>
+<p><strong>Step 5.</strong> Both roots satisfy <span class="math inline">\(|r|&lt;1\)</span> iff <span class="math inline">\(|\beta|&lt;1\)</span> and <span class="math inline">\(|1+\beta-\eta\lambda|&lt;1+\beta\)</span> (the Jury test for quadratics), i.e. <span class="math inline">\(0&lt;\eta\lambda&lt;2(1+\beta)\)</span>.</p>
+<p><strong>Step 6.</strong> <strong>Compare:</strong> plain GD needs <span class="math inline">\(\eta\lambda&lt;2\)</span>. With <span class="math inline">\(\beta=0.9\)</span>, momentum tolerates <span class="math inline">\(\eta\lambda&lt;3.8\)</span>, and in flat directions it accelerates by up to <span class="math inline">\(1/(1-\beta)\)</span>.</p>
+<p><strong>Step 7.</strong> <strong>Why the state must persist:</strong> resetting <span class="math inline">\(v\)</span> each step makes <span class="math inline">\(v_t=g_t\)</span>, which is plain SGD.</p>
+</div>
+<div class="box box-algobox" data-kind="algobox"><div class="box-title">⚙️ Algorithm: SGD with momentum</div>
+<div class="algo">
+<div class="algo-line" style="--d:0"><strong>Input:</strong> <span class="math inline">\(\theta\)</span>, <span class="math inline">\(\eta\)</span>, <span class="math inline">\(\beta\)</span>; state <span class="math inline">\(v\gets0\)</span> created once</div>
+<div class="algo-line" style="--d:0"><strong>for</strong> each step <strong>do</strong></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(g\gets\nabla_\theta L\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(v\gets\beta v+g\)</span></div>
+<div class="algo-line" style="--d:1"><span class="math inline">\(\theta\gets\theta-\eta v\)</span></div>
+<div class="algo-line" style="--d:0"><strong>end</strong></div>
+</div>
+</div>
+<h2 class="unnumbered" id="pytorch-exercise-10-minutes">2. PyTorch exercise — 10 minutes</h2>
+<p>Implement momentum manually on an ill-conditioned quadratic:</p>
+<p><span class="math display">\[L(\theta)=\frac12\theta^\top H\theta,
+\qquad
+H=\operatorname{diag}(1,20)\]</span></p>
+<pre class="code python"><code class="language-python">import torch
+
+H = torch.diag(torch.tensor([1.0, 20.0]))  # [D, D]
+initial = torch.tensor([4.0, 4.0])         # [D]
+
+
+def train(beta, lr=0.04, steps=50, reset_velocity=False):
+    theta = initial.clone().requires_grad_()
+    velocity = ...                          # TODO 1: [D]
+    history = []
+
+    for step in range(steps):
+        loss = ...                          # TODO 2: scalar
+        loss.backward()
+
+        if reset_velocity:
+            ...                             # TODO 3: introduce the bug
+
+        with torch.no_grad():
+            ...                             # TODO 4: update velocity
+            ...                             # TODO 5: update theta
+
+        history.append({
+            &quot;step&quot;: step,
+            &quot;loss&quot;: loss.item(),
+            &quot;theta&quot;: theta.detach().clone(),
+            &quot;velocity&quot;: velocity.clone(),
+        })
+
+        ...                                 # TODO 6: clear gradient
+
+    return history
+
+
+for beta in [0.0, 0.9]:
+    history = train(beta)
+
+    print(f&quot;\nbeta={beta}&quot;)
+    for row in history[::10]:
+        print(
+            f&quot;step={row[&#x27;step&#x27;]:02d}&quot;,
+            f&quot;loss={row[&#x27;loss&#x27;]:9.4f}&quot;,
+            f&quot;theta={row[&#x27;theta&#x27;].tolist()}&quot;,
+        )</code></pre>
+<p>Before running it, predict:</p>
+<ul>
+<li><p>Which coordinate will oscillate more with momentum?</p></li>
+<li><p>Which optimizer will make faster progress along the low-curvature coordinate?</p></li>
+</ul>
+<p>Now reproduce an optimizer-state bug:</p>
+<pre class="code python"><code class="language-python">correct = train(beta=0.9)
+buggy = train(beta=0.9, reset_velocity=True)
+
+print(&quot;correct final loss:&quot;, correct[-1][&quot;loss&quot;])
+print(&quot;buggy final loss:  &quot;, buggy[-1][&quot;loss&quot;])</code></pre>
+<p>Explain why resetting <code>velocity</code> inside the loop destroys momentum.</p>
+<p>Hints:</p>
+<ul>
+<li><p>Use <code>torch.zeros_like(theta)</code> for the state.</p></li>
+<li><p>The quadratic can be written as <code>0.5 * theta @ H @ theta</code>.</p></li>
+<li><p>An in-place momentum update is <code>velocity.mul_(beta).add_(theta.grad)</code>.</p></li>
+<li><p>State must persist across optimization steps.</p></li>
+<li><p>Parameter gradients do not clear automatically.</p></li>
+</ul>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="checks-for-understanding-5-minutes">3. Checks for understanding — 5 minutes</h2>
+<ol>
+<li><p>If <span class="math inline">\(\beta=0\)</span>, how does the momentum update reduce to ordinary SGD?</p></li>
+<li><p>Why must the velocity have the same shape and device as its parameter?</p></li>
+<li><p>Prediction: if the gradient remains constant at <span class="math inline">\(g\)</span>, what value does <span class="math inline">\(v_t\)</span> approach for <span class="math inline">\(0\leq\beta&lt;1\)</span>?</p></li>
+<li><p>Debugging: after resuming from a checkpoint, the loss briefly spikes even though model weights loaded correctly. What missing state could explain this?</p></li>
+<li><p>A model has 4 GB of parameters in training precision. Approximately how much additional memory does classical momentum require for its velocity alone?</p></li>
+</ol>
+<div class="center">
+<hr />
+</div>
+<h2 class="unnumbered" id="solution-open-after-attempting">Solution — open after attempting</h2>
+<pre class="code python"><code class="language-python">def train(beta, lr=0.04, steps=50, reset_velocity=False):
+    theta = initial.clone().requires_grad_()
+    velocity = torch.zeros_like(theta)
+    history = []
+
+    for step in range(steps):
+        loss = 0.5 * theta @ H @ theta
+        loss.backward()
+
+        if reset_velocity:
+            velocity.zero_()
+
+        with torch.no_grad():
+            velocity.mul_(beta).add_(theta.grad)
+            theta.add_(velocity, alpha=-lr)
+
+        history.append({
+            &quot;step&quot;: step,
+            &quot;loss&quot;: loss.item(),
+            &quot;theta&quot;: theta.detach().clone(),
+            &quot;velocity&quot;: velocity.clone(),
+        })
+
+        theta.grad = None
+
+    return history</code></pre>
+<p>The high-curvature coordinate tends to oscillate more because its gradient changes sharply as it crosses the minimum. Momentum should accelerate progress along the consistently sloped, low-curvature coordinate.</p>
+<p>Resetting <code>velocity</code> makes every update:</p>
+<p><span class="math display">\[v_t=\beta(0)+g_t=g_t\]</span></p>
+<p>so the optimizer becomes ordinary SGD regardless of the supplied nonzero <span class="math inline">\(\beta\)</span>.</p>
+<p>Check answers:</p>
+<ol>
+<li><p>With <span class="math inline">\(\beta=0\)</span>, <span class="math inline">\(v_t=g_t\)</span>, giving <span class="math inline">\(\theta_{t+1}=\theta_t-\eta g_t\)</span>.</p></li>
+<li><p>Momentum tracks one accumulated value per parameter element; mismatched devices or shapes make the update invalid.</p></li>
+<li><p>The limiting velocity is:</p>
+<p><span class="math display">\[v_\infty=\frac{g}{1-\beta}\]</span></p></li>
+<li><p>The optimizer checkpoint may be missing its momentum buffers. Scheduler and gradient-scaler state are other possibilities.</p></li>
+<li><p>One parameter-sized velocity requires approximately another 4 GB in the same precision.</p></li>
+</ol>
+<p>Retrieval answers:</p>
+<ol>
+<li><p>The multiplier is <span class="math inline">\(1-\eta\lambda_i\)</span>.</p></li>
+<li><p>Summation scales gradients with the number of elements, effectively increasing the learning rate unless compensated.</p></li>
+</ol>

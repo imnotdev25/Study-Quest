@@ -1,0 +1,443 @@
+
+<p><strong>20 minutes: retrieval 2 · intuition 5 · PyTorch 10 · checks 3</strong></p>
+<h3 class="unnumbered" id="spaced-retrieval">1. Spaced retrieval</h3>
+<ol>
+<li><p>Why can <span class="math inline">\(k_1=\log p(a)-\log q(a)\)</span> be negative even though KL is nonnegative?</p></li>
+<li><p>Under which sampling distribution does averaging <span class="math inline">\(k_1\)</span> estimate <span class="math inline">\(D_{\mathrm{KL}}(p\|q)\)</span>?</p></li>
+</ol>
+<p>Answers are near the end.</p>
+<h3 class="unnumbered" id="ppo-has-three-relevant-policies">2. PPO has three relevant policies</h3>
+<p>During repeated PPO epochs:</p>
+<ul>
+<li><p><span class="math inline">\(q\)</span>: reference policy used for KL regularization;</p></li>
+<li><p><span class="math inline">\(\mu=\pi_{\text{old}}\)</span>: rollout policy that generated the data;</p></li>
+<li><p><span class="math inline">\(p=\pi_\theta\)</span>: current policy after some optimizer steps.</p></li>
+</ul>
+<p>The desired forward KL at a fixed state is:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(p\|q)
+=
+E_{a\sim p}
+\left[
+\log p(a)-\log q(a)
+\right]\]</span></p>
+<p>But rollout actions came from <span class="math inline">\(\mu\)</span>. The naive rollout average therefore estimates:</p>
+<p><span class="math display">\[E_{a\sim\mu}
+\left[
+\log p(a)-\log q(a)
+\right]\]</span></p>
+<p>This is generally not a KL and may be negative.</p>
+<p>For a fixed state, importance sampling repairs the distribution:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(p\|q)
+=
+E_{a\sim\mu}
+\left[
+\frac{p(a)}{\mu(a)}
+\left(\log p(a)-\log q(a)\right)
+\right]\]</span></p>
+<p>provided:</p>
+<p><span class="math display">\[\mu(a)&gt;0\quad\text{whenever}\quad p(a)&gt;0\]</span></p>
+<p>The cost is variance. Effective sample size diagnoses concentration:</p>
+<p><span class="math display">\[\operatorname{ESS}
+=
+\frac{\left(\sum_i w_i\right)^2}
+{\sum_i w_i^2},
+\qquad
+w_i=\frac{p(a_i)}{\mu(a_i)}\]</span></p>
+<p>Clipping <span class="math inline">\(w_i\)</span> lowers variance but changes the estimand. PPO’s clipped policy objective does not make a clipped KL estimate unbiased.</p>
+<p>Tensor shapes:</p>
+<ul>
+<li><p>policy probabilities and log-probabilities: <span style="background-color: codeinlinebg"><code> [V]</code></span></p></li>
+<li><p>sampled IDs, log-ratios and weights: <span style="background-color: codeinlinebg"><code> [N]</code></span></p></li>
+<li><p>LLM token quantities and response mask: <span style="background-color: codeinlinebg"><code> [B, T]</code></span></p></li>
+</ul>
+<p>For an autoregressive LLM, old rollouts also contain prefixes sampled from <span class="math inline">\(\mu\)</span>. Correcting the full current-policy prefix distribution requires products of token ratios:</p>
+<p><span class="math display">\[W_t
+=
+\prod_{j&lt;t}
+\frac{p(a_j\mid s_j)}
+{\mu(a_j\mid s_j)}\]</span></p>
+<p>These products can explode with sequence length. Computing exact vocabulary KL at logged prefixes removes action-sampling noise, but it still measures KL along old-policy prefixes, not the complete current-policy trajectory distribution.</p>
+<p>DPO’s <span class="math inline">\(\beta\)</span> scales a fixed preference loss relative to a reference. Although DPO can be motivated using KL-regularized RL, its usual training loop has neither online rollouts nor a measured-KL controller.</p>
+<h3 class="unnumbered" id="pytorch-exercise-stale-samples-report-negative-kl">3. PyTorch exercise — stale samples report negative “KL”</h3>
+<pre class="code python"><code class="language-python">import math
+import torch
+import torch.nn.functional as F
+
+torch.manual_seed(7)
+torch.set_default_dtype(torch.float64)
+
+num_samples = 100_000
+weight_clip = 2.0
+
+reference_logits = torch.log(torch.tensor([
+    0.50, 0.30, 0.15, 0.05
+]))
+
+rollout_logits = torch.log(torch.tensor([
+    0.70, 0.20, 0.08, 0.02
+]))
+
+current_logits = torch.log(torch.tensor([
+    0.25, 0.25, 0.25, 0.25
+]))
+
+
+# TODO 1: Construct stable distributions and
+# calculate exact quantities.
+reference_log_probabilities = ...
+rollout_log_probabilities = ...
+current_log_probabilities = ...
+
+reference_probabilities = ...
+rollout_probabilities = ...
+current_probabilities = ...
+
+current_reference_log_ratios = ...
+
+exact_forward_kl = ...
+
+# What an infinite stale-rollout sample would produce.
+exact_stale_expectation = ...
+
+
+# TODO 2: Estimate using rollout-policy samples
+# without correction.
+rollout_samples = ...
+
+sampled_reference_log_ratios = ...
+
+naive_stale_estimate = ...
+
+
+# TODO 3: Correct the sampling distribution.
+sampled_log_importance_weights = ...
+
+importance_weights = ...
+
+importance_weighted_terms = ...
+
+importance_sampling_estimate = ...
+
+self_normalized_estimate = ...
+
+
+# TODO 4: Compare weight clipping and fresh samples.
+clipped_weights = ...
+
+clipped_importance_estimate = ...
+
+fresh_current_samples = ...
+
+fresh_current_terms = ...
+
+fresh_current_estimate = ...
+
+
+# TODO 5: Weight and uncertainty diagnostics.
+effective_sample_size = ...
+
+effective_sample_fraction = ...
+
+maximum_weight = ...
+
+fraction_of_samples_clipped = ...
+
+exact_weights = ...
+
+rollout_mass_at_clipped_actions = ...
+current_mass_at_clipped_actions = ...
+
+importance_sampling_se = ...
+
+fresh_current_se = ...
+
+
+print(&quot;Exact KL(p || q):&quot;, exact_forward_kl.item())
+
+print(
+    &quot;Exact stale E_mu[log p - log q]:&quot;,
+    exact_stale_expectation.item(),
+)
+print(
+    &quot;Sampled naive stale estimate:&quot;,
+    naive_stale_estimate.item(),
+)
+
+print(
+    &quot;\nOrdinary IS estimate:&quot;,
+    importance_sampling_estimate.item(),
+)
+print(
+    &quot;Self-normalized IS estimate:&quot;,
+    self_normalized_estimate.item(),
+)
+print(
+    &quot;Fresh-current estimate:&quot;,
+    fresh_current_estimate.item(),
+)
+print(
+    &quot;Clipped-weight estimate:&quot;,
+    clipped_importance_estimate.item(),
+)
+
+print(
+    &quot;\nMean/max importance weight:&quot;,
+    importance_weights.mean().item(),
+    maximum_weight.item(),
+)
+print(
+    &quot;ESS and ESS fraction:&quot;,
+    effective_sample_size.item(),
+    effective_sample_fraction.item(),
+)
+print(
+    &quot;Sample fraction clipped:&quot;,
+    fraction_of_samples_clipped.item(),
+)
+print(
+    &quot;Rollout/current mass at clipped actions:&quot;,
+    rollout_mass_at_clipped_actions.item(),
+    current_mass_at_clipped_actions.item(),
+)
+print(
+    &quot;Estimated SEs: IS, fresh&quot;,
+    importance_sampling_se.item(),
+    fresh_current_se.item(),
+)</code></pre>
+<p>Predict before running:</p>
+<ol>
+<li><p>Will the exact forward KL be positive?</p></li>
+<li><p>Can the naive stale estimate be negative?</p></li>
+<li><p>What is the largest importance weight?</p></li>
+<li><p>Can only 10% of rollout samples represent 50% of current-policy mass?</p></li>
+<li><p>Will clipping the weights at <span style="background-color: codeinlinebg"><code> 2.0</code></span> preserve the KL?</p></li>
+</ol>
+<h3 class="unnumbered" id="hints">Hints</h3>
+<ul>
+<li><p>The target integrand is <span style="background-color: codeinlinebg"><code> current_log_probability - reference_log_probability</code></span>.</p></li>
+<li><p>The correction ratio is <span style="background-color: codeinlinebg"><code> current_probability / rollout_probability</code></span>.</p></li>
+<li><p>Ordinary importance sampling averages <span style="background-color: codeinlinebg"><code> weight * integrand</code></span>.</p></li>
+<li><p>Self-normalized importance sampling divides the weighted sum by the weight sum; it is consistent but biased at finite sample sizes.</p></li>
+<li><p>Compute ratios through log-probability differences before exponentiating.</p></li>
+<li><p>ESS is at most <span style="background-color: codeinlinebg"><code> num_samples</code></span>.</p></li>
+</ul>
+<h3 class="unnumbered" id="debugging-experiments">Debugging experiments</h3>
+<ul>
+<li><p>Accidentally use <span class="math inline">\(q/\mu\)</span> rather than <span class="math inline">\(p/\mu\)</span>.</p></li>
+<li><p>Reuse old rollouts across many epochs without monitoring ESS.</p></li>
+<li><p>Clip importance weights and continue labeling the result exact KL.</p></li>
+<li><p>Average full-vocabulary KL over padded or prompt positions.</p></li>
+<li><p>Compute token means separately per worker instead of globally reducing numerator and valid-token count.</p></li>
+<li><p>Let trajectory log-weights overflow before exponentiation.</p></li>
+<li><p>Drive an adaptive KL coefficient from one noisy minibatch.</p></li>
+<li><p>Backpropagate through a KL diagnostic or reward-shaped return unintentionally.</p></li>
+</ul>
+<h3 class="unnumbered" id="checks-for-understanding">4. Checks for understanding</h3>
+<ol>
+<li><p>Why is the stale unweighted average not a KL?</p></li>
+<li><p>What support condition does importance sampling require?</p></li>
+<li><p>Why is action-level correction insufficient for complete LLM trajectories?</p></li>
+<li><p>When should a measured KL be detached?</p></li>
+<li><p>Does PPO ratio clipping validate clipped KL importance weights?</p></li>
+</ol>
+<hr />
+<h2 class="unnumbered" id="solutions">Solutions</h2>
+<p>Exact distributions:</p>
+<pre class="code python"><code class="language-python">reference_log_probabilities = F.log_softmax(
+    reference_logits,
+    dim=0,
+)
+
+rollout_log_probabilities = F.log_softmax(
+    rollout_logits,
+    dim=0,
+)
+
+current_log_probabilities = F.log_softmax(
+    current_logits,
+    dim=0,
+)
+
+reference_probabilities = (
+    reference_log_probabilities.exp()
+)
+
+rollout_probabilities = (
+    rollout_log_probabilities.exp()
+)
+
+current_probabilities = (
+    current_log_probabilities.exp()
+)
+
+current_reference_log_ratios = (
+    current_log_probabilities
+    - reference_log_probabilities
+)
+
+exact_forward_kl = (
+    current_probabilities
+    * current_reference_log_ratios
+).sum()
+
+exact_stale_expectation = (
+    rollout_probabilities
+    * current_reference_log_ratios
+).sum()</code></pre>
+<p>Stale rollout estimate:</p>
+<pre class="code python"><code class="language-python">rollout_samples = torch.multinomial(
+    rollout_probabilities,
+    num_samples=num_samples,
+    replacement=True,
+)
+
+sampled_reference_log_ratios = (
+    current_reference_log_ratios[
+        rollout_samples
+    ]
+)
+
+naive_stale_estimate = (
+    sampled_reference_log_ratios.mean()
+)</code></pre>
+<p>Importance correction:</p>
+<pre class="code python"><code class="language-python">sampled_log_importance_weights = (
+    current_log_probabilities[
+        rollout_samples
+    ]
+    - rollout_log_probabilities[
+        rollout_samples
+    ]
+)
+
+importance_weights = (
+    sampled_log_importance_weights.exp()
+)
+
+importance_weighted_terms = (
+    importance_weights
+    * sampled_reference_log_ratios
+)
+
+importance_sampling_estimate = (
+    importance_weighted_terms.mean()
+)
+
+self_normalized_estimate = (
+    importance_weighted_terms.sum()
+    / importance_weights.sum()
+)</code></pre>
+<p>Clipping and fresh sampling:</p>
+<pre class="code python"><code class="language-python">clipped_weights = (
+    importance_weights.clamp_max(
+        weight_clip
+    )
+)
+
+clipped_importance_estimate = (
+    clipped_weights
+    * sampled_reference_log_ratios
+).mean()
+
+fresh_current_samples = torch.multinomial(
+    current_probabilities,
+    num_samples=num_samples,
+    replacement=True,
+)
+
+fresh_current_terms = (
+    current_reference_log_ratios[
+        fresh_current_samples
+    ]
+)
+
+fresh_current_estimate = (
+    fresh_current_terms.mean()
+)</code></pre>
+<p>Diagnostics:</p>
+<pre class="code python"><code class="language-python">effective_sample_size = (
+    importance_weights.sum().square()
+    / importance_weights.square().sum()
+)
+
+effective_sample_fraction = (
+    effective_sample_size / num_samples
+)
+
+maximum_weight = (
+    importance_weights.max()
+)
+
+fraction_of_samples_clipped = (
+    (importance_weights &gt; weight_clip)
+    .to(torch.float64)
+    .mean()
+)
+
+exact_weights = (
+    current_probabilities
+    / rollout_probabilities
+)
+
+clipped_action_mask = (
+    exact_weights &gt; weight_clip
+)
+
+rollout_mass_at_clipped_actions = (
+    rollout_probabilities[
+        clipped_action_mask
+    ].sum()
+)
+
+current_mass_at_clipped_actions = (
+    current_probabilities[
+        clipped_action_mask
+    ].sum()
+)
+
+importance_sampling_se = (
+    importance_weighted_terms.std(
+        correction=0
+    )
+    / math.sqrt(num_samples)
+)
+
+fresh_current_se = (
+    fresh_current_terms.std(
+        correction=0
+    )
+    / math.sqrt(num_samples)
+)</code></pre>
+<p>The action log-ratios are approximately:</p>
+<p><span class="math display">\[[-0.693,\;-0.182,\;0.511,\;1.609]\]</span></p>
+<p>Therefore:</p>
+<p><span class="math display">\[D_{\mathrm{KL}}(p\|q)
+\approx0.311\]</span></p>
+<p>But stale rollout weighting gives:</p>
+<p><span class="math display">\[E_\mu[\log p-\log q]
+\approx-0.449\]</span></p>
+<p>The exact importance weights are:</p>
+<p><span class="math display">\[\frac p\mu
+=
+[0.357,\;1.25,\;3.125,\;12.5]\]</span></p>
+<p>Ordinary and self-normalized importance sampling should return near <span style="background-color: codeinlinebg"><code> 0.311</code></span>, but the expected ESS is only about:</p>
+<p><span class="math display">\[0.232N\]</span></p>
+<p>The two rare rollout actions constitute only:</p>
+<p><span class="math display">\[0.08+0.02=0.10\]</span></p>
+<p>of old-policy data, yet they constitute:</p>
+<p><span class="math display">\[0.25+0.25=0.50\]</span></p>
+<p>of current-policy mass. Clipping their weights at <span style="background-color: codeinlinebg"><code> 2.0</code></span> produces an expectation near <span style="background-color: codeinlinebg"><code> -0.073</code></span>, not the desired KL.</p>
+<h3 class="unnumbered" id="check-answers">Check answers</h3>
+<ol>
+<li><p>Its expectation is taken under <span class="math inline">\(\mu\)</span>, whereas forward KL requires actions from <span class="math inline">\(p\)</span> or a valid correction to <span class="math inline">\(p\)</span>.</p></li>
+<li><p>Every action or trajectory possible under <span class="math inline">\(p\)</span> must have positive probability under <span class="math inline">\(\mu\)</span>.</p></li>
+<li><p>Current-policy actions change later prefixes. Correcting their distribution requires cumulative prefix ratios, whose variance often grows rapidly with horizon.</p></li>
+<li><p>Detach or use <span style="background-color: codeinlinebg"><code> no_grad</code></span> for telemetry, controller updates and KL incorporated into rewards before return calculation. Direct gradients are appropriate only when intentionally optimizing an explicit differentiable KL loss.</p></li>
+<li><p>No. PPO clipping defines a conservative policy surrogate; clipping diagnostic importance weights introduces a different, biased estimator.</p></li>
+</ol>
+<h3 class="unnumbered" id="retrieval-answers">Retrieval answers</h3>
+<ol>
+<li><p>Nonnegativity applies to the expectation. Individual tokens favored more by the reference have negative log-ratios.</p></li>
+<li><p>Samples must come from <span class="math inline">\(p\)</span>, the first argument of <span class="math inline">\(D_{\mathrm{KL}}(p\|q)\)</span>, unless importance weighting correctly changes the sampling measure.</p></li>
+</ol>
+<p><strong>Takeaway:</strong> once PPO updates away from its rollout policy, an unweighted rollout average is no longer current-policy KL. Track policy staleness, ESS and maximum ratios; refresh data or state clearly which old-prefix surrogate you are measuring.</p>
