@@ -64,7 +64,7 @@ export function Logo({ size = 26 }: { size?: number }) {
     <svg width={size} height={size} viewBox="0 0 1024 1024" aria-hidden="true" className="logo-svg">
       <defs>
         <linearGradient id="sq-logo-bg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#7c5cf6" /><stop offset="1" stopColor="#5440d8" />
+          <stop offset="0" style={{ stopColor: "var(--accent)" }} /><stop offset="1" style={{ stopColor: "color-mix(in srgb, var(--accent) 75%, black)" }} />
         </linearGradient>
       </defs>
       <rect x="40" y="40" width="944" height="944" rx="220" fill="url(#sq-logo-bg)" />

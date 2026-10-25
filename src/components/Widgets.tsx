@@ -12,7 +12,7 @@ function Plot({ series, xs, yMax, yMin = 0, band }: { series: { ys: number[]; co
       {band && <rect x={sx(band[0])} width={sx(band[1]) - sx(band[0])} y={0} height={H} className="plot-band" />}
       <line x1={0} x2={W} y1={sy(0)} y2={sy(0)} className="plot-axis" />
       {series.map((s, i) => (
-        <polyline key={i} fill="none" stroke={s.color} strokeWidth={2.4} strokeDasharray={s.dash ? "5 4" : undefined}
+        <polyline key={i} fill="none" style={{ stroke: s.color }} strokeWidth={2.4} strokeDasharray={s.dash ? "5 4" : undefined}
           points={s.ys.map((y, j) => `${sx(xs[j])},${sy(Math.max(yMin, Math.min(yMax, y)))}`).join(" ")} />
       ))}
     </svg>
@@ -87,7 +87,7 @@ function PPOClip() {
   return (
     <div>
       <Plot xs={xs} yMin={-2.2} yMax={2.2} band={[1 - eps, 1 + eps]}
-        series={[{ ys: xs.map((r) => r * A), color: "#9ca3af", dash: true }, { ys: obj, color: "#7c5cf6" }]} />
+        series={[{ ys: xs.map((r) => r * A), color: "#9ca3af", dash: true }, { ys: obj, color: "var(--accent)" }]} />
       <Slider label="clip ε" min={0.05} max={0.5} step={0.01} value={eps} set={setEps} />
       <div className="row"><button className={A > 0 ? "chip on" : "chip"} onClick={() => setA(1)}>A &gt; 0</button>
         <button className={A < 0 ? "chip on" : "chip"} onClick={() => setA(-1)}>A &lt; 0</button></div>
@@ -122,7 +122,7 @@ function SpecDecode() {
   const best = sp.indexOf(Math.max(...sp));
   return (
     <div>
-      <Plot xs={ks} yMax={Math.max(...tok) * 1.05} series={[{ ys: tok, color: "#9ca3af", dash: true }, { ys: sp, color: "#7c5cf6" }]} />
+      <Plot xs={ks} yMax={Math.max(...tok) * 1.05} series={[{ ys: tok, color: "#9ca3af", dash: true }, { ys: sp, color: "var(--accent)" }]} />
       <Slider label="acceptance a" min={0.3} max={0.97} step={0.01} value={a} set={setA} />
       <Slider label="draft cost c" min={0} max={0.3} step={0.01} value={c} set={setC} />
       <p className="big">Best k = {ks[best]} → <b>{sp[best].toFixed(2)}× faster</b></p>
@@ -145,7 +145,7 @@ function Bayes() {
   const post = beta(a + h, a + t), prior = beta(a, a);
   return (
     <div>
-      <Plot xs={xs} yMax={Math.max(...post, ...prior) * 1.05} series={[{ ys: prior, color: "#9ca3af", dash: true }, { ys: post, color: "#7c5cf6" }]} />
+      <Plot xs={xs} yMax={Math.max(...post, ...prior) * 1.05} series={[{ ys: prior, color: "#9ca3af", dash: true }, { ys: post, color: "var(--accent)" }]} />
       <Slider label="heads" min={0} max={60} step={1} value={h} set={setH} />
       <Slider label="tails" min={0} max={60} step={1} value={t} set={setT} />
       <Slider label="prior strength" min={1} max={20} step={1} value={a} set={setA} />

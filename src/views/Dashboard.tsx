@@ -88,11 +88,11 @@ export function Dashboard({ data }: { data: Data }) {
               const ids = pathTopicIds(data, p.id), n = ids.filter((id) => s.done[id]).length;
               const on = p.id === (s.settings.path || "rl");
               return (
-                <button key={p.id} className={`path-tile ${on ? "on" : ""}`} style={{ "--path": p.color } as CSSProperties}
+                <button key={p.id} className={`path-tile ${on ? "on" : ""}`} style={{ "--path": "var(--accent)" } as CSSProperties}
                   onClick={() => { setPath(p.id); go({ v: "topic", id: s.lastByPath[p.id] ?? ids.find((id) => !s.done[id]) ?? ids[0] }); }}>
                   <span className="path-tile-icon"><Icon name={p.ic} size={18} /></span>
                   <span className="path-tile-text"><b>{p.long}</b><small className="muted">{n} of {ids.length} topics{on ? " · current" : ""}</small></span>
-                  <Ring value={n / Math.max(1, ids.length)} size={34} stroke={4} color={p.color}
+                  <Ring value={n / Math.max(1, ids.length)} size={34} stroke={4} color="var(--accent)"
                     label={<small>{Math.round((n / Math.max(1, ids.length)) * 100)}</small>} />
                 </button>
               );

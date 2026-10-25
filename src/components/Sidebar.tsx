@@ -39,7 +39,7 @@ export function Sidebar({ data, route, onSearch }: { data: Data; route: Route; o
   const nextId = last && !s.done[last] ? last : ids.find((id) => !s.done[id]) ?? ids[0];
   const next = nextId ? data.topics.get(nextId) : undefined;
   const streak = liveStreak(s);
-  const accent = { "--path": path.color } as CSSProperties;
+  const accent = { "--path": "var(--accent)" } as CSSProperties;
 
   return (
     <aside className="sidebar" style={accent}>
@@ -68,14 +68,14 @@ export function Sidebar({ data, route, onSearch }: { data: Data; route: Route; o
       <div className="path-switch" role="tablist" aria-label="Learning path">
         {PATHS.map((p) => (
           <button key={p.id} role="tab" aria-selected={p.id === pathId} title={p.long}
-            className={p.id === pathId ? "on" : ""} style={{ "--path": p.color } as CSSProperties} onClick={() => setPath(p.id)}>
+            className={p.id === pathId ? "on" : ""} style={{ "--path": "var(--accent)" } as CSSProperties} onClick={() => setPath(p.id)}>
             <Icon name={p.ic} size={15} /><span>{p.title}</span>
           </button>
         ))}
       </div>
 
       <div className="path-card">
-        <Ring value={doneN / Math.max(1, ids.length)} size={44} stroke={5} color={path.color}
+        <Ring value={doneN / Math.max(1, ids.length)} size={44} stroke={5} color="var(--accent)"
           label={<b>{Math.round((doneN / Math.max(1, ids.length)) * 100)}%</b>} />
         <div className="path-card-text">
           <b>{path.long}</b>
@@ -114,7 +114,7 @@ export function Sidebar({ data, route, onSearch }: { data: Data; route: Route; o
               <button className="part-btn" aria-expanded={open} onClick={() => setOpenPart(open ? "" : key)}>
                 <Icon name="chevron" size={13} className="caret" />
                 <span className="part-title">{p.title}</span>
-                <Ring value={n / p.topics.length} size={18} stroke={2.5} color={path.color} />
+                <Ring value={n / p.topics.length} size={18} stroke={2.5} color="var(--accent)" />
               </button>
               {open && (
                 <ol className="timeline">
