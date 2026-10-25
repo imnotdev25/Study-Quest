@@ -77,7 +77,7 @@ jobs:
           # armhf packages come from ports.ubuntu.com.
           for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
             [ -f "$f" ] || continue
-            sudo sed -i -E '/^deb \[/!s/^deb /deb [arch=amd64] /; /^deb \[/{/arch=/!s/^deb \[/deb [arch=amd64 /}' "$f"
+            sudo sed -i -E '/^deb \[/!s/^deb /deb [arch=amd64] /; /^deb \[/{/arch=/!s/^deb \[/deb [arch=amd64 /;}' "$f"
           done
           for f in /etc/apt/sources.list.d/*.sources; do
             [ -f "$f" ] || continue
