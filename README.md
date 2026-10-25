@@ -82,7 +82,7 @@ Linux needs WebKitGTK 4.1 (preinstalled on Ubuntu 22.04+, Fedora 37+).
 
 ## 🛠 Develop
 
-Requirements: Node 22+, pnpm 10, Rust (stable), [uv](https://docs.astral.sh/uv/) (it fetches Python for you). On Linux also the Tauri system libraries:
+Requirements: Node 24+, pnpm 10, Rust (stable), [uv](https://docs.astral.sh/uv/) (it fetches Python for you). On Linux also the Tauri system libraries:
 `sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`.
 
 ```bash
