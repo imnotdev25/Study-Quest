@@ -1,0 +1,16 @@
+{
+  "name": "study-quest-videos",
+  "private": true,
+  "type": "module",
+  "description": "Three.js explainer scenes, rendered to the mp4s in ../public/videos/",
+  "scripts": {
+    "serve": "node serve.mjs",
+    "record": "node record.mjs"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}

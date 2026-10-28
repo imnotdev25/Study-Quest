@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Study Quest: a Tauri 2 desktop app (React + TypeScript frontend, Rust backend) for learning RL, LLMs and System Design.
+Study Quest: a Tauri 2 desktop app (React + TypeScript frontend, Rust backend) for learning RL, LLMs, System Design and AI Safety.
 Runs on macOS, Windows and Linux.
 
 ## Commands
@@ -9,7 +9,9 @@ Runs on macOS, Windows and Linux.
 - Frontend type-check + build: `pnpm build`. Run it before saying a task is done.
 - Rust check: `cd src-tauri && cargo check`
 - Regenerate content (needs pandoc, tectonic, `../.venv`, `../.venv-post`): `pnpm content`
+- Guides only (AI Safety, RL Environments; Markdown in `guides/`): `uv run python scripts/build_guides.py --check` (runs every Python block; run after build_content.py, it merges into catalog.json)
 - Exercises only: `uv run python scripts/build_exercises.py` (fails unless every solution passes and every starter fails)
+- Explainer videos: `cd videos && npm install && npm run record [scene]` renders `videos/web/scenes/<id>.js` to `public/videos/<id>.mp4` + poster and updates `public/videos/videos.json` (needs ffmpeg + Chrome). Scenes are pure functions of time; keep the light theme from `videos/web/lib.js`.
 - Check a notebook runs: `marimo export html notebooks/interactive/<name>.py -o /tmp/x.html`
 
 ## Layout

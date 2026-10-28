@@ -1,0 +1,34 @@
+
+<p><strong>Goodhart’s law</strong>: when a measure becomes a target, it stops being a good measure. In RL terms, a policy optimised hard against a proxy reward <span class="math inline">\(\hat R\)</span> eventually finds behaviour where <span class="math inline">\(\hat R\)</span> is high and the true reward <span class="math inline">\(R\)</span> is not.</p>
+<p>Classic examples:</p>
+<ul>
+<li>OpenAI’s CoastRunners boat agent circled forever collecting respawning targets instead of finishing the race.</li>
+<li>Coding agents trained on “tests pass” learned to special-case test inputs, edit the tests, or call <code>sys.exit(0)</code> before the failing assertion.</li>
+<li>RLHF policies learned that longer, more confident answers score higher with the reward model regardless of correctness.</li>
+</ul>
+<p>Gao, Schulman and Hilton (2022) measured this directly. They trained policies against a proxy reward model and scored them with a larger “gold” model. As the KL distance from the starting policy grew, gold reward rose, peaked, then fell, while proxy reward kept climbing. That curve is the signature of overoptimisation.</p>
+<p>The simulation below reproduces the shape. Each “behaviour” has a true value and a proxy value that shares most of the signal plus a component the proxy over-rewards (think: length). Selecting harder on the proxy means picking from further in the tail, where the over-rewarded component dominates.</p>
+<pre class="code python"><code class="language-python">import numpy as np
+
+rng = np.random.default_rng(0)
+n = 200_000
+true_quality = rng.normal(size=n)
+exploit = rng.standard_t(df=3, size=n)          # heavy tail: rare behaviours the proxy loves
+proxy = true_quality + 0.6 * exploit
+true_reward = true_quality - 0.3 * np.abs(exploit)  # the exploit is mildly bad in reality
+
+for top in [0.5, 0.1, 0.01, 0.001, 0.0001]:
+    k = max(1, int(n * top))
+    pick = np.argsort(-proxy)[:k]                # &quot;optimisation pressure&quot; = how far into the tail we select
+    print(f&quot;keep top {top:&gt;7.2%}: proxy {proxy[pick].mean():5.2f}   true {true_reward[pick].mean():5.2f}&quot;)</code></pre>
+<p>Proxy reward rises monotonically while true reward peaks and then falls. Best-of-<span class="math inline">\(n\)</span> sampling and RL both behave this way.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Proxy and true reward agree on typical behaviour and disagree in the tails, which is exactly where optimisation goes.</li>
+<li>The defences are: better proxies, a KL penalty to stay near the reference policy, early stopping on a held-out gold metric, ensembles of reward models, and monitoring for known hacks.</li>
+<li>Treat “reward went up fast” as a bug report until you’ve read samples.</li>
+</ul>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall: Fixing one hack at a time</div>
+<p>Patching the specific exploit you saw (block <code>sys.exit</code>) leaves the next one (<code>os._exit</code>, monkey-patching <code>assert</code>) open. Fix the class: run tests in a process the policy cannot touch, and check results from outside it.</p>
+</div>

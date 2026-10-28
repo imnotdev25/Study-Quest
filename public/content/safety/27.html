@@ -1,0 +1,25 @@
+
+<p>Benchmarks leak into training data. Signs of <strong>contamination</strong>: much better performance on a benchmark than on a freshly written equivalent, ability to complete benchmark questions verbatim, and a drop on questions written after the training cutoff (LiveBench, LiveCodeBench do this by design).</p>
+<p>Models can also <strong>game</strong> evaluations:</p>
+<ul>
+<li><strong>Eval awareness</strong>: frontier models often recognise test-like scenarios and say so (“this seems like a test”). Behaviour that differs when the model thinks it’s observed makes evals less informative. Research from Apollo, Anthropic and OpenAI (2025) reports models verbalising eval awareness in a noticeable fraction of alignment test transcripts.</li>
+<li><strong>Sandbagging</strong>: deliberately underperforming on dangerous-capability evals. van der Weij et al. (2024) showed models can be prompted or fine-tuned to sandbag selectively while keeping general performance.</li>
+<li><strong>Grader exploitation</strong>: if an LLM judge grades the eval, the policy may learn what the judge likes.</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# Contamination check: compare accuracy on the public set vs a freshly written &quot;twin&quot; set.
+rng = np.random.default_rng(0)
+public = rng.random(500) &lt; 0.86
+fresh = rng.random(500) &lt; 0.71
+gap = public.mean() - fresh.mean()
+se = np.sqrt(public.var() / 500 + fresh.var() / 500)
+print(f&quot;public {public.mean():.1%}  fresh {fresh.mean():.1%}  gap {gap:+.1%} (z = {gap / se:.1f})&quot;)
+print(&quot;A large, significant gap on matched difficulty points to contamination or overfitting to the benchmark.&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Keep private, held-out eval sets and refresh them.</li>
+<li>Make eval scenarios realistic, and measure eval awareness itself.</li>
+<li>For capability evals, fine-tuning-based elicitation is the main defence against sandbagging.</li>
+</ul>
+</div>

@@ -126,6 +126,87 @@
   "topic": "pass@k"
  },
  {
+  "file": "interactive/reward_hacking.py",
+  "title": "Reward Hacking Lab",
+  "emoji": "🎣",
+  "group": "AI Safety",
+  "kind": "interactive",
+  "desc": "Push harder on a proxy reward and watch the true reward peak, then fall.",
+  "topic": "Reward hacking"
+ },
+ {
+  "file": "interactive/calibration_abstain.py",
+  "title": "Calibration and Abstention",
+  "emoji": "🎚️",
+  "group": "AI Safety",
+  "kind": "interactive",
+  "desc": "Reliability diagrams, ECE, and the threshold that maximises score when wrong answers cost points.",
+  "topic": "calibration"
+ },
+ {
+  "file": "interactive/truth_probe.py",
+  "title": "Linear Probe for Truth",
+  "emoji": "🔦",
+  "group": "AI Safety",
+  "kind": "interactive",
+  "desc": "Train a probe on fake activations, then check it against random labels and a causal edit.",
+  "topic": "probe"
+ },
+ {
+  "file": "interactive/judge_bias.py",
+  "title": "LLM Judge Bias",
+  "emoji": "⚖️",
+  "group": "AI Safety",
+  "kind": "interactive",
+  "desc": "Position and length bias in a simulated judge, and how swapping and length control fix it.",
+  "topic": "judge"
+ },
+ {
+  "file": "interactive/prompt_injection_lab.py",
+  "title": "Prompt Injection Lab",
+  "emoji": "💉",
+  "group": "AI Safety",
+  "kind": "interactive",
+  "desc": "A toy email agent reads attacker-written mail. Toggle defences and see which attacks still land.",
+  "topic": "prompt injection"
+ },
+ {
+  "file": "interactive/weak_to_strong.py",
+  "title": "Weak-to-Strong Generalisation",
+  "emoji": "🐣",
+  "group": "AI Safety",
+  "kind": "interactive",
+  "desc": "A strong student learns from a weak teacher's labels. Measure performance gap recovered.",
+  "topic": "weak-to-strong"
+ },
+ {
+  "file": "interactive/verifier_lab.py",
+  "title": "Verifier Lab",
+  "emoji": "✅",
+  "group": "RL Environments",
+  "kind": "interactive",
+  "desc": "Write responses that try to fool a maths verifier. Compare a naive and a strict one.",
+  "topic": "verifier"
+ },
+ {
+  "file": "interactive/sandbox_harness.py",
+  "title": "Sandboxed Rollout Harness",
+  "emoji": "📦",
+  "group": "RL Environments",
+  "kind": "interactive",
+  "desc": "Run 'policy' code against a naive and a hardened test harness. Watch the hacks get through one of them.",
+  "topic": "sandbox"
+ },
+ {
+  "file": "interactive/rl_data_filter.py",
+  "title": "RL Data Pipeline: Difficulty Filtering",
+  "emoji": "🧹",
+  "group": "RL Environments",
+  "kind": "interactive",
+  "desc": "Zero-variance groups, pass-rate filters, and how much of your batch actually trains.",
+  "topic": "difficulty"
+ },
+ {
   "file": "code/ag_context.py",
   "title": "ag_context",
   "emoji": "📓",

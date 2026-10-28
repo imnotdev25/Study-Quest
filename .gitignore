@@ -22,6 +22,9 @@ __pycache__/
 __marimo__/
 notebooks/**/__marimo__/
 
+# --- graphify knowledge graph (local tooling) ---
+graphify-out/
+
 # --- logs, caches, editors, OS ---
 *.log
 npm-debug.log*

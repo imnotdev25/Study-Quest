@@ -1,0 +1,31 @@
+
+<p>When there’s no programmatic check (writing, research, open-ended agent tasks), use an LLM judge, ideally with a <strong>rubric</strong>: a list of specific, checkable criteria, each scored yes/no, with weights.</p>
+<p>Why rubrics over “rate 1-10”:</p>
+<ul>
+<li>Per-criterion verdicts are more consistent and easier to audit.</li>
+<li>You can see <em>which</em> criterion moved during training.</li>
+<li>Criteria can be written per task (e.g. “mentions the dosage limit”, “cites the 2019 study”), which is how rubric-based RL datasets are built.</li>
+</ul>
+<p>Making judge rewards survive training:</p>
+<ul>
+<li>Validate the judge against human labels on a held-out set, and re-validate on samples from the <em>current</em> policy every few hundred steps.</li>
+<li>Penalise or control length; judges reward verbosity.</li>
+<li>Hide the policy’s identity and randomise answer order for pairwise judges.</li>
+<li>Ask the judge for evidence (quote the part of the response that satisfies a criterion) and fail criteria without evidence.</li>
+<li>Use a different (or stronger) model family for the judge than the policy, to reduce self-preference.</li>
+</ul>
+<pre class="code python"><code class="language-python">def rubric_reward(verdicts, rubric, length, max_len=800):
+    &quot;&quot;&quot;verdicts: {criterion_id: bool} from a judge. Weighted pass rate, with a soft length penalty.&quot;&quot;&quot;
+    total = sum(c[&quot;weight&quot;] for c in rubric)
+    score = sum(c[&quot;weight&quot;] for c in rubric if verdicts.get(c[&quot;id&quot;], False)) / total
+    if any(c.get(&quot;critical&quot;) and not verdicts.get(c[&quot;id&quot;], False) for c in rubric):
+        return 0.0                                   # a missed critical criterion fails the whole response
+    over = max(0, length - max_len) / max_len
+    return max(0.0, score - 0.5 * over)
+
+rubric = [{&quot;id&quot;: &quot;correct_dose&quot;, &quot;weight&quot;: 3, &quot;critical&quot;: True},
+          {&quot;id&quot;: &quot;mentions_interactions&quot;, &quot;weight&quot;: 2},
+          {&quot;id&quot;: &quot;advises_doctor&quot;, &quot;weight&quot;: 1}]
+print(rubric_reward({&quot;correct_dose&quot;: True, &quot;mentions_interactions&quot;: True, &quot;advises_doctor&quot;: False}, rubric, 600))
+print(rubric_reward({&quot;correct_dose&quot;: True, &quot;mentions_interactions&quot;: True, &quot;advises_doctor&quot;: True}, rubric, 1600))
+print(rubric_reward({&quot;mentions_interactions&quot;: True, &quot;advises_doctor&quot;: True}, rubric, 300))</code></pre>

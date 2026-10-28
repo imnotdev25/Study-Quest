@@ -1,0 +1,45 @@
+
+<p>For LLM post-training an <strong>environment</strong> has four parts:</p>
+<ul>
+<li><strong>Task distribution</strong>: the prompts or initial states (a maths problem, a repo with a failing issue, a website and a goal).</li>
+<li><strong>Interaction protocol</strong>: single-turn (one completion, then grade) or multi-turn (the model calls tools, sees results, continues).</li>
+<li><strong>State</strong>: whatever the actions change: a conversation, a file system, a database, a browser.</li>
+<li><strong>Reward</strong>: usually a <strong>verifier</strong> that inspects the final state or answer and returns a number.</li>
+</ul>
+<p>This is the classic MDP, with the policy’s “action” being a whole message or tool call. RL with programmatic rewards is often called <strong>RLVR</strong> (reinforcement learning with verifiable rewards). DeepSeek-R1 (2025) is the well-known example: rule-based accuracy and format rewards on maths and code, no learned reward model, and long chain-of-thought emerged from it.</p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: A driving test</div>
+<p>The task distribution is the set of routes, the protocol is “drive until the examiner says stop”, the state is the car and the road, and the verifier is the examiner’s checklist. A sloppy checklist (“did the car arrive?”) passes someone who ran three red lights.</p>
+</div>
+<p>The interface most libraries converge on is a small Gym-like API:</p>
+<pre class="code python"><code class="language-python">from dataclasses import dataclass, field
+
+@dataclass
+class Step:
+    observation: str
+    reward: float = 0.0
+    done: bool = False
+    info: dict = field(default_factory=dict)
+
+class Env:
+    &quot;&quot;&quot;Minimal text environment interface: reset() gives the first observation, step() consumes one model message.&quot;&quot;&quot;
+    def reset(self, task: dict) -&gt; str: ...
+    def step(self, action: str) -&gt; Step: ...
+
+class SingleTurnMath(Env):
+    def reset(self, task):
+        self.answer = task[&quot;answer&quot;]
+        return task[&quot;question&quot;]
+    def step(self, action):
+        ok = action.strip().split()[-1] == str(self.answer)
+        return Step(&quot;&quot;, reward=float(ok), done=True, info={&quot;correct&quot;: ok})
+
+env = SingleTurnMath()
+print(env.reset({&quot;question&quot;: &quot;What is 17 * 3? End with the number.&quot;, &quot;answer&quot;: 51}))
+print(env.step(&quot;17 times 3 is 51&quot;))</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Environment = tasks + protocol + state + verifier. Most bugs live in the verifier.</li>
+<li>Keep the interface tiny so rollout workers, evals and training share one code path.</li>
+<li>Return rich <code>info</code> (why the reward was given); you will need it to debug training.</li>
+</ul>
+</div>

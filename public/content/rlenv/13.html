@@ -1,0 +1,33 @@
+
+<p>A prompt pipeline that survives real training does the boring parts carefully:</p>
+<ol type="1">
+<li><strong>Source</strong> from several places: curated datasets, synthetic generation, real user tasks (with consent), scraped problems with known answers.</li>
+<li><strong>Validate labels</strong>: run the reference solution through the verifier; for scraped maths, cross-check answers with a second source or with a strong model’s majority vote, and drop disagreements.</li>
+<li><strong>Deduplicate</strong>: exact hash, then near-duplicates (MinHash over n-grams, or embedding similarity). Duplicates overweight some tasks and inflate apparent solve rates.</li>
+<li><strong>Decontaminate</strong>: remove anything that overlaps your eval sets (n-gram overlap, typically 13-grams for text, or normalised-code matches). Do this for every eval you will report.</li>
+<li><strong>Filter for verifiability</strong>: drop multiple-choice questions where guessing is easy, proofs graded by final answer only, and questions with ambiguous answers.</li>
+<li><strong>Tag</strong> every item with source, domain, difficulty estimate and license.</li>
+</ol>
+<pre class="code python"><code class="language-python">import re
+
+def shingles(text, n=5):
+    toks = re.findall(r&quot;\w+&quot;, text.lower())
+    return {&quot; &quot;.join(toks[i:i + n]) for i in range(max(1, len(toks) - n + 1))}
+
+def jaccard(a, b):
+    return len(a &amp; b) / max(1, len(a | b))
+
+train = [&quot;Find the sum of all integers from 1 to 100 inclusive.&quot;,
+         &quot;Find the sum of all the integers from 1 to 100, inclusive!&quot;,
+         &quot;A train leaves at 3 pm travelling 60 km/h. When does it arrive 150 km away?&quot;]
+evalset = [&quot;A train leaves at 3 pm travelling 60 km/h. When does it arrive 150 km away?&quot;]
+
+kept = []
+for t in train:
+    s = shingles(t, 3)
+    if any(jaccard(s, shingles(k, 3)) &gt; 0.5 for k in kept):
+        print(&quot;near-duplicate dropped:&quot;, t); continue
+    if any(jaccard(s, shingles(e, 3)) &gt; 0.5 for e in evalset):
+        print(&quot;contaminated dropped:  &quot;, t); continue
+    kept.append(t)
+print(f&quot;kept {len(kept)} of {len(train)}&quot;)</code></pre>

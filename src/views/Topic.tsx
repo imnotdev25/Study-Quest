@@ -13,11 +13,14 @@ import { promptDialog } from "../components/Dialog";
 import { hasBoard, topicBoardId } from "../lib/boards";
 import { BoardFrame, exportBoard } from "./Diagrams";
 import { go } from "../App";
+import { useVideos, videosFor } from "../lib/videos";
+import { VideoPlayer } from "./Videos";
 
 export function TopicView({ data, id }: { data: Data; id: string }) {
   const t = data.topics.get(id);
   const s = useStore();
   const notebooks = useNotebooks(data);
+  const videos = useVideos();
   const [html, setHtml] = useState("");
   const [quiz, setQuiz] = useState(false);
   const [drawing, setDrawing] = useState(false);
@@ -95,6 +98,14 @@ export function TopicView({ data, id }: { data: Data; id: string }) {
 
       {!html && <div className="loading">Loading…</div>}
       <article className="prose" ref={body} />
+
+      {t && videosFor(t, videos).slice(0, 2).map((v) => (
+        <section key={v.id} className="card video-inline">
+          <div className="row"><h3 className="grow">🎬 Watch: {v.title}</h3><button onClick={() => go({ v: "videos" })}>All videos</button></div>
+          <p className="muted small">{v.desc}</p>
+          <VideoPlayer v={v} />
+        </section>
+      ))}
 
       {nbs.map((n) => <InlineNotebook key={n.file} nb={n} autoOpen={extra.includes(n.file)} />)}
       <div className="nb-picker">

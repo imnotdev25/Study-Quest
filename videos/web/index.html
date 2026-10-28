@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Study Quest explainer scenes</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #f6f7fb; overflow: hidden; font: 13px -apple-system, system-ui, sans-serif; }
+    #stage { position: relative; width: 1280px; height: 720px; margin: 0 auto; }
+    #stage canvas { position: absolute; inset: 0; width: 1280px; height: 720px; }
+    #controls { position: fixed; bottom: 10px; left: 10px; color: #475569; display: flex; gap: 8px; align-items: center; }
+    #controls button, #controls select { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; }
+    body.record #controls { display: none; }
+  </style>
+  <script type="importmap">{ "imports": { "three": "/three/build/three.module.js" } }</script>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="controls">
+    <select id="pick" aria-label="Scene"></select>
+    <button id="play" aria-label="Play or pause">Pause</button>
+    <input id="seek" type="range" min="0" max="1000" value="0" aria-label="Seek" style="width:320px" />
+    <span id="time"></span>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

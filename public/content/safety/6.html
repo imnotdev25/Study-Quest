@@ -1,0 +1,35 @@
+
+<p>Behavioural evals tell you what a model does on the inputs you tried. Interpretability asks what it <em>represents</em> and <em>computes</em>, which could let you:</p>
+<ul>
+<li>detect a concept (deception, a harmful plan, “this is a test”) even when the output looks fine,</li>
+<li>explain why a model did something, and predict when it will do it again,</li>
+<li>edit or steer behaviour by changing internal state.</li>
+</ul>
+<p>The two broad styles:</p>
+<ul>
+<li><strong>Representation-level</strong>: find directions in activation space that correspond to concepts (probes, steering vectors, sparse autoencoders).</li>
+<li><strong>Mechanistic</strong>: reverse-engineer the circuit, the specific heads and neurons and their connections, that implements a behaviour (induction heads, attribution graphs).</li>
+</ul>
+<p>The central obstacle is <strong>superposition</strong> (Elhage et al., 2022, <em>Toy Models of Superposition</em>): models represent more features than they have dimensions by storing them as nearly orthogonal directions, so individual neurons are <em>polysemantic</em> and respond to several unrelated things.</p>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# Pack many sparse features into few dimensions with random directions.
+rng = np.random.default_rng(0)
+d, n_feat = 64, 400
+W = rng.normal(size=(n_feat, d)); W /= np.linalg.norm(W, axis=1, keepdims=True)
+overlap = np.abs(W @ W.T)[np.triu_indices(n_feat, 1)]
+print(f&quot;{n_feat} features in {d} dims; mean |cos| between features = {overlap.mean():.3f}, max = {overlap.max():.3f}&quot;)
+
+# Sparse activation: only 3 features on at once. Can we read them back with dot products?
+active = rng.choice(n_feat, 3, replace=False)
+x = W[active].sum(0)
+scores = W @ x
+print(&quot;true active:&quot;, sorted(active.tolist()), &quot; top-3 read back:&quot;, sorted(np.argsort(-scores)[:3].tolist()))</code></pre>
+<p>Because the features are sparse, interference stays small and you can usually decode them. That’s why models do it, and why “look at neuron 1234” rarely works.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Interpretability aims to read concepts and plans from activations, not only from outputs.</li>
+<li>Superposition makes single neurons a poor unit of analysis; directions (features) are better.</li>
+<li>An interpretation is only useful if it predicts behaviour or enables interventions.</li>
+</ul>
+</div>

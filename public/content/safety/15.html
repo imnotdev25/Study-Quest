@@ -1,0 +1,50 @@
+
+<p>Superalignment’s core worry: humans will be the <em>weak</em> supervisor of a <em>strong</em> model. Burns et al. (2023, OpenAI) studied an analogy: fine-tune a strong model (GPT-4) on labels produced by a weak model (GPT-2-level).</p>
+<p>Findings:</p>
+<ul>
+<li>The strong student usually <strong>beats</strong> its weak supervisor, recovering part of the gap to a strong model trained on ground truth.</li>
+<li>They measure this with <strong>performance gap recovered</strong>:</li>
+</ul>
+<p><span class="math display">\[\text{PGR} = \frac{\text{acc}(\text{strong trained on weak labels}) - \text{acc}(\text{weak})}{\text{acc}(\text{strong ceiling}) - \text{acc}(\text{weak})}\]</span></p>
+<ul>
+<li>An auxiliary confidence loss, which lets the student disagree with the weak labels when it’s confident, raised PGR substantially on NLP tasks. Reward modelling showed much weaker generalisation.</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+rng = np.random.default_rng(0)
+n, d = 9000, 40
+X = rng.normal(size=(n, d)); w_true = rng.normal(size=d)
+y = (X @ w_true &gt; 0).astype(float)
+
+def fit(X, y, conf=0.0, steps=400, lr=0.5):
+    &quot;&quot;&quot;Logistic regression; `conf` blends the labels with the model&#x27;s own hardened predictions.&quot;&quot;&quot;
+    w = np.zeros(X.shape[1])
+    for _ in range(steps):
+        p = 1 / (1 + np.exp(-X @ w))
+        w -= lr * X.T @ (p - ((1 - conf) * y + conf * (p &gt; 0.5))) / len(y)
+    return w
+acc = lambda w, X, y: ((X @ w &gt; 0) == y).mean()
+
+def student_features(salience):
+    &quot;&quot;&quot;The strong model&#x27;s own representation: the true concept (scaled by salience) plus unrelated features.&quot;&quot;&quot;
+    truth = X @ w_true / np.linalg.norm(w_true)
+    return np.c_[salience * truth + 0.3 * rng.normal(size=n), rng.normal(size=(n, 19)) + 0.4 * X[:, :19]]
+
+tr, held, te = slice(0, 3000), slice(3000, 6000), slice(6000, None)
+weak = fit(X[tr, :6], y[tr])                              # weak model: sees only 6 raw features
+weak_labels = (X[held, :6] @ weak &gt; 0).astype(float)
+a_w = acc(weak, X[te, :6], y[te])
+for sal, conf in [(0.0, 0.0), (2.0, 0.0), (2.0, 0.8)]:
+    Z = student_features(sal)
+    student = fit(Z[held], weak_labels, conf)             # strong model trained on weak labels
+    ceiling = fit(Z[held], y[held])                       # strong model trained on ground truth
+    a_s, a_c = acc(student, Z[te], y[te]), acc(ceiling, Z[te], y[te])
+    print(f&quot;salience {sal}, conf {conf}: weak {a_w:.1%}  strong-on-weak {a_s:.1%}  ceiling {a_c:.1%}  &quot;
+          f&quot;PGR {(a_s - a_w) / max(1e-9, a_c - a_w):.2f}&quot;)</code></pre>
+<p>When the concept isn’t already easy to read from the student’s features, the student just copies the teacher (PGR near 0, or meaningless when the ceiling is no better). When it is salient, weak labels are enough to point at it, and the confidence loss helps the student overrule wrong labels. The Notebooks tab has a version with sliders.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>PGR near 1 means weak supervision is nearly as good as perfect labels; near 0 means the student copied the supervisor’s mistakes.</li>
+<li>Students imitate errors they can predict. Methods that help: confidence losses, bootstrapping through intermediate models, and generative pre-training that already contains the concept.</li>
+</ul>
+</div>

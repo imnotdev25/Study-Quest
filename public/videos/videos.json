@@ -1,0 +1,101 @@
+[
+ {
+  "id": "rl_loop",
+  "title": "The RL loop",
+  "desc": "An agent acts, the environment answers with a new state and a reward, and returns improve episode by episode.",
+  "path": "rl",
+  "keywords": [
+   "RL is choosing actions",
+   "MDPs and Discounted Return",
+   "Value Functions",
+   "Monte Carlo Prediction",
+   "TD(0)"
+  ],
+  "duration": 32,
+  "src": "videos/rl_loop.mp4",
+  "poster": "videos/rl_loop.jpg"
+ },
+ {
+  "id": "value_iteration",
+  "title": "Value iteration",
+  "desc": "Bellman backups spread value outward from the goal, sweep by sweep, until the greedy policy appears.",
+  "path": "rl",
+  "keywords": [
+   "Value Iteration",
+   "Value Functions",
+   "MDPs and Discounted Return",
+   "Bellman"
+  ],
+  "duration": 32,
+  "src": "videos/value_iteration.mp4",
+  "poster": "videos/value_iteration.jpg"
+ },
+ {
+  "id": "grpo",
+  "title": "GRPO in one group",
+  "desc": "Sample a group of answers, score them, compare each to the group average, and push up the better ones.",
+  "path": "rl",
+  "keywords": [
+   "GRPO",
+   "Group Reward Standardization",
+   "Verifiable Rewards",
+   "DAPO",
+   "Dr. GRPO",
+   "Critic-Free Baselines",
+   "RL with Verifiable Rewards",
+   "Group Baselines"
+  ],
+  "duration": 34,
+  "src": "videos/grpo.mp4",
+  "poster": "videos/grpo.jpg"
+ },
+ {
+  "id": "embeddings",
+  "title": "From tokens to embeddings",
+  "desc": "Text is split into tokens, each id picks a row of the embedding table, and meaning becomes geometry.",
+  "path": "llm",
+  "keywords": [
+   "Embeddings",
+   "Tokenization",
+   "Weight Tying",
+   "Core Intuitions: Dot Products",
+   "Notation, Shapes"
+  ],
+  "duration": 32,
+  "src": "videos/embeddings.mp4",
+  "poster": "videos/embeddings.jpg"
+ },
+ {
+  "id": "attention",
+  "title": "Attention, step by step",
+  "desc": "Queries meet keys, softmax turns scores into weights, and each token gathers a weighted mix of values.",
+  "path": "llm",
+  "keywords": [
+   "Scaled Dot-Product Attention",
+   "Multi-Head Attention",
+   "Backpropagation Through Attention",
+   "Cheaper Attention",
+   "Assemble a Pre-Norm Decoder Block"
+  ],
+  "duration": 34,
+  "src": "videos/attention.mp4",
+  "poster": "videos/attention.jpg"
+ },
+ {
+  "id": "next_token",
+  "title": "Predicting the next token",
+  "desc": "Logits, softmax and temperature, sampling one token, and why the KV cache makes the next step cheap.",
+  "path": "llm",
+  "keywords": [
+   "Autoregressive Decoding and the KV Cache",
+   "Next-Token Loss",
+   "One Token, Prefill and Decode",
+   "Softmax Cross-Entropy",
+   "Speculative Decoding",
+   "PagedAttention"
+  ],
+  "duration": 34,
+  "src": "videos/next_token.mp4",
+  "poster": "videos/next_token.jpg"
+ }
+]

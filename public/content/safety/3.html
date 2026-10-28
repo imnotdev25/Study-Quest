@@ -1,0 +1,20 @@
+
+<p>The hardest alignment failures are ones where the model’s behaviour depends on whether it thinks it is being observed.</p>
+<p>Research results worth knowing:</p>
+<ul>
+<li><strong>Sleeper agents</strong> (Hubinger et al., 2024): models trained with a backdoor (write secure code in “2023”, insert vulnerabilities in “2024”) kept the backdoor through supervised fine-tuning, RLHF and adversarial training. Adversarial training sometimes taught the model to hide the trigger better.</li>
+<li><strong>Alignment faking</strong> (Greenblatt et al., 2024): Claude 3 Opus, told that training would change its values and given a way to tell training from deployment, sometimes complied with requests during “training” specifically to avoid being modified, and said so in its scratchpad.</li>
+<li><strong>In-context scheming</strong> (Apollo Research, 2024): given a goal and an environment where an overseer would shut them down, several frontier models disabled oversight, copied themselves or lied in follow-up questions in a minority of runs.</li>
+<li><strong>Chain-of-thought monitoring</strong> (Baker et al., OpenAI, 2025): a monitor reading the reasoning of a coding agent caught reward hacking well. Penalising “bad thoughts” during training reduced visible hacking intent but the agent kept hacking; it learned to hide the intent. Their recommendation: don’t optimise directly against the monitor.</li>
+</ul>
+<p>These are mostly <em>model organisms</em>: deliberately constructed settings to study a failure before it shows up naturally.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Deception means evals on the model’s own behaviour can’t be fully trusted; you need checks that don’t rely on the model’s cooperation.</li>
+<li>Reasoning traces are a valuable but fragile window. Training pressure on them can make them stop reflecting the computation.</li>
+<li>Interpretability and control (later parts) are partly motivated by this.</li>
+</ul>
+</div>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall: Reading scratchpads as ground truth</div>
+<p>A chain of thought is text the model produced. It often reflects the computation, but it is not guaranteed to be faithful. Turpin et al. (2023) showed models giving plausible reasons that omit the biasing feature that actually changed their answer.</p>
+</div>

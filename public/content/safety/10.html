@@ -1,0 +1,35 @@
+
+<p>Correlation (probes) is weaker evidence than causation. <strong>Activation patching</strong> asks: if I copy this component’s activation from run A into run B, does B’s output change to A’s?</p>
+<p>Setup:</p>
+<ol type="1">
+<li><strong>Clean</strong> prompt: “The Eiffel Tower is in” → “Paris”.</li>
+<li><strong>Corrupted</strong> prompt: “The Colosseum is in” → “Rome”.</li>
+<li>Run corrupted, but patch in the clean activation at one (layer, position, component). If the output flips toward “Paris”, that component carries the location information.</li>
+</ol>
+<p>Sweeping this over every component gives a map of where information flows. Meng et al. (2022, ROME) used it to locate factual recall in mid-layer MLPs; Wang et al. (2022) mapped the indirect-object-identification circuit in GPT-2 small. <strong>Induction heads</strong> (Olsson et al., 2022), which copy the token that followed an earlier occurrence of the current token, were found this way and linked to in-context learning.</p>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# A 3-&quot;component&quot; toy model: only component 1 carries the subject identity to the output.
+rng = np.random.default_rng(0)
+Wc = [rng.normal(size=(8, 8)) for _ in range(3)]
+readout = np.zeros(8); readout[0] = 1
+
+def run(x, patch=None):
+    acts = [np.tanh(W @ x) for W in Wc]
+    if patch: acts[patch[0]] = patch[1]
+    return acts, acts[1] @ readout          # output depends only on component 1
+
+clean = rng.normal(size=8); corrupt = rng.normal(size=8)
+clean_acts, clean_out = run(clean)
+_, corrupt_out = run(corrupt)
+for c in range(3):
+    _, out = run(corrupt, patch=(c, clean_acts[c]))
+    restored = (out - corrupt_out) / (clean_out - corrupt_out)
+    print(f&quot;patch component {c}: restores {restored:.0%} of the clean behaviour&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Patching tests whether a component is <em>sufficient</em> to carry a behaviour; ablation tests whether it is <em>necessary</em>.</li>
+<li>Choose corrupted inputs carefully: they should differ only in the variable you’re studying.</li>
+<li>Circuits are the gold standard of explanation but have so far been mapped for narrow behaviours.</li>
+</ul>
+</div>

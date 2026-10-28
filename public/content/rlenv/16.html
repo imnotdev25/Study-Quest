@@ -1,0 +1,22 @@
+
+<p>Dashboards worth having from step 1:</p>
+<ul>
+<li><strong>Reward</strong>: mean and distribution, per source/domain. Also the fraction of groups with zero variance.</li>
+<li><strong>Held-out evals</strong> with a stricter grader, every N steps.</li>
+<li><strong>Response length</strong> and truncation rate.</li>
+<li><strong>Entropy</strong> of the policy’s token distribution; a collapse means exploration has stopped (often followed by a plateau).</li>
+<li><strong>KL to the reference policy</strong> (if used), and clip fraction for PPO-style losses.</li>
+<li><strong>Infra</strong>: rollout failure rate by type, env latency percentiles, staleness of async data.</li>
+<li><strong>Samples</strong>: a random and a top-reward sample per source, logged as text, read by a human daily.</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+def entropy_alarm(entropy, window=50, drop=0.5):
+    &quot;&quot;&quot;Flag when the moving average entropy falls below `drop` x its starting level.&quot;&quot;&quot;
+    ma = np.convolve(entropy, np.ones(window) / window, mode=&quot;valid&quot;)
+    hit = np.where(ma &lt; drop * ma[0])[0]
+    return int(hit[0] + window) if len(hit) else None
+
+steps = np.arange(1000)
+entropy = 1.2 * np.exp(-steps / 400) + 0.05 * np.random.default_rng(0).normal(size=1000)
+print(&quot;entropy collapse alarm at step:&quot;, entropy_alarm(entropy))</code></pre>

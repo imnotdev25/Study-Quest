@@ -1,0 +1,25 @@
+
+<p>A <strong>verifier</strong> maps (task, response or final state) to a reward. Options, from most to least trustworthy:</p>
+<ul>
+<li><strong>Exact / normalised match</strong>: final answer equals reference after normalisation (numbers, units, whitespace, LaTeX).</li>
+<li><strong>Symbolic / semantic equivalence</strong>: <code>sympy</code> simplification, numeric tolerance, set/unordered comparisons.</li>
+<li><strong>Execution-based</strong>: run unit tests, a SQL query against a DB, a program’s output against expected output.</li>
+<li><strong>State-based</strong>: inspect the environment after the episode: was the file created, is the DB row updated, did the right API call happen.</li>
+<li><strong>Rubric graded by an LLM</strong>: per-criterion yes/no from a judge, aggregated. Needed for open-ended tasks.</li>
+<li><strong>Learned reward model</strong>: preference-trained scorer. Most flexible, most hackable.</li>
+</ul>
+<p>Every verifier has two error types:</p>
+<ul>
+<li><strong>False positive</strong> (rewarding a wrong answer): the policy learns to produce that wrong answer. This is reward hacking fuel.</li>
+<li><strong>False negative</strong> (rejecting a right answer): wasted signal, and a push toward one surface form.</li>
+</ul>
+<p>False positives are usually worse, because RL actively searches for them.</p>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# How verifier errors corrupt the learning signal: expected reward of a correct vs a &quot;hack&quot; response.
+for fpr, fnr in [(0.0, 0.0), (0.0, 0.15), (0.05, 0.0), (0.3, 0.0)]:
+    r_correct = 1 - fnr
+    r_hack = fpr            # a cheap wrong answer that sometimes passes
+    print(f&quot;FPR {fpr:.0%} FNR {fnr:.0%}: reward(correct) {r_correct:.2f}, reward(hack) {r_hack:.2f}, &quot;
+          f&quot;margin {r_correct - r_hack:+.2f}&quot;)
+print(&quot;The policy follows the margin. If a hack is much cheaper to produce, even a small FPR can win.&quot;)</code></pre>

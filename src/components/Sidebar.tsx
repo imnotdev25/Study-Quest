@@ -8,7 +8,7 @@ import { MOD } from "../lib/platform";
 import { go, type Route } from "../App";
 
 const NAV: [Route, IconName, string][] = [
-  [{ v: "home" }, "home", "Home"], [{ v: "play" }, "flask", "Playground"], [{ v: "notebooks" }, "notebook", "Notebooks"], [{ v: "draw" }, "pen", "Diagrams"],
+  [{ v: "home" }, "home", "Home"], [{ v: "play" }, "flask", "Playground"], [{ v: "notebooks" }, "notebook", "Notebooks"], [{ v: "draw" }, "pen", "Diagrams"], [{ v: "videos" }, "film", "Videos"],
   [{ v: "plan" }, "calendar", "Plan"], [{ v: "settings" }, "sliders", "Settings"],
 ];
 

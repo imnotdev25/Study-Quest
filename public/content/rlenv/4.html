@@ -1,0 +1,45 @@
+
+<p>Most maths/QA verifier bugs are in <strong>extracting</strong> the answer, not comparing it.</p>
+<p>Rules that hold up in training:</p>
+<ul>
+<li>Require a specific format (<code>\boxed{...}</code> or <code>Answer: ...</code>), and take <strong>exactly one</strong> final answer. If the response has several boxed answers, fail it; otherwise the policy learns to box every candidate.</li>
+<li>Normalise: strip whitespace, <code>$</code>, trailing <code>.</code>, thousands separators, units you’ve decided to ignore; convert <code>1/2</code>, <code>0.5</code> and <code>\frac{1}{2}</code> to the same number.</li>
+<li>Compare numbers with a tolerance; compare expressions symbolically when you can.</li>
+<li>Cap response length or penalise truncation, so “answer” isn’t scraped from a rambling, cut-off response.</li>
+</ul>
+<pre class="code python"><code class="language-python">import re
+from fractions import Fraction
+
+def extract_boxed(text):
+    &quot;&quot;&quot;Return the content of the single \\boxed{...}, or None if there are zero or several.&quot;&quot;&quot;
+    out, i = [], 0
+    while (j := text.find(&quot;\\boxed{&quot;, i)) != -1:
+        k, depth = j + 7, 1
+        while k &lt; len(text) and depth:
+            depth += {&quot;{&quot;: 1, &quot;}&quot;: -1}.get(text[k], 0); k += 1
+        if depth: return None
+        out.append(text[j + 7:k - 1]); i = k
+    return out[0] if len(out) == 1 else None
+
+def to_number(s):
+    s = s.strip().rstrip(&quot;.&quot;).strip(&quot;$&quot;).replace(&quot;,&quot;, &quot;&quot;).replace(&quot; &quot;, &quot;&quot;)
+    s = re.sub(r&quot;\\[dt]?frac\{([^{}]+)\}\{([^{}]+)\}&quot;, r&quot;(\1)/(\2)&quot;, s)
+    s = s.replace(&quot;(&quot;, &quot;&quot;).replace(&quot;)&quot;, &quot;&quot;)
+    try:
+        return Fraction(s)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+def math_reward(response, reference):
+    got = extract_boxed(response)
+    if got is None: return 0.0
+    a, b = to_number(got), to_number(reference)
+    return float(a is not None and b is not None and a == b)
+
+cases = [(&quot;so \\boxed{\\frac{1}{2}}&quot;, &quot;0.5&quot;), (&quot;\\boxed{1,000}&quot;, &quot;1000&quot;), (&quot;\\boxed{3} or \\boxed{4}&quot;, &quot;4&quot;),
+         (&quot;the answer is 4&quot;, &quot;4&quot;), (&quot;\\boxed{0.50}.&quot;, &quot;1/2&quot;), (&quot;\\boxed{x}&quot;, &quot;4&quot;)]
+for resp, ref in cases:
+    print(f&quot;{resp!r:32s} ref={ref:5s} -&gt; {math_reward(resp, ref)}&quot;)</code></pre>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall: “Last number in the response”</div>
+<p>A common shortcut extracts the final number in the text. The policy then learns to end with a list of guesses, or to append the most frequent answer. Require an explicit, single, delimited final answer.</p>
+</div>

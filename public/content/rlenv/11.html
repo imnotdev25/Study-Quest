@@ -1,0 +1,21 @@
+
+<p>You will need to replay a rollout: to debug a weird reward, to verify a reported hack, or to re-grade with a fixed verifier.</p>
+<ul>
+<li><strong>Pin everything</strong>: image digests (not tags), package versions, dataset versions, tool versions.</li>
+<li><strong>Seed the environment</strong>: random task variations, mock API responses, simulated users.</li>
+<li><strong>Record</strong>: the full action/observation transcript, tool call arguments and results, verifier inputs and outputs, timing, the sandbox image digest and the policy checkpoint.</li>
+<li><strong>Mock the outside world</strong>: replace live web/APIs with recorded or simulated services. Live services change, rate-limit, and make rewards non-stationary.</li>
+<li><strong>Snapshot state</strong> for long tasks so you can resume or branch from a mid-episode state.</li>
+</ul>
+<pre class="code python"><code class="language-python">import hashlib, json
+
+def rollout_record(task_id, image_digest, policy_ckpt, seed, transcript, reward, verifier_version):
+    rec = dict(task_id=task_id, image=image_digest, policy=policy_ckpt, seed=seed,
+               transcript=transcript, reward=reward, verifier=verifier_version)
+    rec[&quot;id&quot;] = hashlib.sha256(json.dumps(rec, sort_keys=True).encode()).hexdigest()[:16]
+    return rec
+
+r = rollout_record(&quot;swe-1234&quot;, &quot;sha256:9f2c...&quot;, &quot;step-1800&quot;, 7,
+                   [{&quot;role&quot;: &quot;assistant&quot;, &quot;tool&quot;: &quot;bash&quot;, &quot;args&quot;: &quot;pytest -q&quot;}, {&quot;role&quot;: &quot;tool&quot;, &quot;out&quot;: &quot;3 passed&quot;}],
+                   1.0, &quot;code-v3&quot;)
+print(json.dumps(r, indent=1)[:400])</code></pre>

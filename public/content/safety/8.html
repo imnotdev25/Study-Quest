@@ -1,0 +1,32 @@
+
+<p>If a concept is a direction <span class="math inline">\(v\)</span>, you can push the model along it: add <span class="math inline">\(\alpha v\)</span> to the residual stream at some layer during generation. This is <strong>activation steering</strong> (Turner et al., 2023, <em>activation addition</em>; Zou et al., 2023, <em>Representation Engineering</em>).</p>
+<p>A common recipe for a steering vector:</p>
+<ol type="1">
+<li>Collect paired prompts that differ in one concept (“Answer honestly” vs “Answer deceptively”; “I love this” vs “I hate this”).</li>
+<li>Record activations at layer <span class="math inline">\(\ell\)</span> for each.</li>
+<li><span class="math inline">\(v = \text{mean}(\text{acts}^+) - \text{mean}(\text{acts}^-)\)</span> (difference of means).</li>
+<li>At inference, <span class="math inline">\(h_\ell \leftarrow h_\ell + \alpha v\)</span>.</li>
+</ol>
+<pre class="code python"><code class="language-python">import numpy as np
+
+rng = np.random.default_rng(0)
+d = 64
+concept = rng.normal(size=d); concept /= np.linalg.norm(concept)
+pos = rng.normal(size=(200, d)) + 1.5 * concept
+neg = rng.normal(size=(200, d)) - 1.5 * concept
+v = pos.mean(0) - neg.mean(0)
+print(f&quot;difference-of-means recovers the concept: cos = {v @ concept / np.linalg.norm(v):.3f}&quot;)
+
+# &quot;Readout&quot; the model uses downstream: a fixed linear head that cares about the concept
+readout = concept * 2.0
+h = rng.normal(size=d)
+for alpha in [0, 1, 2, 4]:
+    print(f&quot;alpha={alpha}: readout = {(h + alpha * v / np.linalg.norm(v)) @ readout:+.2f}&quot;)</code></pre>
+<p>Refusal is a well-studied case: Arditi et al. (2024) found a single direction mediating refusal in many chat models. Removing it from the weights largely disabled refusal, which is both an interpretability result and a warning about how shallow some safety training is.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Difference-of-means is a strong, simple baseline for finding concept directions.</li>
+<li>Steering is causal evidence: if adding <span class="math inline">\(v\)</span> changes the behaviour, the direction is used.</li>
+<li>The same tool that adds safety can remove it, so open-weight safety can’t rely on one direction.</li>
+</ul>
+</div>

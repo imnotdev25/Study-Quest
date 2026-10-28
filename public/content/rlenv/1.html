@@ -1,0 +1,50 @@
+
+<p>Agentic environments add a loop: the model emits a tool call, the environment executes it, the result is appended, repeat until the model stops or a budget runs out.</p>
+<p>Design choices that matter for training:</p>
+<ul>
+<li><strong>Budgets</strong>: max turns, max tokens, max wall-clock per tool call. Hitting a budget is a terminal state with its own reward (usually 0) and a flag in <code>info</code>.</li>
+<li><strong>Tool schema</strong>: strict JSON with validation. Malformed calls get an error observation, not a crash, so the model can learn to recover.</li>
+<li><strong>Observation truncation</strong>: tool outputs can be huge; truncate with a marker (“…[3,200 lines omitted]”) so context doesn’t explode.</li>
+<li><strong>Which tokens get gradient</strong>: only the model’s own tokens. Tool outputs are part of the context but are <em>masked</em> from the loss.</li>
+<li><strong>Reward timing</strong>: usually only at the end (sparse). Intermediate rewards for “called a tool” invite hacking; reward outcomes.</li>
+</ul>
+<pre class="code python"><code class="language-python">import json, random
+
+class GuessNumber:
+    &quot;&quot;&quot;Multi-turn toy: the agent calls guess(n) and hears higher/lower. Reward = solved within budget, minus a turn cost.&quot;&quot;&quot;
+    def __init__(self, max_turns=8):
+        self.max_turns = max_turns
+    def reset(self, task):
+        self.secret, self.turns = task[&quot;secret&quot;], 0
+        return &#x27;Find a number in 1..100. Reply with {&quot;tool&quot;: &quot;guess&quot;, &quot;n&quot;: &lt;int&gt;}.&#x27;
+    def step(self, action):
+        self.turns += 1
+        try:
+            call = json.loads(action); n = int(call[&quot;n&quot;]); assert call[&quot;tool&quot;] == &quot;guess&quot;
+        except Exception:
+            obs = &quot;error: expected {\&quot;tool\&quot;: \&quot;guess\&quot;, \&quot;n\&quot;: &lt;int&gt;}&quot;
+            return dict(obs=obs, reward=0.0, done=self.turns &gt;= self.max_turns, info={&quot;malformed&quot;: True})
+        if n == self.secret:
+            return dict(obs=&quot;correct&quot;, reward=1.0 - 0.05 * self.turns, done=True, info={&quot;turns&quot;: self.turns})
+        done = self.turns &gt;= self.max_turns
+        return dict(obs=&quot;higher&quot; if n &lt; self.secret else &quot;lower&quot;, reward=0.0, done=done,
+                    info={&quot;budget_exhausted&quot;: done})
+
+def binary_search_policy(history):
+    lo, hi = 1, 100
+    for n, obs in history:
+        if obs == &quot;higher&quot;: lo = n + 1
+        elif obs == &quot;lower&quot;: hi = n - 1
+    return json.dumps({&quot;tool&quot;: &quot;guess&quot;, &quot;n&quot;: (lo + hi) // 2})
+
+env, rewards = GuessNumber(), []
+for seed in range(200):
+    env.reset({&quot;secret&quot;: random.Random(seed).randint(1, 100)}); history = []
+    while True:
+        a = binary_search_policy(history); r = env.step(a)
+        history.append((json.loads(a)[&quot;n&quot;], r[&quot;obs&quot;]))
+        if r[&quot;done&quot;]: rewards.append(r[&quot;reward&quot;]); break
+print(f&quot;binary search: mean reward {sum(rewards) / len(rewards):.3f}, solved {sum(r &gt; 0 for r in rewards)}/200&quot;)</code></pre>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall: Rewarding process steps</div>
+<p>“+0.1 per tool call” teaches the model to call tools. “+0.1 for running the tests” teaches it to run the tests and ignore the result. Shape with care, and check that the best possible return is still achieved only by solving the task.</p>
+</div>

@@ -1,0 +1,26 @@
+
+<p>Evals are small samples. A 2-point difference on 200 questions is usually noise. Miller (Anthropic, 2024, <em>Adding Error Bars to Evals</em>) recommends standard errors, clustered when questions share a passage, and paired comparisons when two models answer the same questions.</p>
+<pre class="code python"><code class="language-python">import numpy as np
+
+rng = np.random.default_rng(0)
+n = 300
+a = rng.random(n) &lt; 0.72
+b = rng.random(n) &lt; 0.75
+se = lambda x: x.std(ddof=1) / np.sqrt(len(x))
+diff = b.astype(float) - a.astype(float)
+print(f&quot;model A {a.mean():.1%} ± {1.96 * se(a.astype(float)):.1%}&quot;)
+print(f&quot;model B {b.mean():.1%} ± {1.96 * se(b.astype(float)):.1%}&quot;)
+print(f&quot;paired difference {diff.mean():+.1%} ± {1.96 * se(diff):.1%}  -&gt;&quot;,
+      &quot;significant&quot; if abs(diff.mean()) &gt; 1.96 * se(diff) else &quot;not significant&quot;)
+
+# How many questions to detect a 3-point gap at 95% confidence and 80% power (unpaired)?
+p, gap = 0.73, 0.03
+n_needed = 2 * (1.96 + 0.84) ** 2 * p * (1 - p) / gap ** 2
+print(f&quot;questions needed per model: ~{int(n_needed):,}&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Always show a confidence interval.</li>
+<li>Pair comparisons on the same items; it removes question-difficulty variance.</li>
+<li>Resample over prompts <em>and</em> seeds; agent evals vary a lot run to run, so report pass^k as well as pass@1.</li>
+</ul>
+</div>

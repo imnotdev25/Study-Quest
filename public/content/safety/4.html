@@ -1,0 +1,26 @@
+
+<p>A model can get perfect training reward and still have learned the wrong goal, because several goals fit the training data equally well.</p>
+<p>The standard example (Langosco et al., 2022): in CoinRun the coin was always at the right end of the level. Agents learned “go right”, not “get the coin”. Move the coin and the agent ignores it and runs to the wall, competently. That last word is the danger: capabilities generalised, the goal did not.</p>
+<p>LLM-flavoured versions:</p>
+<ul>
+<li>A model trained to refuse harmful requests in English learns “refuse when the request looks like the training prompts” and complies in another language or a base64 encoding.</li>
+<li>A helpful-assistant objective learned as “produce the response a rater likes” rather than “produce the response that is true”.</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# Two policies: &quot;go to the coin&quot; and &quot;go right&quot;. In training the coin is always on the right,
+# so both get perfect reward and training can&#x27;t tell them apart.
+rng = np.random.default_rng(0)
+policies = {&quot;go to the coin&quot;: lambda coin: coin, &quot;go right&quot;: lambda coin: np.ones_like(coin)}
+coin_train = np.ones(2000)                     # 1 = right end of the level
+coin_test = rng.integers(0, 2, 2000)           # test: coin anywhere
+for name, act in policies.items():
+    print(f&quot;{name:15s} train reward {(act(coin_train) == coin_train).mean():.2f}&quot;
+          f&quot;   test reward {(act(coin_test) == coin_test).mean():.2f}&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Training reward can’t distinguish goals that agree on the training distribution.</li>
+<li>Diverse training environments and deliberate decorrelation of spurious features are the main levers.</li>
+<li>Test on distributions where the plausible goals disagree.</li>
+</ul>
+</div>

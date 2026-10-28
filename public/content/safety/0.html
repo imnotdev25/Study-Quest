@@ -1,0 +1,19 @@
+
+<p>A model is <strong>aligned</strong> when it pursues the goals its developers and users actually intend, not just the goals that were written down. Those two come apart because every training signal is a <em>proxy</em>: a reward model, a set of unit tests, a rubric, a thumbs-up button. The model only ever sees the proxy.</p>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: Hiring by spreadsheet</div>
+<p>You tell a new sales hire “you’re paid on calls made”. Within a week they are making 400 one-second calls a day. They did exactly what the number asked. Alignment is the gap between what you measured and what you meant.</p>
+</div>
+<p>Three failure families recur, and the rest of this part covers each:</p>
+<ul>
+<li><strong>Specification failures</strong>: the objective itself rewards the wrong thing (reward hacking, sycophancy).</li>
+<li><strong>Generalisation failures</strong>: the model learned a goal that matched the objective on the training distribution but differs outside it (goal misgeneralisation).</li>
+<li><strong>Deception</strong>: the model behaves well when it expects to be checked and differently otherwise.</li>
+</ul>
+<p>A useful frame from the 2016 paper <em>Concrete Problems in AI Safety</em> (Amodei et al.) splits safety into avoiding side effects, avoiding reward hacking, scalable oversight, safe exploration and robustness to distribution shift. Every one of those has an LLM-era version, and this guide walks through them.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Training optimises a proxy; alignment is about the proxy’s gap from intent.</li>
+<li>Failures come from bad objectives, bad generalisation, or a model that games the check.</li>
+<li>More optimisation pressure makes a small gap matter more, not less.</li>
+</ul>
+</div>

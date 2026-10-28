@@ -165,7 +165,7 @@ h2 { font-size: 17px; margin: 0 0 10px; }
 .nav-list .nav.on .icon { color: var(--accent); }
 .section-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
   padding: 16px 8px 6px; }
-.path-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 3px; border-radius: 11px;
+.path-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; padding: 3px; border-radius: 11px;
   background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .path-switch button { display: flex; align-items: center; justify-content: center; gap: 6px; border: none; background: none;
   padding: 7px 4px; border-radius: 8px; font-size: 12.5px; color: var(--muted); transition: background .15s, color .15s; }
@@ -440,3 +440,18 @@ html:not(.os-mac) .topdrag { display: none; }
 .pkg.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
 .pkg.opt { color: var(--muted); }
 .small-console { max-height: 160px; font-size: 11px; }
+
+/* 3D explainer videos */
+.video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.video-card h3 { margin: 12px 0 4px; }
+.video-inline h3 { margin: 0; }
+.video-poster { position: relative; display: block; width: 100%; padding: 0; border: 1px solid var(--line); border-radius: 12px;
+  overflow: hidden; aspect-ratio: 16 / 9; background: #f6f7fb; cursor: pointer; }
+.video-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.video-poster:hover, .video-poster:focus-visible { border-color: var(--accent); }
+.video-play { position: absolute; inset: 0; margin: auto; width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 24px; color: #fff; background: color-mix(in srgb, var(--accent) 88%, transparent); box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+.video-time { position: absolute; right: 10px; bottom: 10px; font-size: 12px; padding: 2px 8px; border-radius: 6px; color: #fff; background: rgba(15,23,42,.7); }
+.video-frame { border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9; background: #f6f7fb; border: 1px solid var(--line); }
+.video-frame video { width: 100%; height: 100%; display: block; }
+.row.wrap { flex-wrap: wrap; gap: 6px; }

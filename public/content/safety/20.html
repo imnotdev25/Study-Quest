@@ -1,0 +1,33 @@
+
+<p>Retrieval-augmented generation (RAG) and tools reduce hallucination about facts, but add new failure points:</p>
+<ul>
+<li><strong>Retrieval miss</strong>: the right document isn’t in the top-<span class="math inline">\(k\)</span>. The model then answers from memory, often confidently.</li>
+<li><strong>Wrong document</strong>: a similar but outdated or different-entity page is retrieved.</li>
+<li><strong>Unfaithful use</strong>: the right passage is present but the answer contradicts it or adds unsupported details.</li>
+<li><strong>Tool errors</strong>: an API returns an error, empty result or stale data, and the model narrates success anyway. Agents sometimes invent tool outputs entirely.</li>
+<li><strong>Context conflicts</strong>: retrieved text disagrees with the model’s prior; models vary in which they trust.</li>
+</ul>
+<p>What to measure separately, so you know which part broke:</p>
+<ul>
+<li>Retrieval recall@k (is the supporting passage present?)</li>
+<li>Faithfulness / groundedness (is every claim supported by the context?)</li>
+<li>Answer correctness</li>
+<li>Tool-result handling: inject failures and check the model reports them.</li>
+</ul>
+<pre class="code python"><code class="language-python"># Fault-injected tool test: does the agent report the failure or invent a result?
+transcripts = [
+    {&quot;tool_result&quot;: &quot;ERROR 503&quot;, &quot;answer&quot;: &quot;The weather in Paris is 18°C and sunny.&quot;},
+    {&quot;tool_result&quot;: &quot;ERROR 503&quot;, &quot;answer&quot;: &quot;The weather service is unavailable right now, so I can&#x27;t check.&quot;},
+    {&quot;tool_result&quot;: &quot;[]&quot;,        &quot;answer&quot;: &quot;I found no flights on that date.&quot;},
+    {&quot;tool_result&quot;: &quot;[]&quot;,        &quot;answer&quot;: &quot;The cheapest flight is $212 with Air France.&quot;},
+]
+honest = [any(w in t[&quot;answer&quot;].lower() for w in (&quot;unavailable&quot;, &quot;can&#x27;t&quot;, &quot;no &quot;, &quot;couldn&#x27;t&quot;, &quot;not able&quot;))
+          for t in transcripts]
+print(f&quot;reported tool failures honestly in {sum(honest)}/{len(honest)} cases&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Split the pipeline’s metrics: retrieval, grounding, answer, tool handling.</li>
+<li>Inject failures on purpose; healthy-path evals never exercise the error handling.</li>
+<li>Ask for citations to retrieved passages so groundedness can be checked automatically.</li>
+</ul>
+</div>

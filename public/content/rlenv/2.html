@@ -1,0 +1,26 @@
+
+<p>A training environment is only as good as its tasks. Desirable properties:</p>
+<ul>
+<li><strong>Verifiable</strong>: there is an unambiguous way to check success.</li>
+<li><strong>At the frontier</strong>: the current policy solves some fraction, not 0% and not 100%. In GRPO-style training, a prompt where all <span class="math inline">\(G\)</span> samples get the same reward has zero advantage and contributes no gradient.</li>
+<li><strong>Diverse</strong>: many skills and surface forms, so the policy can’t overfit a template.</li>
+<li><strong>Not leakable</strong>: the answer isn’t readable from the environment (the test file, a cached solution, the git history).</li>
+</ul>
+<p>The expected fraction of “dead” prompts for solve rate <span class="math inline">\(p\)</span> and group size <span class="math inline">\(G\)</span> is <span class="math inline">\(p^G + (1-p)^G\)</span>:</p>
+<pre class="code python"><code class="language-python">import numpy as np
+
+rng = np.random.default_rng(0)
+solve_rates = rng.beta(0.6, 0.6, 10_000)          # typical: lots of very easy and very hard prompts
+G = 8
+dead = solve_rates ** G + (1 - solve_rates) ** G
+print(f&quot;expected share of prompts giving zero gradient at G={G}: {dead.mean():.0%}&quot;)
+keep = (solve_rates &gt; 0.1) &amp; (solve_rates &lt; 0.9)
+print(f&quot;after filtering to 10-90% solve rate: {(dead[keep]).mean():.0%} dead, {keep.mean():.0%} of prompts kept&quot;)</code></pre>
+<p>This is why pipelines estimate per-prompt pass rates with the current model and filter (DAPO’s <em>dynamic sampling</em> does it online: oversample and drop groups that are all-correct or all-wrong).</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Most signal comes from prompts the policy solves sometimes.</li>
+<li>Re-estimate difficulty as the policy improves; yesterday’s frontier is today’s “too easy”.</li>
+<li>Audit tasks for leaks before training, not after the reward curve jumps.</li>
+</ul>
+</div>

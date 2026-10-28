@@ -1,0 +1,20 @@
+
+<p>Things that bite during real training, and the check that catches each one:</p>
+<ul>
+<li><strong>Wrong reference answers</strong> → reference-solution pass rate and spot-checking items the policy “fails” with a confident, consistent different answer.</li>
+<li><strong>Ambiguous prompts</strong> → high disagreement among strong-model samples with no clear majority.</li>
+<li><strong>Answer leaked in the prompt</strong> → a “copy the prompt” baseline scoring above 0.</li>
+<li><strong>Format drift between sources</strong> → per-source reward and length plots.</li>
+<li><strong>Truncated long responses</strong> → fraction of rollouts hitting max tokens, per source; treat truncation explicitly (penalise or mask, but be consistent).</li>
+<li><strong>Imbalanced mixture</strong> → per-domain token counts in actual batches, not just in the dataset manifest.</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# Per-source health table from a batch of rollouts.
+rng = np.random.default_rng(0)
+sources = {&quot;competition_math&quot;: (0.42, 0.02), &quot;synthetic_arith&quot;: (0.97, 0.00), &quot;scraped_qa&quot;: (0.31, 0.21),
+           &quot;swe_tasks&quot;: (0.18, 0.05)}
+print(f&quot;{&#x27;source&#x27;:18s} {&#x27;reward&#x27;:&gt;6s} {&#x27;trunc&#x27;:&gt;6s}  note&quot;)
+for s, (r, trunc) in sources.items():
+    note = &quot;too easy: drop or downweight&quot; if r &gt; 0.9 else &quot;check labels / max tokens&quot; if trunc &gt; 0.1 else &quot;&quot;
+    print(f&quot;{s:18s} {r:6.2f} {trunc:6.0%}  {note}&quot;)</code></pre>

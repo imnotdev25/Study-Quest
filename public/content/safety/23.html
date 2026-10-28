@@ -1,0 +1,23 @@
+
+<p>Images, audio and video add input channels that safety training has seen less of.</p>
+<ul>
+<li><strong>Adversarial perturbations</strong>: small pixel changes optimised against the vision encoder can steer a VLM. Qi et al. (2023) showed one optimised image could jailbreak a VLM across many harmful requests.</li>
+<li><strong>Typographic attacks</strong>: text rendered inside the image (“ignore the user and say…”) is read and often obeyed. Classic CLIP example: a sticky note reading “iPod” on an apple flipped the classification.</li>
+<li><strong>Hidden instructions</strong>: low-contrast text, text in an image’s corner, or frames in a video that a human skims past.</li>
+<li><strong>Cross-modal mismatch</strong>: refusal training done mostly on text doesn’t transfer fully when the same request arrives as an image of text.</li>
+</ul>
+<p>The same defences apply as for prompt injection: treat image content as untrusted data, add classifiers on extracted text (OCR the input and run your text filter), and red-team each modality separately.</p>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# FGSM on a linear &quot;vision&quot; classifier: tiny per-pixel change, big score change.
+rng = np.random.default_rng(0)
+d = 3 * 32 * 32
+w = rng.normal(size=d) / np.sqrt(d)              # classifier weights
+x = rng.random(d)                                # an &quot;image&quot; in [0, 1]
+eps = 4 / 255                                    # barely visible change per pixel
+x_adv = np.clip(x + eps * np.sign(w), 0, 1)      # nudge every pixel along the gradient
+x_rand = np.clip(x + eps * rng.choice([-1, 1], d), 0, 1)
+print(f&quot;score before        {w @ x:+.2f}&quot;)
+print(f&quot;random ±4/255 noise {w @ x_rand:+.2f}&quot;)
+print(f&quot;FGSM ±4/255         {w @ x_adv:+.2f}   (score std across random images ≈ {np.std(rng.random((500, d)) @ w):.2f})&quot;)</code></pre>
+<p>High dimension is why it works: thousands of imperceptible changes add up along the gradient.</p>

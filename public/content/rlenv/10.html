@@ -1,0 +1,38 @@
+
+<p>Even without containers you can close the common holes for pure-Python tasks: separate process, CPU and memory limits, wall-clock timeout, clean temp directory, minimal environment variables, results written to a location the grader controls.</p>
+<pre class="code python"><code class="language-python">import json, os, subprocess, sys, tempfile, pathlib, time
+
+def limits():
+    &quot;&quot;&quot;Applied in the child before exec (POSIX only).&quot;&quot;&quot;
+    import resource
+    for lim, val in [(resource.RLIMIT_CPU, 2),                  # seconds of CPU
+                     (resource.RLIMIT_AS, 512 * 2**20),         # 512 MB address space (ignored on macOS)
+                     (resource.RLIMIT_FSIZE, 10 * 2**20)]:      # no giant files
+        try:
+            resource.setrlimit(lim, (val, val))
+        except (ValueError, OSError):
+            pass
+    os.setsid()                                                 # own process group, easy to kill
+
+def run_rollout(code, timeout=5.0):
+    with tempfile.TemporaryDirectory() as d:
+        (pathlib.Path(d) / &quot;main.py&quot;).write_text(code)
+        env = {&quot;PATH&quot;: &quot;/usr/bin:/bin&quot;, &quot;HOME&quot;: d, &quot;PYTHONDONTWRITEBYTECODE&quot;: &quot;1&quot;}  # no inherited secrets
+        t0 = time.time()
+        try:
+            r = subprocess.run([sys.executable, &quot;-I&quot;, &quot;main.py&quot;], cwd=d, env=env, capture_output=True, text=True,
+                               timeout=timeout, preexec_fn=limits if os.name == &quot;posix&quot; else None)
+            status = &quot;ok&quot; if r.returncode == 0 else f&quot;exit {r.returncode}&quot;
+            out = r.stdout[-2000:]
+        except subprocess.TimeoutExpired:
+            status, out = &quot;timeout&quot;, &quot;&quot;
+        return {&quot;status&quot;: status, &quot;seconds&quot;: round(time.time() - t0, 2), &quot;stdout&quot;: out}
+
+print(run_rollout(&quot;print(sum(range(10)))&quot;))
+print(run_rollout(&quot;import os; print(sorted(k for k in os.environ))&quot;))
+print(run_rollout(&quot;while True: pass&quot;))
+print(run_rollout(&quot;x = bytearray(2 * 1024**3)&quot;))</code></pre>
+<p>On Linux the 2 GB allocation fails with a <code>MemoryError</code>; macOS ignores <code>RLIMIT_AS</code>, so it succeeds there, which shows why per-OS limits are not a sandbox. On Windows <code>preexec_fn</code> isn’t available and only the timeout applies. <code>python -I</code> (isolated mode) ignores <code>PYTHON*</code> variables and the user site directory. This is still not a security boundary for untrusted code at scale: use containers or microVMs with no network for that.</p>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall: Infra failures counted as zero reward</div>
+<p>If a container fails to start, a dependency mirror times out or the machine is overloaded, the rollout gets reward 0 for reasons unrelated to the policy. At scale that’s systematic noise, and it’s correlated with task type. Classify every failure as <strong>policy</strong> (wrong, timeout from slow code) or <strong>infra</strong> (setup error, OOM-killed harness, lost worker), and <strong>mask</strong> infra failures out of the batch instead of rewarding them 0.</p>
+</div>

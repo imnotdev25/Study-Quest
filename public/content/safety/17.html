@@ -1,0 +1,21 @@
+
+<p>A <strong>hallucination</strong> is a fluent, confident statement that is false or unsupported. Causes, roughly from training to deployment:</p>
+<ul>
+<li><strong>Pre-training</strong> maximises likelihood of text; plausible continuations about rare facts are often wrong, and there’s no “I don’t know” token in most documents.</li>
+<li><strong>Evaluation incentives</strong>: Kalai et al. (OpenAI, 2025, <em>Why Language Models Hallucinate</em>) argue that binary-graded benchmarks reward guessing. If “I don’t know” scores 0 and a guess scores 1 with probability <span class="math inline">\(p\)</span>, guessing always wins in expectation, so models are trained and selected to bluff.</li>
+<li><strong>Fine-tuning on unknown facts</strong>: Gekhman et al. (2024) found that fine-tuning on new knowledge the model didn’t have teaches it to hallucinate more.</li>
+<li><strong>Decoding</strong>: high temperature, or sampling a low-probability token early, leads the rest of the answer astray.</li>
+</ul>
+<pre class="code python"><code class="language-python"># The guessing incentive under different grading schemes.
+for p in [0.1, 0.3, 0.5]:
+    binary = p                       # wrong = 0, abstain = 0
+    penalised = p * 1 + (1 - p) * -1 # wrong = -1, abstain = 0
+    print(f&quot;P(correct)={p:.0%}: binary EV of guessing {binary:+.2f} vs abstain 0 | with -1 penalty {penalised:+.2f}&quot;)
+print(&quot;With a penalty for wrong answers, abstaining beats guessing when the model is unsure.&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Hallucination is partly a capability gap and partly an incentive problem.</li>
+<li>Grading that gives credit for abstention (or penalises confident errors) makes “I don’t know” a rational answer.</li>
+<li>SimpleQA (OpenAI, 2024) reports <em>correct / incorrect / not attempted</em> separately for exactly this reason.</li>
+</ul>
+</div>

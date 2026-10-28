@@ -4,9 +4,9 @@
 [![Release](https://img.shields.io/github/v/release/imnotdev25/Study-Quest?include_prereleases)](https://github.com/imnotdev25/Study-Quest/releases)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-7c5cf6)
 
-**Learn Reinforcement Learning, LLMs and System Design by doing, not just reading.**
+**Learn Reinforcement Learning, LLMs, System Design and AI Safety by doing, not just reading.**
 
-Study Quest is a desktop app that turns five long-form books into lessons you can read, run, sketch and quiz yourself on. It has live [marimo](https://marimo.io) notebooks, a coding playground with tested exercises, [Excalidraw](https://excalidraw.com) boards for system design, and Byte the otter 🦦, who nudges (and roasts) you until you open a lesson.
+Study Quest is a desktop app that turns five long-form books and two hands-on guides into lessons you can read, run, sketch and quiz yourself on. It has live [marimo](https://marimo.io) notebooks, a coding playground with tested exercises, [Excalidraw](https://excalidraw.com) boards for system design, and Byte the otter 🦦, who nudges (and roasts) you until you open a lesson.
 
 Built with Tauri 2, React and Rust. Runs on macOS, Windows and Linux. Everything stays on your computer.
 
@@ -14,19 +14,23 @@ Built with Tauri 2, React and Rust. Runs on macOS, Windows and Linux. Everything
 
 ## ✨ What's inside
 
-### Three learning paths, one at a time
+### Four learning paths, one at a time
 | Path | Books | Topics |
 |---|---|---|
-| 🎯 **RL** | Reinforcement Learning | 183 |
+| 🎯 **RL** | Reinforcement Learning · RL Environments & Verifiers | 201 |
 | 🧠 **LLMs** | LLM Fundamentals · Pre-Training to Post-Training | 145 |
 | 🏗️ **System Design** | System Design: Zero to Expert · DSA and ML Interviews | 54 |
+| 🛡️ **AI Safety** | Alignment · Interpretability · Scalable oversight · Truthfulness · Adversarial robustness · Safety evaluation | 30 |
 
 Pick a path in the sidebar and only that path is shown, with a progress ring, chapter list and a **Continue** button. Lessons keep their math (KaTeX), diagrams (compiled from TikZ) and code.
 
+**RL Environments & Verifiers** is the practical side of RL for LLMs: building environments, designing verifiers that resist reward hacking, sandboxes for agentic rollouts, and training-data pipelines that survive a real run.
+
 ### Learn by doing
 - **▶ Runnable lessons:** every Python block has **Run / Edit**, notebook-style: earlier cells run first, output and plots appear inline.
-- **📓 Notebooks in the page:** reactive marimo notebooks open inside lessons. 14 interactive ones (bandits, PPO clipping, attention heatmaps, KV-cache calculator, gridworld, CLT…) plus every book script. Create your own; they live in `~/.study-quest/notebooks`.
-- **🧪 Coding playground:** 50 tested exercises across DSA, ML math, transformers, RL, inference, system design and agents, plus a free scratchpad.
+- **📓 Notebooks in the page:** reactive marimo notebooks open inside lessons. 23 interactive ones (bandits, PPO clipping, attention heatmaps, KV-cache calculator, reward hacking, calibration, linear probes, judge bias, prompt injection, verifier and sandbox labs…) plus every book script. Create your own; they live in `~/.study-quest/notebooks`.
+- **🧪 Coding playground:** 60 tested exercises across DSA, ML math, transformers, RL, inference, system design, agents, RL environments and AI safety, plus a free scratchpad.
+- **🎬 3D explainer videos:** short Three.js animations (the RL loop, value iteration, GRPO, embeddings, attention, next-token prediction) on a **Videos** page and inside the lessons they explain.
 - **✏️ Design it yourself:** every System Design and DSA lesson has an Excalidraw board, saved per lesson. All your boards are on the **Diagrams** page; export as `.excalidraw`.
 
 ### Make it stick
@@ -94,7 +98,7 @@ pnpm build                                    # type-check + build the frontend
 pnpm tauri build                              # installers for your OS
 ```
 
-The book content (`public/content/`, `public/figs/`) and `notebooks/` are generated from LaTeX sources kept outside this repo, and committed here so anyone can build the app.
+The book content (`public/content/`, `public/figs/`) and `notebooks/` are generated from LaTeX sources kept outside this repo, and committed here so anyone can build the app. The AI Safety and RL Environments guides are Markdown in `guides/`, built by `scripts/build_guides.py`.
 
 | Path | What |
 |---|---|
@@ -104,6 +108,8 @@ The book content (`public/content/`, `public/figs/`) and `notebooks/` are genera
 | `src-tauri/src/` | Rust: notebooks folder, marimo server, Python runner, Calendar, nudges, tray |
 | `scripts/exercises_src.py` | All playground exercises (source of truth) |
 | `scripts/build_notebooks.py` | Example marimo notebooks |
+| `guides/*.md`, `scripts/build_guides.py` | Markdown guides (AI Safety, RL Environments) |
+| `videos/web/scenes/*.js`, `videos/record.mjs` | 3D explainer scenes and the recorder that renders them to `public/videos/` |
 | `src/nudges.json` | Every notification and roast |
 | `AGENTS.md` | Conventions for AI coding agents (and humans) |
 
@@ -113,10 +119,10 @@ Every push to `master` refreshes the **nightly** pre-release. Pushing a tag like
 
 ## 💜 Contributing
 
-**The most useful thing you can add is a topic.** If you know something a learner on the RL, LLM or System Design path should know, please share it. PRs of any size are welcome, and so are issues that just say *"this topic is missing"*.
+**The most useful thing you can add is a topic.** If you know something a learner on the RL, LLM, System Design or AI Safety path should know, please share it. PRs of any size are welcome, and so are issues that just say *"this topic is missing"*.
 
 ### Suggest or write a topic
-Open an issue with the **topic** label, or a PR that adds a Markdown or LaTeX file under `contrib/topics/`. A good topic:
+Open an issue with the **topic** label, or a PR. For AI Safety and RL Environments, add a `## Topic` straight to `guides/ai_safety.md` or `guides/rl_envs.md` and run `uv run python scripts/build_guides.py --check` (it runs every Python block). Other paths: a Markdown or LaTeX file under `contrib/topics/`. A good topic:
 
 1. covers **one idea**, with a real-life analogy;
 2. builds any math up **step by step** (each step becomes a reveal in *Quiz me*);
@@ -136,6 +142,9 @@ It refuses to write unless the solution passes every test and the starter fails 
 
 ### Add a notebook
 Add an entry to `INTERACTIVE` in `scripts/build_notebooks.py` (sliders and plots welcome), give it a group in `GROUPS` and a `topic` keyword, and check it runs with `marimo export html`.
+
+### Add a 3D explainer video
+Copy a file in `videos/web/scenes/`, export `meta` (title, path, duration, `keywords` that match lesson titles) and `setup(stage)` returning `renderAt(t)`, and add its id to `SCENES` in `videos/web/main.js`. Preview with `cd videos && npm install && npm run serve`, then render with `npm run record <id>` (needs ffmpeg and Google Chrome). Keep the light background and keep each video around 30 s.
 
 ### Add nudges and roasts
 Add lines to `src/nudges.json`. Keep them funny and about **studying**: tease habits (scrolling, "I'll start Monday", 47 open tabs), never appearance, identity, health or anything that would actually hurt. ML puns score double.

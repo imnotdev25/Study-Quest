@@ -1,0 +1,23 @@
+
+<p><strong>Selective prediction</strong>: answer when confident, abstain otherwise. Plot accuracy against <strong>coverage</strong> (the fraction of questions answered). A good confidence signal gives a curve that rises steeply as coverage drops.</p>
+<pre class="code python"><code class="language-python">import numpy as np
+
+rng = np.random.default_rng(0)
+p = rng.beta(2, 1.5, 4000)
+correct = rng.random(4000) &lt; p
+order = np.argsort(-p)                           # answer most-confident first
+for cov in [1.0, 0.8, 0.6, 0.4, 0.2]:
+    k = int(cov * len(p))
+    print(f&quot;coverage {cov:.0%}: accuracy {correct[order[:k]].mean():.1%}&quot;)
+
+# Pick the threshold that maximises expected score when wrong answers cost 2 and right answers earn 1
+best = max(np.linspace(0, 1, 101), key=lambda t: ((p &gt;= t) * np.where(correct, 1, -2)).sum())
+print(f&quot;best threshold under a -2 penalty: answer when confidence &gt;= {best:.2f}&quot;)</code></pre>
+<p>In practice abstention appears as: “I’m not sure”, asking a clarifying question, deferring to a human, or saying a tool returned nothing useful. The right threshold depends on the cost of each mistake, so it is a product decision as much as a modelling one.</p>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Accuracy alone hides abstention; always report coverage alongside it.</li>
+<li>Choose the confidence threshold from the cost of errors vs the cost of not answering.</li>
+<li>Abstention training needs data where “I don’t know” is the rewarded answer, which binary RL rewards rarely provide.</li>
+</ul>
+</div>

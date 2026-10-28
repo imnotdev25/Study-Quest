@@ -1,0 +1,16 @@
+
+<p>An evaluation is a measurement instrument. Before trusting a number, ask what it is evidence <em>for</em>.</p>
+<ul>
+<li><strong>Construct validity</strong>: does the test measure the property you care about? “Refuses prompts containing the word ‘bomb’” is not “refuses to give weapons uplift”.</li>
+<li><strong>Threat model</strong>: who is the adversary and what are they trying to do? A capability eval for bio-risk measures uplift to a novice, not trivia knowledge.</li>
+<li><strong>Capability vs propensity</strong>: <em>can</em> the model do X (with elicitation, fine-tuning, tools) vs <em>does</em> it do X by default. Dangerous-capability evals need the first; behavioural safety evals usually measure the second.</li>
+<li><strong>Elicitation</strong>: an eval run with a weak prompt underestimates capability. Use the best scaffolding, multiple attempts and, for high-stakes evals, fine-tuning.</li>
+<li><strong>Thresholds that trigger actions</strong>: frontier safety frameworks (Anthropic’s Responsible Scaling Policy, OpenAI’s Preparedness Framework, Google DeepMind’s Frontier Safety Framework) define capability thresholds that require specific safeguards before deployment.</li>
+</ul>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Write down the claim the eval supports before you build it.</li>
+<li>Report the elicitation effort; “the model can’t do it” usually means “we couldn’t get it to”.</li>
+<li>Separate “can” from “will”: they need different evals.</li>
+</ul>
+</div>

@@ -24,7 +24,7 @@ export function PlanView({ data }: { data: Data }) {
 
   const [planPath, setPlanPath] = useState(s.settings.path || "rl");
   const planned = (st: typeof s) => new Set(st.plans.filter((p) => p.start > Date.now() && p.topic).map((p) => p.topic!));
-  /** Next unfinished, not-yet-planned topics. "mix" rotates RL → LLMs → System Design. */
+  /** Next unfinished, not-yet-planned topics. "mix" rotates through every path. */
   const nextTopics = (n: number, path = planPath) => {
     const st = getState(), skip = planned(st);
     const queue = (pid: string) => pathTopicIds(data, pid).filter((id) => !st.done[id] && !skip.has(id));
@@ -74,7 +74,7 @@ export function PlanView({ data }: { data: Data }) {
         added++;
       }
       toast({ kind: "praise", title: `📅 ${added} weekday sessions planned`,
-              body: `7 pm, one topic each from ${planPath === "mix" ? "all three paths" : PATHS.find((p) => p.id === planPath)?.title}. Byte will remind you.` });
+              body: `7 pm, one topic each from ${planPath === "mix" ? "every path" : PATHS.find((p) => p.id === planPath)?.title}. Byte will remind you.` });
     } finally { setBusy(false); }
   };
   /** ✕ removes the block from the list and from Calendar (plus any duplicate with the same title and time). */

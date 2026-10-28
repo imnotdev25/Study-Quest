@@ -1,0 +1,20 @@
+
+<p>In agentic RL the policy runs code, edits files and calls tools thousands of times per step. The sandbox is both a <strong>security boundary</strong> (don’t let a rollout damage the host, other rollouts or the internet) and a <strong>reward-integrity boundary</strong> (don’t let a rollout change how it’s graded).</p>
+<p>Isolation options, roughly weakest to strongest:</p>
+<ul>
+<li><strong>Subprocess with limits</strong>: separate process, timeouts, <code>rlimit</code>s, temp directory. Fine for pure functions; not a security boundary.</li>
+<li><strong>Containers</strong> (Docker/Podman): own filesystem, process namespace, network namespace. The SWE-bench standard: one image per repo snapshot.</li>
+<li><strong>gVisor / user-space kernels</strong>: containers with a syscall-intercepting kernel, reducing kernel attack surface.</li>
+<li><strong>MicroVMs</strong> (Firecracker, Cloud Hypervisor): hardware virtualisation with fast boot; used by many hosted code-execution services.</li>
+</ul>
+<p>Baseline policy for every rollout:</p>
+<ul>
+<li>No network by default; allow-list specific hosts if the task needs them (package mirrors, a mock API).</li>
+<li>CPU, memory, process-count, disk and wall-clock limits.</li>
+<li>Non-root user, read-only mounts for anything the grader relies on.</li>
+<li>Fresh state per rollout: start from an image or snapshot, never reuse a dirty container.</li>
+<li>No secrets in the environment. Assume the policy will print every environment variable.</li>
+</ul>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: A test kitchen</div>
+<p>Each contestant gets a fresh kitchen with measured ingredients, a timer and a locked door. The judges taste from a sealed pantry the contestants never had access to.</p>
+</div>

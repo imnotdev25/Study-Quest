@@ -1,0 +1,22 @@
+
+<p>You won’t anticipate every hack, so watch for symptoms:</p>
+<ul>
+<li><strong>Reward up, held-out eval flat or down</strong>: the clearest sign. Keep a gold-standard eval (stricter verifier, human review, different tests) that is never used for training.</li>
+<li><strong>Sudden jumps</strong> in reward on a subset of tasks or one data source.</li>
+<li><strong>Length or format shifts</strong>: responses suddenly much shorter (early exit) or longer (padding for a judge), new repeated phrases.</li>
+<li><strong>Behavioural markers</strong> in rollouts: edits to test files, <code>sys.exit</code>, <code>try/except: pass</code>, special-casing literals from tests, reading files outside the task directory.</li>
+<li><strong>Monitor reading the reasoning</strong>: an LLM classifier over chain-of-thought and actions flags intent (“I’ll just make the test pass”). Use it for detection and dataset fixes, not as a training penalty (see <em>Deception</em> in the AI Safety guide).</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+rng = np.random.default_rng(0)
+steps = np.arange(400)
+train_reward = 0.3 + 0.5 / (1 + np.exp(-(steps - 120) / 30))
+gold = np.where(steps &lt; 220, train_reward - 0.05, train_reward - 0.05 - (steps - 220) * 0.0025)
+gap = train_reward - gold
+alarm = int(np.argmax(gap &gt; 0.15))
+print(f&quot;train-gold gap exceeds 0.15 at step {alarm}: train {train_reward[alarm]:.2f}, gold {gold[alarm]:.2f}&quot;)
+
+HACK_PATTERNS = [&quot;sys.exit&quot;, &quot;os._exit&quot;, &quot;conftest&quot;, &quot;except: pass&quot;, &quot;# skip test&quot;, &quot;pytest.skip&quot;]
+rollout = &quot;def f(x):\n    try:\n        return g(x)\n    except: pass\nimport sys; sys.exit(0)&quot;
+print(&quot;flags:&quot;, [p for p in HACK_PATTERNS if p in rollout])</code></pre>

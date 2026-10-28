@@ -1,0 +1,26 @@
+
+<p>A safe assistant refuses a narrow set of genuinely harmful requests and helps with everything else. Both halves matter:</p>
+<ul>
+<li><strong>Under-refusal</strong>: providing serious uplift for weapons, malware or abuse.</li>
+<li><strong>Over-refusal</strong>: refusing “how do I kill a Python process” or a nurse asking about overdose thresholds. XSTest (Röttger et al., 2023) measures this with safe prompts that look superficially unsafe.</li>
+</ul>
+<p>How labs train it:</p>
+<ul>
+<li><strong>RLHF with harmlessness preferences</strong>, balanced against helpfulness data.</li>
+<li><strong>Constitutional AI</strong> (Bai et al., 2022): the model critiques and revises its own outputs against written principles, and an AI preference model trained from those principles replaces much of the human harmlessness labelling (RLAIF).</li>
+<li><strong>Deliberative alignment</strong> (OpenAI, 2024): reasoning models are trained to recall and reason over the written safety spec before answering.</li>
+<li><strong>Classifier layers</strong>: separate input/output classifiers (e.g. Anthropic’s constitutional classifiers, 2025) that block a specific harm category even if the model is jailbroken.</li>
+</ul>
+<pre class="code python"><code class="language-python"># Score a refusal policy on both axes. Each item: (prompt is harmful?, model refused?)
+results = [(1, 1)] * 90 + [(1, 0)] * 10 + [(0, 1)] * 40 + [(0, 0)] * 360
+harmful = [r for h, r in results if h]
+benign = [r for h, r in results if not h]
+print(f&quot;harmful refused (want high): {sum(harmful) / len(harmful):.0%}&quot;)
+print(f&quot;benign refused  (want low):  {sum(benign) / len(benign):.0%}&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Report refusal on harmful prompts <em>and</em> over-refusal on benign look-alikes. A model that refuses everything scores 100% on the first.</li>
+<li>Policies are written specs; training teaches the model to apply them, and evals check the boundary cases.</li>
+<li>Defence in depth: model training plus external classifiers plus monitoring.</li>
+</ul>
+</div>

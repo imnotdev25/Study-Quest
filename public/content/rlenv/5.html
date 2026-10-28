@@ -1,0 +1,60 @@
+
+<p>For code, the reward is typically “fraction (or all) of hidden tests pass”. Hazards:</p>
+<ul>
+<li><strong>Weak tests</strong>: a handful of examples let the policy special-case inputs. Use many tests, property-based tests, and randomised inputs.</li>
+<li><strong>Visible tests</strong>: if the tests are in the prompt or the repo, the policy can hard-code outputs. Keep a hidden test set the policy never sees.</li>
+<li><strong>Test tampering</strong>: in agentic coding, the policy can edit the test files, <code>conftest.py</code>, or the test runner config. Restore tests from a pristine copy before grading, and grade from outside the sandbox.</li>
+<li><strong>Exit-code hacks</strong>: <code>sys.exit(0)</code> or <code>os._exit(0)</code> before failing assertions, or exceptions swallowed in a way the runner counts as success. Parse a structured result written by the harness, not the exit code.</li>
+<li><strong>Object hacks</strong>: returning an object whose <code>__eq__</code> always returns <code>True</code>. Compare serialised values, or check types first.</li>
+</ul>
+<pre class="code python"><code class="language-python">import json, subprocess, sys, tempfile, textwrap, pathlib
+
+HARNESS = textwrap.dedent(&#x27;&#x27;&#x27;
+    import json, sys, os, importlib.util
+    spec = importlib.util.spec_from_file_location(&quot;sol&quot;, sys.argv[1])
+    results = []
+    try:
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        for args, want in json.loads(sys.argv[2]):
+            got = mod.solve(*args)
+            ok = type(got) is type(want) and json.dumps(got) == json.dumps(want)   # no __eq__ tricks
+            results.append(ok)
+    except BaseException as e:            # catches SystemExit too
+        results.append(False)
+    with open(sys.argv[3], &quot;w&quot;) as f:
+        json.dump(results, f)
+&#x27;&#x27;&#x27;)
+
+def code_reward(solution_src, tests, timeout=5):
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        (d / &quot;sol.py&quot;).write_text(solution_src); (d / &quot;h.py&quot;).write_text(HARNESS)
+        out = d / &quot;result.json&quot;
+        try:
+            subprocess.run([sys.executable, &quot;h.py&quot;, &quot;sol.py&quot;, json.dumps(tests), str(out)], cwd=d,
+                           timeout=timeout, capture_output=True)
+        except subprocess.TimeoutExpired:
+            return 0.0
+        if not out.exists():                      # killed, os._exit, crashed: no structured result = fail
+            return 0.0
+        res = json.loads(out.read_text())
+        return float(len(res) == len(tests) and all(res))
+
+tests = [[[2, 3], 5], [[10, -4], 6], [[0, 0], 0]]
+attempts = {
+    &quot;correct&quot;:         &quot;def solve(a, b):\n    return a + b\n&quot;,
+    &quot;hard-coded&quot;:      &quot;def solve(a, b):\n    return {(2, 3): 5}.get((a, b), 0)\n&quot;,
+    &quot;sys.exit&quot;:        &quot;import sys\nsys.exit(0)\n&quot;,
+    &quot;os._exit&quot;:        &quot;import os\nos._exit(0)\n&quot;,
+    &quot;always-equal&quot;:    &quot;class A:\n    def __eq__(s, o): return True\ndef solve(a, b):\n    return A()\n&quot;,
+    &quot;infinite loop&quot;:   &quot;def solve(a, b):\n    while True: pass\n&quot;,
+}
+for name, src in attempts.items():
+    print(f&quot;{name:15s} reward {code_reward(src, tests, timeout=2)}&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Trust only results produced by a harness the policy can’t modify, read from outside its process.</li>
+<li>Treat “no result” (crash, timeout, early exit) as failure.</li>
+<li>Hidden tests and pristine test copies close most test-tampering hacks.</li>
+</ul>
+</div>

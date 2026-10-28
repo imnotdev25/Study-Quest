@@ -1,0 +1,21 @@
+
+<p>Before a long run, check:</p>
+<ul class="task-list">
+<li><label><input type="checkbox" />Every task’s reference solution scores 1; null policies score ~0.</label></li>
+<li><label><input type="checkbox" />Verifier has golden and adversarial test suites with documented FPR/FNR.</label></li>
+<li><label><input type="checkbox" />Tests and grading code live outside the policy’s sandbox, restored from a pristine copy.</label></li>
+<li><label><input type="checkbox" />Sandbox: no network (or allow-list), resource limits, no secrets, fresh state per rollout.</label></li>
+<li><label><input type="checkbox" />Infra failures are classified and masked, not scored as 0.</label></li>
+<li><label><input type="checkbox" />Data deduplicated and decontaminated against every eval you’ll report.</label></li>
+<li><label><input type="checkbox" />Difficulty filtered to the policy’s frontier; zero-variance groups dropped or counted.</label></li>
+<li><label><input type="checkbox" />Rollouts recorded with image digest, seed, checkpoint and verifier version.</label></li>
+<li><label><input type="checkbox" />Held-out gold eval and hack-pattern monitors running.</label></li>
+<li><label><input type="checkbox" />Someone reads samples every day.</label></li>
+</ul>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Most RL failures in practice are environment, verifier and data bugs, not optimiser bugs.</li>
+<li>Make every reward explainable: you should be able to replay any rollout and see why it got its score.</li>
+<li>The pipeline is done when it survives the policy actively trying to break it.</li>
+</ul>
+</div>

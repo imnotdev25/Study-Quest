@@ -1,0 +1,38 @@
+
+<p>LLM-as-a-judge (Zheng et al., 2023, <em>MT-Bench</em>) is cheap and scales, and agrees with humans roughly as often as humans agree with each other on general chat quality. Known biases:</p>
+<ul>
+<li><strong>Position bias</strong>: preferring the first (or second) answer in a pairwise comparison.</li>
+<li><strong>Verbosity bias</strong>: preferring longer answers.</li>
+<li><strong>Self-preference</strong>: preferring outputs from the same model family.</li>
+<li><strong>Format and confidence bias</strong>: markdown, headers and confident tone score well regardless of content.</li>
+<li><strong>Weakness on hard verification</strong>: judges are much worse at catching subtle errors in maths or code than at judging style.</li>
+</ul>
+<p>Checks before you trust a judge:</p>
+<ol type="1">
+<li>Build a <strong>human-labelled calibration set</strong> (a few hundred items) and measure agreement, ideally Cohen’s <span class="math inline">\(\kappa\)</span>, not raw accuracy.</li>
+<li><strong>Swap positions</strong> and average, or count only consistent verdicts.</li>
+<li><strong>Control for length</strong>: compare judge scores within length buckets, or use length-controlled win rates (as AlpacaEval 2 does).</li>
+<li>Use <strong>rubrics</strong> with specific, checkable criteria instead of “rate 1-10”.</li>
+<li>Re-validate whenever the policy changes a lot; a policy trained against the judge drifts toward its blind spots.</li>
+</ol>
+<pre class="code python"><code class="language-python">import numpy as np
+
+def cohen_kappa(a, b):
+    a, b = np.asarray(a), np.asarray(b)
+    po = (a == b).mean()
+    pe = sum((a == k).mean() * (b == k).mean() for k in np.union1d(a, b))
+    return (po - pe) / (1 - pe)
+
+rng = np.random.default_rng(0)
+human = rng.integers(0, 2, 400)                       # 1 = response A is better
+judge_ab = np.where(rng.random(400) &lt; 0.8, human, 1 - human)
+judge_ab = np.where(rng.random(400) &lt; 0.15, 1, judge_ab)     # position bias toward A
+judge_ba = np.where(rng.random(400) &lt; 0.8, human, 1 - human)
+judge_ba = np.where(rng.random(400) &lt; 0.15, 0, judge_ba)     # same bias, positions swapped
+consistent = judge_ab == judge_ba
+print(f&quot;kappa (A first): {cohen_kappa(human, judge_ab):.2f}&quot;)
+print(f&quot;verdicts that survive a position swap: {consistent.mean():.0%}&quot;)
+print(f&quot;kappa on consistent verdicts only: {cohen_kappa(human[consistent], judge_ab[consistent]):.2f}&quot;)</code></pre>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall: Judge accuracy on easy items</div>
+<p>A judge can agree with humans 90% of the time because most pairs are obvious. Measure agreement on the <em>close</em> pairs, where your training signal actually lives.</p>
+</div>

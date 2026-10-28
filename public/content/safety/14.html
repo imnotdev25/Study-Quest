@@ -1,0 +1,17 @@
+
+<p><strong>Debate</strong> results so far are mixed but encouraging. Khan et al. (2024, <em>Debating with More Persuasive LLMs Leads to More Truthful Answers</em>) used a reading-comprehension setup where judges couldn’t see the story: judges reading debates reached far higher accuracy than with a single consultant, and accuracy improved as debaters became more persuasive. Michael et al. (2023) found similar effects with human debaters.</p>
+<p><strong>Critiques</strong>: OpenAI’s CriticGPT (McAleese et al., 2024) was trained to find bugs in code written by ChatGPT. Human reviewers with CriticGPT caught more inserted bugs than unassisted reviewers, and the critic’s write-ups were preferred over human ones most of the time. Critics hallucinate bugs too, so the human’s job shifts to checking the critic.</p>
+<p>Design notes for a critique pipeline:</p>
+<ul>
+<li>Train the critic on <strong>tampered</strong> outputs where you planted a bug, so you know the ground truth.</li>
+<li>Score critiques by <strong>recall</strong> of real issues and <strong>precision</strong> (no invented ones). A critic that flags everything is useless.</li>
+<li>Show critiques to the judge, not just the final score; the judge should be able to verify each claim.</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# Precision/recall of a critic against planted bugs.
+rng = np.random.default_rng(0)
+planted = rng.random(400) &lt; 0.5                  # half the samples have a planted bug
+critic_flags = np.where(planted, rng.random(400) &lt; 0.75, rng.random(400) &lt; 0.12)
+tp = (critic_flags &amp; planted).sum(); fp = (critic_flags &amp; ~planted).sum(); fn = (~critic_flags &amp; planted).sum()
+print(f&quot;critic recall {tp / (tp + fn):.0%}, precision {tp / (tp + fp):.0%}&quot;)</code></pre>

@@ -13,11 +13,12 @@ export type Data = { books: Book[]; macros: Record<string, string>; exercises: E
 
 /** Learning paths: the sidebar shows one at a time. */
 /** `icon` is an emoji for plain-text places (dropdowns); `ic` + `color` drive the sidebar and dashboard. */
-export type Path = { id: string; icon: string; ic: "target" | "cpu" | "layers"; color: string; title: string; long: string; books: string[] };
+export type Path = { id: string; icon: string; ic: "target" | "cpu" | "layers" | "shield"; color: string; title: string; long: string; books: string[] };
 export const PATHS: Path[] = [
-  { id: "rl", icon: "🎮", ic: "target", color: "#7c5cf6", title: "RL", long: "Reinforcement Learning", books: ["rl"] },
+  { id: "rl", icon: "🎮", ic: "target", color: "#7c5cf6", title: "RL", long: "Reinforcement Learning", books: ["rl", "rlenv"] },
   { id: "llm", icon: "🧠", ic: "cpu", color: "#2f7bf6", title: "LLMs", long: "Large Language Models", books: ["llm", "post"] },
   { id: "sd", icon: "🏗️", ic: "layers", color: "#0f9f8f", title: "Systems", long: "System Design & Interviews", books: ["sd", "dsa"] },
+  { id: "safety", icon: "🛡️", ic: "shield", color: "#e11d48", title: "Safety", long: "AI Safety", books: ["safety"] },
 ];
 export const pathOf = (topicId: string) => PATHS.find((p) => p.books.includes(topicId.split(":")[0]))?.id ?? "rl";
 export const pathTopicIds = (d: Data, pathId: string) => {

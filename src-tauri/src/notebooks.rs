@@ -65,6 +65,8 @@ fn guess_group(stem: &str, rel: &str) -> &'static str {
         "gradient_descent" | "low_rank_svd" | "math_kit" | "intuitions" => "Math & Optimisation",
         "bayes_coin" | "central_limit" => "Probability & Statistics",
         "pass_at_k" => "Agents & Evals",
+        "reward_hacking" | "calibration_abstain" | "truth_probe" | "judge_bias" | "prompt_injection_lab" | "weak_to_strong" => "AI Safety",
+        "verifier_lab" | "sandbox_harness" | "rl_data_filter" => "RL Environments",
         s if s.starts_with("mf_") => "Math & Optimisation",
         s if s.starts_with("pr_") || s.starts_with("jt_") || s.starts_with("st_") => "Probability & Statistics",
         s if s.starts_with("ag_") => "Agents & Evals",

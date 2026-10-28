@@ -1,0 +1,20 @@
+
+<p>Estimate each prompt’s pass rate with the current policy (sample <span class="math inline">\(k\)</span> answers, count verifier passes), then:</p>
+<ul>
+<li>Drop prompts at 0% that the reference solution passes only by luck or that look broken; keep a small share of 0% prompts that are genuinely hard but solvable, since they become learnable.</li>
+<li>Drop prompts at 100%, or keep a small fraction to avoid forgetting.</li>
+<li>Re-estimate periodically, or filter online (dynamic sampling).</li>
+<li><strong>Curriculum</strong>: ordering by difficulty helps less than keeping each batch at the frontier; the simplest working rule is “sample prompts in proportion to <span class="math inline">\(p(1-p)\)</span>”, the variance of a Bernoulli reward.</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+rng = np.random.default_rng(1)
+p_true = rng.beta(0.5, 0.5, 2000)
+k = 8
+est = rng.binomial(k, p_true) / k                       # cheap estimate from 8 samples
+weight = est * (1 - est)
+probs = weight / weight.sum()
+batch = rng.choice(len(est), 512, p=probs)
+print(f&quot;uniform batch: mean p(1-p) = {(p_true * (1 - p_true)).mean():.3f}&quot;)
+print(f&quot;p(1-p)-weighted batch: mean p(1-p) = {(p_true[batch] * (1 - p_true[batch])).mean():.3f}&quot;)
+print(f&quot;prompts with est 0 or 1 (never sampled): {((est == 0) | (est == 1)).mean():.0%}&quot;)</code></pre>

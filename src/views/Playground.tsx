@@ -1,4 +1,4 @@
-// Coding playground: 50 tested exercises across tracks, plus a free scratchpad. Runs with your local Python.
+// Coding playground: 60 tested exercises across tracks, plus a free scratchpad. Runs with your local Python.
 import { useMemo, useState } from "react";
 import type { Data, Exercise } from "../lib/data";
 import { miniMd } from "../lib/render";

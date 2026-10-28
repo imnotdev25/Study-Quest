@@ -15,10 +15,11 @@ import { Playground } from "./views/Playground";
 import { Notebooks } from "./views/Notebooks";
 import { PlanView, Search, SettingsView } from "./views/Misc";
 import { Diagrams } from "./views/Diagrams";
+import { Videos } from "./views/Videos";
 
 export type Route =
   | { v: "home" } | { v: "topic"; id: string } | { v: "play"; id?: string }
-  | { v: "notebooks"; file?: string } | { v: "draw"; id?: string } | { v: "plan" } | { v: "settings" };
+  | { v: "notebooks"; file?: string } | { v: "draw"; id?: string } | { v: "videos" } | { v: "plan" } | { v: "settings" };
 
 function parse(h: string): Route {
   const [v, ...rest] = h.replace(/^#\/?/, "").split("/");
@@ -28,7 +29,7 @@ function parse(h: string): Route {
     case "play": return { v, id: arg };
     case "draw": return { v, id: arg };
     case "notebooks": return { v, file: arg };
-    case "plan": case "settings": return { v };
+    case "videos": case "plan": case "settings": return { v };
     default: return { v: "home" };
   }
 }
@@ -37,7 +38,7 @@ export function go(r: Route) {
   location.hash = `#/${r.v}${arg ? "/" + encodeURIComponent(arg) : ""}`;
 }
 
-const STUDY_VIEWS = new Set(["topic", "play", "notebooks", "draw"]);
+const STUDY_VIEWS = new Set(["topic", "play", "notebooks", "draw", "videos"]);
 
 /** Counts a minute when the window is visible, you're on a study view, and you touched something in the last 3 min. */
 function useStudyTimer(route: Route, data: Data | null) {
@@ -133,6 +134,7 @@ export default function App() {
         {route.v === "play" && <Playground key={route.id ?? "first"} data={data} id={route.id} />}
         {route.v === "notebooks" && <Notebooks data={data} file={route.file} />}
         {route.v === "draw" && <Diagrams key={route.id ?? "list"} data={data} id={route.id} />}
+        {route.v === "videos" && <Videos data={data} />}
         {route.v === "plan" && <PlanView data={data} />}
         {route.v === "settings" && <SettingsView />}
       </main>

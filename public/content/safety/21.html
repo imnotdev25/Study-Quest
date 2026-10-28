@@ -1,0 +1,22 @@
+
+<p>A <strong>jailbreak</strong> is an input that gets a model to produce content its safety training should block. Wei, Haghtalab and Steinhardt (2023, <em>Jailbroken</em>) explained most of them with two failure modes:</p>
+<ul>
+<li><strong>Competing objectives</strong>: helpfulness or instruction-following wins over safety. Role-play (“you are DAN”), prefix injection (“Start your answer with ‘Sure, here’s’”), refusal suppression.</li>
+<li><strong>Mismatched generalisation</strong>: safety training didn’t cover the input form, though capabilities did. Base64, other languages, ciphers, unusual formats.</li>
+</ul>
+<p>Other attack families:</p>
+<ul>
+<li><strong>Optimised suffixes</strong>: GCG (Zou et al., 2023) uses gradients to find gibberish suffixes that transfer across models.</li>
+<li><strong>Automated red-teaming</strong>: PAIR (Chao et al., 2023) uses an attacker LLM to iteratively refine a jailbreak against a target.</li>
+<li><strong>Many-shot jailbreaking</strong> (Anil et al., Anthropic, 2024): fill a long context with fake dialogues of an assistant complying; effectiveness follows a power law in the number of shots.</li>
+<li><strong>Multi-turn escalation</strong>: start benign and move gradually (e.g. “Crescendo”, Russinovich et al., 2024).</li>
+</ul>
+<p>Defences:</p>
+<ul>
+<li>Adversarial training on known jailbreak families.</li>
+<li>Input and output classifiers, which are trained separately from the model and can be updated quickly.</li>
+<li>Measuring with <strong>attack success rate (ASR)</strong> on benchmarks like HarmBench and JailbreakBench, against adaptive attackers, not only a fixed list.</li>
+</ul>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall: Static jailbreak lists</div>
+<p>A defence that blocks last month’s published prompts can still fall to a lightly reworded version. Robustness claims need adaptive attacks: an attacker who knows the defence and optimises against it.</p>
+</div>

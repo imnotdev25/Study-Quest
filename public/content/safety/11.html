@@ -1,0 +1,26 @@
+
+<p>The safety payoff of interpretability is prediction: a signal that fires <em>before</em> the bad behaviour, on inputs you didn’t test.</p>
+<p>What to check before trusting an internal monitor:</p>
+<ul>
+<li><strong>Generalisation</strong>: train the probe on one type of deception, test on another (different prompts, tasks, triggers).</li>
+<li><strong>Lead time</strong>: does it fire at the prompt, before any harmful token is generated?</li>
+<li><strong>False positive rate</strong> at a usable threshold. A monitor run on millions of requests at 1% FPR is a flood.</li>
+<li><strong>Robustness to optimisation</strong>: if the model (or an attacker) is trained against the probe, does it still work? Bailey et al. (2024) showed models can learn to evade latent-space monitors while keeping the behaviour.</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# Evaluate a monitor at a fixed false-positive budget, the way you would deploy it.
+rng = np.random.default_rng(0)
+benign = rng.normal(0, 1, 100_000)
+bad = rng.normal(2.5, 1, 500)
+for fpr in [0.01, 0.001]:
+    thr = np.quantile(benign, 1 - fpr)
+    print(f&quot;FPR {fpr:.1%}: threshold {thr:.2f}, catches {(bad &gt; thr).mean():.0%} of bad cases, &quot;
+          f&quot;{int(fpr * 1_000_000):,} false alarms per million requests&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>AUROC is not enough; report recall at the false-positive rate you can afford to review.</li>
+<li>Out-of-distribution tests are the whole point. A monitor that only works on its training prompts is a classifier for those prompts.</li>
+<li>Never train the policy directly against the monitor you rely on.</li>
+</ul>
+</div>

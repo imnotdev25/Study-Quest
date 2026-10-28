@@ -1,0 +1,28 @@
+
+<p>Models fail most on inputs unlike their training data: new domains, new tools, longer horizons, rare languages, unusual formats. For agents, the “distribution” includes the environment: a website redesign, an API version change, a different OS.</p>
+<p>What to do about it:</p>
+<ul>
+<li><strong>Measure shift explicitly</strong>: evaluate on held-out domains, time-split data (questions written after the training cutoff), and perturbed versions of benchmarks (paraphrases, reordered options, renamed variables).</li>
+<li><strong>Detect it at runtime</strong>: OOD scores (density, embedding distance from the training set, confidence) can route unfamiliar inputs to safer handling.</li>
+<li><strong>Design for it</strong>: conservative defaults, asking for clarification, and refusing irreversible actions in unfamiliar states.</li>
+</ul>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# A model that half-learned a shortcut: in the benchmark, the correct option is A 60% of the time.
+rng = np.random.default_rng(0)
+n = 2000
+knows = rng.random(n) &lt; 0.55                   # questions the model actually knows
+def accuracy(p_answer_is_A):
+    answer_is_A = rng.random(n) &lt; p_answer_is_A
+    guess_A_right = answer_is_A                # when unsure, the model picks A
+    return np.mean(knows | (~knows &amp; guess_A_right))
+print(f&quot;original benchmark (A correct 60%): {accuracy(0.60):.1%}&quot;)
+print(f&quot;options shuffled   (A correct 25%): {accuracy(0.25):.1%}&quot;)
+print(&quot;Same knowledge, different score: the gap is the shortcut, not capability.&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>In-distribution accuracy is an upper bound; report a shifted-distribution number too.</li>
+<li>Perturbation tests are cheap and expose shortcut learning fast.</li>
+<li>For agents, prefer behaviours that fail safe when the environment looks unfamiliar.</li>
+</ul>
+</div>

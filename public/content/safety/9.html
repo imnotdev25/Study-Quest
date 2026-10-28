@@ -1,0 +1,38 @@
+
+<p><strong>Sparse autoencoders (SAEs)</strong> try to undo superposition. Train an autoencoder on a layer’s activations <span class="math inline">\(x\)</span> with a wide hidden layer and a sparsity penalty:</p>
+<p><span class="math display">\[f = \text{ReLU}(W_e x + b_e), \qquad \hat x = W_d f + b_d, \qquad \mathcal{L} = \|x - \hat x\|^2 + \lambda \|f\|_1\]</span></p>
+<p>Each hidden unit (a “feature”) ideally fires for one interpretable concept. Anthropic’s <em>Towards Monosemanticity</em> (2023) and <em>Scaling Monosemanticity</em> (2024) found millions of features in Claude 3 Sonnet, including features for deception, sycophancy, unsafe code and specific entities like the Golden Gate Bridge; clamping that last one on produced “Golden Gate Claude”.</p>
+<p>Later work (attribution graphs and <em>transcoders</em>, 2025) traces how features connect across layers, giving step-by-step accounts of computations like multi-hop reasoning and planning a rhyme before writing the line.</p>
+<pre class="code python"><code class="language-python">import numpy as np
+
+# Tiny SAE on synthetic superposed data: can it recover the true sparse features?
+rng = np.random.default_rng(0)
+d, k_true, n = 16, 32, 8000                     # 32 true features squeezed into 16 dimensions
+F = rng.normal(size=(k_true, d)); F /= np.linalg.norm(F, axis=1, keepdims=True)
+codes = (rng.random((n, k_true)) &lt; 0.03) * rng.exponential(1.0, (n, k_true))
+X = codes @ F
+
+h, lam, lr = 64, 0.2, 3e-3                      # 64 SAE features, L1 strength, Adam step size
+Wd = rng.normal(size=(h, d)); Wd /= np.linalg.norm(Wd, axis=1, keepdims=True)
+P = {&quot;We&quot;: Wd.T.copy(), &quot;be&quot;: np.zeros(h), &quot;Wd&quot;: Wd}
+m = {k: np.zeros_like(v) for k, v in P.items()}; v = {k: np.zeros_like(x) for k, x in P.items()}
+for s in range(1, 3001):
+    b = X[rng.integers(0, n, 256)]
+    f = np.maximum(0, b @ P[&quot;We&quot;] + P[&quot;be&quot;]); err = f @ P[&quot;Wd&quot;] - b
+    gf = (err @ P[&quot;Wd&quot;].T + lam) * (f &gt; 0)                 # reconstruction + L1 gradient through the ReLU
+    G = {&quot;Wd&quot;: f.T @ err / 256, &quot;We&quot;: b.T @ gf / 256, &quot;be&quot;: gf.mean(0)}
+    for k in P:                                            # Adam
+        m[k] = 0.9 * m[k] + 0.1 * G[k]; v[k] = 0.999 * v[k] + 0.001 * G[k] ** 2
+        P[k] -= lr * (m[k] / (1 - 0.9 ** s)) / (np.sqrt(v[k] / (1 - 0.999 ** s)) + 1e-8)
+    P[&quot;Wd&quot;] /= np.linalg.norm(P[&quot;Wd&quot;], axis=1, keepdims=True) + 1e-9   # unit-norm decoder rows
+
+f = np.maximum(0, X @ P[&quot;We&quot;] + P[&quot;be&quot;])
+best = np.abs(F @ P[&quot;Wd&quot;].T).max(1)
+print(f&quot;true features recovered with cos &gt; 0.9: {(best &gt; 0.9).sum()} / {k_true}&quot;)
+print(f&quot;mean active SAE features per input: {(f &gt; 1e-3).sum(1).mean():.1f} &quot;
+      f&quot;(true features per input: {(codes &gt; 0).sum(1).mean():.1f})&quot;)
+print(f&quot;fraction of variance unexplained: {np.mean((f @ P[&#x27;Wd&#x27;] - X) ** 2) / np.mean(X ** 2):.3f}&quot;)
+print(&quot;Try lam = 0.05: reconstruction improves, features blur together. That trade-off is the SAE&#x27;s core tuning knob.&quot;)</code></pre>
+<div class="box box-pitfall" data-kind="pitfall"><div class="box-title">⚠️ Pitfall: Interpretable is not the same as complete</div>
+<p>SAEs leave reconstruction error (“dark matter”), features can split or merge as you change dictionary size, and a feature labelled “deception” from its top activations may fire on other things too. Validate features by intervention, and measure how much of the model’s loss the SAE reconstruction preserves.</p>
+</div>

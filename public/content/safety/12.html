@@ -1,0 +1,13 @@
+
+<p>RLHF assumes a human can tell a good answer from a bad one. That breaks when the work is too long, too technical or too subtle: a 2,000-line pull request, a novel proof, a research plan. <strong>Scalable oversight</strong> is the set of techniques for supervising models on tasks humans can’t reliably judge unaided.</p>
+<p>Proposals:</p>
+<ul>
+<li><strong>Decomposition</strong> (iterated amplification, Christiano et al., 2018; recursive reward modelling, Leike et al., 2018): break the hard judgement into sub-questions a human, helped by models, can answer.</li>
+<li><strong>Debate</strong> (Irving, Christiano and Amodei, 2018): two models argue opposite sides; a judge decides. The hope is that truth is easier to defend than lies, so honest debaters win.</li>
+<li><strong>AI-assisted critique</strong>: a model points out flaws; the human checks the flaws, which is easier than finding them.</li>
+<li><strong>Weak-to-strong generalisation</strong>: study whether a strong model trained on a weak supervisor’s labels exceeds the supervisor.</li>
+<li><strong>Control</strong>: assume the model might be adversarial and design protocols that stay safe anyway.</li>
+</ul>
+<div class="box box-analogy" data-kind="analogy"><div class="box-title">🧩 Analogy: Reviewing a contractor’s work</div>
+<p>You can’t audit every weld in a building. You can hire an inspector who shows you the three suspicious welds and explains why, then check those yourself. Oversight scales when verifying a flagged problem is cheaper than finding it.</p>
+</div>

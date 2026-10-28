@@ -1,0 +1,19 @@
+
+<p>Bowman et al. (2022) proposed <strong>sandwiching</strong> as a way to test oversight methods today. Pick a task where:</p>
+<ul>
+<li>the model is more capable than the non-expert overseers,</li>
+<li>but less capable than experts, who provide ground truth.</li>
+</ul>
+<p>Then ask: with technique X, how close do non-experts + model get to expert accuracy? You get a number for “how much does this oversight method help”, without needing superhuman AI.</p>
+<pre class="code python"><code class="language-python"># Sandwiching scorecard (illustrative numbers)
+expert = 0.92
+methods = {&quot;model alone&quot;: 0.71, &quot;non-expert alone&quot;: 0.48, &quot;non-expert + chat&quot;: 0.69,
+           &quot;non-expert + debate transcripts&quot;: 0.78, &quot;non-expert + critiques&quot;: 0.80}
+for m, acc in methods.items():
+    print(f&quot;{m:32s} {acc:.0%}   gap to experts {expert - acc:+.0%}&quot;)</code></pre>
+<div class="box box-keyideas" data-kind="keyideas"><div class="box-title">🔑 Key ideas</div>
+<ul>
+<li>Sandwiching turns “will this oversight scale?” into a measurable experiment with today’s models.</li>
+<li>The key comparison is overseer+method vs model alone: if assistance doesn’t beat the model, the human isn’t adding oversight.</li>
+</ul>
+</div>
