@@ -15,6 +15,7 @@ import { BoardFrame, exportBoard } from "./Diagrams";
 import { go } from "../App";
 import { useVideos, videosFor } from "../lib/videos";
 import { VideoPlayer } from "./Videos";
+import { LessonExplainer } from "../explainer/LessonExplainer";
 
 export function TopicView({ data, id }: { data: Data; id: string }) {
   const t = data.topics.get(id);
@@ -95,6 +96,8 @@ export function TopicView({ data, id }: { data: Data; id: string }) {
       </div>
 
       <WarmUp t={t} />
+
+      <LessonExplainer id={id} macros={data.macros} />
 
       {!html && <div className="loading">Loading…</div>}
       <article className="prose" ref={body} />
