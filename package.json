@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node scripts/copy-excalidraw-assets.mjs && vite",
     "build": "node scripts/copy-excalidraw-assets.mjs && tsc --noEmit && vite build",
-    "tauri": "tauri",
+    "tauri": "node scripts/tauri.mjs",
     "content": "../.venv/bin/python scripts/build_content.py && ../.venv/bin/python scripts/build_notebooks.py && ./.venv/bin/python scripts/build_guides.py --check && python3 scripts/build_explainers.py && ../.venv-post/bin/python scripts/build_exercises.py",
     "assets": "node scripts/copy-excalidraw-assets.mjs"
   },

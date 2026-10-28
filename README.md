@@ -122,9 +122,9 @@ the first launch. Drag the app to Applications, then either:
 - open **System Settings → Privacy & Security** and click **Open Anyway** next to Study Quest, or
 - run `xattr -dr com.apple.quarantine "/Applications/Study Quest.app"` once in Terminal.
 
-Building the `.dmg` yourself: if `pnpm tauri build` stops with *Not authorized to send Apple events to Finder*,
-either allow your terminal under **System Settings → Privacy & Security → Automation → Finder**, or run
-`CI=true pnpm tauri build`, which skips the Finder step that only arranges the icons in the DMG window.
+Building the `.dmg` yourself: `pnpm tauri build` skips create-dmg's Finder step (it only arranges the icons in
+the DMG window and needs Automation permission, otherwise it fails with *Not authorized to send Apple events to
+Finder*). Set `STUDY_QUEST_DMG_LAYOUT=1` to keep it.
 
 ---
 
