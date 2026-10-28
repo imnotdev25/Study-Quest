@@ -54,7 +54,7 @@ Download from **[Releases](https://github.com/imnotdev25/Study-Quest/releases)**
 
 | OS | File | First launch (builds aren't signed yet) |
 |---|---|---|
-| macOS (Apple Silicon / Intel) | `.dmg` | Right-click the app → **Open** |
+| macOS (Apple Silicon / Intel) | `.dmg` | See *macOS first launch* below |
 | Windows 10 / 11 | `.exe` installer or `.msi` | SmartScreen: **More info → Run anyway** |
 | Linux x86_64 / ARM64 | `.AppImage` or `.deb` | `chmod +x Study*.AppImage && ./Study*.AppImage`, or `sudo apt install ./study-quest*.deb` |
 | Linux ARMv7 (e.g. Raspberry Pi 32-bit) | `.deb` | `sudo apt install ./study-quest*armhf.deb` |
@@ -114,6 +114,17 @@ The book content (`public/content/`, `public/figs/`) and `notebooks/` are genera
 | `AGENTS.md` | Conventions for AI coding agents (and humans) |
 
 Every push to `master` refreshes the **nightly** pre-release. Pushing a tag like `v0.2.0` publishes a versioned release with every installer.
+
+### macOS first launch
+The builds are ad-hoc signed, not notarised by Apple (that needs a paid Apple Developer account), so macOS blocks
+the first launch. Drag the app to Applications, then either:
+
+- open **System Settings → Privacy & Security** and click **Open Anyway** next to Study Quest, or
+- run `xattr -dr com.apple.quarantine "/Applications/Study Quest.app"` once in Terminal.
+
+Building the `.dmg` yourself: if `pnpm tauri build` stops with *Not authorized to send Apple events to Finder*,
+either allow your terminal under **System Settings → Privacy & Security → Automation → Finder**, or run
+`CI=true pnpm tauri build`, which skips the Finder step that only arranges the icons in the DMG window.
 
 ---
 

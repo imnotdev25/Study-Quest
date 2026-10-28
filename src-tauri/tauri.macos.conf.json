@@ -28,6 +28,9 @@
     "targets": [
       "app",
       "dmg"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }
