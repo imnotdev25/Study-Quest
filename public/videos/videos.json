@@ -1,39 +1,132 @@
 [
  {
-  "id": "rl_loop",
-  "title": "The RL loop",
-  "desc": "An agent acts, the environment answers with a new state and a reward, and returns improve episode by episode.",
+  "id": "bandits",
+  "title": "Multi-armed bandits",
+  "desc": "Three slot machines, hidden payout rates: why pure greed gets stuck, and how a little exploration fixes it.",
+  "path": "rl",
+  "keywords": [
+   "Multi-Armed Bandits",
+   "Bandit",
+   "Exploration",
+   "Upper Confidence"
+  ],
+  "duration": 52,
+  "src": "videos/bandits.mp4",
+  "poster": "videos/bandits.jpg"
+ },
+ {
+  "id": "mdp",
+  "title": "MDPs, returns and value",
+  "desc": "States, actions and rewards; one episode; why we add up future rewards, why we discount them, and what V(s) means.",
   "path": "rl",
   "keywords": [
    "RL is choosing actions",
    "MDPs and Discounted Return",
    "Value Functions",
-   "Monte Carlo Prediction",
-   "TD(0)"
+   "Autoregressive LLMs as RL Policies"
   ],
-  "duration": 32,
-  "src": "videos/rl_loop.mp4",
-  "poster": "videos/rl_loop.jpg"
+  "duration": 50,
+  "src": "videos/mdp.mp4",
+  "poster": "videos/mdp.jpg"
  },
  {
   "id": "value_iteration",
   "title": "Value iteration",
-  "desc": "Bellman backups spread value outward from the goal, sweep by sweep, until the greedy policy appears.",
+  "desc": "One Bellman backup up close, then sweep after sweep until values converge and the best policy appears.",
   "path": "rl",
   "keywords": [
    "Value Iteration",
-   "Value Functions",
-   "MDPs and Discounted Return",
-   "Bellman"
+   "Bellman",
+   "Dynamic Programming",
+   "Policy Iteration"
   ],
-  "duration": 32,
+  "duration": 52,
   "src": "videos/value_iteration.mp4",
   "poster": "videos/value_iteration.jpg"
  },
  {
+  "id": "td_learning",
+  "title": "TD learning vs Monte Carlo",
+  "desc": "Two robots, two corridors: one learns after every step (TD), one waits for the end (Monte Carlo).",
+  "path": "rl",
+  "keywords": [
+   "Monte Carlo Prediction",
+   "TD(0)",
+   "SARSA",
+   "Q-Learning",
+   "Temporal-Difference",
+   "Function Approximation",
+   "DQN Part 1",
+   "DQN Part 2"
+  ],
+  "duration": 50,
+  "src": "videos/td_learning.mp4",
+  "poster": "videos/td_learning.jpg"
+ },
+ {
+  "id": "policy_gradient",
+  "title": "Policy gradients",
+  "desc": "A policy is a set of probabilities. Sample, score against a baseline, and shift probability toward what worked.",
+  "path": "rl",
+  "keywords": [
+   "Policy Gradients",
+   "REINFORCE",
+   "Baselines and Advantage",
+   "Actor-Critic",
+   "GAE",
+   "Leave-One-Out Baselines",
+   "Critic-Free Baselines",
+   "Entropy"
+  ],
+  "duration": 50,
+  "src": "videos/policy_gradient.mp4",
+  "poster": "videos/policy_gradient.jpg"
+ },
+ {
+  "id": "ppo",
+  "title": "PPO: small, safe steps",
+  "desc": "The probability ratio, the clip band, and why PPO stops pushing once a step has gone far enough.",
+  "path": "rl",
+  "keywords": [
+   "PPO",
+   "Trust Regions",
+   "Importance Sampling",
+   "Clip",
+   "PPO for LLMs",
+   "Token-Level PPO Ratios",
+   "PPO KL Early Stopping",
+   "PPO Epoch Reuse",
+   "PPO’s Clipped Surrogate"
+  ],
+  "duration": 50,
+  "src": "videos/ppo.mp4",
+  "poster": "videos/ppo.jpg"
+ },
+ {
+  "id": "rlhf",
+  "title": "RLHF in four steps",
+  "desc": "Human preferences train a reward model, RL climbs it, a KL leash keeps the model sane, and pushing too hard backfires.",
+  "path": "rl",
+  "keywords": [
+   "RLHF",
+   "Reward Modeling",
+   "KL Regularization",
+   "Reward Overoptimization",
+   "Best-of-N",
+   "Reward Models",
+   "Preference Optimization",
+   "DPO",
+   "Adaptive KL Control",
+   "What Alignment Means"
+  ],
+  "duration": 50,
+  "src": "videos/rlhf.mp4",
+  "poster": "videos/rlhf.jpg"
+ },
+ {
   "id": "grpo",
-  "title": "GRPO in one group",
-  "desc": "Sample a group of answers, score them, compare each to the group average, and push up the better ones.",
+  "title": "GRPO: learn from the group",
+  "desc": "Sample a group of answers, score them, compare each with the group average, and push up the better ones.",
   "path": "rl",
   "keywords": [
    "GRPO",
@@ -43,9 +136,11 @@
    "Dr. GRPO",
    "Critic-Free Baselines",
    "RL with Verifiable Rewards",
-   "Group Baselines"
+   "Group Baselines",
+   "GSPO",
+   "Rejection Sampling"
   ],
-  "duration": 34,
+  "duration": 50,
   "src": "videos/grpo.mp4",
   "poster": "videos/grpo.jpg"
  },
@@ -82,6 +177,24 @@
   "poster": "videos/attention.jpg"
  },
  {
+  "id": "transformer_block",
+  "title": "Inside a transformer block",
+  "desc": "Follow five token vectors through norm, attention, residual, MLP and residual, then stack the block N times.",
+  "path": "llm",
+  "keywords": [
+   "Assemble a Pre-Norm Decoder Block",
+   "LayerNorm, Residual Paths",
+   "The LLaMA Recipe",
+   "Multi-Head Attention",
+   "Mixture of Experts",
+   "GPT-1 to GPT-3",
+   "The Architecture Landscape"
+  ],
+  "duration": 50,
+  "src": "videos/transformer_block.mp4",
+  "poster": "videos/transformer_block.jpg"
+ },
+ {
   "id": "next_token",
   "title": "Predicting the next token",
   "desc": "Logits, softmax and temperature, sampling one token, and why the KV cache makes the next step cheap.",
@@ -97,5 +210,26 @@
   "duration": 34,
   "src": "videos/next_token.mp4",
   "poster": "videos/next_token.jpg"
+ },
+ {
+  "id": "training",
+  "title": "How an LLM learns",
+  "desc": "Predict the next token, score the surprise, step downhill on the loss, repeat billions of times.",
+  "path": "llm",
+  "keywords": [
+   "Next-Token Loss",
+   "Where Losses Come From",
+   "How to Actually Calculate a Loss",
+   "Softmax Cross-Entropy",
+   "Learning Rate, Curvature",
+   "Momentum and Optimizer State",
+   "AdamW",
+   "The Pre-Training Loop",
+   "One Neuron, Full Backpropagation",
+   "Supervised Fine-Tuning"
+  ],
+  "duration": 48,
+  "src": "videos/training.mp4",
+  "poster": "videos/training.jpg"
  }
 ]

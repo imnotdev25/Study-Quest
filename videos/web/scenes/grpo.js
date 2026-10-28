@@ -1,108 +1,94 @@
-// GRPO: one prompt, a group of sampled answers, a verifier scores them, advantages are rewards minus the group
-// mean (over the std), and the policy shifts probability toward the above-average answers.
-import { C, THREE, cameraPath, card, fade, label, lerp, mat, smooth } from "../lib.js";
+// GRPO: one prompt, a group of 8 sampled answers, a verifier marks them, the group mean becomes the baseline,
+// answers above it gain probability, the next round improves, and an all-correct group teaches nothing.
+import { C, THREE, cameraPath, card, clamp, dynLabel, ease, fade, label, lerp, mat, smooth, softmax, story } from "../lib.js";
 
 export const meta = {
-  title: "GRPO in one group", path: "rl", duration: 34,
-  desc: "Sample a group of answers, score them, compare each to the group average, and push up the better ones.",
+  title: "GRPO: learn from the group", path: "rl", duration: 50,
+  desc: "Sample a group of answers, score them, compare each with the group average, and push up the better ones.",
   keywords: ["GRPO", "Group Reward Standardization", "Verifiable Rewards", "DAPO", "Dr. GRPO", "Critic-Free Baselines",
-             "RL with Verifiable Rewards", "Group Baselines"],
-  poster: 17,
+             "RL with Verifiable Rewards", "Group Baselines", "GSPO", "Rejection Sampling"],
+  poster: 22,
 };
 
-const ANSWERS = [
-  ["17 × 3 = 51", 1], ["17 × 3 = 41", 0], ["3 × 17 → 51", 1], ["about 50", 0],
-  ["10×3 + 7×3 = 51", 1], ["17 + 3 = 20", 0], ["51", 1], ["5 1?", 0],
+const ANS = ["51", "41", "51", "50", "17×3=51", "20", "54", "57"];
+const R1 = [1, 0, 1, 0, 1, 0, 0, 0];
+const R2 = [1, 1, 1, 0, 1, 1, 1, 0];
+const stats = (r) => { const m = r.reduce((a, b) => a + b, 0) / r.length; const s = Math.sqrt(r.reduce((a, x) => a + (x - m) ** 2, 0) / r.length); return { m, s, adv: r.map((x) => (s > 0 ? (x - m) / s : 0)) }; };
+const S1 = stats(R1), S2 = stats(R2);
+const CH = [
+  { t: 0, title: "", text: "" },
+  { t: 4.5, title: "One prompt, a group of answers", text: "“What is 17 × 3?” The model samples G = 8 answers to the same question." },
+  { t: 11, title: "A verifier scores them", text: "No human needed: the answer is checkable. 3 of 8 are correct (reward 1), 5 are wrong (0)." },
+  { t: 17, title: "The group is the baseline", text: "Group mean = 0.375. Advantage = (reward − mean) / std. Correct answers rise above the plane, wrong ones sink." },
+  { t: 24, title: "Update", text: "Above-average answers gain probability (bars), below-average ones lose it. No value network, unlike PPO." },
+  { t: 31, title: "Next round", text: "The model now gets 6 of 8 right. The mean rises to 0.75, so the bar to beat rises with it." },
+  { t: 38, title: "When everyone agrees", text: "All 8 correct: every advantage is 0, and the prompt teaches nothing. DAPO filters such prompts out." },
+  { t: 44.5, title: "The recipe", text: "Sample a group, verify, subtract the group mean, update. Good RL data sits at the edge of what the model can solve." },
 ];
-const G = ANSWERS.length;
-const R = ANSWERS.map((a) => a[1]);
-const MEAN = R.reduce((a, b) => a + b, 0) / G;
-const STD = Math.sqrt(R.reduce((a, r) => a + (r - MEAN) ** 2, 0) / G);
-const ADV = R.map((r) => (r - MEAN) / (STD + 1e-6));
-const P0 = [0.16, 0.14, 0.1, 0.14, 0.08, 0.14, 0.1, 0.14];
 
 export function setup({ scene, camera, render, hud }) {
-  const prompt = card(["Prompt:", "What is 17 × 3?"], { w: 3.4, h: 1.5, border: "#7c3aed", size: 52 });
-  prompt.position.set(-7.5, 1.6, 0); scene.add(prompt);
-  const model = new THREE.Mesh(new THREE.IcosahedronGeometry(0.9, 1), mat(0x8b5cf6, { flatShading: true }));
-  model.position.set(-4.4, 1.6, 0); model.castShadow = true; scene.add(model);
-  const ml = label("policy π", { color: C.accent }); ml.position.set(-4.4, 3.0, 0); scene.add(ml);
-
-  const cards = [], balls = [], pbars = [];
-  ANSWERS.forEach(([txt], i) => {
-    const c = card(txt, { w: 2.5, h: 0.9, size: 46 });
-    scene.add(c); cards.push(c);
-    const b = new THREE.Mesh(new THREE.SphereGeometry(0.22, 20, 14), mat(R[i] ? 0x16a34a : 0xdc2626));
-    b.castShadow = true; scene.add(b); balls.push(b);
-    const p = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1, 0.5), mat(0x60a5fa));
-    p.castShadow = true; scene.add(p); pbars.push(p);
-  });
-  const plane = new THREE.Mesh(new THREE.BoxGeometry(12, 0.02, 3.2), mat(0xf59e0b, { transparent: true, opacity: 0.35 }));
+  const prompt = card(["17 × 3 = ?"], { w: 3.0, h: 1.2, border: "#7c3aed", size: 60 });
+  prompt.position.set(0, 1.0, 5.0); prompt.rotation.x = -0.35; scene.add(prompt);
+  const slot = (i) => new THREE.Vector3((i - 3.5) * 1.55, 0, 0);
+  const cards = ANS.map((a) => { const c = card(a, { w: 1.35, h: 0.8, size: 48 }); scene.add(c); return c; });
+  const stamps = ANS.map(() => { const l = dynLabel({ size: 34 }); scene.add(l); return l; });
+  const advs = ANS.map(() => { const l = dynLabel({ size: 24 }); scene.add(l); return l; });
+  const bars = ANS.map(() => { const b = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1, 0.6), mat(0x60a5fa)); b.castShadow = true; scene.add(b); return b; });
+  const plane = new THREE.Mesh(new THREE.BoxGeometry(13, 0.03, 1.6), mat(0xf59e0b, { transparent: true, opacity: 0.3 }));
   scene.add(plane);
-  const planeLabel = label(`group mean = ${MEAN.toFixed(2)}`, { color: C.amber }); scene.add(planeLabel);
+  const pl = dynLabel({ size: 28, color: C.amber }); scene.add(pl);
+  const zero = label("advantage 0 for all: no signal", { size: 30, color: C.red }); scene.add(zero);
+  const P0 = ANS.map(() => 1 / 8);
 
-  const slot = (i) => new THREE.Vector3(-1 + (i % 4) * 2.9, 0, i < 4 ? -1.4 : 1.4);
-  const KEYS = [[0, [-2, 7, 15], [-1, 1, 0]], [4.5, [-2, 6, 13], [-1.5, 1.2, 0]], [13, [3.5, 6.5, 11], [3, 1.2, 0]],
-                [24, [3.5, 9, 12], [3, 1, 0]], [34, [3, 10, 13.5], [3, 1, 0]]];
+  const KEYS = [[0, [0, 6, 13], [0, 1, 1.5]], [4.5, [0, 5, 11], [0, 1.2, 1.5]], [11, [0, 4.5, 9], [0, 1.5, 0]],
+                [17, [-5, 5, 9], [0, 1.5, 0]], [24, [5, 5, 9], [0, 1, -0.5]], [31, [0, 5.5, 10], [0, 1.3, 0]],
+                [38, [0, 5, 9.5], [0, 1.3, 0]], [50, [0, 6.5, 11], [0, 1.3, 0]]];
 
   return function renderAt(t) {
-    model.rotation.y = t * 0.8; model.rotation.x = t * 0.3;
-    const reward = smooth((t - 10.5) / 1.5), advT = smooth((t - 15) / 2), upd = smooth((t - 21) / 2.5);
+    const round2 = t >= 31, allOk = t >= 38;
+    const R = allOk ? ANS.map(() => 1) : round2 ? R2 : R1;
+    const St = allOk ? stats(R) : round2 ? S2 : S1;
+    const t0 = allOk ? 38 : round2 ? 31 : 4.5;
+    const verify = smooth((t - (round2 ? t0 + 1.5 : 11.3)) / 0.6);
+    const lift = smooth((t - (round2 ? t0 + 3 : 17.5)) / 1.2);
+    const upd = round2 ? 0 : smooth((t - 24.5) / 2.5);
+    const logits = St.adv.map((a) => a * 0.9 * upd);
+    const p = softmax(logits);
     cards.forEach((c, i) => {
-      const k = smooth((t - 5 - i * 0.45) / 1.2);
-      const target = slot(i).setY(1.1 + ADV[i] * 0.55 * advT);
-      c.position.lerpVectors(model.position, target, k);
-      c.scale.setScalar(lerp(0.2, 1, k));
-      c.visible = k > 0.001;
-      const border = reward > 0.5 ? (R[i] ? "#16a34a" : "#dc2626") : "#cbd5e1";
+      const k = ease.back((t - t0 - 0.6 - i * 0.25) / 0.5);
+      const target = slot(i).setY(1.4 + St.adv[i] * 0.55 * lift);
+      c.position.lerpVectors(prompt.position, target, clamp(k));
+      c.scale.setScalar(Math.max(0.05, lerp(0.3, 1, clamp(k))));
+      const ok = R[i] === 1;
+      const border = verify > 0.5 ? (ok ? "#16a34a" : "#dc2626") : "#cbd5e1";
       if (c.userData.border !== border) { c.userData.redraw(border); c.userData.border = border; }
-      balls[i].visible = reward > 0.01;
-      balls[i].scale.setScalar(reward);
-      balls[i].position.copy(target).add(new THREE.Vector3(1.45, 0.25, 0));
-      const p = lerp(P0[i], P0[i] * Math.exp(0.9 * ADV[i]) / P0.reduce((s, q, j) => s + q * Math.exp(0.9 * ADV[j]), 0), upd);
-      const h = Math.max(0.02, p * 9);
-      pbars[i].visible = t > 19.5;
-      pbars[i].scale.y = h * smooth((t - 19.5) / 1);
-      pbars[i].position.copy(slot(i)).add(new THREE.Vector3(1.45, 0, 0)).setY(0.01 + (h * smooth((t - 19.5) / 1)) / 2);
-      pbars[i].material.color.set(upd > 0.05 ? (ADV[i] > 0 ? 0x16a34a : 0xdc2626) : 0x60a5fa);
+      stamps[i].visible = verify > 0.05;
+      stamps[i].userData.set(ok ? "✓ 1" : "✗ 0", ok ? C.green : C.red);
+      stamps[i].position.copy(target).add(new THREE.Vector3(0, 0.75, 0));
+      stamps[i].material.opacity = verify;
+      advs[i].visible = lift > 0.05;
+      advs[i].userData.set(`A ${St.adv[i] >= 0 ? "+" : ""}${St.adv[i].toFixed(2)}`, St.adv[i] > 0 ? C.green : St.adv[i] < 0 ? C.red : C.muted);
+      advs[i].position.copy(target).add(new THREE.Vector3(0, -0.65, 0));
+      const h = Math.max(0.02, (round2 ? P0[i] : p[i]) * 9);
+      bars[i].visible = t > 24 && t < 31;
+      bars[i].scale.y = h; bars[i].position.set(slot(i).x, h / 2, -1.6);
+      bars[i].material.color.set(upd > 0.1 ? (St.adv[i] > 0 ? 0x16a34a : 0xdc2626) : 0x60a5fa);
     });
-    plane.visible = advT > 0.01;
-    plane.material.opacity = 0.35 * advT;
-    plane.position.set(3.35, 1.1, 0);
-    planeLabel.position.set(9.9, 1.5, 0);
-    planeLabel.material.opacity = advT;
+    plane.visible = pl.visible = lift > 0.02;
+    plane.position.set(0, 1.4, 0); plane.material.opacity = 0.3 * lift;
+    pl.userData.set(`group mean ${St.m.toFixed(3)}`); pl.position.set(6.9, 1.85, 0);
+    zero.visible = allOk && t > 41; zero.position.set(0, 3.3, 0);
     cameraPath(camera, KEYS, t);
     render();
 
     hud.clear();
-    hud.title("GRPO in one group", "no critic: compare each answer with its siblings", fade(t, -1, 4.2, 0.8));
-    hud.caption("1. Sample a group of G = 8 answers to the same prompt.", fade(t, 5, 10.3, 0.4));
-    hud.caption("2. A verifier scores each one: 1 if correct, 0 if not.", fade(t, 10.5, 14.8, 0.4));
-    hud.caption("3. Advantage = (reward − group mean) / group std. Above the plane: better than average.", fade(t, 15, 20.8, 0.4));
-    hud.caption("4. Update: raise the probability of positive-advantage answers, lower the rest.", fade(t, 21, 27, 0.4));
-    const a = fade(t, 15.2, 27.2);
-    if (a > 0) {
-      hud.alpha(a);
-      hud.panel(30, 30, 330, 300);
-      hud.text("Group statistics", 50, 62, 19, C.ink, "left", 700);
-      hud.text(`mean r = ${MEAN.toFixed(2)}   std = ${STD.toFixed(2)}`, 50, 92, 16, C.muted);
-      ANSWERS.forEach(([txt], i) => {
-        const y = 122 + i * 25;
-        hud.text(txt, 50, y, 14, C.ink);
-        hud.text(`r=${R[i]}  A=${ADV[i] >= 0 ? "+" : ""}${ADV[i].toFixed(2)}`, 340, y, 14, ADV[i] > 0 ? C.green : C.red, "right", 650);
-      });
-      hud.alpha(1);
-    }
-    const z = fade(t, 27.5, 40, 0.6);
-    if (z > 0) {
-      hud.alpha(z);
-      hud.panel(250, 200, 780, 250);
-      hud.text("When every answer gets the same reward…", 640, 244, 23, C.ink, "center", 700);
-      hud.text("all 8 correct → mean 1, every advantage 0", 640, 288, 19, C.muted, "center");
-      hud.text("all 8 wrong → mean 0, every advantage 0", 640, 318, 19, C.muted, "center");
-      hud.text("…the group teaches nothing. That's why DAPO filters such prompts out", 640, 368, 18, C.accent, "center", 650);
-      hud.text("and why good RL data sits at the edge of what the model can solve.", 640, 396, 18, C.accent, "center", 650);
-      hud.alpha(1);
+    hud.title("GRPO: learn from the group", "no critic: compare each answer with its siblings", fade(t, -1, 4.3, 0.7));
+    const c = story(hud, CH, t);
+    if (c.i >= 3 && c.i <= 6) {
+      hud.panel(40, 46, 300, 104);
+      hud.text(`round ${round2 ? 2 : 1}${allOk ? " (all correct)" : ""}`, 60, 76, 15, C.muted, "left", 700);
+      hud.text(`mean ${St.m.toFixed(3)}   std ${St.s.toFixed(3)}`, 60, 104, 17, C.ink, "left", 650);
+      hud.text("A = (r − mean) / std", 60, 132, 16, C.accent, "left", 700);
     }
   };
 }

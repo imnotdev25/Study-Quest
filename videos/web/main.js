@@ -1,7 +1,8 @@
 // Loads one scene (?scene=<id>) and exposes window.renderAt(t) for the recorder.
 import { makeStage } from "./lib.js";
 
-export const SCENES = ["rl_loop", "value_iteration", "grpo", "embeddings", "attention", "next_token"];
+export const SCENES = ["bandits", "mdp", "value_iteration", "td_learning", "policy_gradient", "ppo", "rlhf", "grpo",
+  "embeddings", "attention", "transformer_block", "next_token", "training"];
 
 const q = new URLSearchParams(location.search);
 const id = SCENES.includes(q.get("scene")) ? q.get("scene") : SCENES[0];

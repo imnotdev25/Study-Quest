@@ -1,7 +1,7 @@
 // Next-token prediction: the prompt goes through the model, out come logits, softmax (with temperature) turns
 // them into probabilities, one token is sampled and appended, and the KV cache means only the new token is
 // processed on the next step.
-import { C, THREE, cameraPath, card, fade, label, lerp, mat, smooth, softmax } from "../lib.js";
+import { C, THREE, cameraPath, card, fade, label, lerp, mat, smooth, softmax, story } from "../lib.js";
 
 export const meta = {
   title: "Predicting the next token", path: "llm", duration: 34,
@@ -16,6 +16,16 @@ const CANDS = ["Paris", "a", "the", "located", "Lyon", "known"];
 const LOGITS = [6.2, 3.1, 2.9, 2.4, 1.6, 1.4];
 const TEMP = (t) => (t < 15 ? 1 : t < 17.5 ? lerp(1, 0.3, smooth((t - 15) / 1.5)) : t < 20.5 ? lerp(0.3, 2.2, smooth((t - 17.5) / 1.5)) : lerp(2.2, 1, smooth((t - 20.5) / 1)));
 const X = (i) => -6.5 + i * 1.8;
+
+const CH = [
+  { t: 0, title: "", text: "" },
+  { t: 4.5, title: "Prefill", text: "Prefill: the whole prompt goes through the model in one parallel pass." },
+  { t: 7.5, title: "Logits", text: "The last position outputs a logit (a raw score) for every token in the vocabulary." },
+  { t: 11.0, title: "Softmax", text: "Softmax turns logits into probabilities that sum to 1." },
+  { t: 14.5, title: "Temperature", text: "Low temperature sharpens the distribution, high temperature flattens it." },
+  { t: 21.5, title: "Sample and append", text: "Sample one token and append it to the text." },
+  { t: 26.5, title: "The KV cache", text: "Next step: only the new token runs through the model. Earlier keys and values come from the cache." },
+];
 
 export function setup({ scene, camera, render, hud }) {
   const toks = [...PROMPT, "Paris"].map((w, i) => {
@@ -85,12 +95,7 @@ export function setup({ scene, camera, render, hud }) {
 
     hud.clear();
     hud.title("Predicting the next token", "one forward pass, one probability for every token in the vocabulary", fade(t, -1, 4.2, 0.8));
-    hud.caption("1. Prefill: the whole prompt goes through the model in one parallel pass.", fade(t, 5, 7.8, 0.4));
-    hud.caption("2. The last position outputs a logit (a raw score) for every token in the vocabulary.", fade(t, 8, 11.3, 0.4));
-    hud.caption("3. Softmax turns logits into probabilities that sum to 1.", fade(t, 11.5, 14.8, 0.4));
-    hud.caption(`Temperature T = ${T.toFixed(1)}: low T sharpens, high T flattens.`, fade(t, 15, 21.8, 0.4));
-    hud.caption("4. Sample one token and append it to the text.", fade(t, 22, 26.8, 0.4));
-    hud.caption("5. Next step: only the new token runs through the model. Earlier keys and values come from the cache.", fade(t, 27, 34.5, 0.4));
+    story(hud, CH, t);
     const a = fade(t, 11.8, 26.5);
     if (a > 0) {
       hud.alpha(a);

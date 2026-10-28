@@ -1,6 +1,6 @@
 // Tokens become vectors: text splits into tokens, each token id looks up a row of the embedding table, and the
 // vectors land in a space where similar meanings sit close together (and directions carry meaning).
-import { C, THREE, cameraPath, card, fade, hash, label, lerp, mat, smooth } from "../lib.js";
+import { C, THREE, cameraPath, card, fade, hash, label, lerp, mat, smooth, story } from "../lib.js";
 
 export const meta = {
   title: "From tokens to embeddings", path: "llm", duration: 32,
@@ -20,6 +20,14 @@ const POINTS = [
 ];
 const COL = { royalty: 0x7c3aed, people: 0x2563eb, food: 0x16a34a, verbs: 0xd97706, places: 0xdb2777 };
 const OFF = new THREE.Vector3(4, 0, 0);
+
+const CH = [
+  { t: 0, title: "", text: "" },
+  { t: 4.5, title: "Split into tokens", text: "A tokenizer splits text into pieces it knows. Each piece has an integer id." },
+  { t: 11.5, title: "Look up a row", text: "Each id selects one row of a learned table: a vector of d numbers." },
+  { t: 17.5, title: "Meaning becomes distance", text: "Training arranges those vectors so similar meanings end up close together." },
+  { t: 24.5, title: "Directions carry meaning", text: "Directions carry meaning too: king → queen points like man → woman." },
+];
 
 export function setup({ scene, camera, render, hud }) {
   // sentence tokens
@@ -89,10 +97,7 @@ export function setup({ scene, camera, render, hud }) {
 
     hud.clear();
     hud.title("From tokens to embeddings", "how a model turns text into numbers it can compute with", fade(t, -1, 4.2, 0.8));
-    hud.caption("1. A tokenizer splits text into pieces it knows. Each piece has an integer id.", fade(t, 5, 11.6, 0.4));
-    hud.caption("2. Each id selects one row of a learned table: a vector of d numbers.", fade(t, 12, 17.6, 0.4));
-    hud.caption("3. Training arranges those vectors so similar meanings end up close together.", fade(t, 18, 24.6, 0.4));
-    hud.caption("4. Directions carry meaning too: king → queen points like man → woman.", fade(t, 25, 32.5, 0.4));
+    story(hud, CH, t);
     const a = fade(t, 12.5, 24.5);
     if (a > 0) {
       hud.alpha(a);

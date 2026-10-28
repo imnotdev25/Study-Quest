@@ -183,3 +183,105 @@ export function softmax(z, T = 1) {
 }
 
 export const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.05, ...extra });
+
+// ---------------------------------------------------------------- storytelling helpers (v2 scenes)
+/** Chapters: [{t: start seconds, title, text}]. Returns {i, k, local} for time t. */
+export function chapterAt(chapters, t) {
+  let i = 0;
+  while (i + 1 < chapters.length && chapters[i + 1].t <= t) i++;
+  const end = i + 1 < chapters.length ? chapters[i + 1].t : chapters[i].t + 8;
+  return { i, local: t - chapters[i].t, k: clamp((t - chapters[i].t) / (end - chapters[i].t)), end };
+}
+
+function wrap(hud, text, size, maxW) {
+  const words = text.split(" "), lines = [];
+  let line = "";
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    if (hud.width(test, size) > maxW && line) { lines.push(line); line = w; } else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/** Draw chapter progress (top) and the narration card (bottom) for time t. Skips chapter 0 (title card). */
+export function story(hud, chapters, t, { skipFirst = true } = {}) {
+  const c = chapterAt(chapters, t);
+  const g = hud.g;
+  // progress pills
+  const n = chapters.length - (skipFirst ? 1 : 0);
+  if (!(skipFirst && c.i === 0)) {
+    const w = 46, gap = 8, x0 = W / 2 - (n * w + (n - 1) * gap) / 2;
+    for (let j = 0; j < n; j++) {
+      const ci = j + (skipFirst ? 1 : 0), x = x0 + j * (w + gap);
+      g.fillStyle = "rgba(15,23,42,0.10)"; g.beginPath(); g.roundRect(x, 18, w, 6, 3); g.fill();
+      const fill = ci < c.i ? 1 : ci === c.i ? c.k : 0;
+      g.fillStyle = C.accent; g.beginPath(); g.roundRect(x, 18, w * fill, 6, 3); g.fill();
+    }
+  }
+  const ch = chapters[c.i];
+  if (!ch.text || (skipFirst && c.i === 0)) return c;
+  const a = clamp(Math.min(c.local / 0.45, (c.end - (chapters[c.i].t + c.local)) / 0.35 + 0.0001));
+  g.globalAlpha = clamp(a);
+  const lines = wrap(hud, ch.text, 21, 820);
+  const tw = Math.max(hud.width(ch.title, 15, 700), ...lines.map((l) => hud.width(l, 21))) + 52;
+  const h = 46 + lines.length * 28;
+  hud.panel(W / 2 - tw / 2, H - 26 - h, tw, h);
+  hud.text(ch.title.toUpperCase(), W / 2, H - 26 - h + 28, 14, C.accent, "center", 750);
+  lines.forEach((l, j) => hud.text(l, W / 2, H - 26 - h + 56 + j * 28, 21, C.ink, "center"));
+  g.globalAlpha = 1;
+  return c;
+}
+
+/** A sprite label whose text can change (texture rebuilt only when it does). */
+export function dynLabel(opts = {}) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthTest: false }));
+  s.renderOrder = 11;
+  let cur = null;
+  s.userData.set = (text, color = opts.color || C.ink) => {
+    const key = text + color;
+    if (key === cur) return;
+    cur = key;
+    const l = label(text, { ...opts, color });
+    s.material.map?.dispose();
+    s.material.map = l.material.map; s.material.needsUpdate = true;
+    s.scale.copy(l.scale);
+  };
+  return s;
+}
+
+export const ease = { out: (x) => 1 - (1 - clamp(x)) ** 3, back: (x) => { x = clamp(x); const c = 1.7; return 1 + (c + 1) * (x - 1) ** 3 + c * (x - 1) ** 2; } };
+
+export function robot(color = 0x7c3aed) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.36, 8, 16), mat(color));
+  body.position.y = 0.55; body.castShadow = true; g.add(body);
+  for (const s of [-1, 1]) {
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.065, 12, 8), mat(0xffffff, { emissive: 0xffffff, emissiveIntensity: 0.6 }));
+    e.position.set(s * 0.12, 0.72, 0.27); g.add(e);
+  }
+  const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.25), mat(0x334155));
+  ant.position.y = 1.08; g.add(ant);
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), mat(0xf59e0b, { emissive: 0xf59e0b, emissiveIntensity: 0.6 }));
+  tip.position.y = 1.22; g.add(tip);
+  return g;
+}
+
+export function coin(r = 0.28) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.07, 32), mat(0xfbbf24, { metalness: 0.6, roughness: 0.3, emissive: 0xb45309, emissiveIntensity: 0.15 }));
+  m.rotation.x = Math.PI / 2; m.castShadow = true;
+  return m;
+}
+
+/** A flat arrow lying on the floor pointing along (dx, dz). */
+export function floorArrow(color = 0x0f172a, len = 0.7) {
+  const g = new THREE.Group();
+  const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, len * 0.6), mat(color));
+  shaft.position.z = -len * 0.1; g.add(shaft);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.17, len * 0.4, 16), mat(color));
+  head.rotation.x = -Math.PI / 2; head.position.z = -len * 0.4 - len * 0.1; g.add(head);
+  g.userData.point = (dx, dz) => { g.rotation.y = Math.atan2(-dx, -dz); };
+  return g;
+}
+
+export const fmt = (v, d = 1) => (v < 0 ? "−" : "") + Math.abs(v).toFixed(d);

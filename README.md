@@ -30,7 +30,7 @@ Pick a path in the sidebar and only that path is shown, with a progress ring, ch
 - **▶ Runnable lessons:** every Python block has **Run / Edit**, notebook-style: earlier cells run first, output and plots appear inline.
 - **📓 Notebooks in the page:** reactive marimo notebooks open inside lessons. 23 interactive ones (bandits, PPO clipping, attention heatmaps, KV-cache calculator, reward hacking, calibration, linear probes, judge bias, prompt injection, verifier and sandbox labs…) plus every book script. Create your own; they live in `~/.study-quest/notebooks`.
 - **🧪 Coding playground:** 60 tested exercises across DSA, ML math, transformers, RL, inference, system design, agents, RL environments and AI safety, plus a free scratchpad.
-- **🎬 3D explainer videos:** short Three.js animations (the RL loop, value iteration, GRPO, embeddings, attention, next-token prediction) on a **Videos** page and inside the lessons they explain.
+- **🎬 3D explainer videos:** worked-example animations for the major topics: bandits, MDPs and returns, value iteration, TD vs Monte Carlo, policy gradients, PPO, RLHF, GRPO, embeddings, attention, the transformer block, next-token prediction and training on a **Videos** page and inside the lessons they explain.
 - **✏️ Design it yourself:** every System Design and DSA lesson has an Excalidraw board, saved per lesson. All your boards are on the **Diagrams** page; export as `.excalidraw`.
 
 ### Make it stick

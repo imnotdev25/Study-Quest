@@ -1,6 +1,6 @@
 // Attention: "it" sends a query, every earlier token answers with a key, dot products become weights via softmax,
 // and "it" collects a weighted mix of values. Then the full causal attention pattern for several heads.
-import { C, THREE, cameraPath, card, fade, label, lerp, mat, smooth, softmax } from "../lib.js";
+import { C, THREE, cameraPath, card, fade, label, lerp, mat, smooth, softmax, story } from "../lib.js";
 
 export const meta = {
   title: "Attention, step by step", path: "llm", duration: 34,
@@ -20,6 +20,15 @@ const HEADS = [
   ["head 3: first token", (i, j) => (j === 0 ? 3 : 0)],
 ];
 const X = (i) => (i - 4.5) * 1.55;
+
+const CH = [
+  { t: 0, title: "", text: "" },
+  { t: 4.5, title: "Query, key, value", text: "Every token makes a query (what I need), a key (what I have) and a value (what I pass on)." },
+  { t: 8.5, title: "Score every earlier token", text: "Score = query of “it” · key of each earlier token, divided by √d." },
+  { t: 12.5, title: "Softmax into weights", text: "Softmax turns scores into weights that sum to 1. “cat” wins." },
+  { t: 16.5, title: "Mix the values", text: "“it” takes the weighted sum of values: its new vector now knows about the cat." },
+  { t: 22.0, title: "Every token, every head", text: "Every token does this at once: rows = queries, columns = keys. Each head learns its own pattern." },
+];
 
 export function setup({ scene, camera, render, hud }) {
   const toks = WORDS.map((w, i) => {
@@ -106,11 +115,7 @@ export function setup({ scene, camera, render, hud }) {
 
     hud.clear();
     hud.title("Attention, step by step", "how “it” finds out what it refers to", fade(t, -1, 4.2, 0.8));
-    hud.caption("1. Every token makes a query (what I need), a key (what I have) and a value (what I pass on).", fade(t, 5, 8.8, 0.4));
-    hud.caption("2. Score = query of “it” · key of each earlier token, divided by √d.", fade(t, 9, 12.8, 0.4));
-    hud.caption("3. Softmax turns scores into weights that sum to 1. “cat” wins.", fade(t, 13, 16.8, 0.4));
-    hud.caption("4. “it” takes the weighted sum of values: its new vector now knows about the cat.", fade(t, 17, 21.8, 0.4));
-    hud.caption("Every token does this at once: rows = queries, columns = keys. Each head learns its own pattern.", fade(t, 22.5, 34.5, 0.4));
+    story(hud, CH, t);
     const a = fade(t, 9.2, 21.8);
     if (a > 0) {
       hud.alpha(a);
